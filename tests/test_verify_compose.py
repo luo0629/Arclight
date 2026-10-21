@@ -1,11 +1,19 @@
 """隔离验收脚本的本机请求与资源边界回归测试，不启动真实容器。"""
 
+import importlib.util
 import json
+from pathlib import Path
 from unittest.mock import Mock
 
 import httpx
 
-from scripts import verify_compose
+# 脚本不是安装包，pytest 控制台入口与 python -m pytest 均按绝对路径加载。
+spec = importlib.util.spec_from_file_location(
+    "verify_compose", Path(__file__).resolve().parents[1] / "scripts" / "verify_compose.py"
+)
+assert spec is not None and spec.loader is not None
+verify_compose = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(verify_compose)
 
 
 def test_loopback_probe_ignores_system_proxy(monkeypatch):
@@ -51,7 +59,7 @@ def test_loopback_probe_ignores_system_proxy(monkeypatch):
         {"base_url": "http://127.0.0.1:45678", "timeout": 10, "trust_env": False}
     ]
     browser.assert_called_once()
-    assert browser.call_args.kwargs["env"]["ARCLIGHT_E2E_BASE_URL"] == ("http://127.0.0.1:45678")
+    assert browser.call_args.kwargs["env"]["ARCLIGHT_E2E_BASE_URL"] == "http://127.0.0.1:45678"
     assert calls[-1][-4:] == ("down", "--volumes", "--timeout", "15")
     assert calls[-1][0] == "--project-name"
     assert calls[-1][1].startswith("arclight-verify-")
