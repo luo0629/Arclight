@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,10 +19,23 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4.1-mini"
     llm_timeout_seconds: float = 60
     max_story_chars: int = 20000
+    jwt_secret: SecretStr = SecretStr("arclight-local-jwt-secret-change-before-deploying")
+    access_token_minutes: int = Field(default=15, ge=1, le=60)
+    refresh_token_days: int = Field(default=30, ge=1, le=90)
+    allow_registration: bool = True
+    max_request_bytes: int = Field(default=2_000_000, ge=1024, le=100_000_000)
+    auth_requests_per_minute: int = Field(default=30, ge=1, le=10000)
+    auth_allowed_origins: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_secrets(self) -> "Settings":
         if self.environment == "production":
+            if (
+                self.jwt_secret.get_secret_value()
+                == "arclight-local-jwt-secret-change-before-deploying"
+                or len(self.jwt_secret.get_secret_value()) < 32
+            ):
+                raise ValueError("生产环境必须配置独立的 JWT Secret")
             token = self.api_token.get_secret_value()
             if len(token) < 32 or token == "local-development-token-change-me":
                 raise ValueError("生产环境必须设置至少 32 字符的独立 API Token")

@@ -23,6 +23,7 @@ class Project(Entity, Base):
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
     style_guide: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     output_profile: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    archived: Mapped[bool] = mapped_column(default=False)
     budget_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     __table_args__ = (CheckConstraint("budget_limit >= 0", name="budget_nonnegative"),)
 
@@ -61,7 +62,9 @@ class WorkflowRun(Entity, Base):
 class Script(Entity, Base):
     __tablename__ = "scripts"
     episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)
-    run_id: Mapped[UUID] = mapped_column(ForeignKey("workflow_runs.id"), unique=True)
+    run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("workflow_runs.id"), unique=True, nullable=True
+    )
     version_no: Mapped[int]
     content_json: Mapped[dict] = mapped_column(JSON_TYPE)
     status: Mapped[str] = mapped_column(String(32), default=AssetStatus.READY_FOR_REVIEW)
@@ -71,7 +74,9 @@ class Script(Entity, Base):
 class Storyboard(Entity, Base):
     __tablename__ = "storyboards"
     episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)
-    run_id: Mapped[UUID] = mapped_column(ForeignKey("workflow_runs.id"), unique=True)
+    run_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("workflow_runs.id"), unique=True, nullable=True
+    )
     script_version_id: Mapped[UUID] = mapped_column(ForeignKey("scripts.id"))
     version_no: Mapped[int]
     content_json: Mapped[dict] = mapped_column(JSON_TYPE)
@@ -141,6 +146,8 @@ class AssetVersion(Entity, Base):
     checksum: Mapped[str] = mapped_column(String(64))
     metadata_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     created_by: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(32), default="DRAFT")
+    stale: Mapped[bool] = mapped_column(default=False)
     __table_args__ = (UniqueConstraint("asset_id", "version_no"),)
 
 
@@ -160,3 +167,47 @@ class AssetDependency(Entity, Base):
 
 
 Index("ix_outbox_unpublished", OutboxEvent.published_at, OutboxEvent.created_at)
+
+
+class User(Entity, Base):
+    __tablename__ = "users"
+    email: Mapped[str] = mapped_column(String(254), unique=True)
+    display_name: Mapped[str] = mapped_column(String(80))
+    password_hash: Mapped[str] = mapped_column(String(512))
+    disabled: Mapped[bool] = mapped_column(default=False)
+
+
+class AuthSession(Entity, Base):
+    __tablename__ = "auth_sessions"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    refresh_hash: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked: Mapped[bool] = mapped_column(default=False)
+
+
+class ProjectMember(Entity, Base):
+    __tablename__ = "project_members"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(16))
+    __table_args__ = (
+        UniqueConstraint("project_id", "user_id"),
+        CheckConstraint("role IN ('editor', 'viewer')", name="member_role"),
+    )
+
+
+class CanvasLayout(Entity, Base):
+    __tablename__ = "canvas_layouts"
+    episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), unique=True)
+    revision: Mapped[int] = mapped_column(default=0)
+    positions: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    viewport: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+
+
+class AuditEvent(Entity, Base):
+    __tablename__ = "audit_events"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    actor_id: Mapped[str] = mapped_column(String(100))
+    action: Mapped[str] = mapped_column(String(80))
+    resource_id: Mapped[UUID]
+    details_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)

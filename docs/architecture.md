@@ -35,10 +35,10 @@ Worker 以相同 run UUID 作为 `thread_id`，用 `Command(resume=...)` 推进�
 - scripts、storyboards、shots。
 - visual_assets、asset_versions、asset_dependencies（仅结构，不提供业务写入接口）。
 
-每个剧本/分镜版本都绑定 run；分镜引用精确的剧本版本。内容保存后不被本服务覆盖；审核只改变状态。
+工作流生成的剧本/分镜版本绑定 run；人工另存版本的 run_id 为空，通过独立审核接口批准；分镜引用精确的剧本版本。内容保存后不被本服务覆盖；审核只改变状态。
 故事、风格规范及目标时长在创建 run 时保存为输入快照。重试不读取变更后的项目配置，避免同一 run 静默改变输入。
 
-业务表由 Alembic 管理。LangGraph checkpoint 表使用官方 PostgresSaver / SqliteSaver 的 `setup()`，不伪装成应用自有表，也不通过 `create_all()` 代替迁移。
+后续 `0002` 增加 users、auth_sessions、project_members、audit_events、canvas_layouts，以及人工版本/归档字段，升级会回填已有记录。业务表由 Alembic 管理。LangGraph checkpoint 表使用官方 PostgresSaver / SqliteSaver 的 `setup()`，不伪装成应用自有表，也不通过 `create_all()` 代替迁移。
 
 ## 可靠性和故障窗口
 
@@ -57,9 +57,9 @@ Worker 以相同 run UUID 作为 `thread_id`，用 `Command(resume=...)` 推进�
 
 ## 安全边界
 
-当前是单租户服务 Token，通过依赖注入提供固定 principal；不能用客户端传来的任意用户 ID 冒充身份。
+当前支持账号注册登录、可撤销 JWT 会话与项目 Owner/Editor/Viewer 权限；仅非生产环境保留固定 principal 的开发 Service Token。不能用客户端传来的任意用户 ID 冒充身份。
 生产配置拒绝默认/过短令牌、Mock Provider、SQLite 主库和 SQLite checkpoint，但这些保护**不等于已具备生产上线条件**。
-尚缺 JWT/OIDC、多项目成员 RBAC、TLS、请求体字节上限、限流、完整审计与预算治理。
+已具备请求体字节上限、单进程账户限流和关键协作变更审计；尚缺 OIDC、TLS、统一全局限流、完整合规审计与预算治理。账户、人工版本和画布 API 见 [接口说明](accounts-and-content.md)。
 
 真实 Provider 只处理文本结构化输出；输入作为用户数据发送，没有 shell/文件写入工具。Schema 与引用校验只证明结构正确，不保证创作质量、安全内容或版权合规。
 

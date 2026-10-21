@@ -26,6 +26,7 @@ class ProjectCreate(Input):
 
 class ProjectRead(Resource, ProjectCreate):
     owner_id: str
+    archived: bool
 
 
 class EpisodeCreate(Input):
@@ -71,7 +72,7 @@ class AcceptedRun(BaseModel):
 
 class ScriptRead(Resource):
     episode_id: UUID
-    run_id: UUID
+    run_id: UUID | None
     version_no: int
     content_json: dict
     status: str

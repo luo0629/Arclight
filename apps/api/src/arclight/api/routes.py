@@ -2,7 +2,7 @@ from typing import Annotated
 from uuid import UUID
 
 from fastapi import APIRouter, Header, Query, Request
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import (
@@ -32,6 +32,7 @@ from arclight.core.errors import DomainError
 from arclight.persistence.models import (
     Episode,
     Project,
+    ProjectMember,
     Script,
     Shot,
     Storyboard,
@@ -55,9 +56,17 @@ def create_project(payload: ProjectCreate, db: Database, actor: Actor) -> Projec
 def list_projects(
     db: Database, actor: Actor, limit: Limit = 20, offset: Offset = 0
 ) -> list[ProjectRead]:
+    visible = Project.owner_id == actor
+    if actor != "service-owner":
+        visible = or_(
+            visible,
+            Project.id.in_(
+                select(ProjectMember.project_id).where(ProjectMember.user_id == UUID(actor))
+            ),
+        )
     rows = db.scalars(
         select(Project)
-        .where(Project.owner_id == actor)
+        .where(visible)
         .order_by(Project.updated_at.desc(), Project.id)
         .limit(limit)
         .offset(offset)
@@ -74,7 +83,7 @@ def get_project(project_id: UUID, db: Database, actor: Actor) -> ProjectRead:
 def create_episode(
     project_id: UUID, payload: EpisodeCreate, db: Database, actor: Actor
 ) -> EpisodeRead:
-    require_project(db, project_id, actor)
+    require_project(db, project_id, actor, write=True)
     episode = Episode(project_id=project_id, **payload.model_dump())
     db.add(episode)
     db.flush()

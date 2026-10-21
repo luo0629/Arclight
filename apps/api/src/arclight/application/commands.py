@@ -12,6 +12,7 @@ from arclight.persistence.models import (
     Episode,
     OutboxEvent,
     Project,
+    ProjectMember,
     Review,
     Script,
     Shot,
@@ -22,18 +23,40 @@ from arclight.persistence.models import (
 from arclight.workflows.production import WORKFLOW_VERSION
 
 
-def require_project(db: Session, project_id: UUID, actor: str) -> Project:
+def require_project(
+    db: Session, project_id: UUID, actor: str, *, write: bool = False, owner: bool = False
+) -> Project:
     project = db.get(Project, project_id)
-    if project is None or project.owner_id != actor:
+    if project is None:
         raise DomainError("NOT_FOUND", "项目不存在", 404)
+    if project.owner_id != actor:
+        membership = (
+            None
+            if actor == "service-owner"
+            else db.scalar(
+                select(ProjectMember).where(
+                    ProjectMember.project_id == project_id, ProjectMember.user_id == UUID(actor)
+                )
+            )
+        )
+        if membership is None:
+            raise DomainError("NOT_FOUND", "项目不存在", 404)
+        if owner or (write and membership.role != "editor"):
+            raise DomainError("FORBIDDEN", "当前项目角色没有此操作权限", 403)
+    if write and project.archived:
+        raise DomainError("PROJECT_ARCHIVED", "归档项目只允许查看", 409)
     return project
 
 
-def require_episode(db: Session, episode_id: UUID, actor: str) -> Episode:
+def require_episode(
+    db: Session, episode_id: UUID, actor: str, *, write: bool = False, owner: bool = False
+) -> Episode:
     episode = db.get(Episode, episode_id)
     if episode is None:
         raise DomainError("NOT_FOUND", "剧集不存在", 404)
-    require_project(db, episode.project_id, actor)
+    require_project(db, episode.project_id, actor, write=write, owner=owner)
+    if write and episode.status == "ARCHIVED":
+        raise DomainError("EPISODE_ARCHIVED", "归档剧集只允许查看", 409)
     return episode
 
 
@@ -44,7 +67,7 @@ def require_run(db: Session, run_id: UUID, actor: str, *, lock: bool = False) ->
     run = db.scalar(statement)
     if run is None:
         raise DomainError("NOT_FOUND", "工作流不存在", 404)
-    require_episode(db, run.episode_id, actor)
+    require_episode(db, run.episode_id, actor, write=lock)
     return run
 
 
@@ -55,7 +78,7 @@ def emit(db: Session, run: WorkflowRun, event_type: str, payload: dict | None = 
 def start_run(
     db: Session, episode_id: UUID, actor: str, story: str, key: str, request_id: str
 ) -> WorkflowRun:
-    episode = require_episode(db, episode_id, actor)
+    episode = require_episode(db, episode_id, actor, write=True)
     # 同一剧集写入串行化，同时保护版本号分配；唯一约束作为最终防线。
     db.execute(select(Episode).where(Episode.id == episode_id).with_for_update(key_share=True))
     project = require_project(db, episode.project_id, actor)
@@ -97,6 +120,7 @@ def start_run(
 
 
 def resume_run(db: Session, run: WorkflowRun, actor: str, review: ReviewCreate) -> WorkflowRun:
+    require_episode(db, run.episode_id, actor, write=True, owner=True)
     if run.status != RunStatus.WAITING_REVIEW or not run.pending_review:
         raise DomainError("NOT_WAITING_REVIEW", "当前工作流不在人工审核节点")
     if run.revision != review.expected_revision:

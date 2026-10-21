@@ -10,6 +10,11 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from arclight.api.auth import router as auth_router
+from arclight.api.canvas import router as canvas_router
+from arclight.api.collaboration import router as collaboration_router
+from arclight.api.content import router as content_router
+from arclight.api.protection import RequestProtection
 from arclight.api.routes import router
 from arclight.core.config import Settings, get_settings
 from arclight.core.errors import DomainError
@@ -31,6 +36,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine.dispose()
 
     app = FastAPI(title="Arclight API", version="0.1.0", lifespan=lifespan)
+
+    app.add_middleware(
+        RequestProtection,
+        max_bytes=settings.max_request_bytes,
+        auth_per_minute=settings.auth_requests_per_minute,
+    )
 
     @app.middleware("http")
     async def request_context(request: Request, call_next):
@@ -101,7 +112,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise DomainError("DATABASE_UNAVAILABLE", "数据库不可用", 503) from None
         return {"status": "ok", "checks": {"database": "ok"}}
 
+    app.include_router(auth_router)
     app.include_router(router)
+    app.include_router(collaboration_router)
+    app.include_router(content_router)
+    app.include_router(canvas_router)
     return app
 
 
