@@ -1,0 +1,21 @@
+from enum import StrEnum
+
+
+class RunStatus(StrEnum):
+    QUEUED = "QUEUED"
+    RUNNING = "RUNNING"
+    WAITING_REVIEW = "WAITING_REVIEW"
+    SUCCEEDED = "SUCCEEDED"
+    REJECTED = "REJECTED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class AssetStatus(StrEnum):
+    DRAFT = "DRAFT"
+    READY_FOR_REVIEW = "READY_FOR_REVIEW"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    LOCKED = "LOCKED"
+    STALE = "STALE"
+    ARCHIVED = "ARCHIVED"

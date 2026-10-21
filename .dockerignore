@@ -1,0 +1,14 @@
+.git
+.venv
+.env
+.env.*
+__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+*.db
+*.db-*
+.uv-cache
+.uv-python
+
+celerybeat-schedule*

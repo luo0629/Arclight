@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.env
+.env.*
+!.env.example
+*.db
+*.db-*
+*.sqlite*
+.coverage
+htmlcov/
+.pi-loop*
+.uv-cache/
+.uv-python/
+
+celerybeat-schedule*
+
+# Local implementation status and unfinished-task checklist
+/docs/implementation-status.md

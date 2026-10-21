@@ -1,0 +1,76 @@
+x-app: &app
+  build: .
+  environment: &app-env
+    ARCLIGHT_ENVIRONMENT: development
+    ARCLIGHT_DATABASE_URL: postgresql+psycopg://arclight:arclight@postgres:5432/arclight
+    ARCLIGHT_CHECKPOINT_URL: postgresql://arclight:arclight@postgres:5432/arclight
+    ARCLIGHT_REDIS_URL: redis://redis:6379/0
+    ARCLIGHT_API_TOKEN: ${ARCLIGHT_API_TOKEN:-local-development-token-change-me}
+    ARCLIGHT_PROVIDER: ${ARCLIGHT_PROVIDER:-mock}
+    ARCLIGHT_LLM_API_KEY: ${ARCLIGHT_LLM_API_KEY:-}
+    ARCLIGHT_LLM_BASE_URL: ${ARCLIGHT_LLM_BASE_URL:-https://api.openai.com/v1}
+    ARCLIGHT_LLM_MODEL: ${ARCLIGHT_LLM_MODEL:-gpt-4.1-mini}
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: arclight
+      POSTGRES_PASSWORD: arclight
+      POSTGRES_DB: arclight
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arclight -d arclight"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *app
+    restart: "no"
+    command: ["/bin/sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m arclight.workflows.checkpoints"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  api:
+    <<: *app
+    ports: ["127.0.0.1:8000:8000"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  worker:
+    <<: *app
+    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+  beat:
+    <<: *app
+    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      redis: {condition: service_healthy}
+
+volumes:
+  postgres-data:
+  redis-data:
