@@ -175,7 +175,7 @@ npm.cmd run build
 npm.cmd run test:e2e
 ```
 
-测试自动启动临时 SQLite + Mock API（8766）与 Vite（4177），不连接 `.env` 里的业务数据库，也不调用收费模型。覆盖注册、弹窗键盘焦点与 Escape、创建项目剧集、双审核、画布保存、人工新版本、刷新会话与退出，以及 390px 移动端无横向溢出。另一条协作测试覆盖添加成员、只读拒绝写入、切换编辑角色、项目修改／归档恢复、移除后隐藏项目。截图与失败 trace 位于 `apps/web/test-results/`，已忽略，不提交。
+测试自动启动临时 SQLite + Mock API（8766）与 Vite（4177），不连接 `.env` 里的业务数据库，也不调用收费模型。覆盖注册、弹窗键盘焦点与 Escape、创建项目剧集、双审核、画布保存、人工新版本、刷新会话与退出，以及 390px 移动端无横向溢出。协作测试覆盖添加成员、只读拒绝写入、切换编辑角色、项目修改／归档恢复、移除后隐藏项目。第三条测试从空白人工剧本开始，保存并独立审核后启动精确版本导演任务，只经历分镜审核，并核对没有新增第二份剧本。截图与失败 trace 位于 `apps/web/test-results/`，已忽略，不提交。
 
 这条测试使用本地执行器，不替代 PostgreSQL / Redis / Celery 的容器联合验收。GitHub Actions 分别运行后端 SQLite/PostgreSQL 测试和前端构建、浏览器测试；配置存在不等于远程执行已经成功。
 
@@ -188,9 +188,9 @@ docker compose build web api
 uv run python "scripts/verify_compose.py"
 ```
 
-脚本使用本地 `arclight-web:latest` / `arclight-api:latest` 镜像，创建随机 `arclight-verify-*` Compose 项目、独立网络和两个专用测试卷。PostgreSQL 使用该隔离实例内的 `arclight_test`，不发布数据库／Redis／API 端口，Nginx 使用本机随机端口；固定使用 Mock、随机 JWT 密钥，不调用收费服务。
+脚本使用本地 `arclight-web:latest` / `arclight-api:latest` 镜像，创建随机 `arclight-verify-*` Compose 项目、独立网络和两个专用测试卷。PostgreSQL 使用该隔离实例内的 `arclight_test`，不发布数据库／Redis／API 端口，Nginx 使用本机随机端口；固定使用 Mock、随机 JWT 密钥，不调用收费服务。本机 HTTP 探测不继承环境或系统代理，避免 loopback 请求误走代理；不会修改系统代理设置。
 
-验收包括空库迁移、checkpoint 初始化、Nginx 配置和安全头／缓存策略，以及通过真实 PostgreSQL、Redis、Worker、Beat 完成两条浏览器链路。无论成功失败，脚本都尝试清理**仅本次随机项目**的容器和测试卷；拒绝 bind mount 或外部卷混入。运行前应明确同意这项测试资源清理，不要将脚本改为指向业务项目。若终端被强制终止，使用日志中的确切随机项目名检查残留资源，不能全局 prune。
+验收包括空库迁移、checkpoint 初始化、Nginx 配置和安全头／缓存策略，以及通过真实 PostgreSQL、Redis、Worker、Beat 完成三条浏览器链路。无论成功失败，脚本都尝试清理**仅本次随机项目**的容器和测试卷；拒绝 bind mount 或外部卷混入。运行前应明确同意这项测试资源清理，不要将脚本改为指向业务项目。若终端被强制终止，使用日志中的确切随机项目名检查残留资源，不能全局 prune。
 
 ## 部署与代理信任边界
 
@@ -201,7 +201,7 @@ uv run python "scripts/verify_compose.py"
 ## 当前边界
 
 - **未实现**图片/语音/视频生成、MinIO 上传、Continuity Reviewer、时间轴/FFmpeg、资产依赖 DAG 失效传播、预算扣费与 Langfuse/OTel 完整集成。
-- 已实现账户/JWT/多成员 RBAC、画布、人工内容编辑与审核；前端暂不支持从零人工起稿及从已批准人工剧本单独启动导演，相关入口仍需开发。
+- 已实现账户/JWT/多成员 RBAC、画布、人工内容编辑与审核、从零人工起草剧本及从指定已批准剧本单独启动导演；从零人工起草分镜的前端入口仍待补齐。
 - `visual_assets` / `asset_versions` / `asset_dependencies` 已建立最小数据库结构，但没有开放写入或选用 API；不代表资产服务已经实现。
 - 已有账户与可撤销会话、Owner/Editor/Viewer 权限及关键操作审计，但 OIDC、多进程全局限流、完整运营与合规策略仍未接入。
 - 内容版本不被当前服务覆写，审核状态另行推进；尚未增加阻止数据库直写的不可变触发器。

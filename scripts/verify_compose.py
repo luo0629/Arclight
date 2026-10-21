@@ -79,7 +79,8 @@ def main() -> None:
             docker(*args, "exec", "-T", "web", "nginx", "-t")
             port = docker(*args, "port", "web", "80", capture=True).strip().rsplit(":", 1)[1]
             base = "http://127.0.0.1:" + port
-            with httpx.Client(base_url=base, timeout=10) as client:
+            # 仅探测本机隔离网关，不继承环境变量或系统注册表中的代理。
+            with httpx.Client(base_url=base, timeout=10, trust_env=False) as client:
                 index = client.get("/")
                 index.raise_for_status()
                 assert 'id="root"' in index.text
