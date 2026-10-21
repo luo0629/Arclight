@@ -18,6 +18,7 @@ from arclight.api.schemas import (
     ScriptRead,
     ShotRead,
     StoryboardRead,
+    StoryboardRunCreate,
 )
 from arclight.application.commands import (
     cancel_run,
@@ -124,6 +125,32 @@ def create_script_run(
     if len(payload.story) > request.app.state.settings.max_story_chars:
         raise DomainError("STORY_TOO_LARGE", "故事超出当前服务长度限制", 422)
     run = start_run(db, episode_id, actor, payload.story, key, request.state.request_id)
+    return AcceptedRun(
+        run_id=run.id,
+        status=run.status,
+        status_url=f"/api/v1/runs/{run.id}",
+        events_url=f"/api/v1/runs/{run.id}/events",
+    )
+
+
+@router.post("/episodes/{episode_id}/storyboard-runs", tags=["workflows"], status_code=202)
+def create_storyboard_run(
+    episode_id: UUID,
+    payload: StoryboardRunCreate,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+) -> AcceptedRun:
+    run = start_run(
+        db,
+        episode_id,
+        actor,
+        "",
+        key,
+        request.state.request_id,
+        script_version_id=payload.script_version_id,
+    )
     return AcceptedRun(
         run_id=run.id,
         status=run.status,

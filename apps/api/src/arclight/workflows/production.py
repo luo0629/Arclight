@@ -8,6 +8,7 @@ from arclight.agents.contracts import ScriptContent, StoryboardContent
 from arclight.providers.text import TextProvider
 
 WORKFLOW_VERSION = "1.0"
+DIRECTOR_WORKFLOW_VERSION = "director-1.0"
 
 
 class ProductionState(TypedDict, total=False):
@@ -33,7 +34,9 @@ class Artifacts:
         raise NotImplementedError
 
 
-def build_graph(provider: TextProvider, artifacts: Artifacts, checkpointer):
+def build_graph(
+    provider: TextProvider, artifacts: Artifacts, checkpointer, *, director_only: bool = False
+):
     def write_script(state: ProductionState) -> dict:
         version_id, content = artifacts.script(
             lambda: provider.script(state["story"], state["style_guide"]).model_dump()
@@ -61,15 +64,19 @@ def build_graph(provider: TextProvider, artifacts: Artifacts, checkpointer):
         return {"storyboard_approved": decision["decision"] == "APPROVE"}
 
     graph = StateGraph(ProductionState)
-    graph.add_node("screenwriter", write_script)
-    graph.add_node("script_review", review_script)
     graph.add_node("director", direct)
     graph.add_node("storyboard_review", review_storyboard)
-    graph.add_edge(START, "screenwriter")
-    graph.add_edge("screenwriter", "script_review")
-    graph.add_conditional_edges(
-        "script_review", lambda s: "director" if s["script_approved"] else END
-    )
+    if director_only:
+        graph.add_edge(START, "director")
+    else:
+        # 保持 1.0 图的节点名和拓扑，已有 checkpoint 仍可恢复。
+        graph.add_node("screenwriter", write_script)
+        graph.add_node("script_review", review_script)
+        graph.add_edge(START, "screenwriter")
+        graph.add_edge("screenwriter", "script_review")
+        graph.add_conditional_edges(
+            "script_review", lambda s: "director" if s["script_approved"] else END
+        )
     graph.add_edge("director", "storyboard_review")
     graph.add_edge("storyboard_review", END)
     return graph.compile(checkpointer=checkpointer)

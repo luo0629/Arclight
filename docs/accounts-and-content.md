@@ -27,7 +27,23 @@
 - 内容版本只增不覆盖；版本号冲突返回 409。分镜还需通过场景/角色/台词引用及目标时长校验。
 - `POST /episodes/{id}/{scripts|storyboards}/{version_id}/review`：Owner 审核人工版本，正文 `decision=APPROVE|REJECT`、可选 `comment`。
 - 工作流生成版本不能从此接口绕过审核，必须使用原 `/runs/{id}/resume`，绑定具体版本和 revision。
-- 人工版本通过审核后，不会自动启动导演任务；独立从已批准剧本启动导演工作流仍待实现。
+- 前端在剧集起点选择“自己写剧本”，从空白表单创建人工剧本；保存前仅是本地草稿，保存后可选择该版本由 Owner 审核。
+- 人工版本审核通过不会自动调用模型；在已批准剧本上选择“从此版本生成分镜”，显式启动独立导演任务。
+
+## 从指定剧本启动导演
+
+`POST /api/v1/episodes/{id}/storyboard-runs`，必需 `Idempotency-Key` 请求头，正文：
+
+```json
+{"script_version_id": "指定已批准剧本的 UUID"}
+```
+
+- 返回 202，格式与 `script-runs` 相同：`run_id`、`status`、`status_url`、`events_url`。
+- Editor / Owner 可发起；Viewer 403，非成员或其他剧集的剧本 404；未批准剧本、归档项目／剧集或同剧集已有活动任务 409。
+- 输入固定精确剧本 ID、正文快照和目标时长；不会调用编剧或新增剧本，不会在执行／重试时改用最新版。
+- `workflow_type=storyboard`、`workflow_version=director-1.0`；旧 `1.0` 双审核图保留，已有 checkpoint 继续按原拓扑恢复。没有数据库结构变化，无需新增 Alembic revision。
+- 两种启动入口共享同一剧集的幂等键空间；同键同正文返回原任务，同键不同正文／入口返回 409。成功提交后再次主动生成请使用新键。
+- 只有分镜人工审核节点，仍用 `/runs/{id}/resume` 绑定精确版本和 revision；取消、失败重试、事件及重复消息保护复用既有协议。
 
 ## 画布
 

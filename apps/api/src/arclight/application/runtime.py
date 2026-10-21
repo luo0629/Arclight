@@ -12,7 +12,7 @@ from arclight.domain.enums import RunStatus
 from arclight.persistence.models import WorkflowRun
 from arclight.providers.text import build_provider
 from arclight.workflows.checkpoints import open_checkpointer
-from arclight.workflows.production import WORKFLOW_VERSION, build_graph
+from arclight.workflows.production import DIRECTOR_WORKFLOW_VERSION, WORKFLOW_VERSION, build_graph
 
 logger = logging.getLogger(__name__)
 
@@ -27,14 +27,17 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
         if run is None or run.status != RunStatus.QUEUED or run.revision != revision:
             return
         try:
-            if run.workflow_version != WORKFLOW_VERSION:
+            if run.workflow_version not in {WORKFLOW_VERSION, DIRECTOR_WORKFLOW_VERSION}:
                 raise ValueError("不兼容的工作流版本")
             run.status = RunStatus.RUNNING
             # 不提前 flush：SQLite 的测试模式不允许跨连接同时写业务数据库。
             emit(db, run, "workflow.started", {"revision": revision})
             with open_checkpointer(settings) as saver:
                 graph = build_graph(
-                    build_provider(settings), ArtifactStore(factory, run.id, run.episode_id), saver
+                    build_provider(settings),
+                    ArtifactStore(factory, run.id, run.episode_id),
+                    saver,
+                    director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
                 )
                 config = {"configurable": {"thread_id": str(run.id)}}
                 snapshot = graph.get_state(config)

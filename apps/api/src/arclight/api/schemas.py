@@ -44,6 +44,10 @@ class RunCreate(Input):
     story: str = Field(min_length=1, max_length=20000)
 
 
+class StoryboardRunCreate(Input):
+    script_version_id: UUID
+
+
 class ReviewCreate(Input):
     resource_type: Literal["script", "storyboard"]
     version_id: UUID

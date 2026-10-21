@@ -134,3 +134,53 @@ test('真实 API：成员角色、只读权限、归档恢复与移除成员', a
     await expect(partner.getByRole('heading', { name: '新的一页，等你落笔' })).toBeVisible();
   } finally { await memberContext.close(); }
 });
+
+
+test('真实 API：从零人工剧本、独立审核、指定版本导演任务与单次分镜审核', async ({ page }) => {
+  const response = await page.request.post('/api/v1/auth/register', { data: {
+    email: `manual-${Date.now()}@example.com`, password: 'arclight-manual-test', display_name: '星星编剧',
+  } });
+  expect(response.status()).toBe(201);
+  const owner = await response.json();
+  const headers = { Authorization: `Bearer ${owner.access_token}` };
+  const projectResponse = await page.request.post('/api/v1/projects', { headers, data: { name: '亲手写下的故事' } });
+  expect(projectResponse.status()).toBe(201);
+  const project = await projectResponse.json();
+  const episodeResponse = await page.request.post(`/api/v1/projects/${project.id}/episodes`, { headers, data: { episode_no: 1, title: '寻找星光' } });
+  expect(episodeResponse.status()).toBe(201);
+  const episode = await episodeResponse.json();
+  const prefix = `/api/v1/episodes/${episode.id}`;
+  await page.goto('/');
+  await page.getByRole('button', { name: '自己写剧本', exact: true }).click();
+  await expect(page.getByText('这是尚未保存的人工草稿。', { exact: false })).toBeVisible();
+  await page.getByLabel('剧本标题', { exact: true }).fill('亲手写下的星光');
+  await page.getByLabel('梗概', { exact: true }).fill('小女孩在森林里寻找掉落的星星。');
+  await page.getByLabel('角色（用中文逗号分隔）').fill('小女孩');
+  await page.getByLabel('场景 1', { exact: true }).fill('月光森林');
+  await page.getByLabel('场景动作', { exact: true }).fill('小女孩提着灯笼，沿着发光的脚印向前走。');
+  await page.getByRole('button', { name: '添加对白', exact: true }).click();
+  await page.getByLabel('说话角色', { exact: true }).selectOption('小女孩');
+  await page.getByLabel('对白', { exact: true }).fill('星星，你在哪里？');
+  await page.getByRole('button', { name: '保存人工剧本', exact: true }).click();
+  await expect(page.getByRole('button', { name: '自己写剧本', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '版本列表', exact: true }).click();
+  await page.locator('.version-row').filter({ hasText: '亲手写下的星光' }).click();
+  await expect(page.getByRole('button', { name: '从此版本生成分镜', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '批准该版本', exact: true }).click();
+  await expect(page.locator('.inspector .section-heading .status')).toHaveText('已批准');
+  await page.reload();
+  await page.getByRole('button', { name: '版本列表', exact: true }).click();
+  await page.locator('.version-row').filter({ hasText: '亲手写下的星光' }).click();
+  await page.getByRole('button', { name: '从此版本生成分镜', exact: true }).click();
+  await expect(page.getByText('等待审核：分镜版本', { exact: false })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByText('等待审核：剧本版本', { exact: false })).toHaveCount(0);
+  await page.getByRole('button', { name: '批准并继续', exact: true }).click();
+  await expect(page.locator('.task .status')).toHaveText('已完成', { timeout: 20000 });
+  const scripts = await (await page.request.get(prefix + '/scripts', { headers })).json();
+  const boards = await (await page.request.get(prefix + '/storyboards', { headers })).json();
+  expect(scripts).toHaveLength(1);
+  expect(scripts[0].run_id).toBeNull();
+  expect(boards).toHaveLength(1);
+  expect(boards[0].script_version_id).toBe(scripts[0].id);
+  expect(boards[0].status).toBe('APPROVED');
+});

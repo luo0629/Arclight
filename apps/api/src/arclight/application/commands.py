@@ -20,7 +20,7 @@ from arclight.persistence.models import (
     WorkflowEvent,
     WorkflowRun,
 )
-from arclight.workflows.production import WORKFLOW_VERSION
+from arclight.workflows.production import DIRECTOR_WORKFLOW_VERSION, WORKFLOW_VERSION
 
 
 def require_project(
@@ -76,13 +76,26 @@ def emit(db: Session, run: WorkflowRun, event_type: str, payload: dict | None = 
 
 
 def start_run(
-    db: Session, episode_id: UUID, actor: str, story: str, key: str, request_id: str
+    db: Session,
+    episode_id: UUID,
+    actor: str,
+    story: str,
+    key: str,
+    request_id: str,
+    *,
+    script_version_id: UUID | None = None,
 ) -> WorkflowRun:
     episode = require_episode(db, episode_id, actor, write=True)
     # 同一剧集写入串行化，同时保护版本号分配；唯一约束作为最终防线。
     db.execute(select(Episode).where(Episode.id == episode_id).with_for_update(key_share=True))
     project = require_project(db, episode.project_id, actor)
-    fingerprint = hashlib.sha256(json.dumps({"story": story}, sort_keys=True).encode()).hexdigest()
+    # 旧请求指纹保持不变；两种启动方式共享剧集内的幂等键空间。
+    payload = (
+        {"story": story}
+        if script_version_id is None
+        else {"script_version_id": str(script_version_id)}
+    )
+    fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
             WorkflowRun.episode_id == episode_id, WorkflowRun.idempotency_key == key
@@ -100,17 +113,33 @@ def start_run(
     )
     if active:
         raise DomainError("EPISODE_BUSY", "该剧集已有未完成工作流")
+    inputs = {
+        "story": story,
+        "style_guide": project.style_guide,
+        "target_duration_ms": episode.target_duration_ms,
+    }
+    if script_version_id is not None:
+        script = db.get(Script, script_version_id)
+        if script is None or script.episode_id != episode_id:
+            raise DomainError("NOT_FOUND", "指定剧本版本不存在", 404)
+        if script.status != AssetStatus.APPROVED:
+            raise DomainError("SCRIPT_NOT_APPROVED", "只能从已批准的剧本版本生成分镜")
+        # 固定精确版本和正文快照，不在 Worker 执行时重新选择“最新版”。
+        inputs = {
+            "script_version_id": str(script.id),
+            "script": script.content_json,
+            "target_duration_ms": episode.target_duration_ms,
+        }
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=fingerprint,
-        workflow_version=WORKFLOW_VERSION,
-        input_json={
-            "story": story,
-            "style_guide": project.style_guide,
-            "target_duration_ms": episode.target_duration_ms,
-        },
+        workflow_type="script_storyboard" if script_version_id is None else "storyboard",
+        workflow_version=WORKFLOW_VERSION
+        if script_version_id is None
+        else DIRECTOR_WORKFLOW_VERSION,
+        input_json=inputs,
     )
     db.add(run)
     db.flush()
