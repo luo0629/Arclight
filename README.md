@@ -1,202 +1,146 @@
 # Arclight
 
-面向 AI 漫剧生产的模块化后端，依据 `docs/technical-design-v1.2.md` 搭建。
-当前交付是 **后端基础工程 + 剧本/分镜审核链路**，不是设计文档中全部功能的完成版。
+**面向 AI 漫剧与视觉叙事的多智能体创作项目。**
 
-## 已实现
+让故事创作成为可审核、可追踪、可恢复的生产流程，而不是一组彼此独立的模型调用。
 
-- Python 3.12、uv 依赖锁定、FastAPI/OpenAPI、Pydantic v2。
-- SQLAlchemy 2 + PostgreSQL，业务表通过 **Alembic** 迁移，启动时不调用 `create_all()`。
-- 项目/剧集创建与分页查询，项目归属校验，统一错误响应和 request ID。
-- LangGraph 编剧 → 剧本审核 → 导演 → 分镜审核，审核使用 `interrupt` / `Command`。
-- PostgreSQL 持久化 checkpoint，同一 run 使用稳定 thread ID；SQLite 供单进程开发和测试。
-- 剧本、分镜版本及镜头持久化；审核必须绑定具体版本和运行 revision。
-- 事务 Outbox、Celery/Redis 独立 Worker、重复消息消除、运行事件、取消和显式失败重试。
-- Mock 文本 Provider，以及输出经 Pydantic 校验的 OpenAI-compatible Provider。
-- Docker Compose、格式/静态检查、SQLite 与 PostgreSQL 自动化测试、GitHub Actions 配置。
+Arclight 面向个人创作者、小型漫剧工作室和 AI 内容制作团队，目标是连接故事、剧本、分镜、视觉素材与最终成片。创作者负责方向与关键决策，专业 Agent 承担具体创作任务，服务端负责状态、版本、审核和执行。
 
-## 架构
+> **当前阶段：后端基础工程 + 剧本／分镜审核链路。**
+> 已实现从故事输入到结构化剧本、分镜及两次人工审核的流程；完整媒体生产与前端工作台尚未实现。
+
+## 为什么做 Arclight
+
+AI 内容创作的难点不只在于生成一段文字或一张图片，还在于如何把不同环节组织成可持续修改、协作和交付的过程：
+
+- **创作结果需要成为正式产物。** 剧本、分镜和镜头信息不能只存在于聊天记录中，需要保存、查询并关联具体版本。
+- **关键决定需要由人确认。** 剧本和分镜是否通过，应当是明确的审核动作，而不是模型自行跳过的步骤。
+- **中断不应丢失全部进度。** 工作流需要记录执行位置，支持等待审核、重启恢复和失败后的显式重试。
+- **扩展模型不应改写业务流程。** 生成能力与业务逻辑分离，避免工作流绑定某个供应商的 SDK。
+
+Arclight 先把文本创作与审核链路做实，再逐步向完整的漫剧生产流程扩展。
+
+## 当前可以做什么
+
+### 从故事生成剧本与分镜
+
+以项目和剧集组织创作内容。输入故事后，由编剧 Agent 生成结构化剧本；剧本通过人工审核后，再由导演 Agent 生成结构化分镜和镜头信息。
+
+生成结果通过 Pydantic 合同校验并保存到数据库，分镜关联具体剧本版本，便于后续查询和核对。
+
+### 在关键节点保留创作控制权
+
+剧本与分镜各有独立的人工审核节点。审核绑定具体内容版本和运行 revision，避免将过期审核结果应用到另一份内容。
+
+审核通过后继续执行，驳回则终止当前运行。当前支持审核，不包含在线编辑内容并保存新版本的能力。
+
+### 查看与恢复工作流
+
+每次创作任务都有独立的运行记录、状态和业务事件。LangGraph checkpoint 保存编排进度，同一任务使用稳定的 thread ID，在人工审核后恢复原有流程。
+
+后台任务支持幂等请求、重复消息去重、排队／待审核运行取消，以及失败后的显式重试。外部模型调用不承诺 exactly-once，重试可能产生额外调用费用。
+
+### 在无模型密钥的环境中演示
+
+默认 Mock Provider 可以演示完整的文本审核流程。仓库也提供 OpenAI-compatible 文本适配器，使用结构化输出协议接入模型服务；真实供应商仍需配置和联调。
+
+## 创作流程
 
 ```text
-Client → FastAPI → Application → PostgreSQL（业务表 / Outbox）
-                       │
-Celery Beat → Outbox Dispatcher → Redis → Celery Worker
-                                           │
-                                   LangGraph + Text Provider
-                                           │
-                         PostgreSQL（checkpoint / 版本 / 事件）
+创建项目与剧集
+      ↓
+   输入故事
+      ↓
+编剧 Agent → 保存剧本版本
+      ↓
+  人工审核剧本 ── 驳回 → 结束
+      ↓ 通过
+导演 Agent → 保存分镜与镜头
+      ↓
+  人工审核分镜 ── 驳回 → 结束
+      ↓ 通过
+  本次创作任务完成
 ```
 
-业务状态以 PostgreSQL 为准。Redis 不承载正式资产或审核状态；API 不在请求内执行模型长任务。
+这里的“完成”指剧本／分镜任务完成，不代表图片、配音或视频已经生成。
 
-## 快速启动：Docker Compose
+## 设计思路
 
-需要 Docker Compose。首次启动会下载镜像并构建 Python 环境。
-默认凭据和端口绑定只适用于本机开发，**不要直接部署到公网**。
+| 原则 | 在当前工程中的体现 |
+| --- | --- |
+| 内容优先，而非聊天优先 | 剧本、分镜和镜头独立持久化，不依赖对话历史保存业务事实 |
+| 模型负责创作，代码负责执行 | Agent 输出经过结构校验，状态迁移、审核和版本一致性由服务端控制 |
+| 人工审核是流程的一部分 | 使用 LangGraph `interrupt` 暂停，通过 `Command` 恢复原任务 |
+| 数据库记录业务事实 | PostgreSQL 保存运行、内容和审核，Redis 仅承载后台任务队列 |
+| 生成能力可以替换 | Provider 适配层与 API、工作流及持久化逻辑分离 |
+| 先完成明确链路 | 采用模块化单体 + 独立 Worker，不提前拆分空微服务 |
+
+## 技术架构
+
+```text
+客户端 / OpenAPI
+       │
+       ▼
+    FastAPI ──► PostgreSQL（业务数据 / 内容版本 / 审核 / Outbox）
+                       │
+                Celery Beat 扫描 Outbox
+                       │
+                       ▼
+                     Redis
+                       │
+                       ▼
+                 Celery Worker
+                       │
+                       ▼
+                   LangGraph ──► Text Provider
+                       │
+                       ▼
+                PostgreSQL Checkpoint
+```
+
+API 负责接收请求和查询结果，耗时生成在独立 Worker 中执行。业务表通过 **Alembic** 管理版本；LangGraph checkpoint 内部表通过官方持久化组件单独初始化。
+
+| 层次 | 技术 |
+| --- | --- |
+| 语言与依赖 | Python 3.12、uv |
+| API 与数据校验 | FastAPI、Pydantic v2 |
+| Agent 编排 | LangGraph、持久化 checkpoint |
+| 业务存储与迁移 | PostgreSQL、SQLAlchemy 2、Alembic |
+| 后台任务 | Celery、Redis |
+| 本地运行与检查 | Docker Compose、pytest、Ruff、mypy、GitHub Actions 配置 |
+
+SQLite 用于单进程开发和测试，不作为生产或并发 Worker 的数据库方案。
+
+## 当前范围
+
+本仓库目前提供后端 API，没有前端工作台；身份机制为单租户服务 Token，不是完整的用户与成员权限系统。
+
+图片／视频／TTS 生成、连续性审查、对象存储、时间轴及 FFmpeg 成片尚未实现。资产相关表仅有基础结构，不代表资产管理服务已经完成；预算扣费与完整可观测性也尚未接入。
+
+当前适合本地演示、架构验证和后续开发，**不应按完整生产系统直接部署到公网**。详细约束见 [架构说明](docs/architecture.md) 与 [开发指南](docs/development.md#当前边界)。
+
+## 快速体验
+
+安装 Docker Compose 后，在仓库根目录执行。若已有 `.env`，请保留现有文件并按示例调整配置。
 
 ```powershell
 Copy-Item ".env.example" ".env"
-uv sync --frozen
-# 启动新开发环境时，这条命令会执行 Alembic 与 checkpoint 初始化。
 docker compose up --build -d
 ```
 
 - Swagger：`http://localhost:8000/docs`
-- 存活探针：`http://localhost:8000/health/live`
-- 数据库连接探针：`http://localhost:8000/health/ready`
-- API 使用 Bearer Token；默认开发值为 `local-development-token-change-me`。
-- Compose 的 `migrate` 是一次性服务；API/Worker 等迁移成功后启动。
+- 默认使用 Mock，无需模型密钥。
+- 本地开发 Bearer Token：`local-development-token-change-me`
+- 首次启动会执行业务表迁移和 checkpoint 初始化，默认凭据仅适用于本机开发。
 
-查看日志与正常停止（保留数据卷）：
+本地 Python 开发、双审核接口演示、真实模型配置和测试命令见 [开发与运行指南](docs/development.md)。
 
-```powershell
-docker compose logs -f api worker beat
-docker compose down
-```
+## 项目文档
 
-不要对有用数据执行 `docker compose down -v`。迁移到已有数据库前先备份并审阅迁移。
+- [技术设计 v1.2](docs/technical-design-v1.2.md)：产品目标、完整生产流程与数据模型设计；不代表所有能力已实现。
+- [架构与约束](docs/architecture.md)：分层、持久化、恢复机制及安全边界。
+- [开发与运行指南](docs/development.md)：环境启动、API 演示、Alembic 迁移、模型配置及质量检查。
 
-## 本地 Python 开发
+## 许可证
 
-先启动依赖服务，再显式迁移：
-
-```powershell
-uv sync --frozen
-Copy-Item ".env.example" ".env"
-docker compose up -d postgres redis
-uv run alembic upgrade head
-uv run python -m arclight.workflows.checkpoints
-uv run uvicorn arclight.main:app --reload
-```
-
-其他终端在相同项目目录分别启动：
-
-```powershell
-# Windows 本机使用 solo；Linux/Docker 可使用默认 prefork。
-uv run celery -A arclight.workers.celery_app:celery_app worker --pool=solo --loglevel=info
-uv run celery -A arclight.workers.celery_app:celery_app beat --loglevel=info --schedule=celerybeat-schedule
-```
-
-也可完全不运行 PostgreSQL/Redis：编辑 `.env` 中以下两项，保持 `ARCLIGHT_PROVIDER=mock`：
-
-```dotenv
-ARCLIGHT_DATABASE_URL=sqlite:///./arclight.db
-ARCLIGHT_CHECKPOINT_URL=sqlite:///./checkpoints.db
-```
-
-然后执行迁移、checkpoint 初始化和 API 启动命令。每次创建或恢复 run 后，用以下命令手动推进一次：
-
-```powershell
-uv run python -m arclight.workers.local "替换为实际-run-UUID"
-```
-
-SQLite 仅支持此处的单进程演示；生产及并发 Worker 必须使用 PostgreSQL。
-
-## 演示链路
-
-1. `POST /api/v1/projects` 创建项目。
-2. `POST /api/v1/projects/{project_id}/episodes` 创建剧集。
-3. `POST /api/v1/episodes/{episode_id}/script-runs`，携带 `Idempotency-Key`，正文为 `{"story":"雨夜，主角收到一封匿名来信。"}`，返回 202 和 run ID。
-4. Worker 执行后，`GET /api/v1/runs/{run_id}` 返回 `WAITING_REVIEW` 和 `pending_review`。
-5. 查询 `/api/v1/episodes/{episode_id}/scripts` 阅读对应版本。
-6. `POST /api/v1/runs/{run_id}/resume` 提交审核；不能省略版本 ID 和 revision：
-
-```json
-{
-  "resource_type": "script",
-  "version_id": "复制 pending_review.version_id",
-  "decision": "APPROVE",
-  "comment": "剧本通过",
-  "expected_revision": 1
-}
-```
-
-7. 再次推进后暂停在分镜审核。查询 `/api/v1/episodes/{episode_id}/storyboards`，以及 `/api/v1/episodes/{episode_id}/shots?storyboard_id={version_id}`。
-8. 再调用 resume，将 `resource_type` 设为 `storyboard`，使用本次返回的版本 ID 和 revision。
-9. 推进后 run 变成 `SUCCEEDED`。任意审核 `REJECT` 均终止为 `REJECTED`；驳回后可用新幂等键启动新 run。
-10. `/api/v1/runs/{run_id}/events` 查询事件；排队/等待审核可调用 `/cancel`；失败可主动调用 `/retry`，外部模型调用可能再次产生费用。
-
-Swagger 的 **Authorize** 输入开发 Token 后即可执行上述接口。具体 API 列表以生成的 OpenAPI 为准。
-
-## Alembic 数据库版本管理
-
-```powershell
-uv run alembic current
-uv run alembic history
-uv run alembic revision --autogenerate -m "describe schema change"
-# 必须审阅新迁移后再执行。
-uv run alembic upgrade head
-uv run alembic check
-# downgrade 可能丢失数据，确认备份与影响后才可使用。
-# uv run alembic downgrade -1
-```
-
-- 初始迁移：`apps/api/migrations/versions/0001_initial_production_foundation.py`。
-- 后续修改模型必须新增迁移，不要回改已部署的 `0001`。
-- checkpoint 内部表由 LangGraph 官方 `setup()` 迁移，不纳入业务 Alembic；更新依赖后显式运行 checkpoint 初始化。
-- `alembic check` 只管理本应用声明的业务表，不尝试删除 checkpoint 或其他工具的内部表。
-
-## 切换真实文本模型
-
-在 `.env` 中设置：
-
-```dotenv
-ARCLIGHT_PROVIDER=openai_compatible
-ARCLIGHT_LLM_BASE_URL=https://your-provider.example/v1
-ARCLIGHT_LLM_MODEL=your-structured-output-model
-ARCLIGHT_LLM_API_KEY=your-private-key
-```
-
-适配器要求 Chat Completions 与 `response_format=json_schema` 能力；并非所有“兼容”服务都实现该能力。
-该接口未经真实付费服务联调。不会自动降级为 Mock，不会对超时进行隐式付费重试。
-模型输入会发送给配置的服务商；不要在未获授权时输入敏感素材。
-
-## 质量检查
-
-```powershell
-uv run ruff check .
-uv run ruff format --check .
-uv run mypy
-uv run pytest -q
-```
-
-测试从 Alembic 空库迁移开始，覆盖升降级与元数据一致性、引用校验、鉴权、幂等冲突、版本绑定审核、checkpoint 恢复、重复投递、失败与显式重试、驳回和取消。
-
-如需 PostgreSQL 测试，使用**专用空测试数据库** `arclight_test`：
-
-```powershell
-$env:ARCLIGHT_TEST_DATABASE_URL="postgresql+psycopg://user:password@localhost:5432/arclight_test"
-uv run pytest -q
-```
-
-每个测试创建独立 schema；只允许数据库名 `arclight_test`，不应指向业务数据库。测试 schema 留待专用测试环境销毁。
-
-## 目录
-
-```text
-apps/api/src/arclight/
-  api/             路由、请求响应 Schema、鉴权与事务依赖
-  application/     项目权限、运行命令、产物写入、执行服务
-  agents/          编剧/导演的结构化输出合同
-  core/            环境配置、领域异常
-  domain/          状态定义
-  persistence/     SQLAlchemy 模型、会话、元数据
-  providers/       Mock 与真实文本服务适配器
-  workflows/       LangGraph 生产图与 checkpoint 初始化
-  workers/         Celery、Outbox 分发、单进程执行入口
-apps/api/migrations/  Alembic 环境与迁移版本
-tests/                API、工作流、合同、迁移测试
-docs/                 原始设计、架构与实施边界
-```
-
-## 当前边界
-
-- **未实现**前端、用户注册/JWT/多成员 RBAC、图片/语音/视频生成、MinIO 上传、Continuity Reviewer、时间轴/FFmpeg、依赖 DAG 失效传播、预算扣费与 Langfuse/OTel 完整集成。
-- `visual_assets` / `asset_versions` / `asset_dependencies` 已建立最小数据库结构，但没有开放写入或选用 API；不代表资产服务已经实现。
-- 当前只有单租户服务 Token 身份，不接受客户端任意指定用户 ID；生产前必须补齐身份系统、TLS、限流、密钥管理及审计策略。
-- 内容版本不被当前服务覆写，审核状态另行推进；尚未增加阻止数据库直写的不可变触发器。
-- 工作流推进期间持有 PostgreSQL 运行行锁，适合当前文本原型。运行中的模型请求不能即时取消，媒体长任务必须使用后续独立生成调度器。
-- Outbox 会重复投递 QUEUED run；内部通过 revision、状态与行锁去重。模型调用与数据库/checkpoint 无法组成同一事务，崩溃时不能承诺外部调用 exactly-once。
-- 健康 ready 仅检查数据库连接，不代表 Redis、模型服务或未来对象存储已经就绪。
-
-架构与实现约束详见 `docs/architecture.md`。详细待办清单仅在本地维护，不纳入 Git 版本管理。
+本项目采用 [MIT License](LICENSE)。
