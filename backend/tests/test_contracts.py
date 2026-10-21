@@ -1,7 +1,8 @@
 import pytest
+from pydantic import ValidationError
+
 from arclight.agents.contracts import Dialogue, Scene, ScriptContent, ShotContent, StoryboardContent
 from arclight.providers.text import MockTextProvider
-from pydantic import ValidationError
 
 
 def test_contract_rejects_unknown_character():

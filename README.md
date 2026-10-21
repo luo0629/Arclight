@@ -147,6 +147,34 @@ docker compose up --build -d
 
 本地 Python 开发、双审核接口演示、真实模型配置和测试命令见 [开发与运行指南](docs/development.md)。
 
+## 项目结构
+
+```text
+Arclight/
+├── backend/                 # FastAPI、LangGraph 与后台任务
+│   ├── src/arclight/        # API、业务服务、Agent、工作流与持久化
+│   ├── migrations/         # Alembic 历史迁移
+│   ├── tests/              # 后端单元测试与集成测试
+│   ├── scripts/            # 浏览器测试服务与隔离 Compose 验收
+│   ├── alembic.ini
+│   ├── pyproject.toml
+│   ├── uv.lock
+│   └── Dockerfile
+├── fronted/                 # React + TypeScript 前端（目录名为 fronted）
+│   ├── src/
+│   ├── tests/              # Playwright 浏览器测试
+│   ├── package.json
+│   ├── package-lock.json
+│   ├── nginx.conf
+│   └── Dockerfile
+├── docs/                    # 设计、架构与开发文档
+├── .github/workflows/       # 前后端 CI
+├── .env.example             # 本地配置示例
+└── compose.yaml             # 前后端与数据库等依赖的统一编排
+```
+
+Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前端 npm 命令在 `fronted/` 执行；Docker Compose 在仓库根目录执行。数据库和 Redis 仍由 Compose 提供，目录调整不会改变服务名、端口或数据卷。
+
 ## 项目文档
 
 - [账户与内容](docs/accounts-and-content.md)：权限、不可变版本、审核与接口。

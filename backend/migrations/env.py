@@ -1,8 +1,9 @@
 from alembic import context
+from sqlalchemy import JSON, create_engine, pool
+
 from arclight.core.config import get_settings
 from arclight.persistence import models  # noqa: F401
 from arclight.persistence.base import Base
-from sqlalchemy import JSON, create_engine, pool
 
 config = context.config
 url = config.attributes.get("database_url") or get_settings().database_url

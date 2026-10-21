@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import httpx
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def docker(*args: str, capture: bool = False) -> str:
@@ -95,7 +95,7 @@ def main() -> None:
             env = {**os.environ, "ARCLIGHT_E2E_BASE_URL": base}
             subprocess.run(
                 ["npm.cmd" if os.name == "nt" else "npm", "run", "test:e2e"],
-                cwd=ROOT / "apps/web",
+                cwd=ROOT / "fronted",
                 env=env,
                 check=True,
             )

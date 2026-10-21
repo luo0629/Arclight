@@ -2,6 +2,7 @@ import asyncio
 import json
 
 import pytest
+
 from arclight.api.protection import RequestProtection
 
 
@@ -77,8 +78,9 @@ def test_body_guard_disconnect_does_not_call_application():
 
 
 def test_auth_rate_limit_and_request_id(settings, migrated, monkeypatch):
-    from arclight.main import create_app
     from fastapi.testclient import TestClient
+
+    from arclight.main import create_app
 
     settings.auth_requests_per_minute = 2
     now = [100.0]
@@ -97,8 +99,9 @@ def test_auth_rate_limit_and_request_id(settings, migrated, monkeypatch):
 
 
 def test_http_request_size_guard(settings, migrated):
-    from arclight.main import create_app
     from fastapi.testclient import TestClient
+
+    from arclight.main import create_app
 
     settings.max_request_bytes = 1024
     with TestClient(create_app(settings)) as client:

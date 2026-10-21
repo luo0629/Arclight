@@ -1,0 +1,9 @@
+# 前端构建上下文仅为 fronted/，不打包依赖、测试产物或本地配置。
+node_modules
+dist
+test-results
+playwright-report
+*.tsbuildinfo
+.env
+.env.*
+tests

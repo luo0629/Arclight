@@ -7,12 +7,13 @@ from pathlib import Path
 import uvicorn
 from alembic import command
 from alembic.config import Config
+from sqlalchemy import select
+
 from arclight.application.runtime import execute_run
 from arclight.core.config import Settings
 from arclight.main import create_app
 from arclight.persistence.models import WorkflowRun
 from arclight.persistence.session import build_engine, session_factory
-from sqlalchemy import select
 
 
 def main():
@@ -25,7 +26,7 @@ def main():
         checkpoint_url="sqlite:///" + (folder / "checkpoints.db").as_posix(),
         auth_requests_per_minute=300,
     )
-    config = Config("alembic.ini")
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
     command.upgrade(config, "head")
     factory = session_factory(build_engine(settings))

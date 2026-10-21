@@ -1,5 +1,6 @@
 x-app: &app
-  build: .
+  build:
+    context: ./backend
   environment: &app-env
     ARCLIGHT_ENVIRONMENT: development
     ARCLIGHT_DATABASE_URL: postgresql+psycopg://arclight:arclight@postgres:5432/arclight
@@ -18,8 +19,7 @@ x-app: &app
 services:
   web:
     build:
-      context: .
-      dockerfile: apps/web/Dockerfile
+      context: ./fronted
     ports: ["127.0.0.1:8080:80"]
     restart: unless-stopped
     depends_on:

@@ -3,7 +3,9 @@
 本指南包含前后端启动、接口演示、数据库迁移、模型配置和质量检查。
 项目定位与能力介绍见 [项目首页](../README.md)，架构约束见 [架构说明](architecture.md)。
 
-下列命令均在仓库根目录执行。若已有 `.env`，请保留并调整现有配置，不要直接覆盖。
+除特别注明外，每个小节从仓库根目录开始；后端命令在 `backend/` 执行，前端命令在 `fronted/` 执行，Compose 在根目录执行。若已有 `.env`，请保留并调整现有配置，不要直接覆盖。
+
+根目录 `.env` 用于 Compose 变量替换；本机运行后端时，从公共示例创建 `backend/.env`，由后端进程加载。两者均被 Git 忽略，不要填写真实密钥后提交。
 
 ## 快速启动：Docker Compose
 
@@ -38,15 +40,16 @@ docker compose down
 先启动依赖服务，再显式迁移：
 
 ```powershell
-uv sync --frozen
-Copy-Item ".env.example" ".env"
 docker compose up -d postgres redis
+Set-Location "backend"
+uv sync --frozen
+Copy-Item "../.env.example" ".env"
 uv run alembic upgrade head
 uv run python -m arclight.workflows.checkpoints
 uv run uvicorn arclight.main:app --reload
 ```
 
-其他终端在相同项目目录分别启动：
+其他终端先进入 `backend/`，再分别启动：
 
 ```powershell
 # Windows 本机使用 solo；Linux/Docker 可使用默认 prefork。
@@ -54,7 +57,7 @@ uv run celery -A arclight.workers.celery_app:celery_app worker --pool=solo --log
 uv run celery -A arclight.workers.celery_app:celery_app beat --loglevel=info --schedule=celerybeat-schedule
 ```
 
-也可完全不运行 PostgreSQL/Redis：编辑 `.env` 中以下两项，保持 `ARCLIGHT_PROVIDER=mock`：
+也可完全不运行 PostgreSQL/Redis：编辑 `backend/.env` 中以下两项，保持 `ARCLIGHT_PROVIDER=mock`：
 
 ```dotenv
 ARCLIGHT_DATABASE_URL=sqlite:///./arclight.db
@@ -71,10 +74,10 @@ SQLite 仅支持此处的单进程演示；生产及并发 Worker 必须使用 P
 
 ## 本地前端开发
 
-需要 Node.js 24 和 npm。在另一个终端执行：
+需要 Node.js 24 和 npm。在另一个终端从仓库根目录执行：
 
 ```powershell
-Set-Location "apps/web"
+Set-Location "fronted"
 npm.cmd ci
 npm.cmd run dev
 ```
@@ -111,6 +114,8 @@ Swagger 的 **Authorize** 输入开发 Token 后即可执行上述接口。具�
 
 ## Alembic 数据库版本管理
 
+以下命令在 `backend/` 执行；迁移配置为 `backend/alembic.ini`。目录迁移不改变数据库 revision，不需要新增空迁移或重建数据库。
+
 ```powershell
 uv run alembic current
 uv run alembic history
@@ -122,7 +127,7 @@ uv run alembic check
 # uv run alembic downgrade -1
 ```
 
-- 初始迁移：`apps/api/migrations/versions/0001_initial_production_foundation.py`。
+- 初始迁移：`backend/migrations/versions/0001_initial_production_foundation.py`。
 - 第二版迁移 `0002` 增加账户、会话、成员、审计、画布布局与人工内容版本支持。
 - 后续修改模型必须新增迁移，不要回改已部署的历史版本。
 - 存在不关联 run 的人工版本时，回退到 `0001` 会在任何 DDL 前拒绝执行，避免删除内容或伪造关联。
@@ -131,7 +136,7 @@ uv run alembic check
 
 ## 切换真实文本模型
 
-在 `.env` 中设置：
+本机后端在 `backend/.env` 中设置；Compose 在根目录 `.env` 中设置：
 
 ```dotenv
 ARCLIGHT_PROVIDER=openai_compatible
@@ -147,6 +152,7 @@ ARCLIGHT_LLM_API_KEY=your-private-key
 ## 质量检查
 
 ```powershell
+Set-Location "backend"
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
@@ -166,8 +172,10 @@ uv run pytest -q
 
 ## 浏览器端到端验收
 
+先在 `backend/` 运行 `uv sync --frozen` 创建后端虚拟环境，再从仓库根目录执行：
+
 ```powershell
-Set-Location "apps/web"
+Set-Location "fronted"
 npm.cmd ci
 npm.cmd run build
 # 默认使用已安装的 Chrome；CI 使用 Playwright Chromium。
@@ -175,7 +183,7 @@ npm.cmd run build
 npm.cmd run test:e2e
 ```
 
-测试自动启动临时 SQLite + Mock API（8766）与 Vite（4177），不连接 `.env` 里的业务数据库，也不调用收费模型。覆盖注册、弹窗键盘焦点与 Escape、创建项目剧集、双审核、画布保存、人工新版本、刷新会话与退出，以及 390px 移动端无横向溢出。协作测试覆盖添加成员、只读拒绝写入、切换编辑角色、项目修改／归档恢复、移除后隐藏项目。第三条测试从空白人工剧本开始，保存并独立审核后启动精确版本导演任务，只经历分镜审核，并核对没有新增第二份剧本。截图与失败 trace 位于 `apps/web/test-results/`，已忽略，不提交。
+测试自动启动临时 SQLite + Mock API（8766）与 Vite（4177），不连接 `.env` 里的业务数据库，也不调用收费模型。覆盖注册、弹窗键盘焦点与 Escape、创建项目剧集、双审核、画布保存、人工新版本、刷新会话与退出，以及 390px 移动端无横向溢出。协作测试覆盖添加成员、只读拒绝写入、切换编辑角色、项目修改／归档恢复、移除后隐藏项目。第三条测试从空白人工剧本开始，保存并独立审核后启动精确版本导演任务，只经历分镜审核，并核对没有新增第二份剧本。截图与失败 trace 位于 `fronted/test-results/`，已忽略，不提交。
 
 这条测试使用本地执行器，不替代 PostgreSQL / Redis / Celery 的容器联合验收。GitHub Actions 分别运行后端 SQLite/PostgreSQL 测试和前端构建、浏览器测试；配置存在不等于远程执行已经成功。
 
@@ -185,7 +193,7 @@ npm.cmd run test:e2e
 
 ```powershell
 docker compose build web api
-uv run python "scripts/verify_compose.py"
+uv run --directory "backend" python "scripts/verify_compose.py"
 ```
 
 脚本使用本地 `arclight-web:latest` / `arclight-api:latest` 镜像，创建随机 `arclight-verify-*` Compose 项目、独立网络和两个专用测试卷。PostgreSQL 使用该隔离实例内的 `arclight_test`，不发布数据库／Redis／API 端口，Nginx 使用本机随机端口；固定使用 Mock、随机 JWT 密钥，不调用收费服务。本机 HTTP 探测不继承环境或系统代理，避免 loopback 请求误走代理；不会修改系统代理设置。

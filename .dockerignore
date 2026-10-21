@@ -21,3 +21,6 @@ celerybeat-schedule*
 .pi-loop*
 
 docs/implementation-status.md
+
+# Local-only project todo checklist
+todo.md

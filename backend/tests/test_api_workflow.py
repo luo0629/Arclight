@@ -1,9 +1,10 @@
 from uuid import UUID, uuid4
 
+from sqlalchemy import func, select
+
 from arclight.application.runtime import execute_run
 from arclight.main import create_app
 from arclight.persistence.models import OutboxEvent, Review, Script, Shot, Storyboard
-from sqlalchemy import func, select
 
 
 def start(client, episode, key="first", story="雨夜，主角在街角发现一封信。"):
@@ -194,6 +195,7 @@ def test_postgres_concurrent_duplicate_delivery(client, episode, settings, monke
     from threading import Lock
 
     import pytest
+
     from arclight.application import runtime
     from arclight.providers.text import MockTextProvider
 

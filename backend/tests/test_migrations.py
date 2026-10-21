@@ -1,8 +1,11 @@
+from pathlib import Path
+
 import pytest
 from alembic import command
+from sqlalchemy import inspect
+
 from arclight.persistence.base import Base
 from arclight.persistence.session import build_engine
-from sqlalchemy import inspect
 
 
 def test_migration_round_trip(settings, migrated):
@@ -25,13 +28,15 @@ def test_production_rejects_insecure_settings():
         Settings(_env_file=None, environment="production")
 
 
-def test_postgres_offline_sql_contains_circular_fk():
+def test_postgres_offline_sql_contains_circular_fk(monkeypatch, tmp_path):
     from io import StringIO
 
     from alembic.config import Config
 
+    # 配置与迁移路径绑定 backend，而不是调用者的工作目录。
+    monkeypatch.chdir(tmp_path)
     output = StringIO()
-    config = Config("alembic.ini", output_buffer=output)
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"), output_buffer=output)
     config.attributes["database_url"] = "postgresql+psycopg://unused:unused@localhost/unused"
     command.upgrade(config, "head", sql=True)
     sql = output.getvalue()
@@ -47,7 +52,7 @@ def test_upgrade_preserves_0001_rows_and_backfills_new_columns(settings):
     from alembic.config import Config
     from sqlalchemy import MetaData, select
 
-    config = Config("alembic.ini")
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
     command.upgrade(config, "0001")
     engine = build_engine(settings)
@@ -114,8 +119,9 @@ def test_upgrade_preserves_0001_rows_and_backfills_new_columns(settings):
 
 
 def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated):
-    from arclight.providers.text import MockTextProvider
     from sqlalchemy import text
+
+    from arclight.providers.text import MockTextProvider
 
     response = client.post(
         f"/api/v1/episodes/{episode['id']}/scripts",

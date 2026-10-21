@@ -2,10 +2,11 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
-from arclight.main import create_app
-from arclight.providers.text import MockTextProvider
 from fastapi.testclient import TestClient
 from test_collaboration import register
+
+from arclight.main import create_app
+from arclight.providers.text import MockTextProvider
 
 
 def require_postgres(settings):

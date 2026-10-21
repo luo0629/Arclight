@@ -1500,6 +1500,8 @@ uv run ruff format --check .
 
 ## 18. 代码仓库结构
 
+> 2026-10-21 工程调整：当前仓库使用 `backend/` 存放后端源码、迁移、Python 配置与测试，使用 `fronted/` 存放前端工程；Compose 和公共文档保留在根目录。实际目录和运行命令以 [README](../README.md#项目结构) 与 [开发指南](development.md) 为准。下方保留 v1.2 的原始结构建议，不代表当前已落地目录。
+
 建议采用以下结构，按模块渐进实现：
 
 ```text

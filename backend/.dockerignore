@@ -1,0 +1,18 @@
+# 后端构建上下文仅为 backend/，不打包环境、缓存与本地数据。
+.venv
+.env
+.env.*
+**/__pycache__
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.uv-cache
+.uv-python
+*.db
+*.db-*
+*.sqlite*
+.coverage
+htmlcov
+celerybeat-schedule*
+tests
+scripts

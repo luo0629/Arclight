@@ -59,7 +59,20 @@ def test_loopback_probe_ignores_system_proxy(monkeypatch):
         {"base_url": "http://127.0.0.1:45678", "timeout": 10, "trust_env": False}
     ]
     browser.assert_called_once()
+    root = Path(__file__).resolve().parents[2]
+    assert root == verify_compose.ROOT
+    assert browser.call_args.kwargs["cwd"] == root / "fronted"
     assert browser.call_args.kwargs["env"]["ARCLIGHT_E2E_BASE_URL"] == "http://127.0.0.1:45678"
     assert calls[-1][-4:] == ("down", "--volumes", "--timeout", "15")
     assert calls[-1][0] == "--project-name"
     assert calls[-1][1].startswith("arclight-verify-")
+
+
+def test_docker_command_uses_repository_compose(monkeypatch):
+    runner = Mock(return_value=Mock(stdout="{}"))
+    monkeypatch.setattr(verify_compose.subprocess, "run", runner)
+    assert verify_compose.docker("config", "--format", "json", capture=True) == "{}"
+    assert runner.call_args.args[0] == ["docker", "compose", "config", "--format", "json"]
+    root = Path(__file__).resolve().parents[2]
+    assert runner.call_args.kwargs["cwd"] == root
+    assert (root / "compose.yaml").is_file()

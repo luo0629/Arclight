@@ -1,21 +1,24 @@
 import os
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from arclight.core.config import Settings
-from arclight.main import create_app
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+
+from arclight.core.config import Settings
+from arclight.main import create_app
 
 
 @pytest.fixture
 def settings(tmp_path):
     test_url = os.getenv("ARCLIGHT_TEST_DATABASE_URL")
     if test_url:
-        from arclight.workflows.checkpoints import open_checkpointer
         from sqlalchemy.engine import make_url
+
+        from arclight.workflows.checkpoints import open_checkpointer
 
         if make_url(test_url).database != "arclight_test":
             raise ValueError("集成测试只允许连接名为 arclight_test 的专用数据库")
@@ -52,7 +55,7 @@ def settings(tmp_path):
 
 @pytest.fixture
 def migrated(settings):
-    config = Config("alembic.ini")
+    config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
     command.upgrade(config, "head")
     return config
