@@ -1,0 +1,26 @@
+import { useState } from 'react';
+import { api, json, statusText, type Run } from './api';
+
+type Act = (action: () => Promise<unknown>) => Promise<boolean>;
+export default function Tasks({ runs, owner, writable, busy, act, reload }: { runs: Run[]; owner: boolean; writable: boolean; busy: boolean; act: Act; reload: () => Promise<void> }) {
+  const [events, setEvents] = useState<{ run: string; rows: { id: string; event_type: string; created_at: string; payload_json: unknown }[] } | null>(null);
+  const [comment, setComment] = useState('');
+  async function action(run: Run, command: string, decision?: string) {
+    const payload = command === 'resume' ? { ...run.pending_review, decision, comment, expected_revision: run.revision } : undefined;
+    await act(async () => { await api(`/runs/${run.id}/${command}`, json('POST', payload)); await reload(); setComment(''); });
+  }
+  return <section className="page-panel"><p className="eyebrow">每一步都有迹可循</p><h2>创作任务与审核</h2>
+    <p className="muted">生成在后台 Worker 中执行。等待审核时，只有项目 Owner 可以批准或驳回对应的具体版本。</p>
+    {runs.length === 0 ? <div className="empty compact"><h3>还没有创作任务</h3><p>回到创作画布，在故事起点写下灵感并生成剧本。</p></div> : <div className="task-list">{runs.map(run => <article className="task" key={run.id}>
+      <div className="task-heading"><strong>剧本与分镜创作</strong><span className={`status ${run.status.toLowerCase()}`}>{statusText[run.status] ?? run.status}</span></div>
+      <p className="muted">{new Date(run.created_at).toLocaleString('zh-CN')} · 修订 {run.revision}</p><code className="task-id">{run.id}</code>
+      {run.error_code && <p className="error">错误代码：{run.error_code}。请检查服务配置和 Worker 日志。</p>}
+      {run.pending_review && <p>等待审核：{run.pending_review.resource_type === 'script' ? '剧本' : '分镜'}版本 <code>{run.pending_review.version_id}</code></p>}
+      {owner && writable && run.pending_review && <><label>审核意见<textarea value={comment} onChange={event => setComment(event.target.value)} maxLength={2000} placeholder="记录这次创作决定的原因"/></label><div className="button-row"><button className="primary" disabled={busy} onClick={() => void action(run, 'resume', 'APPROVE')}>批准并继续</button><button disabled={busy} onClick={() => void action(run, 'resume', 'REJECT')}>驳回该版本</button></div></>}
+      <div className="button-row">{writable && ['QUEUED', 'WAITING_REVIEW'].includes(run.status) && <button disabled={busy} onClick={() => { if (window.confirm('取消此任务？已有版本会保留。')) void action(run, 'cancel'); }}>取消任务</button>}
+      {writable && run.status === 'FAILED' && <button disabled={busy} onClick={() => void action(run, 'retry')}>重试任务</button>}
+      <button disabled={busy} onClick={() => void act(async () => { const rows = await api<NonNullable<typeof events>['rows']>(`/runs/${run.id}/events?limit=100`); setEvents({ run: run.id, rows }); })}>查看执行记录</button></div>
+    </article>)}</div>}
+    {events && <section className="event-panel"><div className="section-heading"><h3>执行记录</h3><button onClick={() => setEvents(null)}>收起记录</button></div><p className="muted">任务 {events.run} · 最早 100 条记录</p><ol>{events.rows.map(event => <li key={event.id}><time>{new Date(event.created_at).toLocaleTimeString('zh-CN')}</time><strong>{event.event_type}</strong><details><summary>事件数据</summary><pre>{JSON.stringify(event.payload_json, null, 2)}</pre></details></li>)}</ol></section>}
+  </section>;
+}

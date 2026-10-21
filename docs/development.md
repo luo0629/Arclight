@@ -1,6 +1,6 @@
 # Arclight 开发与运行指南
 
-本指南包含环境启动、接口演示、数据库迁移、模型配置和质量检查。
+本指南包含前后端启动、接口演示、数据库迁移、模型配置和质量检查。
 项目定位与能力介绍见 [项目首页](../README.md)，架构约束见 [架构说明](architecture.md)。
 
 下列命令均在仓库根目录执行。若已有 `.env`，请保留并调整现有配置，不要直接覆盖。
@@ -12,21 +12,22 @@
 
 ```powershell
 Copy-Item ".env.example" ".env"
-uv sync --frozen
 # 启动新开发环境时，这条命令会执行 Alembic 与 checkpoint 初始化。
 docker compose up --build -d
 ```
 
+- 前端工作台：`http://localhost:8080`，通过 Nginx 同源代理 API；首次访问创建账号。
 - Swagger：`http://localhost:8000/docs`
 - 存活探针：`http://localhost:8000/health/live`
 - 数据库连接探针：`http://localhost:8000/health/ready`
-- API 使用 Bearer Token；默认开发值为 `local-development-token-change-me`。
+- 工作台使用账户登录：Access Token 仅放内存，刷新凭证使用 HttpOnly Cookie。
+- API 调试仍可使用开发 Service Token：`local-development-token-change-me`；生产模式禁用此身份。
 - Compose 的 `migrate` 是一次性服务；API/Worker 等迁移成功后启动。
 
 查看日志与正常停止（保留数据卷）：
 
 ```powershell
-docker compose logs -f api worker beat
+docker compose logs -f web api worker beat
 docker compose down
 ```
 
@@ -68,6 +69,20 @@ uv run python -m arclight.workers.local "替换为实际-run-UUID"
 
 SQLite 仅支持此处的单进程演示；生产及并发 Worker 必须使用 PostgreSQL。
 
+## 本地前端开发
+
+需要 Node.js 24 和 npm。在另一个终端执行：
+
+```powershell
+Set-Location "apps/web"
+npm.cmd ci
+npm.cmd run dev
+```
+
+访问 `http://localhost:5173`。Vite 默认将 `/api`、`/health` 转发至本机 8000 端口，保留原始 Host 与 Origin；API 与 Worker 请按上一节启动。需要更换目标时设置进程环境变量 `ARCLIGHT_API_PROXY`。
+
+界面体验顺序：注册 → 创建项目 → 添加剧集 → 输入故事 → 发起编剧任务 → 任务中心批准剧本 → 批准分镜 → 在画布／版本列表查看结果。人工编辑会另存新版本，不覆盖旧内容；工作流审核与人工版本审核是独立入口。图片与成片页面会明确提示尚未实现。
+
 ## 演示链路
 
 1. `POST /api/v1/projects` 创建项目。
@@ -108,7 +123,9 @@ uv run alembic check
 ```
 
 - 初始迁移：`apps/api/migrations/versions/0001_initial_production_foundation.py`。
-- 后续修改模型必须新增迁移，不要回改已部署的 `0001`。
+- 第二版迁移 `0002` 增加账户、会话、成员、审计、画布布局与人工内容版本支持。
+- 后续修改模型必须新增迁移，不要回改已部署的历史版本。
+- 存在不关联 run 的人工版本时，回退到 `0001` 会在任何 DDL 前拒绝执行，避免删除内容或伪造关联。
 - checkpoint 内部表由 LangGraph 官方 `setup()` 迁移，不纳入业务 Alembic；更新依赖后显式运行 checkpoint 初始化。
 - `alembic check` 只管理本应用声明的业务表，不尝试删除 checkpoint 或其他工具的内部表。
 
@@ -147,11 +164,46 @@ uv run pytest -q
 
 每个测试创建独立 schema；只允许数据库名 `arclight_test`，不应指向业务数据库。测试 schema 留待专用测试环境销毁。
 
+## 浏览器端到端验收
+
+```powershell
+Set-Location "apps/web"
+npm.cmd ci
+npm.cmd run build
+# 默认使用已安装的 Chrome；CI 使用 Playwright Chromium。
+# 如在本地缺少 Chrome，可执行：npx playwright install chrome
+npm.cmd run test:e2e
+```
+
+测试自动启动临时 SQLite + Mock API（8766）与 Vite（4177），不连接 `.env` 里的业务数据库，也不调用收费模型。覆盖注册、弹窗键盘焦点与 Escape、创建项目剧集、双审核、画布保存、人工新版本、刷新会话与退出，以及 390px 移动端无横向溢出。另一条协作测试覆盖添加成员、只读拒绝写入、切换编辑角色、项目修改／归档恢复、移除后隐藏项目。截图与失败 trace 位于 `apps/web/test-results/`，已忽略，不提交。
+
+这条测试使用本地执行器，不替代 PostgreSQL / Redis / Celery 的容器联合验收。GitHub Actions 分别运行后端 SQLite/PostgreSQL 测试和前端构建、浏览器测试；配置存在不等于远程执行已经成功。
+
+## 隔离 Docker 联合验收
+
+安装前端依赖并构建默认镜像后，在仓库根目录执行：
+
+```powershell
+docker compose build web api
+uv run python "scripts/verify_compose.py"
+```
+
+脚本使用本地 `arclight-web:latest` / `arclight-api:latest` 镜像，创建随机 `arclight-verify-*` Compose 项目、独立网络和两个专用测试卷。PostgreSQL 使用该隔离实例内的 `arclight_test`，不发布数据库／Redis／API 端口，Nginx 使用本机随机端口；固定使用 Mock、随机 JWT 密钥，不调用收费服务。
+
+验收包括空库迁移、checkpoint 初始化、Nginx 配置和安全头／缓存策略，以及通过真实 PostgreSQL、Redis、Worker、Beat 完成两条浏览器链路。无论成功失败，脚本都尝试清理**仅本次随机项目**的容器和测试卷；拒绝 bind mount 或外部卷混入。运行前应明确同意这项测试资源清理，不要将脚本改为指向业务项目。若终端被强制终止，使用日志中的确切随机项目名检查残留资源，不能全局 prune。
+
+## 部署与代理信任边界
+
+默认 Compose 仅供本机开发：前端 8080、API 8000、PostgreSQL 5432、Redis 6379 均仅绑定 loopback。Nginx 覆盖客户端传来的转发 IP／协议头，并对账户 POST 请求做网关限流；API 另有请求体上限与进程内账户限流。
+
+`ARCLIGHT_TRUSTED_PROXY_IPS` 默认 `*`，用于受控本地 Compose 网关。**这不是公网推荐值**：公网部署必须限制为真实代理 IP／网段，隔离 API 与数据库网络，配置 HTTPS、独立高强度 JWT 密钥、精确的 `ARCLIGHT_AUTH_ALLOWED_ORIGINS`，并按需要关闭 `ARCLIGHT_ALLOW_REGISTRATION`。若有外层 TLS 终止代理，须显式配置浏览器来源；不要盲目信任用户提交的转发头。仅在 Nginx 或本机设置限流，不等于分布式全局限流已经完成。
+
 ## 当前边界
 
-- **未实现**前端、用户注册/JWT/多成员 RBAC、图片/语音/视频生成、MinIO 上传、Continuity Reviewer、时间轴/FFmpeg、依赖 DAG 失效传播、预算扣费与 Langfuse/OTel 完整集成。
+- **未实现**图片/语音/视频生成、MinIO 上传、Continuity Reviewer、时间轴/FFmpeg、资产依赖 DAG 失效传播、预算扣费与 Langfuse/OTel 完整集成。
+- 已实现账户/JWT/多成员 RBAC、画布、人工内容编辑与审核；前端暂不支持从零人工起稿及从已批准人工剧本单独启动导演，相关入口仍需开发。
 - `visual_assets` / `asset_versions` / `asset_dependencies` 已建立最小数据库结构，但没有开放写入或选用 API；不代表资产服务已经实现。
-- 当前只有单租户服务 Token 身份，不接受客户端任意指定用户 ID；生产前必须补齐身份系统、TLS、限流、密钥管理及审计策略。
+- 已有账户与可撤销会话、Owner/Editor/Viewer 权限及关键操作审计，但 OIDC、多进程全局限流、完整运营与合规策略仍未接入。
 - 内容版本不被当前服务覆写，审核状态另行推进；尚未增加阻止数据库直写的不可变触发器。
 - 工作流推进期间持有 PostgreSQL 运行行锁，适合当前文本原型。运行中的模型请求不能即时取消，媒体长任务必须使用后续独立生成调度器。
 - Outbox 会重复投递 QUEUED run；内部通过 revision、状态与行锁去重。模型调用与数据库/checkpoint 无法组成同一事务，崩溃时不能承诺外部调用 exactly-once。

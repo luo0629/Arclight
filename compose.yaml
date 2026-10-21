@@ -6,6 +6,9 @@ x-app: &app
     ARCLIGHT_CHECKPOINT_URL: postgresql://arclight:arclight@postgres:5432/arclight
     ARCLIGHT_REDIS_URL: redis://redis:6379/0
     ARCLIGHT_API_TOKEN: ${ARCLIGHT_API_TOKEN:-local-development-token-change-me}
+    ARCLIGHT_JWT_SECRET: ${ARCLIGHT_JWT_SECRET:-arclight-local-jwt-secret-change-before-deploying}
+    ARCLIGHT_ALLOW_REGISTRATION: ${ARCLIGHT_ALLOW_REGISTRATION:-true}
+    ARCLIGHT_AUTH_ALLOWED_ORIGINS: ${ARCLIGHT_AUTH_ALLOWED_ORIGINS:-[]}
     ARCLIGHT_PROVIDER: ${ARCLIGHT_PROVIDER:-mock}
     ARCLIGHT_LLM_API_KEY: ${ARCLIGHT_LLM_API_KEY:-}
     ARCLIGHT_LLM_BASE_URL: ${ARCLIGHT_LLM_BASE_URL:-https://api.openai.com/v1}
@@ -13,6 +16,20 @@ x-app: &app
   restart: unless-stopped
 
 services:
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports: ["127.0.0.1:8080:80"]
+    restart: unless-stopped
+    depends_on:
+      api: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   postgres:
     image: postgres:17-alpine
     environment:
@@ -47,6 +64,10 @@ services:
 
   api:
     <<: *app
+    environment:
+      <<: *app-env
+      # 本地网关覆盖转发头，API 宿主端口仅监听 loopback；公网部署须限制可信代理。
+      FORWARDED_ALLOW_IPS: ${ARCLIGHT_TRUSTED_PROXY_IPS:-*}
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       migrate: {condition: service_completed_successfully}

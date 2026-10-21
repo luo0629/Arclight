@@ -20,3 +20,10 @@ celerybeat-schedule*
 
 # Local implementation status and unfinished-task checklist
 /docs/implementation-status.md
+
+# Frontend build and browser test artifacts
+node_modules/
+dist/
+test-results/
+playwright-report/
+*.tsbuildinfo

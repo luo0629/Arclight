@@ -12,3 +12,12 @@ __pycache__
 .uv-python
 
 celerybeat-schedule*
+
+**/node_modules
+**/dist
+**/test-results
+**/playwright-report
+*.tsbuildinfo
+.pi-loop*
+
+docs/implementation-status.md
