@@ -201,3 +201,16 @@ blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid #ddbbcf;
 .episode-dialog > p { color: var(--muted); font-size: 13px; line-height: 1.7; }
 .episode-dialog form { display: grid; gap: 18px; margin-top: 20px; }
 .episode-dialog .button-row { margin-top: 0; }
+
+/* 项目生产配置沿用设置页表单，比例示意不冒充生成结果。 */
+.production-settings { max-width: 720px; }
+.production-settings form { margin-top: 18px; }
+.production-profile { display: grid; grid-template-columns: minmax(0, 1fr) 180px; align-items: center; gap: 24px; }
+.profile-preview { margin: 0; text-align: center; color: var(--muted); font-size: 12px; }
+.profile-preview-stage { display: flex; align-items: center; justify-content: center; min-height: 160px; }
+.profile-preview-frame { border: 2px solid var(--berry); background: var(--paper); }
+.profile-preview small { display: block; margin-top: 5px; font-size: 10px; }
+.saved-production-config { margin-top: 18px; font-size: 12px; }
+.saved-production-config summary { cursor: pointer; color: var(--muted); }
+.saved-production-config pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
+@media (max-width: 620px) { .production-profile { grid-template-columns: minmax(0, 1fr); gap: 14px; }.production-settings .button-row { flex-wrap: wrap; } }

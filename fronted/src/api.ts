@@ -1,6 +1,6 @@
 export type User = { id: string; email: string; display_name: string };
 export type Session = { access_token: string; user: User };
-export type Project = { id: string; name: string; owner_id: string; archived: boolean; budget_limit: string };
+export type Project = { id: string; name: string; owner_id: string; archived: boolean; budget_limit: string; style_guide: Record<string, unknown>; output_profile: Record<string, unknown> };
 export type Episode = { id: string; project_id: string; episode_no: number; title: string; status: string; target_duration_ms: number };
 export type ContentVersion = { id: string; episode_id: string; version_no: number; content_json: Record<string, unknown>; status: string; run_id: string | null; script_version_id?: string };
 export type Run = { id: string; status: string; revision: number; pending_review: { resource_type: 'script' | 'storyboard'; version_id: string } | null; error_code: string | null; created_at: string };
