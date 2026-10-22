@@ -214,3 +214,11 @@ blockquote { margin: 10px 0; padding-left: 12px; border-left: 3px solid #ddbbcf;
 .saved-production-config summary { cursor: pointer; color: var(--muted); }
 .saved-production-config pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 14px; border: 1px solid var(--line); border-radius: 8px; }
 @media (max-width: 620px) { .production-profile { grid-template-columns: minmax(0, 1fr); gap: 14px; }.production-settings .button-row { flex-wrap: wrap; } }
+
+/* 分页统计只描述已读取范围；窄屏下控件换行，不撑开工作区。 */
+.list-pagination { margin: 12px 0; padding: 10px; border: 1px dashed var(--line); border-radius: 10px; min-width: 0; }
+.list-pagination .hint { margin: 0 0 8px; }
+.pagination-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pagination-actions .script-select-trigger { width: auto; min-width: 0; max-width: 100%; margin: 0; }
+.list-pagination .error { overflow-wrap: anywhere; }
+.event-panel > .muted { overflow-wrap: anywhere; }

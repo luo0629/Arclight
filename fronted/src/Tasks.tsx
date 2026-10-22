@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import usePagedList from './usePagedList';
+import ListPagination from './ListPagination';
 import { api, json, statusText, type Run } from './api';
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
-export default function Tasks({ runs, owner, writable, busy, act, reload }: { runs: Run[]; owner: boolean; writable: boolean; busy: boolean; act: Act; reload: () => Promise<void> }) {
-  const [events, setEvents] = useState<{ run: string; rows: { id: string; event_type: string; created_at: string; payload_json: unknown }[] } | null>(null);
+export default function Tasks({ runs, owner, writable, busy, act, reload, pagination }: { runs: Run[]; pagination: React.ReactNode; owner: boolean; writable: boolean; busy: boolean; act: Act; reload: () => Promise<void> }) {
+  const [eventRun, setEventRun] = useState('');
   const [comment, setComment] = useState('');
   async function action(run: Run, command: string, decision?: string) {
     const payload = command === 'resume' ? { ...run.pending_review, decision, comment, expected_revision: run.revision } : undefined;
@@ -19,8 +21,21 @@ export default function Tasks({ runs, owner, writable, busy, act, reload }: { ru
       {owner && writable && run.pending_review && <><label>审核意见<textarea value={comment} onChange={event => setComment(event.target.value)} maxLength={2000} placeholder="记录这次创作决定的原因"/></label><div className="button-row"><button className="primary" disabled={busy} onClick={() => void action(run, 'resume', 'APPROVE')}>批准并继续</button><button disabled={busy} onClick={() => void action(run, 'resume', 'REJECT')}>驳回该版本</button></div></>}
       <div className="button-row">{writable && ['QUEUED', 'WAITING_REVIEW'].includes(run.status) && <button disabled={busy} onClick={() => { if (window.confirm('取消此任务？已有版本会保留。')) void action(run, 'cancel'); }}>取消任务</button>}
       {writable && run.status === 'FAILED' && <button disabled={busy} onClick={() => void action(run, 'retry')}>重试任务</button>}
-      <button disabled={busy} onClick={() => void act(async () => { const rows = await api<NonNullable<typeof events>['rows']>(`/runs/${run.id}/events?limit=100`); setEvents({ run: run.id, rows }); })}>查看执行记录</button></div>
+      <button disabled={busy} onClick={() => setEventRun(run.id)}>查看执行记录</button></div>
     </article>)}</div>}
-    {events && <section className="event-panel"><div className="section-heading"><h3>执行记录</h3><button onClick={() => setEvents(null)}>收起记录</button></div><p className="muted">任务 {events.run} · 最早 100 条记录</p><ol>{events.rows.map(event => <li key={event.id}><time>{new Date(event.created_at).toLocaleTimeString('zh-CN')}</time><strong>{event.event_type}</strong><details><summary>事件数据</summary><pre>{JSON.stringify(event.payload_json, null, 2)}</pre></details></li>)}</ol></section>}
+    {pagination}
+    {eventRun && <EventHistory key={eventRun} runId={eventRun} close={() => setEventRun('')}/>}
+  </section>;
+}
+
+type RunEvent = { id: string; event_type: string; created_at: string; payload_json: unknown };
+function EventHistory({ runId, close }: { runId: string; close: () => void }) {
+  const events = usePagedList<RunEvent>('/runs/' + runId + '/events');
+  const { reload } = events;
+  useEffect(() => { void reload().catch(() => {}); }, [reload]);
+  return <section className="event-panel" aria-label="执行记录"><div className="section-heading"><h3>执行记录</h3><button onClick={close}>收起记录</button></div><p className="muted">任务 {runId} · 按时间从早到晚</p>
+    {events.loaded && !events.rows.length && <p className="hint">暂无执行记录</p>}
+    <ol>{events.rows.map(event => <li key={event.id}><time>{new Date(event.created_at).toLocaleTimeString('zh-CN')}</time><strong>{event.event_type}</strong><details><summary>事件数据</summary><pre>{JSON.stringify(event.payload_json, null, 2)}</pre></details></li>)}</ol>
+    <ListPagination {...events} label="事件" count={events.rows.length}/>
   </section>;
 }

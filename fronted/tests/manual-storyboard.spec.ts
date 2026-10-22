@@ -164,6 +164,8 @@ test('TXT-01：剧集归档与活动任务禁止人工起稿，加载失败可�
   const { headers, prefix, script } = await setup(page);
   await script(0, '限制验收稿', true);
   await page.goto('/');
+  // 先等待工作台首批读取完成，再只模拟人工起稿选择器的失败。
+  await expect(page.getByRole('button', { name: '自己写分镜', exact: true })).toBeVisible();
   await page.route('**/scripts?limit=100&offset=0', route => route.abort());
   await page.getByRole('button', { name: '自己写分镜', exact: true }).click();
   await expect(page.getByRole('button', { name: '重试加载剧本' })).toBeVisible();
