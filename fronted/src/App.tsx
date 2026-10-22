@@ -6,6 +6,7 @@ import Login from './Login';
 import Members from './Members';
 import Tasks from './Tasks';
 import Settings from './Settings';
+import EpisodeEditor from './EpisodeEditor';
 import Dialog from './Dialog';
 
 export default function App() {
@@ -72,6 +73,7 @@ function ProjectWorkspace({ project, projectPicker, reloadProjects }: { project:
   useEffect(() => { let live = true; void (async () => { try { await reload(); } catch (error) { if (live) setError(message(error)); } })(); return () => { live = false; }; }, [reload]);
   const owner = role === 'owner'; const writable = role !== 'viewer' && !project.archived;
   const episode = episodes.find(row => row.id === episodeId);
+  function updateEpisode(updated: Episode) { setEpisodes(rows => rows.map(row => row.id === updated.id ? updated : row)); }
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); setBusy(true); setError(''); const data = new FormData(event.currentTarget);
     try { const row = await api<Episode>(`/projects/${project.id}/episodes`, json('POST', { episode_no: Number(data.get('number')), title: data.get('title'), target_duration_ms: Number(data.get('duration')) * 1000 })); await reload(); setEpisodeId(row.id); setAdding(false); setPage('canvas'); }
@@ -81,9 +83,9 @@ function ProjectWorkspace({ project, projectPicker, reloadProjects }: { project:
     <nav aria-label="剧集列表" className="episode-nav">{episodes.map(row => <button className={row.id === episodeId ? 'active' : ''} key={row.id} onClick={() => { setEpisodeId(row.id); setPage('canvas'); }}><span className="episode-number">{String(row.episode_no).padStart(2, '0')}</span><span>{row.title}<small>{row.status === 'ARCHIVED' ? '已归档' : `${row.target_duration_ms / 1000} 秒目标时长`}</small></span></button>)}</nav>
     {writable && <button className="dashed-button" onClick={() => setAdding(true)}>＋ 添加一集</button>}
     <div className="sidebar-bottom"><p className="hint">{owner ? '你是项目拥有者' : role === 'editor' ? '你可以编辑与创建任务' : '你当前拥有只读权限'}</p><button className={page === 'members' ? 'active' : ''} onClick={() => setPage('members')}>创作伙伴</button>{owner && <button onClick={() => setPage('settings')}>项目设置与归档</button>}<p className="version-note">文本工作台 · 图片与成片开发中</p></div>
-  </aside><main className="workspace"><div className="workspace-top"><div><p className="breadcrumb">创作本 / {project.name}{project.archived ? ' / 已归档' : ''}</p><h1>{page === 'members' ? '创作伙伴' : page === 'settings' ? '项目设置' : episode ? `第 ${episode.episode_no} 集 · ${episode.title}` : '你的故事，准备开场'}</h1></div><span className="notebook-stamp" aria-hidden="true">MAKE A<br/>LITTLE MAGIC</span></div>
+  </aside><main className="workspace"><div className="workspace-top"><div><p className="breadcrumb">创作本 / {project.name}{project.archived ? ' / 已归档' : ''}</p><h1>{page === 'members' ? '创作伙伴' : page === 'settings' ? '项目设置' : episode ? `第 ${episode.episode_no} 集 · ${episode.title}` : '你的故事，准备开场'}</h1>{page === 'canvas' && episode && role !== 'viewer' && <EpisodeEditor key={episode.id} episode={episode} disabled={!writable || episode.status === 'ARCHIVED'} onSaved={updateEpisode}/>}</div><span className="notebook-stamp" aria-hidden="true">MAKE A<br/>LITTLE MAGIC</span></div>
     {error && <p className="error workspace-error" role="alert">{error}<button onClick={() => void reload().catch(error => setError(message(error)))}>重试</button></p>}
-    {page === 'members' ? <Members key={project.id} projectId={project.id} owner={owner} writable={writable}/> : page === 'settings' ? <Settings project={project} episodes={episodes} reload={async () => { await reloadProjects(); await reload(); }}/> : episode ? <EpisodeWorkspace key={episode.id} episode={episode} owner={owner} writable={writable && episode.status !== 'ARCHIVED'}/> : <div className="empty"><span className="big-flower" aria-hidden="true">✿</span><h2>{loaded ? '写下第一集的名字吧' : '正在载入剧集…'}</h2><p>每一集都有独立的剧本、分镜、画布与任务记录。</p>{writable && <button className="primary" onClick={() => setAdding(true)}>添加第一集</button>}</div>}
+    {page === 'members' ? <Members key={project.id} projectId={project.id} owner={owner} writable={writable}/> : page === 'settings' ? <Settings project={project} episodes={episodes} onEpisodeSaved={updateEpisode} reload={async () => { await reloadProjects(); await reload(); }}/> : episode ? <EpisodeWorkspace key={episode.id} episode={episode} owner={owner} writable={writable && episode.status !== 'ARCHIVED'}/> : <div className="empty"><span className="big-flower" aria-hidden="true">✿</span><h2>{loaded ? '写下第一集的名字吧' : '正在载入剧集…'}</h2><p>每一集都有独立的剧本、分镜、画布与任务记录。</p>{writable && <button className="primary" onClick={() => setAdding(true)}>添加第一集</button>}</div>}
   </main>
   {adding && <Dialog labelledBy="episode-title" busy={busy} onDismiss={() => setAdding(false)}><h2 id="episode-title">开始新的一集</h2><form onSubmit={create}><label>剧集标题<input name="title" required maxLength={160} autoFocus/></label><div className="field-pair"><label>集数<input name="number" type="number" min="1" defaultValue={Math.max(0, ...episodes.map(row => row.episode_no)) + 1} required/></label><label>目标时长（秒）<input name="duration" type="number" min="2.5" max="1800" step="0.5" defaultValue="30" required/></label></div>{error && <p className="error" role="alert">{error}</p>}<div className="button-row"><button type="button" disabled={busy} onClick={() => setAdding(false)}>取消</button><button className="primary" disabled={busy}>{busy ? '创建中…' : '创建剧集'}</button></div></form></Dialog>}
   </div>;
@@ -106,7 +108,7 @@ function EpisodeWorkspace({ episode, owner, writable }: { episode: Episode; owne
       api<Run[]>(prefix + '/runs?limit=100'), api<Graph>(prefix + '/canvas'),
     ]);
     if (mounted.current && ticket === sequence.current) setData({ scripts, boards, runs, graph });
-  }, [episode.id]);
+  }, [episode.id, episode.title, episode.target_duration_ms]);
   useEffect(() => { mounted.current = true; void reload().catch(error => { if (mounted.current) setError(message(error)); }); return () => { mounted.current = false; sequence.current++; }; }, [reload]);
   const active = data?.runs.some(run => ['QUEUED', 'RUNNING', 'WAITING_REVIEW'].includes(run.status));
   useEffect(() => {
