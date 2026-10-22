@@ -98,6 +98,7 @@ test('真实 API：成员角色、只读权限、归档恢复与移除成员', a
     const partner = await memberContext.newPage();
     await partner.goto('/');
     await expect(partner.getByText('你当前拥有只读权限', { exact: true })).toBeVisible();
+    await expect(partner.getByRole('button', { name: '自己写分镜', exact: true })).toHaveCount(0);
     await expect(partner.getByRole('button', { name: '＋ 添加一集', exact: true })).toHaveCount(0);
     await expect(partner.getByRole('button', { name: '项目设置与归档', exact: true })).toHaveCount(0);
     const denied = await memberContext.request.post(`/api/v1/projects/${project.id}/episodes`, {
@@ -108,6 +109,7 @@ test('真实 API：成员角色、只读权限、归档恢复与移除成员', a
     await expect(page.getByLabel('小伙伴的角色')).toBeEnabled();
     await partner.reload();
     await expect(partner.getByText('你可以编辑与创建任务', { exact: true })).toBeVisible();
+    await expect(partner.getByRole('button', { name: '自己写分镜', exact: true })).toBeVisible();
     await expect(partner.getByRole('button', { name: '＋ 添加一集', exact: true })).toBeVisible();
     await page.getByRole('button', { name: '项目设置与归档', exact: true }).click();
     await page.getByLabel('项目名称').fill('星星创作小队');
@@ -118,6 +120,7 @@ test('真实 API：成员角色、只读权限、归档恢复与移除成员', a
     await expect(page.getByRole('button', { name: '恢复项目', exact: true })).toBeVisible();
     await expect(page.getByLabel('项目名称')).toBeDisabled();
     await partner.reload();
+    await expect(partner.getByRole('button', { name: '自己写分镜', exact: true })).toHaveCount(0);
     await expect(partner.getByRole('button', { name: '＋ 添加一集', exact: true })).toHaveCount(0);
     page.once('dialog', dialog => dialog.accept());
     await page.getByRole('button', { name: '恢复项目', exact: true }).click();
