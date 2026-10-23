@@ -18,8 +18,8 @@ htmlcov/
 
 celerybeat-schedule*
 
-# Local implementation status and unfinished-task checklist
-/docs/implementation-status.md
+# Local-only project documentation
+/docs/
 
 # Frontend build and browser test artifacts
 node_modules/
