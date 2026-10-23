@@ -7,6 +7,7 @@ from pathlib import Path
 import uvicorn
 from alembic import command
 from alembic.config import Config
+from cryptography.fernet import Fernet
 from sqlalchemy import select
 
 from arclight.application.runtime import execute_run
@@ -22,6 +23,7 @@ def main():
         _env_file=None,
         environment="test",
         provider="mock",
+        service_encryption_key=Fernet.generate_key().decode(),
         database_url="sqlite:///" + (folder / "business.db").as_posix(),
         checkpoint_url="sqlite:///" + (folder / "checkpoints.db").as_posix(),
         auth_requests_per_minute=300,

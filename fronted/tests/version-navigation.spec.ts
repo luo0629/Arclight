@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 const content = (title: string) => ({
@@ -45,6 +46,7 @@ async function setup(page: Page) {
 }
 
 async function draft(page: Page, title: string) {
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await page.getByLabel("剧本标题", { exact: true }).fill(title);
   await page.getByLabel("梗概", { exact: true }).fill("新的人工剧本");
@@ -76,6 +78,7 @@ test("TXT-05：从旧剧本另存，精确选中 POST 回执而非并发最新�
     ).ok(),
   ).toBeTruthy();
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page.locator(".version-row").filter({ hasText: "最早的原稿" }).click();
   await page.getByRole("button", { name: "编辑并另存新版本" }).click();
@@ -136,6 +139,7 @@ test("TXT-05：手机从零保存自动打开待审核稿，审核后提示同�
   await page.setViewportSize({ width: 390, height: 844 });
   const { headers, prefix } = await setup(page);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await draft(page, "手机新稿");
   await page.getByRole("button", { name: "保存人工剧本", exact: true }).click();
   await expect(detail(page).locator(".section-heading h3")).toHaveText(
@@ -174,6 +178,7 @@ test("TXT-05：POST 失败保留草稿，成功后刷新失败仍打开已保存
 }) => {
   const { headers, prefix } = await setup(page);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await draft(page, "不能重复保存的新稿");
   let posts = 0;
   let failPost = true;
@@ -256,6 +261,7 @@ test("TXT-05：保存响应迟到时不污染已切换的剧集", async ({ page 
     })
   ).json();
   await page.goto("/");
+  await openWorkspacePanels(page);
   await draft(page, "第一集迟到稿");
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -288,6 +294,7 @@ test("TXT-05：保存响应迟到时不污染已切换的剧集", async ({ page 
   );
   release();
   await delivered;
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("button", { name: "自己写剧本", exact: true }),
   ).toBeVisible();

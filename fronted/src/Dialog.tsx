@@ -10,11 +10,13 @@ export default function Dialog({
   busy,
   onDismiss,
   children,
+  className,
 }: {
   labelledBy: string;
   busy: boolean;
   onDismiss: () => void;
   children: ReactNode;
+  className?: string;
 }) {
   const previous = useRef(
     document.activeElement instanceof HTMLElement
@@ -32,7 +34,7 @@ export default function Dialog({
         showCloseButton={false}
         aria-labelledby={labelledBy}
         aria-describedby={undefined}
-        className="max-h-[90dvh] overflow-y-auto"
+        className={"max-h-[90dvh] overflow-y-auto " + (className ?? "")}
         onInteractOutside={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => {
           if (busy) event.preventDefault();

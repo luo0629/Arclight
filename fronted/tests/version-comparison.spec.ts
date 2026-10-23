@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 const scriptContent = (title: string) => ({
@@ -124,6 +125,7 @@ test("TXT-07：人工另存记录精确旧来源，字段新增修改删除、�
   const first = await env.script(0, "雨夜初稿");
   await env.script(1, "另一个已保存版本", first.id);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page.locator(".version-row").filter({ hasText: "雨夜初稿" }).click();
   await page.getByRole("button", { name: "编辑并另存新版本" }).click();
@@ -201,6 +203,7 @@ test("TXT-07：分镜精确引用、数值与空文本、首版和相同内容�
   const board1 = await env.board(0, first.id, "女孩撑伞站在巷口。");
   const board2 = await env.board(1, second.id, "猫从屋檐探出头。", board1.id);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await openVersion(page, "分镜版本 2");
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText(`引用剧本：v2 · ${second.id}`);
@@ -253,6 +256,7 @@ test("TXT-07：跨100个历史版本追加和读取失败重试，基准保持�
     previous = row.id;
   }
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page
     .locator(".version-row")
@@ -303,6 +307,7 @@ test("TXT-07：选择器列表失败可重试，切换基准丢弃迟到对比�
   await env.script(1, "中间版本的正文");
   const third = await env.script(2, "当前版本的正文", first.id);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page
     .locator(".version-row")
@@ -397,6 +402,7 @@ test("TXT-07：归档项目的Viewer可只读对比，不出现编辑及审核�
     ).status(),
   ).toBe(200);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await openVersion(page, "归档前的终稿");
   await expect(page.getByRole("dialog")).toContainText("归档前的原稿");
   await page.keyboard.press("Escape");
@@ -413,6 +419,7 @@ test("TXT-07：当前各页面真实截图，系统生成作者与直接下游�
 }) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("button", { name: "登录创作手帐" }),
   ).toBeVisible();
@@ -444,6 +451,7 @@ test("TXT-07：当前各页面真实截图，系统生成作者与直接下游�
     )
     .toBe("WAITING_REVIEW");
   await page.goto("/");
+  await openWorkspacePanels(page);
   await expect(page.locator(".react-flow__node").first()).toBeVisible();
   await page.screenshot({
     path: "test-results/pages-canvas-desktop.png",

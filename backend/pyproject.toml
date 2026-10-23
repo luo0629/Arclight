@@ -18,6 +18,7 @@ dependencies = [
     "PyJWT>=2.10,<3",
     "pwdlib[argon2]>=0.3,<1",
     "pillow>=11,<13",
+    "cryptography>=46,<50",
 ]
 
 [dependency-groups]

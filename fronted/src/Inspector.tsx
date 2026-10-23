@@ -121,13 +121,13 @@ export default function Inspector({
     >
       <div className="inspector-heading flex items-center justify-between border-b border-dashed pb-3">
         <span className="eyebrow text-[11px] font-semibold tracking-widest text-primary">
-          这一页的细节
+          内容与创作
         </span>
         <span
-          className="mini-flower text-xl text-primary/60"
+          className="mini-flower flex size-7 items-center justify-center rounded-full bg-accent text-sm text-primary"
           aria-hidden="true"
         >
-          ✿
+          ✦
         </span>
       </div>
       {episodeDrafts.length > 0 && (

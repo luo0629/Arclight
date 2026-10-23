@@ -35,7 +35,7 @@ export default function ListPagination({
 }: Props) {
   return (
     <section
-      className="list-pagination flex min-w-0 flex-col gap-2 rounded-lg border border-dashed bg-card/80 p-3"
+      className="list-pagination flex min-w-0 flex-col gap-2 py-1"
       aria-label={label + "分页"}
       aria-busy={loading}
     >
@@ -86,7 +86,7 @@ export default function ListPagination({
             </Select>
             <Button
               variant="outline"
-              size="lg"
+              size="sm"
               disabled={loading}
               onClick={() => void (loaded ? more() : reload()).catch(() => {})}
             >

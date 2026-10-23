@@ -1,3 +1,4 @@
+import { Sprout, FileText, Clapperboard, Film } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatusBadge } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
@@ -30,6 +31,10 @@ const names: Record<string, string> = {
   shot: "镜头",
 };
 function PaperNode({ data, selected }: NodeProps<Paper>) {
+  const Icon =
+    { episode: Sprout, script: FileText, storyboard: Clapperboard, shot: Film }[
+      data.kind
+    ] ?? FileText;
   return (
     <article
       className={cn(
@@ -41,7 +46,10 @@ function PaperNode({ data, selected }: NodeProps<Paper>) {
       )}
     >
       <Handle type="target" position={Position.Left} isConnectable={false} />
-      <div className="paper-kicker text-[10px] tracking-wider text-muted-foreground">
+      <div className="paper-kicker flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="flex size-7 items-center justify-center rounded-lg bg-background text-primary">
+          <Icon className="size-4" />
+        </span>
         {names[data.kind]}
         {data.version_no ? ` / v${data.version_no}` : ""}
       </div>
@@ -152,7 +160,7 @@ export default function Canvas({
     }
   }
   return (
-    <div className="canvas-wrap relative h-[600px] min-w-0 overflow-hidden rounded-xl border bg-card">
+    <div className="canvas-wrap relative h-[max(560px,calc(100dvh-354px))] min-w-0 overflow-hidden rounded-2xl border bg-card shadow-sm">
       <div
         className="canvas-note pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-24px)] rounded-lg border bg-card/90 px-3 py-2 text-xs text-muted-foreground"
         role="status"
@@ -183,7 +191,7 @@ export default function Canvas({
           "controls.interactive.ariaLabel": "切换交互",
         }}
       >
-        <Background color="#dfcdd8" gap={22} size={1.2} />
+        <Background color="#c8dbdf" gap={22} size={1.2} />
         <Controls showInteractive={false} />
       </ReactFlow>
       {writable && (

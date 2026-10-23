@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4.1-mini"
     llm_timeout_seconds: float = 60
+    service_encryption_key: SecretStr = SecretStr("")
+    model_service_allowed_hosts: list[str] = Field(default_factory=lambda: ["api.openai.com"])
     max_story_chars: int = 20000
     jwt_secret: SecretStr = SecretStr("arclight-local-jwt-secret-change-before-deploying")
     access_token_minutes: int = Field(default=15, ge=1, le=60)

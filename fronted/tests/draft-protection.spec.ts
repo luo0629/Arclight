@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 const content = (title: string) => ({
@@ -57,6 +58,7 @@ async function setup(page: Page) {
     return row;
   }
   await page.goto("/");
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("heading", { name: "第 1 集 · 第一集", exact: true }),
   ).toBeVisible();
@@ -78,6 +80,7 @@ async function select(page: Page, title: string) {
   await page.locator(".version-row").filter({ hasText: title }).click();
 }
 async function newScript(page: Page, title: string) {
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await page.getByLabel("剧本标题", { exact: true }).fill(title);
   await page.getByLabel("梗概", { exact: true }).fill("保留这份梗概");
@@ -94,6 +97,7 @@ async function drafts(
   );
 }
 async function beginBoard(page: Page, title: string) {
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写分镜", exact: true }).click();
   await page.getByRole("combobox", { name: "已批准的剧本版本" }).click();
   await page.getByRole("option").filter({ hasText: title }).click();
@@ -115,6 +119,7 @@ test("TXT-06：精确版本隔离，切换视图、任务、设置、剧集和�
     })
   ).json();
   await page.reload();
+  await openWorkspacePanels(page);
   await page
     .getByRole("combobox", { name: "选择项目", exact: true })
     .selectOption(project.id);
@@ -169,6 +174,7 @@ test("TXT-06：精确版本隔离，切换视图、任务、设置、剧集和�
     await dialog.accept();
   });
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(page.locator(".episode-drafts")).toContainText("剧本 v1 的修改");
   await page
     .getByRole("combobox", { name: "选择项目", exact: true })
@@ -183,6 +189,7 @@ test("TXT-06：精确版本隔离，切换视图、任务、设置、剧集和�
     "甲的未保存修改",
   );
   await page.reload();
+  await openWorkspacePanels(page);
   expect(warning).toBeGreaterThan(0);
   await list(page);
   await select(page, "原稿乙");
@@ -208,6 +215,7 @@ test("TXT-06：手机人工起稿和灵感切集及刷新恢复，显式放弃�
   await page.getByLabel("故事灵感", { exact: true }).fill("雨夜的女孩和猫");
   await newScript(page, "手机未完成的剧本");
   await page.getByRole("button", { name: "收起人工起稿", exact: true }).click();
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "手机未完成的剧本",
@@ -235,9 +243,11 @@ test("TXT-06：手机人工起稿和灵感切集及刷新恢复，显式放弃�
   );
   page.on("dialog", (dialog) => dialog.accept());
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(page.getByLabel("故事灵感", { exact: true })).toHaveValue(
     "雨夜的女孩和猫",
   );
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "手机未完成的剧本",
@@ -269,6 +279,7 @@ test("TXT-06：分镜起稿按精确来源隔离，旧分镜另存草稿也可�
   const source = await script(0, "来源甲", true);
   await script(1, "来源乙", true);
   await page.reload();
+  await openWorkspacePanels(page);
   await beginBoard(page, "来源甲");
   await page.getByLabel("画面描述", { exact: true }).fill("甲的镜头草稿");
   await page.getByRole("button", { name: "收起人工分镜", exact: true }).click();
@@ -387,6 +398,7 @@ test("TXT-06：存储拒绝写入时明确警告，内存草稿跨剧集恢复�
     .getByRole("button")
     .filter({ hasText: "第一集" })
     .click();
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "内存里的草稿",
@@ -416,6 +428,7 @@ test("TXT-06：损坏存储不崩溃，不读取其他账号草稿", async ({ pa
     { key: storageKey, episodeId: episode.id },
   );
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(page.getByRole("alert")).toContainText("本标签页草稿存储不可用");
   await expect(page.getByLabel("故事灵感", { exact: true })).toHaveValue("");
   await expect(page.locator(".episode-drafts")).toHaveCount(0);
@@ -435,6 +448,8 @@ test("TXT-06：损坏存储不崩溃，不读取其他账号草稿", async ({ pa
     { key: storageKey, episodeId: episode.id },
   );
   await page.reload();
+  await openWorkspacePanels(page);
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("本地草稿格式损坏");
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue("");
@@ -478,6 +493,7 @@ test("TXT-06：迟到的保存回执不能清除切回后继续输入的新草�
     .click();
   await list(page);
   await page.locator(".version-row").filter({ hasText: "第一集" }).click();
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "已提交的旧输入",
@@ -500,8 +516,10 @@ test("TXT-06：迟到的保存回执不能清除切回后继续输入的新草�
   );
   page.on("dialog", (dialog) => dialog.accept());
   await page.reload();
+  await openWorkspacePanels(page);
   await list(page);
   await page.locator(".version-row").filter({ hasText: "第一集" }).click();
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "切回后继续写的新草稿",
@@ -512,6 +530,7 @@ test("TXT-06：归档后恢复历史版本草稿不会绕过只读限制", async
   const { script, storageKey } = await setup(page);
   await script(0, "归档前的原稿");
   await page.reload();
+  await openWorkspacePanels(page);
   await list(page);
   await select(page, "归档前的原稿");
   await page.getByRole("button", { name: "编辑并另存新版本" }).click();
@@ -561,6 +580,7 @@ test("TXT-06：同标签页退出再登录可恢复，换账号不展示前一�
   });
   expect(registered.status()).toBe(201);
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("button", { name: "退出登录", exact: true }),
   ).toBeVisible();
@@ -573,6 +593,8 @@ test("TXT-06：同标签页退出再登录可恢复，换账号不展示前一�
   await page.getByLabel("邮箱", { exact: true }).fill(user.email);
   await page.getByLabel("密码", { exact: true }).fill("draft-protection-test");
   await page.getByRole("button", { name: "登录创作手帐", exact: true }).click();
+  await expect(page.locator(".workspace-toolbar")).toBeVisible();
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "原账号的临时内容",

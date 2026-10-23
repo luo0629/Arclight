@@ -184,6 +184,16 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 - [架构与约束](docs/architecture.md)：分层、持久化、恢复机制及安全边界。
 - [开发与运行指南](docs/development.md)：环境启动、API 演示、Alembic 迁移、模型配置及质量检查。
 
+## 账号模型服务配置
+
+顶栏“模型服务配置”可分别保存文字、图片、视频和语音的地址与模型预设。文字服务默认继承服务器配置，只有用户显式启用自定义文字服务后，新任务才使用该配置。图片、视频、语音当前仅保存预设，不支持生成；真实收费 Provider 联调仍待授权验收。
+
+- 部署新版前按既有流程备份并执行 `alembic upgrade head`（新增迁移 `0003`）；开发代理需保持 `/api/v1` 同源。
+- 保存 API Key 前须配置独立 `ARCLIGHT_SERVICE_ENCRYPTION_KEY`：以 `cryptography.fernet.Fernet.generate_key()` 生成，API 与 Worker 使用相同值。密钥不与密文同库存储，不写入 Git，必须安全备份；直接更换会使已保存服务和未结束任务的配置快照无法解密。未配置时仍可保存无密钥预设。
+- `ARCLIGHT_MODEL_SERVICE_ALLOWED_HOSTS` 是管理员信任的精确公网 HTTPS 域名 JSON 列表，默认仅 `api.openai.com`。不要加入不受信任或解析到内网的域名；禁止 IP、HTTP、URL 凭证、查询参数、非443端口。HTTP 客户端不跟随重定向；执行任务时再次检查允许列表，管理员撤销域名后，未结束任务可能被阻止。
+- 配置按账号隔离、revision 防止陈旧覆盖。读取接口只有 `has_key`，不返回密钥或密文；浏览器不持久化 API Key。工作流启动时捕获加密配置快照，后续修改不会改变等待审核及重试任务；凭证不进入提示词、checkpoint、公开任务详情或审计事件。
+- 保存不测试连接、不产生模型费用。启用自定义文字服务后，主动创建的任务将发送故事素材并可能收费，请先确认数据与预算。
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。

@@ -1,3 +1,11 @@
+import {
+  PanelLeftClose,
+  PanelLeftOpen,
+  LayoutDashboard,
+  Users,
+  Settings2,
+  Leaf,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { Notice, FormLabel, EmptyState } from "@/components/ui-kit";
@@ -39,6 +47,9 @@ export default function ProjectWorkspace({
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState("canvas");
+  const [directoryOpen, setDirectoryOpen] = useState(
+    () => !window.matchMedia("(max-width: 900px)").matches,
+  );
   const reload = useCallback(async () => {
     const [rows, access] = await Promise.all([
       loadEpisodes(),
@@ -102,214 +113,251 @@ export default function ProjectWorkspace({
     }
   }
   return (
-    <div className="app-shell grid min-h-[calc(100dvh-81px)] grid-cols-1 lg:grid-cols-[250px_minmax(0,1fr)]">
-      <aside className="sidebar flex min-w-0 flex-col gap-4 border-b bg-card/70 p-5 lg:border-r lg:border-b-0">
-        {projectPicker}
-        <Separator />
-        <div className="section-heading flex flex-wrap items-center justify-between gap-2">
-          <h2>剧集目录</h2>
-          <span
-            className="count rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-            title="已加载剧集数，不代表总数"
-          >
-            {episodes.length}
-            {episodeList.hasMore ? "+" : ""}
-          </span>
-        </div>
-        <nav
-          aria-label="剧集列表"
-          className="episode-nav flex max-h-64 flex-col gap-1 overflow-y-auto lg:max-h-[45dvh]"
+    <div className="app-shell min-h-[calc(100dvh-65px)]">
+      <nav
+        aria-label="项目功能"
+        className="flex flex-wrap items-center gap-2 border-b bg-card px-4 py-3 lg:px-6"
+      >
+        <Button
+          variant="ghost"
+          aria-expanded={directoryOpen}
+          aria-controls="project-directory"
+          onClick={() => setDirectoryOpen(!directoryOpen)}
         >
-          {(episode && !episodes.some((row) => row.id === episode.id)
-            ? [...episodes, episode]
-            : episodes
-          ).map((row) => (
-            <Button
-              variant={row.id === episodeId ? "secondary" : "ghost"}
-              size="lg"
-              aria-pressed={row.id === episodeId}
-              className={cn(
-                "h-auto justify-start gap-3 px-2 py-3 text-left whitespace-normal [&_small]:mt-1 [&_small]:block [&_small]:text-xs [&_small]:font-normal [&_small]:text-muted-foreground",
-                row.id === episodeId && "active",
-              )}
-              key={row.id}
-              onClick={() => {
-                setPinnedEpisode(row);
-                setEpisodeId(row.id);
-                setPage("canvas");
-              }}
-            >
-              <span className="episode-number flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-xs text-secondary-foreground">
-                {String(row.episode_no).padStart(2, "0")}
-              </span>
-              <span>
-                {row.title}
-                <small>
-                  {row.status === "ARCHIVED"
-                    ? "已归档"
-                    : `${row.target_duration_ms / 1000} 秒目标时长`}
-                </small>
-              </span>
-            </Button>
-          ))}
-        </nav>
-        <ListPagination
-          {...episodeList}
-          reload={reload}
-          label="剧集"
-          count={episodes.length}
+          {directoryOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+          {directoryOpen ? "收起目录" : "展开目录"}
+        </Button>
+        <Separator
+          orientation="vertical"
+          className="mx-1 hidden h-5 sm:block"
         />
-        {writable && (
+        <Button
+          variant={page === "canvas" ? "secondary" : "ghost"}
+          aria-pressed={page === "canvas"}
+          onClick={() => setPage("canvas")}
+        >
+          <LayoutDashboard />
+          创作工作区
+        </Button>
+        <Button
+          variant={page === "members" ? "secondary" : "ghost"}
+          aria-pressed={page === "members"}
+          onClick={() => setPage("members")}
+        >
+          <Users />
+          创作伙伴
+        </Button>
+        {owner && (
           <Button
-            variant="outline"
-            size="lg"
-            className="dashed-button w-full border-dashed"
-            onClick={() => setAdding(true)}
+            variant={page === "settings" ? "secondary" : "ghost"}
+            aria-pressed={page === "settings"}
+            onClick={() => setPage("settings")}
           >
-            ＋ 添加一集
+            <Settings2 />
+            项目设置与归档
           </Button>
         )}
-        <div className="sidebar-bottom mt-auto flex flex-col gap-2 pt-6">
-          <p className="hint text-xs leading-relaxed text-muted-foreground">
-            {owner
-              ? "你是项目拥有者"
-              : role === "editor"
-                ? "你可以编辑与创建任务"
-                : "你当前拥有只读权限"}
-          </p>
-          <Button
-            variant="outline"
-            size="lg"
-            aria-pressed={page === "members"}
-            onClick={() => setPage("members")}
+      </nav>
+      <div
+        className={cn(
+          "grid min-w-0 grid-cols-1",
+          directoryOpen && "lg:grid-cols-[224px_minmax(0,1fr)]",
+        )}
+      >
+        <aside
+          id="project-directory"
+          hidden={!directoryOpen}
+          className="sidebar flex min-w-0 flex-col gap-4 border-b bg-card/80 p-4 lg:border-r lg:border-b-0"
+        >
+          {projectPicker}
+          <Separator />
+          <div className="section-heading flex flex-wrap items-center justify-between gap-2">
+            <h2>剧集目录</h2>
+            <span
+              className="count rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+              title="已加载剧集数，不代表总数"
+            >
+              {episodes.length}
+              {episodeList.hasMore ? "+" : ""}
+            </span>
+          </div>
+          <nav
+            aria-label="剧集列表"
+            className="episode-nav flex max-h-64 flex-col gap-1 overflow-y-auto lg:max-h-[45dvh]"
           >
-            创作伙伴
-          </Button>
-          {owner && (
+            {(episode && !episodes.some((row) => row.id === episode.id)
+              ? [...episodes, episode]
+              : episodes
+            ).map((row) => (
+              <Button
+                variant={row.id === episodeId ? "secondary" : "ghost"}
+                size="lg"
+                aria-pressed={row.id === episodeId}
+                className={cn(
+                  "h-auto justify-start gap-3 px-2 py-3 text-left whitespace-normal [&_small]:mt-1 [&_small]:block [&_small]:text-xs [&_small]:font-normal [&_small]:text-muted-foreground",
+                  row.id === episodeId && "active",
+                )}
+                key={row.id}
+                onClick={() => {
+                  setPinnedEpisode(row);
+                  setEpisodeId(row.id);
+                  setPage("canvas");
+                }}
+              >
+                <span className="episode-number flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-xs text-secondary-foreground">
+                  {String(row.episode_no).padStart(2, "0")}
+                </span>
+                <span>
+                  {row.title}
+                  <small>
+                    {row.status === "ARCHIVED"
+                      ? "已归档"
+                      : `${row.target_duration_ms / 1000} 秒目标时长`}
+                  </small>
+                </span>
+              </Button>
+            ))}
+          </nav>
+          <ListPagination
+            {...episodeList}
+            reload={reload}
+            label="剧集"
+            count={episodes.length}
+          />
+          {writable && (
             <Button
               variant="outline"
               size="lg"
-              onClick={() => setPage("settings")}
+              className="dashed-button w-full border-dashed"
+              onClick={() => setAdding(true)}
             >
-              项目设置与归档
+              ＋ 添加一集
             </Button>
           )}
-          <p className="version-note mt-4 text-[10px] leading-relaxed text-muted-foreground">
-            文本工作台 · 图片与成片开发中
-          </p>
-        </div>
-      </aside>
-      <main className="workspace min-w-0 p-4 sm:p-6 xl:p-8">
-        <div className="workspace-top mb-6 flex items-start justify-between gap-4">
-          <div>
-            <p className="breadcrumb mb-2 text-xs text-muted-foreground">
-              创作本 / {project.name}
-              {project.archived ? " / 已归档" : ""}
+          <div className="sidebar-bottom mt-auto flex flex-col gap-2 pt-6">
+            <p className="hint text-xs leading-relaxed text-muted-foreground">
+              {owner
+                ? "你是项目拥有者"
+                : role === "editor"
+                  ? "你可以编辑与创建任务"
+                  : "你当前拥有只读权限"}
             </p>
-            <h1>
-              {page === "members"
-                ? "创作伙伴"
-                : page === "settings"
-                  ? "项目设置"
-                  : episode
-                    ? `第 ${episode.episode_no} 集 · ${episode.title}`
-                    : "你的故事，准备开场"}
-            </h1>
-            {page === "canvas" && episode && role !== "viewer" && (
-              <EpisodeEditor
-                key={episode.id}
-                episode={episode}
-                disabled={!writable || episode.status === "ARCHIVED"}
-                onSaved={updateEpisode}
-              />
-            )}
+            <p className="version-note mt-4 text-[10px] leading-relaxed text-muted-foreground">
+              文本工作台 · 图片与成片开发中
+            </p>
           </div>
-          <span
-            className="notebook-stamp hidden rotate-6 rounded-full border border-dashed border-primary/40 p-4 text-center text-[9px] tracking-widest text-primary/70 xl:block"
-            aria-hidden="true"
-          >
-            MAKE A<br />
-            LITTLE MAGIC
-          </span>
-        </div>
-        {error && (
-          <Notice
-            tone="error"
-            className="error workspace-error mb-4"
-            role="alert"
-          >
-            {error}
-            <Button
-              variant="outline"
-              size="lg"
-              onClick={() =>
-                void reload().catch((error) => setError(message(error)))
-              }
-            >
-              重试
-            </Button>
-          </Notice>
-        )}
-        {page === "members" ? (
-          <Members
-            key={project.id}
-            projectId={project.id}
-            owner={owner}
-            writable={writable}
-          />
-        ) : page === "settings" ? (
-          <Settings
-            project={project}
-            episodes={
-              episode && !episodes.some((row) => row.id === episode.id)
-                ? [...episodes, episode]
-                : episodes
-            }
-            pagination={
-              <ListPagination
-                {...episodeList}
-                reload={reload}
-                label="剧集"
-                count={episodes.length}
-              />
-            }
-            onProjectSaved={onProjectSaved}
-            onEpisodeSaved={updateEpisode}
-            reload={async () => {
-              await reloadProjects();
-              await reload();
-            }}
-          />
-        ) : episode ? (
-          <EpisodeWorkspace
-            key={episode.id}
-            episode={episode}
-            owner={owner}
-            writable={writable && episode.status !== "ARCHIVED"}
-          />
-        ) : (
-          <EmptyState className="empty">
-            <span
-              className="big-flower text-5xl text-primary/50"
-              aria-hidden="true"
-            >
-              ✿
+        </aside>
+        <main
+          className={`workspace min-w-0 p-4 lg:p-6 ${page !== "canvas" ? "mx-auto w-full max-w-5xl" : ""}`}
+        >
+          <div className="workspace-top mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="breadcrumb mb-1 text-xs text-muted-foreground">
+                创作本 / {project.name}
+                {project.archived ? " / 已归档" : ""}
+              </p>
+              <h1>
+                {page === "members"
+                  ? "创作伙伴"
+                  : page === "settings"
+                    ? "项目设置"
+                    : episode
+                      ? `第 ${episode.episode_no} 集 · ${episode.title}`
+                      : "你的故事，准备开场"}
+              </h1>
+              {page === "canvas" && episode && role !== "viewer" && (
+                <EpisodeEditor
+                  key={episode.id}
+                  episode={episode}
+                  disabled={!writable || episode.status === "ARCHIVED"}
+                  onSaved={updateEpisode}
+                />
+              )}
+            </div>
+            <span className="hidden items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs text-accent-foreground md:flex">
+              <Leaf className="size-3.5" />
+              让灵感慢慢生长
             </span>
-            <h2>{loaded ? "写下第一集的名字吧" : "正在载入剧集…"}</h2>
-            <p>每一集都有独立的剧本、分镜、画布与任务记录。</p>
-            {writable && (
+          </div>
+          {error && (
+            <Notice
+              tone="error"
+              className="error workspace-error mb-4"
+              role="alert"
+            >
+              {error}
               <Button
-                variant="default"
+                variant="outline"
                 size="lg"
-                className=""
-                onClick={() => setAdding(true)}
+                onClick={() =>
+                  void reload().catch((error) => setError(message(error)))
+                }
               >
-                添加第一集
+                重试
               </Button>
-            )}
-          </EmptyState>
-        )}
-      </main>
+            </Notice>
+          )}
+          {page === "members" ? (
+            <Members
+              key={project.id}
+              projectId={project.id}
+              owner={owner}
+              writable={writable}
+            />
+          ) : page === "settings" ? (
+            <Settings
+              project={project}
+              episodes={
+                episode && !episodes.some((row) => row.id === episode.id)
+                  ? [...episodes, episode]
+                  : episodes
+              }
+              pagination={
+                <ListPagination
+                  {...episodeList}
+                  reload={reload}
+                  label="剧集"
+                  count={episodes.length}
+                />
+              }
+              onProjectSaved={onProjectSaved}
+              onEpisodeSaved={updateEpisode}
+              reload={async () => {
+                await reloadProjects();
+                await reload();
+              }}
+            />
+          ) : episode ? (
+            <EpisodeWorkspace
+              key={episode.id}
+              episode={episode}
+              owner={owner}
+              writable={writable && episode.status !== "ARCHIVED"}
+            />
+          ) : (
+            <EmptyState className="empty">
+              <span
+                className="big-flower text-5xl text-primary/50"
+                aria-hidden="true"
+              >
+                ✿
+              </span>
+              <h2>{loaded ? "写下第一集的名字吧" : "正在载入剧集…"}</h2>
+              <p>每一集都有独立的剧本、分镜、画布与任务记录。</p>
+              {writable && (
+                <Button
+                  variant="default"
+                  size="lg"
+                  className=""
+                  onClick={() => setAdding(true)}
+                >
+                  添加第一集
+                </Button>
+              )}
+            </EmptyState>
+          )}
+        </main>
+      </div>
       {adding && (
         <Dialog
           labelledBy="episode-title"

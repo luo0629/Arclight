@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 async function setup(page: Page, config: Record<string, unknown> = {}) {
@@ -27,6 +28,7 @@ async function setup(page: Page, config: Record<string, unknown> = {}) {
 }
 async function openSettings(page: Page) {
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "项目设置与归档" }).click();
   await expect(
     page.getByRole("heading", { name: "视觉风格与画幅", exact: true }),
@@ -122,6 +124,7 @@ test("TXT-03：Owner 键盘选择画幅、保存风格与帧率、保留扩展�
     "水彩绘本，柔和线条，避免写实血腥。",
   );
   await page.reload();
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "项目设置与归档" }).click();
   await expect(page.getByLabel("帧率（fps）", { exact: true })).toHaveValue(
     "29.97",
@@ -265,6 +268,7 @@ test("TXT-03：非文本旧风格原样保留，不同项目配置不串用", as
   expect(otherResponse.status()).toBe(201);
   const other = await otherResponse.json();
   await page.reload();
+  await openWorkspacePanels(page);
   await page.getByRole("combobox", { name: "选择项目" }).selectOption(other.id);
   await page.getByRole("button", { name: "项目设置与归档" }).click();
   await expect(page.getByLabel("视觉风格说明", { exact: true })).toHaveValue(
@@ -417,6 +421,7 @@ test("TXT-03：仅 Owner 可修改配置，归档只读与恢复后继续编辑"
           ).ok(),
         ).toBeTruthy();
       await partner.goto("/");
+      await openWorkspacePanels(partner);
       await expect(
         partner.getByText(
           role === "viewer" ? "你当前拥有只读权限" : "你可以编辑与创建任务",

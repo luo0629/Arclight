@@ -121,16 +121,20 @@ GET /api/v1/episodes/{episode_id}/storyboards/{version_id}/comparison
 
 ### 当前页面外观与截图
 
-整体沿用“创作手帐”：奶油白背景、莓红主按钮、浅紫选中态、细粉色边框与白色圆角卡片。桌面端为顶栏、左侧项目／剧集目录与主内容区；手机端目录堆叠到内容上方，内容及差异双栏改为纵向排列。
+整体为冷白、湖青、浅湖蓝与薄荷的清新创作室，不使用粉色。沿用 shadcn/ui（Radix）与 Tailwind，不引入第二套组件库。桌面默认画布，目录可收起，内容面板按需浮动展开；手机默认版本列表，目录默认收起。创作、任务、协作及项目管理有独立入口。
 
 | 页面／视图 | 当前内容 | 本地验收截图（不提交产物） |
 | --- | --- | --- |
-| 登录／注册入口 | 左侧品牌、创作介绍及便签，右侧邮箱密码卡片与注册切换 | `fronted/test-results/pages-login-desktop.png` |
-| 创作画布 | 点阵画布上的剧集、剧本、分镜、镜头卡片及真实依赖连线；右侧灵感／内容面板 | `fronted/test-results/pages-canvas-desktop.png` |
-| 版本列表 | “故事的每一稿”纵向条目、状态标签；右侧正文、编辑、审核及差异入口 | `fronted/test-results/pages-versions-desktop.png` |
-| 任务与审核 | 任务状态卡、精确待审版本、审核意见及批准／驳回／取消／执行记录入口 | `fronted/test-results/pages-tasks-desktop.png` |
-| 创作伙伴 | 邮箱、角色选择与添加成员；无伙伴时的空状态 | `fronted/test-results/pages-members-desktop.png` |
-| 项目设置 | 名称、预算额度、风格说明、画幅／帧率及比例示意、项目归档和剧集管理 | `fronted/test-results/pages-settings-desktop.png` |
-| 版本差异弹窗 | 基准选择、双方来源信息与下游卡片，下方字段前后对照；手机端上下排列 | `fronted/test-results/pages-comparison-desktop.png`、`pages-comparison-fields-desktop.png`、`pages-comparison-mobile.png`、`pages-comparison-fields-mobile.png` |
+| 登录／注册入口 | 左侧品牌与嫩芽／故事便签插图，右侧邮箱密码卡片 | login-desktop |
+| 创作画布 | 点阵画布、真实版本依赖节点；收起目录进入专注画布，点节点打开内容面板 | canvas-desktop、canvas-focus-desktop、canvas-details-desktop |
+| 开始创作 | 独立居中的灵感与人工起稿区，不再与画布挤在同一屏 | create-desktop |
+| 版本列表 | 左侧已保存版本，右侧详情、编辑、审核及差异入口；手机上下排列 | versions-desktop、versions-mobile |
+| 任务与审核 | 独立任务状态、精确待审版本、审核与执行记录 | tasks-desktop |
+| 创作伙伴 | 独立成员与角色管理页 | members-desktop |
+| 项目设置 | 限宽管理页，名称、预算、视觉风格、画幅、归档与剧集管理 | project-settings-desktop |
+| 版本差异弹窗 | 基准版本、来源与下游、字段前后对照；手机纵向排列 | comparison-desktop、comparison-mobile |
+| 模型服务配置 | 顶栏弹窗，文字／图片／视频／语音分区；地址、模型、密钥与保存状态 | service-text-desktop、service-image-desktop、service-video-desktop、service-mobile |
 
-截图通过隔离 SQLite、公开 API 和 Mock 工作流生成，不包含业务素材；重新运行 Playwright 会刷新产物。没有单独完成的资产、图片生成、音频或成片页面，设置中的画幅示意也不是成片预览。
+上述截图位于本地 `fronted/test-results/`，文件名统一为 `final-<页面>.png`；例如 `final-canvas-desktop.png`。通过隔离 SQLite、公开 API 和 Mock 工作流生成，不包含业务素材；运行 Playwright 会刷新产物。验收后仅保留新版 final 截图，旧截图会清理。
+
+模型服务配置见 README：文字服务可显式启用且仅作用于新任务；媒体服务仅保存预设，尚未开放生成。没有单独完成的资产、图片生成、音频或成片页面，画幅示意不是成片预览；真实收费模型联调仍待授权。

@@ -1,3 +1,4 @@
+import { PenLine, PanelRightOpen, X, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Notice, EmptyState, StatusBadge } from "@/components/ui-kit";
@@ -53,6 +54,7 @@ export default function EpisodeWorkspace({
   const [view, setView] = useState(() =>
     window.matchMedia("(max-width: 900px)").matches ? "list" : "canvas",
   );
+  const [inspectorOpen, setInspectorOpen] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -127,6 +129,8 @@ export default function EpisodeWorkspace({
   const onCreated: VersionCreated = async (version, kind) => {
     if (!mounted.current) return;
     setSaved({ version, kind });
+    setInspectorOpen(true);
+    if (view === "create") setView("list");
     setShowSavedNotice(true);
     setSelectedId(kind + ":" + version.id);
     setSavedRefreshError("");
@@ -244,14 +248,39 @@ export default function EpisodeWorkspace({
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
-        <Button
-          variant="outline"
-          size="lg"
-          disabled={busy || refreshing}
-          onClick={() => void refresh()}
-        >
-          {refreshing ? "刷新中…" : "刷新内容"}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {writable && (
+            <Button
+              onClick={() => {
+                setSelectedId("");
+                setView("create");
+              }}
+              aria-pressed={view === "create"}
+            >
+              <PenLine />
+              开始创作
+            </Button>
+          )}
+          {view === "canvas" && (
+            <Button
+              variant="outline"
+              aria-expanded={inspectorOpen}
+              aria-controls="canvas-inspector"
+              onClick={() => setInspectorOpen(!inspectorOpen)}
+            >
+              <PanelRightOpen />
+              {inspectorOpen ? "收起内容面板" : "展开内容面板"}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            disabled={busy || refreshing}
+            onClick={() => void refresh()}
+          >
+            <RefreshCw className="size-4" />
+            {refreshing ? "刷新中…" : "刷新内容"}
+          </Button>
+        </div>
       </div>
       {error && (
         <Notice
@@ -331,9 +360,19 @@ export default function EpisodeWorkspace({
           reload={reload}
         />
       ) : (
-        <div className="editor-layout grid min-w-0 grid-cols-1 items-start gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div
+          className={cn(
+            "editor-layout relative min-w-0",
+            view === "list" &&
+              "grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px]",
+            view === "create" && "mx-auto max-w-3xl py-3",
+          )}
+        >
           <section
-            className="creation-area flex min-w-0 flex-col gap-4"
+            className={cn(
+              "creation-area min-w-0 flex-col gap-4",
+              view === "create" ? "hidden" : "flex",
+            )}
             aria-label="创作内容"
           >
             {view === "canvas" ? (
@@ -348,7 +387,10 @@ export default function EpisodeWorkspace({
                   }
                   episodeId={episode.id}
                   writable={writable}
-                  onSelect={(node: GraphNode) => setSelectedId(node.id)}
+                  onSelect={(node: GraphNode) => {
+                    setSelectedId(node.id);
+                    setInspectorOpen(true);
+                  }}
                 />
               </Suspense>
             ) : (
@@ -369,7 +411,10 @@ export default function EpisodeWorkspace({
                       selected?.id === node.id && "active ring-2 ring-ring",
                     )}
                     aria-pressed={selected?.id === node.id}
-                    onClick={() => setSelectedId(node.id)}
+                    onClick={() => {
+                      setSelectedId(node.id);
+                      setInspectorOpen(true);
+                    }}
                   >
                     <span
                       className={cn(
@@ -396,31 +441,54 @@ export default function EpisodeWorkspace({
                 {versionPagination}
               </div>
             )}
-            {view === "canvas" && versionPagination}
           </section>
-          <Inspector
-            node={selected}
-            episode={episode}
-            scripts={scriptRows}
-            boards={boardRows}
-            runs={runs.rows}
-            owner={owner}
-            writable={writable}
-            busy={busy}
-            act={act}
-            reload={reload}
-            versionLoading={scripts.loading || boards.loading}
-            onCreated={onCreated}
-            focusVersionId={saved?.version.id}
-            retryVersion={() =>
-              selectedResource
-                ? selectedKind === "script"
-                  ? ensureScript(selectedResource)
-                  : ensureBoard(selectedResource)
-                : Promise.resolve()
-            }
-            showTasks={() => setView("tasks")}
-          />
+          {(view !== "canvas" || inspectorOpen) && (
+            <div
+              id="canvas-inspector"
+              className={cn(
+                "min-w-0",
+                view === "canvas" &&
+                  "absolute inset-y-3 right-3 z-20 w-[min(400px,calc(100%-24px))] overflow-y-auto rounded-2xl border bg-card shadow-xl shadow-foreground/10",
+              )}
+            >
+              {view === "canvas" && (
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-card px-4 py-2">
+                  <span className="text-sm font-semibold">内容面板</span>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="关闭内容面板"
+                    onClick={() => setInspectorOpen(false)}
+                  >
+                    <X />
+                  </Button>
+                </div>
+              )}
+              <Inspector
+                node={view === "create" ? null : selected}
+                episode={episode}
+                scripts={scriptRows}
+                boards={boardRows}
+                runs={runs.rows}
+                owner={owner}
+                writable={writable}
+                busy={busy}
+                act={act}
+                reload={reload}
+                versionLoading={scripts.loading || boards.loading}
+                onCreated={onCreated}
+                focusVersionId={saved?.version.id}
+                retryVersion={() =>
+                  selectedResource
+                    ? selectedKind === "script"
+                      ? ensureScript(selectedResource)
+                      : ensureBoard(selectedResource)
+                    : Promise.resolve()
+                }
+                showTasks={() => setView("tasks")}
+              />
+            </div>
+          )}
         </div>
       )}
     </>

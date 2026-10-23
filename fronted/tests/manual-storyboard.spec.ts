@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 const scriptContent = (title: string) => ({
@@ -85,6 +86,7 @@ async function setup(page: Page) {
 }
 
 async function begin(page: Page, option: string) {
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写分镜", exact: true }).click();
   await page.getByRole("combobox", { name: "已批准的剧本版本" }).click();
   await page.getByRole("option", { name: option, exact: true }).click();
@@ -108,6 +110,8 @@ test("TXT-01：选择旧的精确已批准剧本，空白起稿、镜头增删�
   const other = await otherResponse.json();
   await script(0, "另一集的已批准剧本", true, `/api/v1/episodes/${other.id}`);
   await page.goto("/");
+  await openWorkspacePanels(page);
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写分镜", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "使用此剧本起稿" }),
@@ -260,6 +264,8 @@ test("TXT-01：没有已批准版本时提示前置条件，选择器读取第 1
   const { headers, prefix, script } = await setup(page);
   const first = await script(0, "历史批准稿");
   await page.goto("/");
+  await openWorkspacePanels(page);
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写分镜", exact: true }).click();
   await expect(
     page.getByText("本剧集还没有已批准的剧本", { exact: false }),
@@ -290,6 +296,7 @@ test("TXT-01：没有已批准版本时提示前置条件，选择器读取第 1
   for (let index = 1; index <= 100; index++)
     await script(index, "尚未批准 " + index);
   await page.reload();
+  await openWorkspacePanels(page);
   await begin(page, "v1 · 历史批准稿");
   await page
     .getByLabel("画面描述", { exact: true })
@@ -310,6 +317,7 @@ test("TXT-01：无效引用与真实版本冲突保留草稿，刷新后显式�
   const { headers, prefix, script } = await setup(page);
   const source = await script(0, "冲突验收稿", true);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await begin(page, "v1 · 冲突验收稿");
   await page.getByLabel("画面描述", { exact: true }).fill("不能丢失的人工草稿");
   await page.getByLabel("出场角色（用中文逗号分隔）").fill("不存在的角色");
@@ -365,11 +373,13 @@ test("TXT-01：剧集归档与活动任务禁止人工起稿，加载失败可�
   const { headers, prefix, script } = await setup(page);
   await script(0, "限制验收稿", true);
   await page.goto("/");
+  await openWorkspacePanels(page);
   // 先等待工作台首批读取完成，再只模拟人工起稿选择器的失败。
   await expect(
     page.getByRole("button", { name: "自己写分镜", exact: true }),
   ).toBeVisible();
   await page.route("**/scripts?limit=100&offset=0", (route) => route.abort());
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写分镜", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "重试加载剧本" }),
@@ -385,6 +395,7 @@ test("TXT-01：剧集归档与活动任务禁止人工起稿，加载失败可�
     ).ok(),
   ).toBeTruthy();
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(
     page.getByText("当前为只读模式", { exact: false }),
   ).toBeVisible();
@@ -402,6 +413,7 @@ test("TXT-01：剧集归档与活动任务禁止人工起稿，加载失败可�
   });
   expect(run.status()).toBe(202);
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("button", { name: "自己写分镜", exact: true }),
   ).toBeDisabled();

@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect } from "@playwright/test";
 
 test("组件化：登录使用 Card/Field/Input/Button，390px 无溢出且品牌主题生效", async ({
@@ -5,6 +6,7 @@ test("组件化：登录使用 Card/Field/Input/Button，390px 无溢出且品�
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
+  await openWorkspacePanels(page);
   const login = page.locator(".login-card");
   await expect(
     login.getByRole("heading", { name: "欢迎回来，小创作家" }),
@@ -14,7 +16,7 @@ test("组件化：登录使用 Card/Field/Input/Button，390px 无溢出且品�
   await expect(login.locator('[data-slot="input"]')).toHaveCount(2);
   const submit = login.getByRole("button", { name: "登录创作手帐" });
   await expect(submit).toHaveAttribute("data-slot", "button");
-  await expect(submit).toHaveCSS("background-color", "rgb(166, 50, 103)");
+  await expect(submit).toHaveCSS("background-color", "rgb(8, 127, 131)");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -54,6 +56,7 @@ test("组件化：视图单选支持键盘，Dialog 返回焦点，成员与设�
     ).status(),
   ).toBe(201);
   await page.goto("/");
+  await openWorkspacePanels(page);
   const canvas = page.getByRole("radio", { name: "创作画布", exact: true });
   const list = page.getByRole("radio", { name: "版本列表", exact: true });
   await canvas.focus();

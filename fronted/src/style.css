@@ -5,27 +5,27 @@
 
 @custom-variant dark (&:is(.dark *));
 
-/* 创作手帐主题：纸张、莓果色印章与柔和分镜便签。 */
+/* 清风创作室：湖蓝、青绿与清透的白色工作区。 */
 :root {
-  --background: #fffaf7;
-  --foreground: #382b45;
+  --background: #f5f9fa;
+  --foreground: #203b43;
   --card: #ffffff;
-  --card-foreground: #382b45;
+  --card-foreground: #203b43;
   --popover: #ffffff;
-  --popover-foreground: #382b45;
-  --primary: #a63267;
+  --popover-foreground: #203b43;
+  --primary: #087f83;
   --primary-foreground: #ffffff;
-  --secondary: #eee5ff;
-  --secondary-foreground: #55416c;
-  --muted: #f5eef2;
-  --muted-foreground: #75677c;
-  --accent: #fff0f5;
-  --accent-foreground: #8c2855;
-  --destructive: #b3263d;
-  --success: #29664d;
-  --border: #e9d9e4;
-  --input: #dfcbd7;
-  --ring: #a63267;
+  --secondary: #e8f3fb;
+  --secondary-foreground: #32637c;
+  --muted: #edf3f4;
+  --muted-foreground: #657c83;
+  --accent: #e9f7f0;
+  --accent-foreground: #236c59;
+  --destructive: #bb443d;
+  --success: #24755b;
+  --border: #dce9eb;
+  --input: #c8dbdf;
+  --ring: #087f83;
   --radius: 0.75rem;
 }
 

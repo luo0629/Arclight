@@ -211,3 +211,15 @@ class AuditEvent(Entity, Base):
     action: Mapped[str] = mapped_column(String(80))
     resource_id: Mapped[UUID]
     details_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+
+
+class ModelService(Entity, Base):
+    __tablename__ = "model_services"
+    user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    mode: Mapped[str] = mapped_column(String(16), default="server")
+    base_url: Mapped[str] = mapped_column(String(500), default="")
+    model: Mapped[str] = mapped_column(String(160), default="")
+    encrypted_key: Mapped[str | None] = mapped_column(String(8192), nullable=True)
+    revision: Mapped[int] = mapped_column(default=1)
+    __table_args__ = (UniqueConstraint("user_id", "kind"),)

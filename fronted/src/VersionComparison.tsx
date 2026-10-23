@@ -351,7 +351,7 @@ function ComparisonPanel({
                   {row.path}
                 </h3>
                 <div className="grid min-w-0 gap-2 md:grid-cols-2">
-                  <div className="min-w-0 rounded-md bg-destructive/5 p-3">
+                  <div className="min-w-0 rounded-md bg-secondary/45 p-3">
                     <p className="mb-1 text-xs font-medium text-muted-foreground">
                       基准内容
                     </p>
@@ -363,7 +363,7 @@ function ComparisonPanel({
                           : row.before}
                     </p>
                   </div>
-                  <div className="min-w-0 rounded-md bg-success/5 p-3">
+                  <div className="min-w-0 rounded-md bg-accent/60 p-3">
                     <p className="mb-1 text-xs font-medium text-muted-foreground">
                       当前内容
                     </p>

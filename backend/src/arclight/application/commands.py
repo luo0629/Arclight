@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.api.schemas import ReviewCreate
+from arclight.application.model_services import text_snapshot
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.persistence.models import (
@@ -131,6 +132,9 @@ def start_run(
             "script": script.content_json,
             "target_duration_ms": episode.target_duration_ms,
         }
+    snapshot = text_snapshot(db, actor)
+    if snapshot:
+        inputs["_text_service"] = snapshot
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,

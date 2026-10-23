@@ -14,6 +14,7 @@ from arclight.api.auth import router as auth_router
 from arclight.api.canvas import router as canvas_router
 from arclight.api.collaboration import router as collaboration_router
 from arclight.api.content import router as content_router
+from arclight.api.model_services import router as model_services_router
 from arclight.api.protection import RequestProtection
 from arclight.api.routes import router
 from arclight.core.config import Settings, get_settings
@@ -112,6 +113,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise DomainError("DATABASE_UNAVAILABLE", "数据库不可用", 503) from None
         return {"status": "ok", "checks": {"database": "ok"}}
 
+    app.include_router(model_services_router)
     app.include_router(auth_router)
     app.include_router(router)
     app.include_router(collaboration_router)

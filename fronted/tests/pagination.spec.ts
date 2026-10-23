@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 async function account(page: Page) {
@@ -52,6 +53,7 @@ test("TXT-04：真实项目和剧集超过100条、选择保留、新建与设�
       title: "历史剧集" + i,
     });
   await page.goto("/");
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("heading", { name: "第 1 集 · 历史剧集1", exact: true }),
   ).toBeVisible();
@@ -65,6 +67,7 @@ test("TXT-04：真实项目和剧集超过100条、选择保留、新建与设�
   await expect(pager(page, "项目")).toContainText("已加载 102 条 · 已全部加载");
   await page.getByRole("combobox", { name: "选择项目" }).selectOption(first.id);
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(page.getByRole("combobox", { name: "选择项目" })).toHaveValue(
     first.id,
   );
@@ -160,6 +163,7 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
       },
     });
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await expect(pager(page, "剧本版本")).toContainText("已加载 100 条");
   await expect(page.locator(".version-row .kind-dot.script")).toHaveCount(100);
@@ -218,7 +222,10 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
   ).toBeTruthy();
   // 重新进入只加载首批，再从完整画布点选旧稿，必须读取精确版本而非提示调用 API。
   await page.reload();
+  await openWorkspacePanels(page);
+  await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await expect(pager(page, "剧本版本")).toContainText("已加载 100 条");
+  await page.getByRole("radio", { name: "创作画布", exact: true }).click();
   await page
     .locator(".react-flow__node")
     .filter({ has: page.getByText("历史剧本1", { exact: true }) })
@@ -226,6 +233,7 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
   await expect(page.locator(".inspector")).toContainText(
     "用于真实历史分页验收。",
   );
+  await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await expect(pager(page, "剧本版本")).toContainText(
     "已加载 105 条 · 已全部加载",
   );
@@ -287,6 +295,7 @@ test("TXT-04：任务与事件追加、整页边界、失败重试、防重入�
     await slices(route, events);
   });
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
   await expect(page.locator(".task")).toHaveCount(100);
   await pager(page, "任务")
@@ -421,6 +430,7 @@ test("TXT-04：切换任务丢弃旧事件响应、空列表和首批失败重�
     fail ? route.abort() : route.fulfill({ json: [] }),
   );
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
   await page
     .locator(".task")
@@ -502,6 +512,7 @@ test("TXT-04：追加去重仍按原始offset推进，切换剧集取消迟到�
     await route.fulfill({ json: result }).catch(() => {});
   });
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
   await pager(page, "任务")
     .getByRole("button", { name: "加载更多任务", exact: true })
@@ -515,6 +526,7 @@ test("TXT-04：追加去重仍按原始offset推进，切换剧集取消迟到�
   expect(offsets).not.toContain(199);
   await expect(pager(page, "任务")).toContainText("已加载 205 条 · 已全部加载");
   await page.reload();
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
   await expect(page.locator(".task")).toHaveCount(100);
   delay = true;

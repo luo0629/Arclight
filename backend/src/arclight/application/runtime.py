@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
+from arclight.application.model_services import run_settings
 from arclight.core.config import Settings
 from arclight.domain.enums import RunStatus
 from arclight.persistence.models import WorkflowRun
@@ -34,7 +35,7 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
             emit(db, run, "workflow.started", {"revision": revision})
             with open_checkpointer(settings) as saver:
                 graph = build_graph(
-                    build_provider(settings),
+                    build_provider(run_settings(settings, run.input_json.get("_text_service"))),
                     ArtifactStore(factory, run.id, run.episode_id),
                     saver,
                     director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
@@ -43,7 +44,8 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                 snapshot = graph.get_state(config)
                 value: dict | Command | None = None
                 if not snapshot.values:
-                    value = {"run_id": str(run.id), **run.input_json}
+                    inputs = {k: v for k, v in run.input_json.items() if k != "_text_service"}
+                    value = {"run_id": str(run.id), **inputs}
                 elif snapshot.interrupts and run.resume_json:
                     pending = snapshot.interrupts[0].value
                     if (

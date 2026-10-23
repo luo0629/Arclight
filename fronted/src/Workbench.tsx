@@ -1,3 +1,5 @@
+import { SlidersHorizontal } from "lucide-react";
+import ServiceSettings from "./ServiceSettings";
 import { Notice, FormLabel, EmptyState } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,6 +32,7 @@ export default function Workbench({
 }) {
   const projectList = usePagedList<Project>("/projects");
   const { rows: projects, reload: loadProjects } = projectList;
+  const [servicesOpen, setServicesOpen] = useState(false);
   const [pinnedProject, setPinnedProject] = useState<Project | null>(null);
   const [projectId, setProjectId] = useState(
     () => localStorage.getItem("arclight-project") ?? "",
@@ -138,7 +141,7 @@ export default function Workbench({
   );
   return (
     <div className="application min-h-dvh">
-      <header className="app-header flex min-h-20 flex-wrap items-center justify-between gap-4 border-b bg-card px-5 py-4 lg:px-8">
+      <header className="app-header flex min-h-16 flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-3 lg:px-6">
         <a
           className="brand flex items-center gap-3 font-semibold tracking-tight no-underline [&_small]:block [&_small]:text-[10px] [&_small]:font-normal [&_small]:tracking-[.2em] [&_small]:text-muted-foreground"
           href="/"
@@ -155,9 +158,13 @@ export default function Workbench({
           </span>
         </a>
         <p className="header-note hidden text-sm text-muted-foreground lg:block">
-          让好故事，一格一格发生。
+          给灵感一片自由生长的地方。
         </p>
         <div className="account flex items-center gap-2 text-sm [&>span:nth-child(2)]:hidden sm:[&>span:nth-child(2)]:inline">
+          <Button variant="ghost" onClick={() => setServicesOpen(true)}>
+            <SlidersHorizontal />
+            模型服务配置
+          </Button>
           <span className="avatar flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground">
             {user.display_name.slice(0, 1)}
           </span>
@@ -167,6 +174,9 @@ export default function Workbench({
           </Button>
         </div>
       </header>
+      {servicesOpen && (
+        <ServiceSettings onDismiss={() => setServicesOpen(false)} />
+      )}
       {error && (
         <Notice tone="error" className="global-error mx-4 my-3" role="alert">
           {error}

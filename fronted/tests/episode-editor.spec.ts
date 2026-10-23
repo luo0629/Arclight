@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 async function setup(page: Page) {
@@ -48,6 +49,7 @@ test("TXT-02：Owner 保存毫秒精度，目录、标题、画布同步，设�
   );
   expect(second.status()).toBe(201);
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "编辑剧集", exact: true }).click();
   await page.screenshot({
     path: testInfo.outputPath("episode-editor-desktop.png"),
@@ -78,6 +80,7 @@ test("TXT-02：Owner 保存毫秒精度，目录、标题、画布同步，设�
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await expect(page.locator(".version-list")).toContainText("星光新标题");
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("heading", { name: "第 1 集 · 星光新标题" }),
   ).toBeVisible();
@@ -113,6 +116,7 @@ test("TXT-02：输入边界、取消和 Esc、失败保留草稿、防重复提�
   const { headers, path } = await setup(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
+  await openWorkspacePanels(page);
   const trigger = page.getByRole("button", { name: "编辑剧集", exact: true });
   await trigger.click();
   const dialog = page.getByRole("dialog", { name: "编辑剧集信息" });
@@ -230,6 +234,7 @@ test("TXT-02：Viewer 无编辑入口，Editor 可编辑，剧集和项目归档
     ).toBe(201);
     const partner = await context.newPage();
     await partner.goto("/");
+    await openWorkspacePanels(partner);
     await expect(
       partner.getByText("你当前拥有只读权限", { exact: true }),
     ).toBeVisible();
@@ -253,6 +258,7 @@ test("TXT-02：Viewer 无编辑入口，Editor 可编辑，剧集和项目归档
       ).ok(),
     ).toBeTruthy();
     await partner.reload();
+    await openWorkspacePanels(partner);
     await partner.getByRole("button", { name: "编辑剧集" }).click();
     await edit(partner, "伙伴修改的标题", "45");
     await expect(
@@ -267,10 +273,12 @@ test("TXT-02：Viewer 无编辑入口，Editor 可编辑，剧集和项目归档
       ).ok(),
     ).toBeTruthy();
     await partner.reload();
+    await openWorkspacePanels(partner);
     await expect(
       partner.getByRole("button", { name: "编辑剧集" }),
     ).toBeDisabled();
     await page.goto("/");
+    await openWorkspacePanels(page);
     await page.getByRole("button", { name: "项目设置与归档" }).click();
     await expect(page.getByRole("button", { name: "编辑剧集" })).toBeDisabled();
     expect(
@@ -295,10 +303,12 @@ test("TXT-02：Viewer 无编辑入口，Editor 可编辑，剧集和项目归档
       ).ok(),
     ).toBeTruthy();
     await partner.reload();
+    await openWorkspacePanels(partner);
     await expect(
       partner.getByRole("button", { name: "编辑剧集" }),
     ).toBeDisabled();
     await page.reload();
+    await openWorkspacePanels(page);
     await page.getByRole("button", { name: "项目设置与归档" }).click();
     await expect(page.getByRole("button", { name: "编辑剧集" })).toBeDisabled();
     expect(
@@ -335,6 +345,7 @@ test("TXT-02：真实活动任务拒绝修改，保留草稿，取消任务后�
     )
     .toBe("WAITING_REVIEW");
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "编辑剧集" }).click();
   await edit(page, "任务结束后的新标题", "42");
   const dialog = page.getByRole("dialog");

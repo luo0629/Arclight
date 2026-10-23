@@ -1,3 +1,4 @@
+import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect } from "@playwright/test";
 
 test("真实 API：注册、创建项目剧集、双审核、画布保存、人工新版本与刷新登录", async ({
@@ -6,6 +7,7 @@ test("真实 API：注册、创建项目剧集、双审核、画布保存、人�
   const crashes: string[] = [];
   page.on("pageerror", (error) => crashes.push(error.message));
   await page.goto("/");
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "第一次来？创建账号" }).click();
   await page.getByLabel("怎么称呼你").fill("小星星");
   await page
@@ -35,6 +37,7 @@ test("真实 API：注册、创建项目剧集、双审核、画布保存、人�
   await expect(
     page.getByRole("heading", { name: "第 1 集 · 一把会唱歌的伞" }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "开始创作", exact: true }).click();
   await page
     .getByLabel("故事灵感")
     .fill("雨夜里，小猫把一把会唱歌的伞借给迷路的小女孩，他们一起寻找星星。");
@@ -76,6 +79,7 @@ test("真实 API：注册、创建项目剧集、双审核、画布保存、人�
     page.locator(".version-row").filter({ hasText: "雨天里的星星" }),
   ).toBeVisible();
   await page.reload();
+  await openWorkspacePanels(page);
   await expect(
     page.getByRole("heading", { name: "第 1 集 · 一把会唱歌的伞" }),
   ).toBeVisible();
@@ -159,6 +163,7 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     expect(memberResponse.status()).toBe(201);
     const member = await memberResponse.json();
     await page.goto("/");
+    await openWorkspacePanels(page);
     await page.getByRole("button", { name: "创作伙伴", exact: true }).click();
     await page.getByLabel("伙伴的邮箱").fill(memberEmail);
     await page.getByLabel("项目角色").selectOption("viewer");
@@ -166,6 +171,7 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     await expect(page.getByLabel("小伙伴的角色")).toHaveValue("viewer");
     const partner = await memberContext.newPage();
     await partner.goto("/");
+    await openWorkspacePanels(partner);
     await expect(
       partner.getByText("你当前拥有只读权限", { exact: true }),
     ).toBeVisible();
@@ -189,6 +195,7 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     await page.getByLabel("小伙伴的角色").selectOption("editor");
     await expect(page.getByLabel("小伙伴的角色")).toBeEnabled();
     await partner.reload();
+    await openWorkspacePanels(partner);
     await expect(
       partner.getByText("你可以编辑与创建任务", { exact: true }),
     ).toBeVisible();
@@ -211,6 +218,7 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     ).toBeVisible();
     await expect(page.getByLabel("项目名称")).toBeDisabled();
     await partner.reload();
+    await openWorkspacePanels(partner);
     await expect(
       partner.getByRole("button", { name: "自己写分镜", exact: true }),
     ).toHaveCount(0);
@@ -232,6 +240,7 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     );
     expect(hidden.status()).toBe(404);
     await partner.reload();
+    await openWorkspacePanels(partner);
     await expect(
       partner.getByRole("heading", { name: "新的一页，等你落笔" }),
     ).toBeVisible();
@@ -267,6 +276,8 @@ test("真实 API：从零人工剧本、独立审核、指定版本导演任务�
   const episode = await episodeResponse.json();
   const prefix = `/api/v1/episodes/${episode.id}`;
   await page.goto("/");
+  await openWorkspacePanels(page);
+  await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
   await expect(
     page.getByText("这是尚未保存的人工草稿。", { exact: false }),
@@ -299,6 +310,7 @@ test("真实 API：从零人工剧本、独立审核、指定版本导演任务�
     "已批准",
   );
   await page.reload();
+  await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page
     .locator(".version-row")
