@@ -118,10 +118,17 @@ def test_upgrade_preserves_0001_rows_and_backfills_new_columns(settings):
     engine.dispose()
 
 
-def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated):
+@pytest.mark.parametrize("revision", ["0002", "head"])
+def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, revision):
     from sqlalchemy import text
 
     from arclight.providers.text import MockTextProvider
+
+    command.downgrade(migrated, revision)
+    engine = client.app.state.engine
+    tables_before = set(inspect(engine).get_table_names())
+    with engine.connect() as db:
+        revision_before = db.scalar(text("SELECT version_num FROM alembic_version"))
 
     response = client.post(
         f"/api/v1/episodes/{episode['id']}/scripts",
@@ -133,8 +140,12 @@ def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated):
     assert response.status_code == 201
     with pytest.raises(RuntimeError, match="无法无损降级"):
         command.downgrade(migrated, "0001")
-    with client.app.state.engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0002"
+    # PostgreSQL 会回滚整段 DDL；SQLite 保留此前已完成的降级步骤。
+    expected_revision = revision_before if engine.dialect.name == "postgresql" else "0002"
+    with engine.connect() as db:
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == expected_revision
+    if engine.dialect.name == "postgresql":
+        assert set(inspect(engine).get_table_names()) == tables_before
     assert (
         client.get(f"/api/v1/episodes/{episode['id']}/scripts").json()[0]["id"]
         == response.json()["id"]
