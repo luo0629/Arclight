@@ -118,13 +118,15 @@ def test_comparison_exact_dependencies_counts_and_bounded_preview(client, episod
             ).status_code
             == 200
         )
-    board_content = (
-        MockTextProvider()
-        .storyboard(ScriptContent.model_validate(first["content_json"]), 30000)
-        .model_dump()
-    )
     boards = []
     for index in range(22):
+        source = first if index < 21 else second
+        # 精确场景与台词 ID 必须来自实际选择的剧本，不能复用另一版的分镜。
+        board_content = (
+            MockTextProvider()
+            .storyboard(ScriptContent.model_validate(source["content_json"]), 30000)
+            .model_dump()
+        )
         response = client.post(
             prefix + "/storyboards",
             json={

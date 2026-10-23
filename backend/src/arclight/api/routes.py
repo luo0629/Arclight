@@ -4,9 +4,11 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Query, Request
 from sqlalchemy import or_, select
 
+from arclight.agents.contracts import ScriptContent
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import (
     AcceptedRun,
+    DialogueLineRead,
     EpisodeCreate,
     EpisodeRead,
     EventRead,
@@ -211,6 +213,34 @@ def get_scripts(
             .offset(offset)
         )
     ]
+
+
+@router.get("/episodes/{episode_id}/dialogue-lines", tags=["scripts"])
+def get_dialogue_lines(
+    episode_id: UUID,
+    script_version_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 100,
+    offset: Offset = 0,
+) -> list[DialogueLineRead]:
+    require_episode(db, episode_id, actor)
+    script = db.get(Script, script_version_id)
+    if script is None or script.episode_id != episode_id:
+        raise DomainError("NOT_FOUND", "剧本版本不存在", 404)
+    content = ScriptContent.model_validate(script.content_json)
+    lines = [
+        {
+            "script_version_id": str(script.id),
+            "scene_id": scene.scene_id,
+            "scene_no": scene.scene_no,
+            "sequence_no": index + 1,
+            **line.model_dump(),
+        }
+        for scene in content.scenes
+        for index, line in enumerate(scene.dialogue)
+    ]
+    return [DialogueLineRead.model_validate(row) for row in lines[offset : offset + limit]]
 
 
 @router.get("/episodes/{episode_id}/storyboards", tags=["storyboards"])

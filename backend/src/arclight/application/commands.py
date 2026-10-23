@@ -5,7 +5,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from arclight.agents.contracts import ScriptContent, StoryboardContent
 from arclight.api.schemas import ReviewCreate
+from arclight.application.content_references import (
+    validate_script_assets,
+    validate_storyboard_assets,
+)
 from arclight.application.model_services import text_snapshot
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus, RunStatus
@@ -126,6 +131,7 @@ def start_run(
             raise DomainError("NOT_FOUND", "指定剧本版本不存在", 404)
         if script.status != AssetStatus.APPROVED:
             raise DomainError("SCRIPT_NOT_APPROVED", "只能从已批准的剧本版本生成分镜")
+        validate_script_assets(db, project.id, ScriptContent.model_validate(script.content_json))
         # 固定精确版本和正文快照，不在 Worker 执行时重新选择“最新版”。
         inputs = {
             "script_version_id": str(script.id),
@@ -178,6 +184,16 @@ def resume_run(db: Session, run: WorkflowRun, actor: str, review: ReviewCreate) 
         artifact = db.get(Storyboard, review.version_id)
     if artifact is None or artifact.run_id != run.id:
         raise DomainError("STALE_REVIEW", "待审核版本不存在或不属于本次工作流")
+    if review.decision == "APPROVE":
+        episode = require_episode(db, run.episode_id, actor)
+        if isinstance(artifact, Script):
+            validate_script_assets(
+                db, episode.project_id, ScriptContent.model_validate(artifact.content_json)
+            )
+        else:
+            validate_storyboard_assets(
+                db, episode.project_id, StoryboardContent.model_validate(artifact.content_json)
+            )
     artifact.status = AssetStatus.APPROVED if review.decision == "APPROVE" else AssetStatus.REJECTED
     if isinstance(artifact, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):

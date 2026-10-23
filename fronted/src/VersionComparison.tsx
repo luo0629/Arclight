@@ -64,10 +64,35 @@ const names: Record<string, string> = {
   duration_ms: "时长（毫秒）",
   camera_movement: "镜头运动",
   subtitle: "字幕",
+  schema_version: "合同版本",
+  scene_id: "稳定场景 ID",
+  line_id: "稳定台词 ID",
+  line_type: "台词类别",
+  emotion: "情绪",
+  character_assets: "角色精确资产",
+  character_details: "角色表演",
+  character: "角色",
+  asset: "角色资产",
+  asset_id: "资产 ID",
+  asset_version_id: "精确资产版本",
+  scene_asset: "场景资产",
+  location_asset: "地点资产",
+  props: "道具资产",
+  costume: "服装版本",
+  expression: "表情",
+  gaze: "视线",
+  composition: "构图",
+  dialogue_line_ids: "台词引用",
+  sound_effects: "音效",
+  transition_out: "转场",
+  notes: "人工备注",
+  selected_visual_asset: "选用画面版本",
+  quality_review: "质检批准引用",
+  review_id: "审核记录 ID",
   order: "排列顺序",
 };
 
-// 场景和镜头按当前业务编号配对，不将数组位置误当成永久身份。
+// 台词按稳定 ID 配对；场景和镜头保持原业务编号比较。
 function fields(value: unknown, path = "", result = new Map<string, string>()) {
   if (
     Array.isArray(value) &&
@@ -76,13 +101,17 @@ function fields(value: unknown, path = "", result = new Map<string, string>()) {
       (row) =>
         row &&
         typeof row === "object" &&
-        ("scene_no" in row || "shot_no" in row),
+        ("scene_no" in row || "shot_no" in row || "line_id" in row),
     )
   ) {
-    const ids = value.map((row) => row.shot_no ?? row.scene_no);
+    const ids = value.map((row) => row.line_id ?? row.shot_no ?? row.scene_no);
     result.set(`${path} / 排列顺序`, ids.join(" → "));
     value.forEach((row) =>
-      fields(row, `${path} ${row.shot_no ?? row.scene_no}`, result),
+      fields(
+        row,
+        `${path} ${row.line_id ?? row.shot_no ?? row.scene_no}`,
+        result,
+      ),
     );
   } else if (
     Array.isArray(value) &&

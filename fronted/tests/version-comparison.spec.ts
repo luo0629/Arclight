@@ -168,7 +168,10 @@ test("TXT-07：人工另存记录精确旧来源，字段新增修改删除、�
   ).toContainText("另一个已保存版本");
   await selectBase(page, "v1");
   await expect(
-    dialog.getByRole("region", { name: "场景 1 / 对白 2 / 内容", exact: true }),
+    dialog.getByRole("region", {
+      name: `场景 1 / 对白 ${first.content_json.scenes[0].dialogue[1].line_id} / 内容`,
+      exact: true,
+    }),
   ).toContainText("删除");
   await expect(
     dialog.getByRole("region", { name: "标题", exact: true }),

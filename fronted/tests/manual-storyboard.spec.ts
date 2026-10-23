@@ -364,7 +364,7 @@ test("TXT-01：无效引用与真实版本冲突保留草稿，刷新后显式�
   expect(boards[0].content_json.shots[0].visual_description).toBe(
     "不能丢失的人工草稿",
   );
-  expect(boards[1].content_json).toEqual(boardContent);
+  expect(boards[1].content_json).toMatchObject(boardContent);
 });
 
 test("TXT-01：剧集归档与活动任务禁止人工起稿，加载失败可以重试", async ({

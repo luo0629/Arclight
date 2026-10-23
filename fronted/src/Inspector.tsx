@@ -265,6 +265,9 @@ export default function Inspector({
           <VersionEditor
             key={version.id}
             version={version}
+            sourceScript={scripts.find(
+              (row) => row.id === version.script_version_id,
+            )}
             kind={node.kind === "script" ? "script" : "storyboard"}
             onCreated={created}
             episode={episode}

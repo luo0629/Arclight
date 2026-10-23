@@ -12,6 +12,10 @@ from arclight.api.content_history import router as history_router
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input, ScriptRead, StoryboardRead
 from arclight.application.commands import require_episode
+from arclight.application.content_references import (
+    validate_script_assets,
+    validate_storyboard_assets,
+)
 from arclight.core.errors import DomainError
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 
@@ -60,6 +64,7 @@ def save_script(
     episode = lock_edit(db, episode_id, actor)
     if payload.base_version_id:
         require_version(db, Script, episode_id, payload.base_version_id)
+    validate_script_assets(db, episode.project_id, payload.content)
     version = Script(
         episode_id=episode_id,
         run_id=None,
@@ -90,12 +95,15 @@ def save_storyboard(
         raise DomainError("NOT_FOUND", "剧本版本不存在", 404)
     if script.status != "APPROVED":
         raise DomainError("SCRIPT_NOT_APPROVED", "分镜必须引用已批准的剧本版本", 409)
+    source = ScriptContent.model_validate(script.content_json)
+    validate_script_assets(db, episode.project_id, source)
     try:
-        payload.content.validate_against(ScriptContent.model_validate(script.content_json))
+        payload.content.validate_against(source)
     except ValueError:
         raise DomainError("INVALID_REFERENCES", "分镜引用了无效的场景或角色", 422) from None
     if payload.base_version_id:
         require_version(db, Storyboard, episode_id, payload.base_version_id)
+    validate_storyboard_assets(db, episode.project_id, payload.content)
     version = Storyboard(
         episode_id=episode_id,
         run_id=None,
@@ -156,6 +164,15 @@ def review_content(
         raise DomainError("WORKFLOW_REVIEW_REQUIRED", "工作流产物必须通过任务审核入口处理", 409)
     if version.status != "READY_FOR_REVIEW":
         raise DomainError("ALREADY_REVIEWED", "该版本已审核；修改请创建新版本", 409)
+    if payload.decision == "APPROVE":
+        if isinstance(version, Script):
+            validate_script_assets(
+                db, episode.project_id, ScriptContent.model_validate(version.content_json)
+            )
+        else:
+            validate_storyboard_assets(
+                db, episode.project_id, StoryboardContent.model_validate(version.content_json)
+            )
     version.status = "APPROVED" if payload.decision == "APPROVE" else "REJECTED"
     if isinstance(version, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == version.id)):

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.orm import Session
 
+from arclight.agents.contracts import read_content
 from arclight.api.dependencies import Actor, Database
 from arclight.application.commands import require_episode
 from arclight.core.errors import DomainError
@@ -133,7 +134,7 @@ def snapshot(db: Session, row: Script | Storyboard, project_id: UUID) -> Version
         version_no=row.version_no,
         status=row.status,
         created_at=row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=UTC),
-        content_json=row.content_json,
+        content_json=read_content(row.content_json),
         origin="generated" if row.run_id else "manual" if author else "unknown",
         author=author,
         base_version=base,

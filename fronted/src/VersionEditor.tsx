@@ -11,6 +11,10 @@ import { useId, useRef, useState } from "react";
 import { api, json, type ContentVersion, type Episode } from "./api";
 
 import Dialog from "./Dialog";
+import ShotDetails, {
+  ContractMetadata,
+  type ShotExtensions,
+} from "./ShotDetails";
 import { useSessionDraft } from "./Drafts";
 
 export type VersionKind = "script" | "storyboard";
@@ -23,15 +27,29 @@ type Script = {
   title: string;
   summary: string;
   characters: string[];
+  character_assets?: { character: string; asset: unknown }[];
   scenes: {
     scene_no: number;
+    scene_id?: string;
+    scene_asset?: unknown;
+    location_asset?: unknown;
+    props?: unknown[];
     title: string;
     action: string;
-    dialogue: { speaker: string; text: string }[];
+    dialogue: {
+      line_id?: string;
+      speaker: string;
+      text: string;
+      line_type?: "dialogue" | "narration";
+      emotion?: string;
+    }[];
   }[];
 };
 type Board = {
-  shots: {
+  shots: (ShotExtensions & {
+    scene_asset?: unknown;
+    location_asset?: unknown;
+    props?: unknown[];
     shot_no: number;
     scene_no: number;
     duration_ms: number;
@@ -40,7 +58,7 @@ type Board = {
     characters: string[];
     camera_movement: string;
     subtitle: string;
-  }[];
+  })[];
 };
 
 function validContent(value: unknown, kind: VersionKind): boolean {
@@ -117,6 +135,10 @@ export default function VersionEditor({
     return {
       shot_no: shotNo,
       scene_no: source?.scenes[0]?.scene_no ?? 1,
+      scene_id: source?.scenes[0]?.scene_id ?? null,
+      scene_asset: source?.scenes[0]?.scene_asset ?? null,
+      location_asset: source?.scenes[0]?.location_asset ?? null,
+      props: source?.scenes[0]?.props ?? [],
       duration_ms: 3000,
       shot_size: "medium",
       visual_description: "",
@@ -134,7 +156,15 @@ export default function VersionEditor({
             title: "",
             summary: "",
             characters: ["主角"],
-            scenes: [{ scene_no: 1, title: "", action: "", dialogue: [] }],
+            scenes: [
+              {
+                scene_id: crypto.randomUUID(),
+                scene_no: 1,
+                title: "",
+                action: "",
+                dialogue: [],
+              },
+            ],
           },
   );
   const local = useSessionDraft({
@@ -142,7 +172,7 @@ export default function VersionEditor({
       episode.id,
       kind,
       version?.id ?? null,
-      sourceScript?.id ?? null,
+      version ? null : (sourceScript?.id ?? null),
     ]),
     episodeId: episode.id,
     label: version
@@ -398,6 +428,10 @@ export default function VersionEditor({
                           mutate((value) => {
                             value.scenes[index].dialogue[lineIndex].speaker =
                               event.target.value;
+                            value.scenes[index].dialogue[lineIndex].line_type =
+                              event.target.value === "旁白"
+                                ? "narration"
+                                : "dialogue";
                           })
                         }
                       >
@@ -428,6 +462,23 @@ export default function VersionEditor({
                         }
                       />
                     </Field>
+                    <FormLabel>
+                      台词情绪
+                      <Input
+                        value={line.emotion ?? ""}
+                        maxLength={300}
+                        onChange={(event) =>
+                          mutate((value) => {
+                            value.scenes[index].dialogue[lineIndex].emotion =
+                              event.target.value;
+                          })
+                        }
+                      />
+                    </FormLabel>
+                    <small className="break-all text-xs text-muted-foreground">
+                      {line.line_type === "narration" ? "旁白" : "对白"} ·{" "}
+                      {line.line_id ?? "保存时分配标识"}
+                    </small>
                     <Button
                       variant="outline"
                       size="lg"
@@ -458,7 +509,10 @@ export default function VersionEditor({
                     onClick={() =>
                       mutate((value) => {
                         value.scenes[index].dialogue.push({
+                          line_id: crypto.randomUUID(),
                           speaker: "旁白",
+                          line_type: "narration",
+                          emotion: "",
                           text: "",
                         });
                       })
@@ -493,6 +547,7 @@ export default function VersionEditor({
               onClick={() =>
                 mutate((value) => {
                   value.scenes.push({
+                    scene_id: crypto.randomUUID(),
                     scene_no: value.scenes.length + 1,
                     title: "",
                     action: "",
@@ -562,6 +617,17 @@ export default function VersionEditor({
                               value.shots[index].scene_no = Number(
                                 event.target.value,
                               );
+                              const scene = source?.scenes.find(
+                                (row) =>
+                                  row.scene_no === Number(event.target.value),
+                              );
+                              Object.assign(value.shots[index], {
+                                scene_id: scene?.scene_id ?? null,
+                                dialogue_line_ids: [],
+                                scene_asset: scene?.scene_asset ?? null,
+                                location_asset: scene?.location_asset ?? null,
+                                props: scene?.props ?? [],
+                              });
                             })
                           }
                         >
@@ -578,15 +644,9 @@ export default function VersionEditor({
                         <Input
                           id={`${editorId}-scene-${index}`}
                           type="number"
-                          min="1"
                           value={shot.scene_no}
-                          onChange={(event) =>
-                            mutate((value) => {
-                              value.shots[index].scene_no = Number(
-                                event.target.value,
-                              );
-                            })
-                          }
+                          disabled
+                          title="精确来源剧本尚未加载，暂不能更改场景"
                         />
                       )}
                     </Field>
@@ -651,6 +711,24 @@ export default function VersionEditor({
                                 .split(/[，,]/)
                                 .map((name) => name.trim())
                             : [];
+                          const current = value.shots[index];
+                          const details = current.character_details ?? [];
+                          current.character_details = current.characters.map(
+                            (character) => {
+                              const existing = details.find(
+                                (row) => row.character === character,
+                              );
+                              const binding = source?.character_assets?.find(
+                                (row) => row.character === character,
+                              );
+                              return (
+                                existing ?? {
+                                  character,
+                                  ...(binding ? { asset: binding.asset } : {}),
+                                }
+                              );
+                            },
+                          );
                         })
                       }
                     />
@@ -687,6 +765,20 @@ export default function VersionEditor({
                   {shot.subtitle && <blockquote>{shot.subtitle}</blockquote>}
                 </>
               )}
+              <ShotDetails
+                shot={shot}
+                editing={editing}
+                lines={
+                  source?.scenes.find(
+                    (scene) => scene.scene_no === shot.scene_no,
+                  )?.dialogue
+                }
+                update={(patch) =>
+                  mutate((value) => {
+                    Object.assign(value.shots[index], patch);
+                  })
+                }
+              />
               {editing && (
                 <Button
                   variant="outline"
@@ -722,6 +814,7 @@ export default function VersionEditor({
           )}
         </div>
       )}
+      <ContractMetadata content={draft} />
       {editing && invalidBoard && (
         <p className="hint text-xs leading-relaxed text-muted-foreground">
           每个镜头都需要画面描述，时长须在 0.5–30 秒之间。

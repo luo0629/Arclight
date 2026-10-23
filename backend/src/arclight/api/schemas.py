@@ -3,7 +3,9 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
 
 
 class Input(BaseModel):
@@ -81,6 +83,18 @@ class ScriptRead(Resource):
     content_json: dict
     status: str
 
+    @field_validator("content_json")
+    @classmethod
+    def normalize_content(cls, value: dict) -> dict:
+        return read_content(value)
+
+
+class DialogueLineRead(Dialogue):
+    script_version_id: UUID
+    scene_id: Identifier
+    scene_no: int = Field(gt=0)
+    sequence_no: int = Field(gt=0)
+
 
 class StoryboardRead(ScriptRead):
     script_version_id: UUID
@@ -93,6 +107,11 @@ class ShotRead(Resource):
     description: str
     content_json: dict
     status: str
+
+    @field_validator("content_json")
+    @classmethod
+    def normalize_content(cls, value: dict) -> dict:
+        return ShotContent.model_validate(value).model_dump(mode="json")
 
 
 class EventRead(Resource):
