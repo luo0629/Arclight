@@ -7,6 +7,8 @@ from sqlalchemy import func, select
 
 from arclight.agents.contracts import ScriptContent, StoryboardContent
 from arclight.api.collaboration import audit, require_idle
+from arclight.api.content_history import require_version
+from arclight.api.content_history import router as history_router
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input, ScriptRead, StoryboardRead
 from arclight.application.commands import require_episode
@@ -14,15 +16,18 @@ from arclight.core.errors import DomainError
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 
 router = APIRouter(prefix="/api/v1", tags=["content"])
+router.include_router(history_router)
 
 
 class ScriptVersionInput(Input):
     expected_version_no: int = Field(ge=0)
+    base_version_id: UUID | None = None
     content: ScriptContent
 
 
 class StoryboardVersionInput(Input):
     expected_version_no: int = Field(ge=0)
+    base_version_id: UUID | None = None
     script_version_id: UUID
     content: StoryboardContent
 
@@ -53,6 +58,8 @@ def save_script(
     episode_id: UUID, payload: ScriptVersionInput, db: Database, actor: Actor
 ) -> ScriptRead:
     episode = lock_edit(db, episode_id, actor)
+    if payload.base_version_id:
+        require_version(db, Script, episode_id, payload.base_version_id)
     version = Script(
         episode_id=episode_id,
         run_id=None,
@@ -62,7 +69,14 @@ def save_script(
     )
     db.add(version)
     db.flush()
-    audit(db, episode.project_id, actor, "script.version_created", version.id)
+    audit(
+        db,
+        episode.project_id,
+        actor,
+        "script.version_created",
+        version.id,
+        {"base_version_id": str(payload.base_version_id)} if payload.base_version_id else {},
+    )
     return ScriptRead.model_validate(version)
 
 
@@ -80,6 +94,8 @@ def save_storyboard(
         payload.content.validate_against(ScriptContent.model_validate(script.content_json))
     except ValueError:
         raise DomainError("INVALID_REFERENCES", "分镜引用了无效的场景或角色", 422) from None
+    if payload.base_version_id:
+        require_version(db, Storyboard, episode_id, payload.base_version_id)
     version = Storyboard(
         episode_id=episode_id,
         run_id=None,
@@ -107,7 +123,12 @@ def save_storyboard(
         actor,
         "storyboard.version_created",
         version.id,
-        {"script_version_id": str(script.id)},
+        {
+            "script_version_id": str(script.id),
+            **(
+                {"base_version_id": str(payload.base_version_id)} if payload.base_version_id else {}
+            ),
+        },
     )
     return StoryboardRead.model_validate(version)
 

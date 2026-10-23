@@ -9,6 +9,7 @@ from arclight.api.schemas import ReviewCreate
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.persistence.models import (
+    AuditEvent,
     Episode,
     OutboxEvent,
     Project,
@@ -143,6 +144,15 @@ def start_run(
     )
     db.add(run)
     db.flush()
+    db.add(
+        AuditEvent(
+            project_id=episode.project_id,
+            actor_id=actor,
+            action="workflow.started",
+            resource_id=run.id,
+            details_json={},
+        )
+    )
     db.add(OutboxEvent(run_id=run.id, revision=0))
     emit(db, run, "workflow.queued")
     return run

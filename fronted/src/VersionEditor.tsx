@@ -197,6 +197,7 @@ export default function VersionEditor({
           `/episodes/${episode.id}/${kind === "script" ? "scripts" : "storyboards"}`,
           json("POST", {
             expected_version_no: latestNo,
+            ...(version ? { base_version_id: version.id } : {}),
             content: draft,
             ...(kind === "storyboard"
               ? {

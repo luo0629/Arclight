@@ -14,6 +14,7 @@ import {
 
 import VersionEditor, { type Act, type VersionCreated } from "./VersionEditor";
 import ManualStoryboard from "./ManualStoryboard";
+import VersionComparison from "./VersionComparison";
 import { useDraftStore, useSessionDraft } from "./Drafts";
 
 export default function Inspector({
@@ -255,6 +256,12 @@ export default function Inspector({
         </>
       ) : version ? (
         <>
+          <VersionComparison
+            key={`compare:${version.id}`}
+            episodeId={episode.id}
+            kind={node.kind === "script" ? "script" : "storyboard"}
+            version={version}
+          />
           <VersionEditor
             key={version.id}
             version={version}
