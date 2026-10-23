@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button";
-import { FormLabel, StatusBadge } from "@/components/ui-kit";
+import { Notice, FormLabel, StatusBadge } from "@/components/ui-kit";
+import { Field } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import {
   api,
   json,
@@ -13,6 +14,7 @@ import {
 
 import VersionEditor, { type Act, type VersionCreated } from "./VersionEditor";
 import ManualStoryboard from "./ManualStoryboard";
+import { useDraftStore, useSessionDraft } from "./Drafts";
 
 export default function Inspector({
   node,
@@ -47,7 +49,19 @@ export default function Inspector({
   onCreated: VersionCreated;
   focusVersionId?: string;
 }) {
-  const [story, setStory] = useState("");
+  const storyId = useId();
+  const storyDraft = useSessionDraft({
+    id: JSON.stringify([episode.id, "story"]),
+    episodeId: episode.id,
+    label: "故事灵感",
+    initial: "",
+    validate: (value): value is string => typeof value === "string",
+  });
+  const story = storyDraft.value;
+  const { drafts } = useDraftStore();
+  const episodeDrafts = Object.values(drafts).filter(
+    (draft) => draft.episodeId === episode.id,
+  );
   const [creating, setCreating] = useState(false);
   const [creatingBoard, setCreatingBoard] = useState(false);
   const panel = useRef<HTMLElement>(null);
@@ -79,6 +93,7 @@ export default function Inspector({
         ...json("POST", { story }),
         headers: { "Idempotency-Key": requestKey.current.key },
       });
+      storyDraft.clear();
       await reload();
       showTasks();
     });
@@ -114,6 +129,13 @@ export default function Inspector({
           ✿
         </span>
       </div>
+      {episodeDrafts.length > 0 && (
+        <Notice tone="info" role="status" className="episode-drafts">
+          本剧集有未保存草稿：
+          {episodeDrafts.map((draft) => draft.label).join("、")}。
+          重新打开对应版本或人工起稿入口即可恢复。仅限当前标签页，不会自动提交。
+        </Notice>
+      )}
       {!node || node.kind === "episode" ? (
         <>
           {writable && (
@@ -177,17 +199,18 @@ export default function Inspector({
           <p className="muted text-sm text-muted-foreground">
             一场相遇、一段对白，或者一个小小的“如果”。编剧会把它展开成可审核的剧本。
           </p>
-          <FormLabel>
-            故事灵感
+          <Field className="flex min-w-0 flex-col gap-2">
+            <FormLabel htmlFor={storyId}>故事灵感</FormLabel>
             <Textarea
+              id={storyId}
               className="story-input min-h-40"
               value={story}
-              onChange={(event) => setStory(event.target.value)}
+              onChange={(event) => storyDraft.update(event.target.value)}
               maxLength={20000}
               placeholder="雨夜，一位修伞的女孩遇到了一只会说话的小猫……"
-              disabled={!writable}
+              disabled={!writable || busy}
             />
-          </FormLabel>
+          </Field>
           <p className="counter -mt-2 text-right text-xs text-muted-foreground">
             {story.length} / 20000
           </p>

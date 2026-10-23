@@ -1,4 +1,4 @@
-import { StatusBadge, FormLabel } from "@/components/ui-kit";
+import { Notice, StatusBadge, FormLabel } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,6 +9,9 @@ import {
 import { Field } from "@/components/ui/field";
 import { useId, useRef, useState } from "react";
 import { api, json, type ContentVersion, type Episode } from "./api";
+
+import Dialog from "./Dialog";
+import { useSessionDraft } from "./Drafts";
 
 export type VersionKind = "script" | "storyboard";
 export type VersionCreated = (
@@ -40,6 +43,51 @@ type Board = {
   }[];
 };
 
+function validContent(value: unknown, kind: VersionKind): boolean {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  const strings = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.every((x) => typeof x === "string");
+  const text = (v: unknown) => typeof v === "string";
+  const number = (v: unknown) => typeof v === "number" && Number.isFinite(v);
+  if (kind === "script")
+    return (
+      text(row.title) &&
+      text(row.summary) &&
+      strings(row.characters) &&
+      Array.isArray(row.scenes) &&
+      row.scenes.length > 0 &&
+      row.scenes.every(
+        (scene) =>
+          scene &&
+          number(scene.scene_no) &&
+          text(scene.title) &&
+          text(scene.action) &&
+          Array.isArray(scene.dialogue) &&
+          scene.dialogue.every(
+            (line: Record<string, unknown>) =>
+              line && text(line.speaker) && text(line.text),
+          ),
+      )
+    );
+  return (
+    Array.isArray(row.shots) &&
+    row.shots.length > 0 &&
+    row.shots.every(
+      (shot) =>
+        shot &&
+        number(shot.shot_no) &&
+        number(shot.scene_no) &&
+        number(shot.duration_ms) &&
+        text(shot.shot_size) &&
+        text(shot.visual_description) &&
+        strings(shot.characters) &&
+        text(shot.camera_movement) &&
+        text(shot.subtitle),
+    )
+  );
+}
+
 export default function VersionEditor({
   version,
   kind,
@@ -64,7 +112,6 @@ export default function VersionEditor({
   active: boolean;
 }) {
   const editorId = useId();
-  const [editing, setEditing] = useState(!version);
   const source = sourceScript?.content_json as Script | undefined;
   function emptyShot(shotNo: number): Board["shots"][number] {
     return {
@@ -78,7 +125,7 @@ export default function VersionEditor({
       subtitle: "",
     };
   }
-  const [draft, setDraft] = useState<Record<string, unknown>>(() =>
+  const [initial] = useState<Record<string, unknown>>(() =>
     version
       ? structuredClone(version.content_json)
       : kind === "storyboard"
@@ -90,13 +137,39 @@ export default function VersionEditor({
             scenes: [{ scene_no: 1, title: "", action: "", dialogue: [] }],
           },
   );
+  const local = useSessionDraft({
+    id: JSON.stringify([
+      episode.id,
+      kind,
+      version?.id ?? null,
+      sourceScript?.id ?? null,
+    ]),
+    episodeId: episode.id,
+    label: version
+      ? `${kind === "script" ? "剧本" : "分镜"} v${version.version_no} 的修改`
+      : kind === "script"
+        ? "人工剧本起稿"
+        : `人工分镜起稿（来源剧本 v${sourceScript?.version_no}）`,
+    initial,
+    validate: (value): value is Record<string, unknown> =>
+      validContent(value, kind),
+  });
+  const draft = local.value;
+  const [editing, setEditing] = useState(!version || local.recovered);
+  const [discarding, setDiscarding] = useState(false);
+  function discard() {
+    local.clear();
+    local.update(structuredClone(initial));
+    setEditing(!version);
+    setDiscarding(false);
+  }
   const saving = useRef(false);
   const script = draft as unknown as Script;
   const board = draft as unknown as Board;
   function mutate(change: (value: Script & Board) => void) {
     const copy = structuredClone(draft);
     change(copy as unknown as Script & Board);
-    setDraft(copy);
+    local.update(copy);
   }
   const invalidBoard =
     kind === "storyboard" &&
@@ -134,6 +207,7 @@ export default function VersionEditor({
           }),
         );
         // POST 已成功：先结束草稿并定位精确版本，刷新失败不能退回保存入口。
+        local.clear();
         setEditing(false);
         await onCreated(created, kind);
       });
@@ -142,7 +216,10 @@ export default function VersionEditor({
     }
   }
   return (
-    <>
+    <fieldset
+      disabled={busy || !writable || active}
+      className="flex min-w-0 flex-col gap-4"
+    >
       <div className="section-heading flex flex-wrap items-center justify-between gap-2">
         <h3>
           {kind === "script" ? "剧本" : "分镜"}{" "}
@@ -161,12 +238,50 @@ export default function VersionEditor({
           size="lg"
           disabled={busy || active}
           onClick={() => {
-            setEditing(!editing);
-            setDraft(structuredClone(version.content_json));
+            if (editing && local.dirty) setDiscarding(true);
+            else setEditing(!editing);
           }}
         >
           {editing ? "放弃本次编辑" : "编辑并另存新版本"}
         </Button>
+      )}
+      {local.invalid && (
+        <Notice tone="error" role="alert">
+          本地草稿格式损坏，未自动恢复。当前显示原稿；可放弃草稿后重新编辑。
+        </Notice>
+      )}
+      {local.dirty && (
+        <Notice tone="info" role="status" className="draft-notice">
+          {local.recovered ? "已恢复未保存草稿。" : "未保存草稿已暂存。"}
+          仅保留在当前浏览器标签页，切换后重新打开相同版本或起稿入口即可恢复；不代表已保存到服务器，关闭标签页会清除。
+          {!version && (
+            <Button
+              variant="outline"
+              onClick={() => setDiscarding(true)}
+              disabled={busy}
+            >
+              放弃草稿
+            </Button>
+          )}
+        </Notice>
+      )}
+      {discarding && (
+        <Dialog
+          labelledBy={`${editorId}-discard`}
+          busy={busy}
+          onDismiss={() => setDiscarding(false)}
+        >
+          <h2 id={`${editorId}-discard`}>放弃未保存草稿？</h2>
+          <p>此操作会清除本标签页的这份草稿，服务器上的历史版本不受影响。</p>
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="outline" onClick={() => setDiscarding(false)}>
+              继续编辑
+            </Button>
+            <Button variant="destructive" onClick={discard}>
+              确认放弃草稿
+            </Button>
+          </div>
+        </Dialog>
       )}
       {kind === "script" ? (
         <div className="document flex min-w-0 flex-col gap-4 break-words">
@@ -184,9 +299,10 @@ export default function VersionEditor({
                   }
                 />
               </FormLabel>
-              <FormLabel>
-                梗概
+              <Field className="flex min-w-0 flex-col gap-2">
+                <FormLabel htmlFor={`${editorId}-summary`}>梗概</FormLabel>
                 <Textarea
+                  id={`${editorId}-summary`}
                   value={script.summary}
                   maxLength={3000}
                   onChange={(event) =>
@@ -195,7 +311,7 @@ export default function VersionEditor({
                     })
                   }
                 />
-              </FormLabel>
+              </Field>
               <FormLabel>
                 角色（用中文逗号分隔）
                 <Input
@@ -238,9 +354,12 @@ export default function VersionEditor({
                       }
                     />
                   </FormLabel>
-                  <FormLabel>
-                    场景动作
+                  <Field className="flex min-w-0 flex-col gap-2">
+                    <FormLabel htmlFor={`${editorId}-action-${index}`}>
+                      场景动作
+                    </FormLabel>
                     <Textarea
+                      id={`${editorId}-action-${index}`}
                       value={scene.action}
                       maxLength={5000}
                       onChange={(event) =>
@@ -249,7 +368,7 @@ export default function VersionEditor({
                         })
                       }
                     />
-                  </FormLabel>
+                  </Field>
                 </>
               ) : (
                 <>
@@ -290,9 +409,14 @@ export default function VersionEditor({
                         )}
                       </NativeSelect>
                     </div>
-                    <FormLabel>
-                      对白
+                    <Field className="flex min-w-0 flex-col gap-2">
+                      <FormLabel
+                        htmlFor={`${editorId}-dialogue-${index}-${lineIndex}`}
+                      >
+                        对白
+                      </FormLabel>
                       <Textarea
+                        id={`${editorId}-dialogue-${index}-${lineIndex}`}
                         value={line.text}
                         maxLength={2000}
                         onChange={(event) =>
@@ -302,7 +426,7 @@ export default function VersionEditor({
                           })
                         }
                       />
-                    </FormLabel>
+                    </Field>
                     <Button
                       variant="outline"
                       size="lg"
@@ -619,6 +743,6 @@ export default function VersionEditor({
                 : "保存人工分镜"}
         </Button>
       )}
-    </>
+    </fieldset>
   );
 }

@@ -15,6 +15,7 @@ import {
 import Login from "./Login";
 
 import Workbench from "./Workbench";
+import { DraftProvider } from "./Drafts";
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,7 +81,9 @@ export default function App() {
         </Notice>
       )}
       {user ? (
-        <Workbench key={user.id} user={user} logout={logout} />
+        <DraftProvider key={user.id} userId={user.id}>
+          <Workbench user={user} logout={logout} />
+        </DraftProvider>
       ) : (
         <Login onLogin={login} />
       )}
