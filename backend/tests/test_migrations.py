@@ -124,12 +124,6 @@ def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, 
 
     from arclight.providers.text import MockTextProvider
 
-    command.downgrade(migrated, revision)
-    engine = client.app.state.engine
-    tables_before = set(inspect(engine).get_table_names())
-    with engine.connect() as db:
-        revision_before = db.scalar(text("SELECT version_num FROM alembic_version"))
-
     response = client.post(
         f"/api/v1/episodes/{episode['id']}/scripts",
         json={
@@ -138,6 +132,13 @@ def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, 
         },
     )
     assert response.status_code == 201
+    # Current application writes only against head; test old DDL after seeding.
+    command.downgrade(migrated, revision)
+    engine = client.app.state.engine
+    tables_before = set(inspect(engine).get_table_names())
+    with engine.connect() as db:
+        revision_before = db.scalar(text("SELECT version_num FROM alembic_version"))
+
     with pytest.raises(RuntimeError, match="无法无损降级"):
         command.downgrade(migrated, "0001")
     # PostgreSQL 会回滚整段 DDL；SQLite 保留此前已完成的降级步骤。
@@ -146,6 +147,8 @@ def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, 
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == expected_revision
     if engine.dialect.name == "postgresql":
         assert set(inspect(engine).get_table_names()) == tables_before
+    # Restore head before reading through the current application model.
+    command.upgrade(migrated, "head")
     assert (
         client.get(f"/api/v1/episodes/{episode['id']}/scripts").json()[0]["id"]
         == response.json()["id"]

@@ -1,6 +1,17 @@
 export type User = { id: string; email: string; display_name: string };
 export type Session = { access_token: string; user: User };
+export type ProjectStorySettings = {
+  schema_version: 1;
+  description: string;
+  genre: string;
+  target_audience: string;
+  content_restrictions: string;
+  default_episode_duration_ms: number;
+  target_episode_count: number;
+  episode_plan: string;
+};
 export type Project = {
+  story_settings: ProjectStorySettings;
   id: string;
   name: string;
   owner_id: string;

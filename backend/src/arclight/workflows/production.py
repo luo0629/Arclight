@@ -15,6 +15,7 @@ class ProductionState(TypedDict, total=False):
     run_id: str
     story: str
     style_guide: dict
+    story_settings: dict
     target_duration_ms: int
     script: dict
     script_version_id: str
@@ -38,11 +39,14 @@ def build_graph(
     provider: TextProvider, artifacts: Artifacts, checkpointer, *, director_only: bool = False
 ):
     def write_script(state: ProductionState) -> dict:
-        version_id, content = artifacts.script(
-            lambda: provider.script(
-                state["story"], state["style_guide"], state["target_duration_ms"]
-            ).model_dump()
-        )
+        def generate() -> dict:
+            args = (state["story"], state["style_guide"], state["target_duration_ms"])
+            # Old checkpoints have no brief: never inject today's project settings.
+            if "story_settings" not in state:
+                return provider.script(*args).model_dump()
+            return provider.script(*args, story_settings=state["story_settings"]).model_dump()
+
+        version_id, content = artifacts.script(generate)
         return {"script": content, "script_version_id": version_id}
 
     def review_script(state: ProductionState) -> dict:

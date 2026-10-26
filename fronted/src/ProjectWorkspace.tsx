@@ -98,7 +98,7 @@ export default function ProjectWorkspace({
         json("POST", {
           episode_no: Number(data.get("number")),
           title: data.get("title"),
-          target_duration_ms: Number(data.get("duration")) * 1000,
+          target_duration_ms: Math.round(Number(data.get("duration")) * 1000),
         }),
       );
       await reload();
@@ -390,8 +390,10 @@ export default function ProjectWorkspace({
                     type="number"
                     min="2.5"
                     max="1800"
-                    step="0.5"
-                    defaultValue="30"
+                    step="0.001"
+                    defaultValue={
+                      project.story_settings.default_episode_duration_ms / 1000
+                    }
                     required
                   />
                 </FormLabel>

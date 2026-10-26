@@ -11,6 +11,7 @@ from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import EpisodeRead, Input, ProjectRead, RunRead
 from arclight.application.commands import require_episode, require_project
 from arclight.core.errors import DomainError
+from arclight.domain.project_settings import ProjectStorySettings
 from arclight.persistence.models import (
     AuditEvent,
     Episode,
@@ -24,6 +25,7 @@ router = APIRouter(prefix="/api/v1", tags=["collaboration"])
 
 
 class ProjectPatch(Input):
+    story_settings: ProjectStorySettings | None = None
     name: str | None = Field(default=None, min_length=1, max_length=160)
     style_guide: dict | None = None
     output_profile: dict | None = None
@@ -105,6 +107,8 @@ def patch_project(
     project = require_project(db, project_id, actor, owner=True)
     db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
     changes = payload.model_dump(exclude_unset=True)
+    if payload.story_settings is not None:
+        changes["story_settings"] = payload.story_settings.model_dump()
     if project.archived and changes != {"archived": False}:
         raise DomainError("PROJECT_ARCHIVED", "请先恢复项目再编辑", 409)
     if changes:

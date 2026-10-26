@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
+from arclight.domain.project_settings import ProjectStorySettings
 
 
 class Input(BaseModel):
@@ -20,6 +21,7 @@ class Resource(BaseModel):
 
 
 class ProjectCreate(Input):
+    story_settings: ProjectStorySettings = Field(default_factory=ProjectStorySettings)
     name: str = Field(min_length=1, max_length=160)
     style_guide: dict = Field(default_factory=dict)
     output_profile: dict = Field(default_factory=lambda: {"width": 1080, "height": 1920, "fps": 30})

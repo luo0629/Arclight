@@ -86,8 +86,13 @@ def get_project(project_id: UUID, db: Database, actor: Actor) -> ProjectRead:
 def create_episode(
     project_id: UUID, payload: EpisodeCreate, db: Database, actor: Actor
 ) -> EpisodeRead:
-    require_project(db, project_id, actor, write=True)
-    episode = Episode(project_id=project_id, **payload.model_dump())
+    project = require_project(db, project_id, actor, write=True)
+    values = payload.model_dump()
+    if "target_duration_ms" not in payload.model_fields_set:
+        values["target_duration_ms"] = ProjectRead.model_validate(
+            project
+        ).story_settings.default_episode_duration_ms
+    episode = Episode(project_id=project_id, **values)
     db.add(episode)
     db.flush()
     return EpisodeRead.model_validate(episode)

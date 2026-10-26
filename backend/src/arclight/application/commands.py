@@ -16,6 +16,7 @@ from arclight.application.model_services import text_snapshot
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus, RunStatus
+from arclight.domain.project_settings import ProjectStorySettings
 from arclight.persistence.models import (
     AuditEvent,
     Episode,
@@ -126,6 +127,7 @@ def start_run(
     inputs = {
         "story": story,
         "style_guide": project.style_guide,
+        "story_settings": ProjectStorySettings.model_validate(project.story_settings).model_dump(),
         "target_duration_ms": episode.target_duration_ms,
     }
     if script_version_id is not None:

@@ -21,6 +21,7 @@ class Project(Entity, Base):
     __tablename__ = "projects"
     name: Mapped[str] = mapped_column(String(160))
     owner_id: Mapped[str] = mapped_column(String(100), index=True)
+    story_settings: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, server_default="{}")
     style_guide: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     output_profile: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     archived: Mapped[bool] = mapped_column(default=False)

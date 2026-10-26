@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useState, type FormEvent } from "react";
 import EpisodeEditor from "./EpisodeEditor";
 import ProjectProductionSettings from "./ProjectProductionSettings";
+import ProjectStorySettings from "./ProjectStorySettings";
 import { api, json, message, type Episode, type Project } from "./api";
 
 export default function Settings({
@@ -103,6 +104,13 @@ export default function Settings({
           </Button>
         </FieldGroup>
       </form>
+      <ProjectStorySettings
+        key={project.id}
+        project={project}
+        disabled={busy}
+        onBusyChange={setBusy}
+        onSaved={onProjectSaved}
+      />
       <ProjectProductionSettings
         project={project}
         disabled={busy}
