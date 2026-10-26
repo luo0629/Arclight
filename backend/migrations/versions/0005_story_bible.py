@@ -18,7 +18,9 @@ def upgrade() -> None:
         sa.Column("project_id", sa.Uuid(), sa.ForeignKey("projects.id"), nullable=False),
         sa.Column("kind", sa.String(16), nullable=False),
         sa.Column("name", sa.String(100), nullable=False),
-        sa.Column("data_json", sa.JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=False),
+        sa.Column(
+            "data_json", sa.JSON().with_variant(postgresql.JSONB(), "postgresql"), nullable=False
+        ),
         sa.Column("archived", sa.Boolean(), nullable=False),
         sa.Column("revision", sa.Integer(), nullable=False),
         sa.Column("created_by", sa.String(100), nullable=False),
