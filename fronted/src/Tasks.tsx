@@ -52,7 +52,7 @@ export default function Tasks({
     <PagePanel
       eyebrow="每一步都有迹可循"
       title="创作任务与审核"
-      description="生成在后台 Worker 中执行。等待审核时，只有项目 Owner 可以批准或驳回对应的具体版本。"
+      description="创作会在后台继续，不必一直等待。生成完成后，由项目拥有者确认每一版剧本与分镜。"
     >
       {runs.length === 0 ? (
         <EmptyState className="empty compact py-8">

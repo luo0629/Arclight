@@ -160,7 +160,7 @@ export default function Canvas({
     }
   }
   return (
-    <div className="canvas-wrap relative h-[max(560px,calc(100dvh-354px))] min-w-0 overflow-hidden rounded-2xl border bg-card shadow-sm">
+    <div className="canvas-wrap relative h-[max(480px,calc(100dvh-390px))] min-w-0 overflow-hidden rounded-2xl border bg-card shadow-sm">
       <div
         className="canvas-note pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-24px)] rounded-lg border bg-card/90 px-3 py-2 text-xs text-muted-foreground"
         role="status"
@@ -184,6 +184,7 @@ export default function Canvas({
         minZoom={0.1}
         maxZoom={3}
         fitView={graph.layout.revision === 0}
+        fitViewOptions={{ padding: 0.25, maxZoom: 1 }}
         ariaLabelConfig={{
           "controls.zoomIn.ariaLabel": "放大画布",
           "controls.zoomOut.ariaLabel": "缩小画布",
@@ -191,7 +192,7 @@ export default function Canvas({
           "controls.interactive.ariaLabel": "切换交互",
         }}
       >
-        <Background color="#c8dbdf" gap={22} size={1.2} />
+        <Background color="var(--border)" gap={22} size={1.2} />
         <Controls showInteractive={false} />
       </ReactFlow>
       {writable && (

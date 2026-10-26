@@ -1,7 +1,10 @@
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Brand } from "@/components/brand-art";
 import { Notice } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import {
   api,
   configureAuth,
@@ -14,8 +17,9 @@ import {
 
 import Login from "./Login";
 
-import Workbench from "./Workbench";
 import { DraftProvider } from "./Drafts";
+
+const Workbench = lazy(() => import("./Workbench"));
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,20 +58,9 @@ export default function App() {
       setSessionError(message(error));
     }
   }
-  if (loading)
-    return (
-      <main
-        className="boot-screen flex min-h-dvh flex-col items-center justify-center gap-4 text-sm text-muted-foreground"
-        role="status"
-      >
-        <span className="brand-mark flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary font-serif text-3xl italic text-primary-foreground shadow-sm">
-          a
-        </span>
-        <p>正在打开你的创作手帐…</p>
-      </main>
-    );
+  if (loading) return <OpeningStory />;
   return (
-    <>
+    <TooltipProvider delayDuration={400}>
       {sessionError && (
         <Notice tone="error" className="global-error mx-4 my-3" role="alert">
           {sessionError}
@@ -81,12 +74,30 @@ export default function App() {
         </Notice>
       )}
       {user ? (
-        <DraftProvider key={user.id} userId={user.id}>
-          <Workbench user={user} logout={logout} />
-        </DraftProvider>
+        <Suspense fallback={<OpeningStory />}>
+          <DraftProvider key={user.id} userId={user.id}>
+            <Workbench user={user} logout={logout} />
+          </DraftProvider>
+        </Suspense>
       ) : (
         <Login onLogin={login} />
       )}
-    </>
+    </TooltipProvider>
+  );
+}
+
+function OpeningStory() {
+  return (
+    <main
+      className="boot-screen flex min-h-dvh flex-col items-center justify-center gap-4 text-sm text-muted-foreground"
+      role="status"
+    >
+      <Brand />
+      <p>正在打开你的故事…</p>
+      <div className="flex w-52 flex-col items-center gap-3" aria-hidden="true">
+        <Skeleton className="h-2 w-full" />
+        <Skeleton className="h-2 w-32" />
+      </div>
+    </main>
   );
 }

@@ -40,7 +40,10 @@ test("工作区辅助函数：登录页不要求存在工作区面板", async ({
   await page.goto("/");
   await openWorkspacePanels(page);
   await expect(
-    page.getByRole("heading", { name: "欢迎回来，小创作家", exact: true }),
+    page.getByRole("heading", {
+      name: /让一个小灵感，\s*长成好故事。/,
+      exact: true,
+    }),
   ).toBeVisible();
 });
 
@@ -67,9 +70,12 @@ test("工作区辅助函数：无剧集项目刷新后仍可展开目录", async
       page.getByRole("button", { name: "展开目录", exact: true }),
     ).toHaveAttribute("aria-expanded", "false");
     await openWorkspacePanels(page);
-    await expect(page.getByRole("combobox", { name: "选择项目" })).toHaveValue(
-      project.id,
+    await expect(page.getByRole("combobox", { name: "选择项目" })).toHaveText(
+      project.name,
     );
+    await expect
+      .poll(() => page.evaluate(() => localStorage.getItem("arclight-project")))
+      .toBe(project.id);
     await expect(
       page.getByRole("button", { name: "收起目录", exact: true }),
     ).toHaveAttribute("aria-expanded", "true");

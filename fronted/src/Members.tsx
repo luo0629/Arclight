@@ -2,13 +2,18 @@ import { PagePanel } from "@/components/ui-kit";
 import { Notice, FormLabel, EmptyState } from "@/components/ui-kit";
 import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@/components/ui/native-select";
+import { ChoiceSelect } from "@/components/choice-select";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Spinner } from "@/components/ui/spinner";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, json, message, type Member } from "./api";
+
+const roles = [
+  { value: "editor", label: "编辑者" },
+  { value: "viewer", label: "查看者" },
+];
 
 export default function Members({
   projectId,
@@ -21,6 +26,7 @@ export default function Members({
 }) {
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState("");
+  const [inviteRole, setInviteRole] = useState("editor");
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const url = `/projects/${projectId}/members`;
@@ -66,13 +72,14 @@ export default function Members({
         json("POST", { email: data.get("email"), role: data.get("role") }),
       );
       form.reset();
+      setInviteRole("editor");
     });
   }
   return (
     <PagePanel
       eyebrow="一起创作"
       title="给故事找几个好伙伴"
-      description="Owner 批准关键内容与管理项目；编辑者可编辑和发起任务；查看者只读。添加前，请伙伴先注册账号。"
+      description="邀请伙伴一起打磨故事。拥有者负责审核与管理，编辑者可以创作，查看者可以阅读。邀请前，请伙伴先注册账号。"
     >
       {error && (
         <Notice tone="error" className="error" role="alert">
@@ -96,19 +103,29 @@ export default function Members({
             </FormLabel>
             <FormLabel>
               项目角色
-              <NativeSelect name="role">
-                <NativeSelectOption value="editor">编辑者</NativeSelectOption>
-                <NativeSelectOption value="viewer">查看者</NativeSelectOption>
-              </NativeSelect>
+              <ChoiceSelect
+                name="role"
+                aria-label="项目角色"
+                value={inviteRole}
+                onValueChange={setInviteRole}
+                options={roles}
+                disabled={busy}
+              />
             </FormLabel>
             <Button variant="default" size="lg" className="" disabled={busy}>
+              {busy && <Spinner aria-hidden="true" />}
               添加成员
             </Button>
           </FieldGroup>
         </form>
       )}
       {!loaded ? (
-        <p role="status">正在寻找伙伴…</p>
+        <div role="status" className="flex flex-col gap-3">
+          <span className="sr-only">正在寻找伙伴…</span>
+          {[0, 1, 2].map((key) => (
+            <Skeleton key={key} aria-hidden="true" className="h-20 w-full" />
+          ))}
+        </div>
       ) : members.length === 0 ? (
         <EmptyState className="empty compact py-8">
           <h3>现在是你的独立创作时间</h3>
@@ -118,35 +135,32 @@ export default function Members({
         <ul className="member-list flex flex-col gap-3 [&>li]:flex [&>li]:flex-wrap [&>li]:items-center [&>li]:gap-3 [&>li]:rounded-lg [&>li]:border [&>li]:p-4 [&>li>div]:min-w-0 [&>li>div]:flex-1 [&_p]:break-all [&_p]:text-xs [&_p]:text-muted-foreground">
           {members.map((member) => (
             <li key={member.user_id}>
-              <span className="avatar flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground">
-                {member.display_name.slice(0, 1)}
-              </span>
+              <Avatar aria-hidden="true">
+                <AvatarFallback>
+                  {Array.from(member.display_name)[0] || "我"}
+                </AvatarFallback>
+              </Avatar>
               <div>
                 <strong>{member.display_name}</strong>
                 <p>{member.email}</p>
               </div>
               {owner && writable ? (
                 <>
-                  <NativeSelect
+                  <ChoiceSelect
                     aria-label={`${member.display_name}的角色`}
                     value={member.role}
                     disabled={busy}
-                    onChange={(event) =>
+                    className="w-36"
+                    options={roles}
+                    onValueChange={(role) =>
                       void act(() =>
                         api(
                           `${url}/${member.user_id}`,
-                          json("PATCH", { role: event.target.value }),
+                          json("PATCH", { role }),
                         ),
                       )
                     }
-                  >
-                    <NativeSelectOption value="editor">
-                      编辑者
-                    </NativeSelectOption>
-                    <NativeSelectOption value="viewer">
-                      查看者
-                    </NativeSelectOption>
-                  </NativeSelect>
+                  />
                   <Button
                     variant="outline"
                     size="lg"

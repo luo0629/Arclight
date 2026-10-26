@@ -1,0 +1,673 @@
+/* 产品首页：有留白的故事拼贴，功能控件不参与装饰性旋转。 */
+.product-page {
+  --font-story: Georgia, "Noto Serif SC", "Songti SC", SimSun, serif;
+  background: var(--background);
+}
+.brand-wordmark {
+  display: inline-block;
+  font-size: 1.8rem;
+  font-weight: 850;
+  letter-spacing: -0.085em;
+  line-height: 1.15;
+  color: var(--foreground);
+}
+.brand-period {
+  color: var(--primary);
+}
+.product-header {
+  max-width: 1392px;
+  margin-inline: auto;
+  min-height: 100px;
+  padding: 20px 56px;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+}
+.product-brand {
+  text-decoration: none;
+}
+.product-brand .brand-wordmark {
+  font-size: 2.25rem;
+}
+.header-about {
+  justify-self: start;
+  font-size: 0.75rem;
+  text-underline-offset: 5px;
+}
+.header-about:hover {
+  text-decoration: underline;
+}
+.header-login {
+  justify-self: end;
+}
+.skip-link {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 60;
+  padding: 12px 20px;
+  border-radius: 12px;
+  background: var(--accent);
+  transform: translateY(-160%);
+}
+.skip-link:focus {
+  transform: translateY(0);
+}
+.story-hero {
+  position: relative;
+  max-width: 1392px;
+  min-height: 740px;
+  margin-inline: auto;
+  isolation: isolate;
+}
+.hero-copy {
+  position: relative;
+  z-index: 1;
+  width: min(620px, 52%);
+  margin-inline: auto;
+  padding-top: 178px;
+  text-align: center;
+}
+.hero-intro {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 25px;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.hero-intro > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+}
+.hero-copy h1 {
+  margin: 0;
+  font-family: var(--font-story);
+  font-size: clamp(2.75rem, 4.25vw, 4rem);
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.055em;
+}
+.hero-copy h1 em {
+  position: relative;
+  font-style: normal;
+  white-space: nowrap;
+  z-index: 0;
+}
+.hero-copy h1 em::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: 32% -0.08em 3%;
+  background: var(--accent);
+  transform: rotate(-2deg);
+  border-radius: 2px 6px 3px 1px;
+}
+.hero-description {
+  margin: 25px 0 28px;
+  color: var(--muted-foreground);
+  font-size: 0.875rem;
+  line-height: 1.9;
+}
+.hero-cta {
+  min-width: 180px;
+  height: 48px;
+  border-radius: 999px;
+  gap: 16px;
+}
+.hero-signin {
+  display: block;
+  margin: 17px auto 0;
+  padding: 5px;
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+  text-underline-offset: 5px;
+}
+.hero-signin:hover {
+  color: var(--foreground);
+  text-decoration: underline;
+}
+.story-collage {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+}
+.story-drawing {
+  display: block;
+  width: 100%;
+  height: auto;
+  color: var(--foreground);
+}
+.story-scrap {
+  position: absolute;
+  padding: 19px;
+  border-radius: 17px;
+  background: var(--secondary);
+  color: var(--foreground);
+}
+.story-scrap p {
+  font-family: var(--font-story);
+  font-size: 1.05rem;
+  line-height: 1.5;
+  margin-block: 10px;
+}
+.scrap-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.625rem;
+}
+.scrap-label svg {
+  width: 13px;
+  height: 13px;
+}
+.scrap-caption {
+  font-size: 0.5625rem;
+  color: var(--muted-foreground);
+}
+.collage-writer {
+  position: absolute;
+  width: 230px;
+  left: 4.5%;
+  top: 82px;
+  transform: rotate(-5deg);
+}
+.handwritten {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-story);
+  font-size: 0.7rem;
+  text-align: center;
+}
+.scrap-idea {
+  width: 186px;
+  top: 33px;
+  left: 24%;
+  transform: rotate(-7deg);
+}
+.scrap-ready {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  top: 67px;
+  left: 46%;
+  padding: 15px 19px;
+  background: var(--accent);
+  transform: rotate(5deg);
+  font-family: var(--font-story);
+  font-size: 0.75rem;
+}
+.scrap-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  border-radius: 50%;
+  background: var(--foreground);
+  color: var(--background);
+}
+.scrap-check svg {
+  width: 12px;
+  height: 12px;
+}
+.scrap-script {
+  width: 192px;
+  top: 379px;
+  left: 5.5%;
+  transform: rotate(-5deg);
+  padding: 22px;
+}
+.scrap-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 16px 0;
+}
+.scrap-lines i {
+  width: 86%;
+  border-top: 1px solid color-mix(in oklch, var(--foreground), transparent 82%);
+}
+.scrap-lines i:last-child {
+  width: 60%;
+}
+.scrap-scene {
+  width: 205px;
+  right: 6.5%;
+  top: 96px;
+  transform: rotate(7deg);
+  padding: 8px;
+  background: var(--secondary);
+}
+.scrap-scene .story-drawing {
+  border-radius: 11px;
+}
+.scrap-scene > div {
+  padding: 10px 9px 6px;
+}
+.scrap-scene p {
+  margin: 7px 0 0;
+  font-size: 0.85rem;
+}
+.scrap-board {
+  width: 137px;
+  top: 385px;
+  right: 10%;
+  transform: rotate(8deg);
+  background: var(--accent);
+}
+.scrap-board > svg {
+  width: 24px;
+  height: 24px;
+  stroke-width: 1.5;
+}
+.scrap-note {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  top: 616px;
+  left: 21%;
+  transform: rotate(3deg);
+  font-size: 0.625rem;
+  background: var(--sky);
+}
+.scrap-note .scrap-check {
+  background: var(--background);
+  color: var(--foreground);
+}
+.collage-plane {
+  position: absolute;
+  width: 140px;
+  top: 185px;
+  right: 22%;
+  transform: rotate(-12deg);
+}
+.collage-book {
+  position: absolute;
+  width: 180px;
+  top: 535px;
+  right: 23%;
+  transform: rotate(7deg);
+}
+.collage-asterisk {
+  position: absolute;
+  top: 592px;
+  left: 8%;
+  font-size: 54px;
+  line-height: 1;
+  transform: rotate(10deg);
+}
+.hero-scroll {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  white-space: nowrap;
+}
+.hero-scroll svg {
+  width: 16px;
+  height: 16px;
+}
+.collage-disclaimer {
+  position: absolute;
+  right: 36px;
+  bottom: 30px;
+  font-size: 0.625rem;
+  color: var(--muted-foreground);
+}
+.story-journey {
+  max-width: 1160px;
+  margin: 0 auto;
+  padding: 75px 32px 88px;
+  border-top: 1px solid var(--border);
+  scroll-margin-top: 30px;
+}
+.journey-heading {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 52px;
+}
+.journey-heading > p {
+  font-size: 0.75rem;
+  margin-top: 8px;
+  color: var(--muted-foreground);
+}
+.journey-heading h2 {
+  font-family: var(--font-story);
+  font-size: 2.1rem;
+  line-height: 1.5;
+  font-weight: 400;
+  width: 65%;
+}
+.journey-steps {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 54px;
+  padding: 0;
+}
+.journey-steps li {
+  position: relative;
+}
+.journey-icon {
+  display: flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 25px;
+  border-radius: 14px;
+  background: var(--secondary);
+  transform: rotate(-6deg);
+}
+.journey-steps li:nth-child(2) .journey-icon {
+  background: var(--accent);
+  transform: rotate(5deg);
+}
+.journey-steps li:nth-child(3) .journey-icon {
+  background: var(--sky);
+}
+.journey-icon svg {
+  width: 22px;
+  height: 22px;
+  stroke-width: 1.5;
+}
+.journey-number {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+.journey-steps h3 {
+  font-size: 1rem;
+  margin-top: 12px;
+  margin-bottom: 14px;
+  font-weight: 500;
+}
+.journey-steps p {
+  font-size: 0.8125rem;
+  line-height: 1.9;
+  color: var(--muted-foreground);
+  max-width: 30em;
+}
+.story-invitation {
+  max-width: 1160px;
+  margin: 0 auto 70px;
+  border-radius: 28px;
+  background: var(--secondary);
+  padding: 45px 56px;
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  align-items: center;
+  gap: 18px 50px;
+}
+.story-invitation > .story-drawing {
+  grid-row: span 2;
+  transform: rotate(-6deg);
+}
+.story-invitation > div > p {
+  font-size: 0.75rem;
+  color: var(--muted-foreground);
+}
+.story-invitation h2 {
+  font-family: var(--font-story);
+  font-size: 1.8rem;
+  font-weight: 400;
+  margin: 10px 0 22px;
+}
+.story-invitation [data-slot="button"] {
+  border-radius: 999px;
+}
+.product-availability {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+  line-height: 1.8;
+}
+.product-footer {
+  max-width: 1272px;
+  margin: auto;
+  padding: 26px 32px 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border-top: 1px solid var(--border);
+}
+.product-footer .brand-wordmark {
+  font-size: 1.4rem;
+}
+.product-footer p,
+.product-footer > span {
+  font-size: 0.6875rem;
+  color: var(--muted-foreground);
+}
+.auth-dialog {
+  padding: 32px;
+  gap: 25px;
+}
+.auth-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.auth-heading .brand-wordmark {
+  font-size: 1.65rem;
+}
+.auth-dialog h2 {
+  font-size: 1.3rem;
+  line-height: 1.6;
+}
+.auth-description {
+  color: var(--muted-foreground);
+  font-size: 0.8125rem;
+  margin-top: 7px;
+}
+.auth-dialog [data-slot="field-group"] {
+  gap: 20px;
+}
+@media (min-width: 1440px) {
+  .story-hero {
+    min-height: 780px;
+  }
+  .hero-copy {
+    padding-top: 195px;
+  }
+}
+@media (max-width: 1100px) {
+  .product-header {
+    padding-inline: 32px;
+  }
+  .story-hero {
+    min-height: 710px;
+  }
+  .hero-copy {
+    padding-top: 175px;
+    width: 57%;
+  }
+  .collage-writer {
+    width: 180px;
+    left: 1%;
+    top: 110px;
+  }
+  .scrap-idea {
+    left: 20%;
+    width: 165px;
+  }
+  .scrap-scene {
+    width: 165px;
+    right: 3%;
+  }
+  .scrap-script {
+    width: 163px;
+    left: 3%;
+  }
+  .scrap-board {
+    right: 4%;
+    width: 120px;
+  }
+  .collage-plane {
+    width: 105px;
+    right: 20%;
+    top: 180px;
+  }
+  .collage-book {
+    width: 140px;
+    right: 18%;
+  }
+  .scrap-note {
+    left: 18%;
+    top: 590px;
+  }
+  .story-invitation {
+    margin-inline: 32px;
+  }
+}
+@media (max-width: 900px) {
+  .product-header {
+    min-height: 80px;
+    padding: 16px 22px;
+  }
+  .product-brand .brand-wordmark {
+    font-size: 1.8rem;
+  }
+  .header-about {
+    font-size: 0.625rem;
+  }
+  .story-hero {
+    display: flex;
+    flex-direction: column;
+    min-height: auto;
+    padding: 35px 20px 32px;
+  }
+  .hero-copy {
+    width: 100%;
+    padding-top: 0;
+  }
+  .hero-intro {
+    font-size: 0.6875rem;
+    margin-bottom: 22px;
+  }
+  .hero-copy h1 {
+    font-size: clamp(2.4rem, 7.5vw, 3.5rem);
+  }
+  .hero-description {
+    font-size: 0.8125rem;
+    margin: 22px 0;
+  }
+  .story-collage {
+    position: relative;
+    order: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 26px;
+    margin: 34px auto 22px;
+    width: min(100%, 400px);
+    min-height: 190px;
+  }
+  .story-collage > * {
+    display: none;
+  }
+  .story-collage .scrap-script,
+  .story-collage .scrap-scene {
+    display: block;
+    position: relative;
+    inset: auto;
+    width: 42%;
+  }
+  .scrap-script {
+    padding: 15px;
+  }
+  .scrap-script p {
+    font-size: 0.875rem;
+  }
+  .scrap-scene > div {
+    padding: 5px;
+  }
+  .scrap-scene p {
+    font-size: 0.75rem;
+  }
+  .scrap-caption {
+    font-size: 0.5rem;
+  }
+  .hero-scroll {
+    position: static;
+    transform: none;
+    order: 3;
+    margin-top: 10px;
+  }
+  .collage-disclaimer {
+    position: static;
+    order: 4;
+    text-align: center;
+    margin-top: 20px;
+    font-size: 0.5625rem;
+  }
+  .story-journey {
+    margin-inline: 24px;
+    padding: 45px 0 55px;
+  }
+  .journey-heading {
+    flex-direction: column;
+    gap: 14px;
+    margin-bottom: 35px;
+  }
+  .journey-heading h2 {
+    width: 100%;
+    font-size: 1.8rem;
+  }
+  .journey-steps {
+    grid-template-columns: 1fr;
+    gap: 32px;
+  }
+  .journey-steps li {
+    padding-left: 64px;
+  }
+  .journey-icon {
+    position: absolute;
+    left: 0;
+    top: 2px;
+  }
+  .journey-steps h3 {
+    margin-block: 7px 9px;
+  }
+  .journey-steps p {
+    max-width: none;
+  }
+  .story-invitation {
+    margin: 0 20px 40px;
+    padding: 30px 26px;
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+  .story-invitation > .story-drawing {
+    width: 110px;
+    grid-row: auto;
+  }
+  .story-invitation h2 {
+    font-size: 1.5rem;
+  }
+  .product-footer {
+    flex-wrap: wrap;
+    margin-inline: 24px;
+    padding: 24px 0 30px;
+    gap: 16px;
+  }
+  .product-footer > span:last-child {
+    display: none;
+  }
+  .auth-dialog {
+    padding: 24px;
+  }
+}

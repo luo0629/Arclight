@@ -110,7 +110,7 @@ export default function Settings({
         onSaved={onProjectSaved}
       />
       <section className="settings-section flex min-w-0 flex-col gap-4 rounded-xl border bg-background/60 p-4">
-        <h3>{project.archived ? "恢复这本创作手帐" : "归档项目"}</h3>
+        <h3>{project.archived ? "恢复这个故事项目" : "归档项目"}</h3>
         <p>归档期间，所有成员只能查看内容。</p>
         <Button
           variant="outline"

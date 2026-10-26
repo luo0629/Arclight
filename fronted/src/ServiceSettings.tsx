@@ -14,10 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { FormLabel, Notice, LoadingState } from "@/components/ui-kit";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@/components/ui/native-select";
+import { ChoiceSelect } from "@/components/choice-select";
+import { Spinner } from "@/components/ui/spinner";
 
 type Kind = "text" | "image" | "video" | "speech";
 type Profile = {
@@ -253,20 +251,21 @@ export default function ServiceSettings({
             {kind === "text" && (
               <FormLabel>
                 文字任务服务
-                <NativeSelect
+                <ChoiceSelect
+                  aria-label="文字任务服务"
                   value={draft.mode}
                   disabled={busy}
-                  onChange={(event) =>
-                    change({ mode: event.target.value as "server" | "custom" })
+                  onValueChange={(mode) =>
+                    change({ mode: mode as Profile["mode"] })
                   }
-                >
-                  <NativeSelectOption value="server">
-                    使用服务器默认服务
-                  </NativeSelectOption>
-                  <NativeSelectOption value="custom">
-                    启用我的兼容服务（可能产生费用）
-                  </NativeSelectOption>
-                </NativeSelect>
+                  options={[
+                    { value: "server", label: "使用服务器默认服务" },
+                    {
+                      value: "custom",
+                      label: "启用我的兼容服务（可能产生费用）",
+                    },
+                  ]}
+                />
               </FormLabel>
             )}
             <div className="grid min-w-0 gap-5 sm:grid-cols-2">
@@ -372,6 +371,7 @@ export default function ServiceSettings({
                   关闭
                 </Button>
                 <Button disabled={busy || !draft.dirty}>
+                  {busy && <Spinner aria-hidden="true" />}
                   {busy ? "保存中…" : "保存此服务"}
                 </Button>
               </div>

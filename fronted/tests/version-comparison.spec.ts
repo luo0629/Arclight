@@ -424,7 +424,7 @@ test("TXT-07：当前各页面真实截图，系统生成作者与直接下游�
   await page.goto("/");
   await openWorkspacePanels(page);
   await expect(
-    page.getByRole("button", { name: "登录创作手帐" }),
+    page.getByRole("button", { name: "开始我的故事" }),
   ).toBeVisible();
   await page.screenshot({
     path: "test-results/pages-login-desktop.png",

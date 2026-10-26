@@ -1,3 +1,10 @@
+import { RefreshCw } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Spinner } from "@/components/ui/spinner";
 import { Notice } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import {
@@ -90,19 +97,30 @@ export default function ListPagination({
               disabled={loading}
               onClick={() => void (loaded ? more() : reload()).catch(() => {})}
             >
+              {loading && <Spinner aria-hidden="true" />}
               {error ? "重试加载" : "加载更多"}
               {label}
             </Button>
           </>
         )}
-        <Button
-          variant="outline"
-          size="lg"
-          disabled={loading}
-          onClick={() => void reload().catch(() => {})}
-        >
-          刷新{label}
-        </Button>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={loading}
+              onClick={() => void reload().catch(() => {})}
+            >
+              {loading ? (
+                <Spinner aria-hidden="true" />
+              ) : (
+                <RefreshCw aria-hidden="true" />
+              )}
+              刷新{label}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">重新获取{label}列表</TooltipContent>
+        </Tooltip>
       </div>
     </section>
   );

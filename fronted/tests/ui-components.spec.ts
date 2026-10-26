@@ -1,22 +1,23 @@
 import { openWorkspacePanels } from "./workspace-helpers";
 import { test, expect } from "@playwright/test";
 
-test("组件化：登录使用 Card/Field/Input/Button，390px 无溢出且品牌主题生效", async ({
+test("组件化：登录使用 Dialog/Field/Input/Button，390px 无溢出且品牌主题生效", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
   await openWorkspacePanels(page);
-  const login = page.locator(".login-card");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  const login = page.getByRole("dialog");
   await expect(
-    login.getByRole("heading", { name: "欢迎回来，小创作家" }),
+    login.getByRole("heading", { name: "欢迎回来，继续你的故事。" }),
   ).toBeVisible();
-  await expect(login).toHaveAttribute("data-slot", "card");
+  await expect(login).toHaveAttribute("data-slot", "dialog-content");
   await expect(login.locator('[data-slot="field"]')).toHaveCount(2);
   await expect(login.locator('[data-slot="input"]')).toHaveCount(2);
-  const submit = login.getByRole("button", { name: "登录创作手帐" });
+  const submit = login.getByRole("button", { name: "登录并继续创作" });
   await expect(submit).toHaveAttribute("data-slot", "button");
-  await expect(submit).toHaveCSS("background-color", "rgb(8, 127, 131)");
+  await expect(submit).toHaveCSS("background-color", "oklch(0.926 0.195 119)");
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

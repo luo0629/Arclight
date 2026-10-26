@@ -145,7 +145,7 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
   );
   await page.getByRole("button", { name: "创作伙伴", exact: true }).click();
   await expect(page.locator(".canvas-wrap")).toHaveCount(0);
-  await page.getByRole("button", { name: "创作工作区", exact: true }).click();
+  await page.getByRole("button", { name: "故事创作", exact: true }).click();
   await expect(page.locator(".canvas-wrap")).toBeVisible();
   await noOverflow(page);
 });
@@ -271,7 +271,9 @@ test("新版页面截图：桌面各功能、专注画布、服务配置与手�
   };
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto("/");
-  await expect(page.locator(".login-card")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /让一个小灵感，\s*长成好故事。/ }),
+  ).toBeVisible();
   await shot("login-desktop");
   const { headers, episode } = await setup(page, true);
   await expect(page.locator(".paper-node.storyboard")).toBeVisible();

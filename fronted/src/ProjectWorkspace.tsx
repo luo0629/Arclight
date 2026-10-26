@@ -137,7 +137,7 @@ export default function ProjectWorkspace({
           onClick={() => setPage("canvas")}
         >
           <LayoutDashboard />
-          创作工作区
+          故事创作
         </Button>
         <Button
           variant={page === "members" ? "secondary" : "ghost"}
@@ -243,7 +243,7 @@ export default function ProjectWorkspace({
                   : "你当前拥有只读权限"}
             </p>
             <p className="version-note mt-4 text-[10px] leading-relaxed text-muted-foreground">
-              文本工作台 · 图片与成片开发中
+              每一份灵感，都值得好好收藏。
             </p>
           </div>
         </aside>
@@ -253,7 +253,7 @@ export default function ProjectWorkspace({
           <div className="workspace-top mb-5 flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="breadcrumb mb-1 text-xs text-muted-foreground">
-                创作本 / {project.name}
+                我的故事 / {project.name}
                 {project.archived ? " / 已归档" : ""}
               </p>
               <h1>
@@ -336,12 +336,6 @@ export default function ProjectWorkspace({
             />
           ) : (
             <EmptyState className="empty">
-              <span
-                className="big-flower text-5xl text-primary/50"
-                aria-hidden="true"
-              >
-                ✿
-              </span>
               <h2>{loaded ? "写下第一集的名字吧" : "正在载入剧集…"}</h2>
               <p>每一集都有独立的剧本、分镜、画布与任务记录。</p>
               {writable && (

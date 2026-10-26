@@ -2,35 +2,37 @@
 @import "tw-animate-css";
 @import "./components/ui/shadcn-variants.css";
 @import "@fontsource-variable/geist";
+@import "./product.css";
 
 @custom-variant dark (&:is(.dark *));
 
-/* 清风创作室：湖蓝、青绿与清透的白色工作区。 */
+/* Arclight：纸白、奶油与青柠；深色 primary 保证文字链接的对比度。 */
 :root {
-  --background: #f5f9fa;
-  --foreground: #203b43;
-  --card: #ffffff;
-  --card-foreground: #203b43;
-  --popover: #ffffff;
-  --popover-foreground: #203b43;
-  --primary: #087f83;
-  --primary-foreground: #ffffff;
-  --secondary: #e8f3fb;
-  --secondary-foreground: #32637c;
-  --muted: #edf3f4;
-  --muted-foreground: #657c83;
-  --accent: #e9f7f0;
-  --accent-foreground: #236c59;
-  --destructive: #bb443d;
-  --success: #24755b;
-  --border: #dce9eb;
-  --input: #c8dbdf;
-  --ring: #087f83;
-  --radius: 0.75rem;
+  --background: oklch(0.993 0.005 106);
+  --foreground: oklch(0.285 0.013 115);
+  --card: oklch(0.998 0.002 106);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.993 0.005 106);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.32 0.045 120);
+  --primary-foreground: oklch(0.993 0.005 106);
+  --secondary: oklch(0.936 0.017 88);
+  --secondary-foreground: oklch(0.36 0.025 90);
+  --muted: oklch(0.963 0.008 100);
+  --muted-foreground: oklch(0.51 0.018 115);
+  --accent: oklch(0.926 0.195 119);
+  --accent-foreground: oklch(0.285 0.035 115);
+  --sky: oklch(0.949 0.018 211);
+  --destructive: oklch(0.5 0.16 28);
+  --success: oklch(0.43 0.095 146);
+  --border: oklch(0.902 0.012 100);
+  --input: oklch(0.825 0.018 100);
+  --ring: oklch(0.48 0.1 122);
+  --radius: 0.875rem;
 }
 
 @theme inline {
-  --font-sans: "Geist Variable", "Microsoft YaHei", sans-serif;
+  --font-sans: "Geist Variable", "PingFang SC", "Microsoft YaHei", sans-serif;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -138,5 +140,198 @@
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* 共享组件覆盖所有创作、审核与设置页面，局部布局仍由各页面负责。 */
+[data-slot="button"] {
+  transition-property:
+    background-color, border-color, color, box-shadow, transform;
+  transition-duration: 160ms;
+}
+[data-slot="input"],
+[data-slot="textarea"],
+[data-slot="native-select"],
+[data-slot="select-trigger"] {
+  background-color: var(--background);
+  box-shadow: none;
+}
+[data-slot="input"],
+[data-slot="native-select"],
+[data-slot="select-trigger"] {
+  min-height: 2.75rem;
+}
+[data-slot="textarea"] {
+  line-height: 1.8;
+}
+[data-slot="dialog-content"] {
+  border-radius: 1.5rem;
+  box-shadow: 0 24px 90px oklch(0.285 0.013 115 / 0.12);
+}
+[data-slot="card"] {
+  border-radius: 1.25rem;
+}
+[data-slot="badge"] {
+  font-weight: 500;
+  padding: 0.25rem 0.625rem;
+}
+[data-slot="alert"] {
+  border-radius: 1rem;
+}
+.app-header {
+  min-height: 80px;
+  background: var(--background);
+}
+.app-header .brand-wordmark {
+  font-size: 1.8rem;
+}
+.header-note {
+  font-family: Georgia, "Songti SC", SimSun, serif;
+}
+.sidebar {
+  background: var(--background);
+  padding-top: 1.5rem;
+}
+.sidebar [aria-pressed="true"],
+.episode-nav .active {
+  background: var(--secondary);
+}
+.sidebar .new-project {
+  border-color: var(--input);
+  background: var(--secondary);
+}
+.workspace {
+  background: var(--muted);
+}
+.workspace-top {
+  padding-block: 0.4rem 0.6rem;
+}
+.workspace-top h1 {
+  font-size: 1.5rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.workspace-toolbar {
+  padding-block: 0.25rem;
+}
+.page-panel {
+  overflow: hidden;
+}
+.page-panel [data-slot="card-header"] {
+  position: relative;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+.page-panel [data-slot="card-title"] {
+  font-weight: 500;
+}
+.panel-drawing {
+  width: 68px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.empty-illustration {
+  width: 125px;
+  margin: 0 auto 0.75rem;
+}
+.welcome-empty {
+  background: var(--background);
+}
+.welcome-empty h1 {
+  font-family: Georgia, "Songti SC", SimSun, serif;
+  font-weight: 400;
+}
+.canvas-wrap {
+  border-radius: 1.25rem;
+  border-color: var(--border);
+  background: var(--background);
+}
+.paper-node {
+  border-color: var(--border);
+  border-radius: 1.125rem;
+  box-shadow: 0 3px 0 oklch(0.285 0.013 115 / 0.035);
+}
+.paper-node.episode {
+  background: var(--accent);
+}
+.paper-node.script {
+  background: var(--secondary);
+}
+.paper-node.storyboard {
+  background: var(--sky);
+}
+.paper-node.shot {
+  background: var(--card);
+}
+.paper-node.selected {
+  border-color: var(--ring);
+}
+.inspector,
+.version-list,
+.task {
+  border-radius: 1.25rem;
+}
+.scene,
+.settings-section {
+  border-style: solid;
+  background: var(--background);
+}
+.document {
+  line-height: 1.8;
+}
+.dialogue {
+  border-left: 2px solid var(--input);
+}
+.episode-number {
+  border-radius: 50%;
+}
+.inspector-drawing {
+  width: 54px;
+  height: 42px;
+}
+.inspector {
+  box-shadow: none;
+}
+.inspector-heading {
+  border-bottom-style: solid;
+}
+.app-shell > nav {
+  background: var(--background);
+}
+.app-shell > nav [aria-pressed="true"] {
+  background: var(--secondary);
+}
+.workspace-toolbar [data-slot="toggle-group"] {
+  padding: 4px;
+  border-radius: 13px;
+  background: var(--secondary);
+}
+.workspace-toolbar [data-slot="toggle-group-item"] {
+  border-color: transparent;
+}
+.workspace-toolbar [data-slot="toggle-group-item"][data-state="on"] {
+  background: var(--card);
+  box-shadow: 0 1px 3px oklch(0.285 0.013 115 / 0.08);
+}
+.canvas-note {
+  border-color: transparent;
+  background: var(--secondary);
+}
+.task-heading {
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+@media (max-width: 639px) {
+  .panel-drawing {
+    display: none;
+  }
+  .app-header {
+    gap: 0.75rem;
+  }
+  .app-header .account {
+    flex-wrap: wrap;
+  }
+  .workspace-top h1 {
+    font-size: 1.25rem;
   }
 }

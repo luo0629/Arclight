@@ -26,3 +26,13 @@ export async function openWorkspacePanels(page: Page) {
   });
   if (await content.isVisible()) await content.click();
 }
+
+export async function chooseProject(page: Page, project: { name: string }) {
+  await page.getByRole("combobox", { name: "选择项目", exact: true }).click();
+  await page.getByRole("option", { name: project.name, exact: true }).click();
+}
+
+export async function signOut(page: Page) {
+  await page.getByRole("button", { name: "账号菜单", exact: true }).click();
+  await page.getByRole("menuitem", { name: "退出登录", exact: true }).click();
+}

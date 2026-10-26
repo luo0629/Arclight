@@ -13,6 +13,7 @@ import { Field, FieldLabel } from "./ui/field";
 import { Skeleton } from "./ui/skeleton";
 import { cn } from "@/lib/utils";
 import { statusText } from "@/api";
+import { StoryDrawing } from "./brand-art";
 
 export function Notice({
   tone = "info",
@@ -90,20 +91,26 @@ export function PagePanel({
 }) {
   return (
     <Card className={cn("page-panel gap-6 shadow-none", className)}>
-      <CardHeader>
-        {eyebrow && (
-          <p className="text-xs font-semibold tracking-widest text-primary">
-            {eyebrow}
-          </p>
-        )}
-        <CardTitle role="heading" aria-level={2} className="text-xl">
-          {title}
-        </CardTitle>
-        {description && (
-          <CardDescription className="leading-relaxed">
-            {description}
-          </CardDescription>
-        )}
+      <CardHeader className="flex flex-row items-center justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-2">
+          {eyebrow && (
+            <p className="text-xs font-semibold tracking-widest text-primary">
+              {eyebrow}
+            </p>
+          )}
+          <CardTitle role="heading" aria-level={2} className="text-xl">
+            {title}
+          </CardTitle>
+          {description && (
+            <CardDescription className="leading-relaxed">
+              {description}
+            </CardDescription>
+          )}
+        </div>
+        <StoryDrawing
+          variant="plane"
+          className="panel-drawing hidden sm:block"
+        />
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-5">
         {children}
@@ -119,6 +126,7 @@ export function EmptyState({
 }: ComponentProps<"div">) {
   return (
     <Empty className={cn("empty min-w-0 py-12", className)} {...props}>
+      <StoryDrawing variant="book" className="empty-illustration" />
       <EmptyHeader className="max-w-lg [&_h1]:text-2xl [&_h2]:text-xl [&_h3]:text-lg [&_p]:text-sm [&_p]:leading-relaxed [&_p]:text-muted-foreground">
         {children}
       </EmptyHeader>

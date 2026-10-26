@@ -1,4 +1,4 @@
-import { openWorkspacePanels } from "./workspace-helpers";
+import { openWorkspacePanels, signOut } from "./workspace-helpers";
 import { test, expect } from "@playwright/test";
 
 test("真实 API：注册、创建项目剧集、双审核、画布保存、人工新版本与刷新登录", async ({
@@ -8,7 +8,7 @@ test("真实 API：注册、创建项目剧集、双审核、画布保存、人�
   page.on("pageerror", (error) => crashes.push(error.message));
   await page.goto("/");
   await openWorkspacePanels(page);
-  await page.getByRole("button", { name: "第一次来？创建账号" }).click();
+  await page.getByRole("button", { name: "开始我的故事" }).click();
   await page.getByLabel("怎么称呼你").fill("小星星");
   await page
     .getByLabel("邮箱", { exact: true })
@@ -110,9 +110,9 @@ test("真实 API：注册、创建项目剧集、双审核、画布保存、人�
     fullPage: true,
   });
   expect(crashes).toEqual([]);
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await signOut(page);
   await expect(
-    page.getByRole("heading", { name: "欢迎回来，小创作家" }),
+    page.getByRole("heading", { name: /让一个小灵感，\s*长成好故事。/ }),
   ).toBeVisible();
 });
 
@@ -166,9 +166,15 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     await openWorkspacePanels(page);
     await page.getByRole("button", { name: "创作伙伴", exact: true }).click();
     await page.getByLabel("伙伴的邮箱").fill(memberEmail);
-    await page.getByLabel("项目角色").selectOption("viewer");
+    await page.getByRole("combobox", { name: "项目角色", exact: true }).click();
+    await page.getByRole("option", { name: "查看者", exact: true }).click();
     await page.getByRole("button", { name: "添加成员", exact: true }).click();
-    await expect(page.getByLabel("小伙伴的角色")).toHaveValue("viewer");
+    await expect(
+      page.getByRole("combobox", { name: "小伙伴的角色", exact: true }),
+    ).toHaveText("查看者");
+    await expect(
+      page.getByRole("combobox", { name: "项目角色", exact: true }),
+    ).toHaveText("编辑者");
     const partner = await memberContext.newPage();
     await partner.goto("/");
     await openWorkspacePanels(partner);
@@ -192,7 +198,10 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
       },
     );
     expect(denied.status()).toBe(403);
-    await page.getByLabel("小伙伴的角色").selectOption("editor");
+    await page
+      .getByRole("combobox", { name: "小伙伴的角色", exact: true })
+      .click();
+    await page.getByRole("option", { name: "编辑者", exact: true }).click();
     await expect(page.getByLabel("小伙伴的角色")).toBeEnabled();
     await partner.reload();
     await openWorkspacePanels(partner);

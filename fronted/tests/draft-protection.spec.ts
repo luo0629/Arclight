@@ -1,4 +1,8 @@
-import { openWorkspacePanels } from "./workspace-helpers";
+import {
+  openWorkspacePanels,
+  chooseProject,
+  signOut,
+} from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 const content = (title: string) => ({
@@ -120,9 +124,7 @@ test("TXT-06：精确版本隔离，切换视图、任务、设置、剧集和�
   ).json();
   await page.reload();
   await openWorkspacePanels(page);
-  await page
-    .getByRole("combobox", { name: "选择项目", exact: true })
-    .selectOption(project.id);
+  await chooseProject(page, project);
   await list(page);
   await select(page, "原稿甲");
   await page.getByRole("button", { name: "编辑并另存新版本" }).click();
@@ -176,13 +178,9 @@ test("TXT-06：精确版本隔离，切换视图、任务、设置、剧集和�
   await page.reload();
   await openWorkspacePanels(page);
   await expect(page.locator(".episode-drafts")).toContainText("剧本 v1 的修改");
-  await page
-    .getByRole("combobox", { name: "选择项目", exact: true })
-    .selectOption(other.id);
+  await chooseProject(page, other);
   await expect(page.locator(".episode-drafts")).toHaveCount(0);
-  await page
-    .getByRole("combobox", { name: "选择项目", exact: true })
-    .selectOption(project.id);
+  await chooseProject(page, project);
   await list(page);
   await select(page, "原稿甲");
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
@@ -567,9 +565,9 @@ test("TXT-06：同标签页退出再登录可恢复，换账号不展示前一�
 }) => {
   const { user, storageKey } = await setup(page);
   await newScript(page, "原账号的临时内容");
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await signOut(page);
   await expect(
-    page.getByRole("button", { name: "登录创作手帐", exact: true }),
+    page.getByRole("button", { name: "登录", exact: true }),
   ).toBeVisible();
   const registered = await page.request.post("/api/v1/auth/register", {
     data: {
@@ -582,17 +580,20 @@ test("TXT-06：同标签页退出再登录可恢复，换账号不展示前一�
   await page.reload();
   await openWorkspacePanels(page);
   await expect(
-    page.getByRole("button", { name: "退出登录", exact: true }),
+    page.getByRole("button", { name: "账号菜单", exact: true }),
   ).toBeVisible();
   await expect(page.locator(".episode-drafts")).toHaveCount(0);
   await expect(page.getByText("原账号的临时内容", { exact: true })).toHaveCount(
     0,
   );
   expect(Object.keys(await drafts(page, storageKey))).toHaveLength(1);
-  await page.getByRole("button", { name: "退出登录", exact: true }).click();
+  await signOut(page);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
   await page.getByLabel("邮箱", { exact: true }).fill(user.email);
   await page.getByLabel("密码", { exact: true }).fill("draft-protection-test");
-  await page.getByRole("button", { name: "登录创作手帐", exact: true }).click();
+  await page
+    .getByRole("button", { name: "登录并继续创作", exact: true })
+    .click();
   await expect(page.locator(".workspace-toolbar")).toBeVisible();
   await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();

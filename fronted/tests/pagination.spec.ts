@@ -1,4 +1,4 @@
-import { openWorkspacePanels } from "./workspace-helpers";
+import { openWorkspacePanels, chooseProject } from "./workspace-helpers";
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 async function account(page: Page) {
@@ -58,25 +58,26 @@ test("TXT-04：真实项目和剧集超过100条、选择保留、新建与设�
     page.getByRole("heading", { name: "第 1 集 · 历史剧集1", exact: true }),
   ).toBeVisible();
   await expect(pager(page, "项目")).toContainText("已加载 100 条 · 可继续加载");
-  await expect(
-    page.getByRole("combobox", { name: "选择项目" }).locator("option"),
-  ).toHaveCount(101);
+  await page.getByRole("combobox", { name: "选择项目" }).click();
+  await expect(page.getByRole("option")).toHaveCount(100);
+  await page.keyboard.press("Escape");
   await pager(page, "项目")
     .getByRole("button", { name: "加载更多项目", exact: true })
     .click();
   await expect(pager(page, "项目")).toContainText("已加载 102 条 · 已全部加载");
-  await page.getByRole("combobox", { name: "选择项目" }).selectOption(first.id);
+  await chooseProject(page, first);
   await page.reload();
   await openWorkspacePanels(page);
-  await expect(page.getByRole("combobox", { name: "选择项目" })).toHaveValue(
-    first.id,
+  await expect(page.getByRole("combobox", { name: "选择项目" })).toHaveText(
+    first.name,
   );
+  await expect
+    .poll(() => page.evaluate(() => localStorage.getItem("arclight-project")))
+    .toBe(first.id);
   await expect(
-    page.getByText("创作本 / 最早的项目", { exact: true }),
+    page.getByText("我的故事 / 最早的项目", { exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("combobox", { name: "选择项目" })
-    .selectOption(project.id);
+  await chooseProject(page, project);
   await expect(pager(page, "剧集")).toContainText("已加载 100 条 · 可继续加载");
   await expect(
     page.getByRole("navigation", { name: "剧集列表" }).getByRole("button"),

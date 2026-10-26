@@ -1,4 +1,4 @@
-import { openWorkspacePanels } from "./workspace-helpers";
+import { openWorkspacePanels, chooseProject } from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 async function setup(page: Page, config: Record<string, unknown> = {}) {
@@ -269,7 +269,7 @@ test("TXT-03：非文本旧风格原样保留，不同项目配置不串用", as
   const other = await otherResponse.json();
   await page.reload();
   await openWorkspacePanels(page);
-  await page.getByRole("combobox", { name: "选择项目" }).selectOption(other.id);
+  await chooseProject(page, other);
   await page.getByRole("button", { name: "项目设置与归档" }).click();
   await expect(page.getByLabel("视觉风格说明", { exact: true })).toHaveValue(
     "像素风格",
@@ -277,9 +277,7 @@ test("TXT-03：非文本旧风格原样保留，不同项目配置不串用", as
   await expect(page.getByLabel("宽度（像素）", { exact: true })).toHaveValue(
     "720",
   );
-  await page
-    .getByRole("combobox", { name: "选择项目" })
-    .selectOption(project.id);
+  await chooseProject(page, project);
   await page.getByRole("button", { name: "项目设置与归档" }).click();
   await expect(page.getByLabel("视觉风格说明", { exact: true })).toBeDisabled();
   await expect(page.getByLabel("宽度（像素）", { exact: true })).toHaveValue(

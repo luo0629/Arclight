@@ -1,3 +1,4 @@
+import { StoryDrawing } from "@/components/brand-art";
 import { Button } from "@/components/ui/button";
 import { Notice, FormLabel, StatusBadge } from "@/components/ui-kit";
 import { Field } from "@/components/ui/field";
@@ -123,12 +124,7 @@ export default function Inspector({
         <span className="eyebrow text-[11px] font-semibold tracking-widest text-primary">
           内容与创作
         </span>
-        <span
-          className="mini-flower flex size-7 items-center justify-center rounded-full bg-accent text-sm text-primary"
-          aria-hidden="true"
-        >
-          ✦
-        </span>
+        <StoryDrawing variant="plane" className="inspector-drawing" />
       </div>
       {episodeDrafts.length > 0 && (
         <Notice tone="info" role="status" className="episode-drafts">

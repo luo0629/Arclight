@@ -1,11 +1,11 @@
+import { Brand } from "@/components/brand-art";
 import { SlidersHorizontal } from "lucide-react";
+import AccountMenu from "./AccountMenu";
+import { ChoiceSelect } from "@/components/choice-select";
+import { Spinner } from "@/components/ui/spinner";
 import ServiceSettings from "./ServiceSettings";
 import { Notice, FormLabel, EmptyState } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
-import {
-  NativeSelect,
-  NativeSelectOption,
-} from "@/components/ui/native-select";
 import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 
@@ -37,6 +37,7 @@ export default function Workbench({
   const [projectId, setProjectId] = useState(
     () => localStorage.getItem("arclight-project") ?? "",
   );
+  const projectPickerRef = useRef<HTMLButtonElement>(null);
   const currentProjectId = useRef(projectId);
   currentProjectId.current = projectId;
   const [error, setError] = useState("");
@@ -103,25 +104,27 @@ export default function Workbench({
   const projectPicker = (
     <>
       <FormLabel className="project-picker text-xs text-muted-foreground">
-        我的创作本
-        <NativeSelect
-          value={projectId}
-          onChange={(event) => select(event.target.value)}
+        我的故事
+        <ChoiceSelect
+          value={project ? projectId : ""}
+          triggerRef={projectPickerRef}
+          onValueChange={select}
+          onCloseAutoFocus={(event) => {
+            // 等弹层释放焦点锁后，再聚焦切换项目后新挂载的选择器。
+            event.preventDefault();
+            projectPickerRef.current?.focus({ preventScroll: true });
+          }}
           aria-label="选择项目"
-        >
-          <NativeSelectOption value="" disabled>
-            选择一个项目
-          </NativeSelectOption>
-          {(project && !projects.some((row) => row.id === project.id)
+          placeholder="选择一个项目"
+          disabled={!projects.length && !project}
+          options={(project && !projects.some((row) => row.id === project.id)
             ? [project, ...projects]
             : projects
-          ).map((row) => (
-            <NativeSelectOption key={row.id} value={row.id}>
-              {row.name}
-              {row.archived ? "（归档）" : ""}
-            </NativeSelectOption>
-          ))}
-        </NativeSelect>
+          ).map((row) => ({
+            value: row.id,
+            label: row.name + (row.archived ? "（归档）" : ""),
+          }))}
+        />
       </FormLabel>
       <ListPagination
         {...projectList}
@@ -145,33 +148,19 @@ export default function Workbench({
         <a
           className="brand flex items-center gap-3 font-semibold tracking-tight no-underline [&_small]:block [&_small]:text-[10px] [&_small]:font-normal [&_small]:tracking-[.2em] [&_small]:text-muted-foreground"
           href="/"
-          aria-label="Arclight 创作手帐首页"
+          aria-label="Arclight 首页"
         >
-          <span
-            className="brand-mark flex size-10 shrink-0 items-center justify-center rounded-2xl bg-primary font-serif text-3xl italic text-primary-foreground shadow-sm"
-            aria-hidden="true"
-          >
-            a
-          </span>
-          <span>
-            Arclight<small>创作手帐</small>
-          </span>
+          <Brand />
         </a>
         <p className="header-note hidden text-sm text-muted-foreground lg:block">
           给灵感一片自由生长的地方。
         </p>
-        <div className="account flex items-center gap-2 text-sm [&>span:nth-child(2)]:hidden sm:[&>span:nth-child(2)]:inline">
+        <div className="account flex items-center gap-2 text-sm">
           <Button variant="ghost" onClick={() => setServicesOpen(true)}>
             <SlidersHorizontal />
             模型服务配置
           </Button>
-          <span className="avatar flex size-9 shrink-0 items-center justify-center rounded-full bg-secondary text-sm font-semibold text-secondary-foreground">
-            {user.display_name.slice(0, 1)}
-          </span>
-          <span>{user.display_name}</span>
-          <Button variant="outline" size="lg" onClick={() => void logout()}>
-            退出登录
-          </Button>
+          <AccountMenu user={user} logout={logout} />
         </div>
       </header>
       {servicesOpen && (
@@ -205,16 +194,10 @@ export default function Workbench({
             {projectPicker}
           </aside>
           <EmptyState className="empty welcome-empty min-h-96">
-            <span
-              className="big-flower text-5xl text-primary/50"
-              aria-hidden="true"
-            >
-              ✿
-            </span>
             <p className="eyebrow text-[11px] font-semibold tracking-widest text-primary">
               故事从这里开始
             </p>
-            <h1>{loaded ? "新的一页，等你落笔" : "正在载入你的创作本…"}</h1>
+            <h1>{loaded ? "新的一页，等你落笔" : "正在找回你的故事…"}</h1>
             <p>为一个小宇宙新建项目，再添加第一集。</p>
             <Button
               variant="default"
@@ -267,6 +250,7 @@ export default function Workbench({
                   className=""
                   disabled={busy}
                 >
+                  {busy && <Spinner aria-hidden="true" />}
                   {busy ? "创建中…" : "创建项目"}
                 </Button>
               </div>
