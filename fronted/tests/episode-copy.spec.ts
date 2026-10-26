@@ -1,5 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openWorkspacePanels } from "./workspace-helpers";
+import {
+  openWorkspacePanels,
+  openDirectory,
+  closeDirectory,
+} from "./workspace-helpers";
 
 async function setup(page: Page) {
   const registration = await page.request.post("/api/v1/auth/register", {
@@ -132,9 +136,11 @@ test("STORY-03：复制草稿持久化、独立版本、正确派生和重新审
   await expect(
     page.getByRole("heading", { name: "第 2 集 · 雨夜的回声", exact: true }),
   ).toBeVisible();
+  await openDirectory(page);
   await expect(
     page.getByRole("navigation", { name: "剧集列表" }),
   ).toContainText("雨夜的回声");
+  await closeDirectory(page);
   expect(copied.status).toBe("DRAFT");
   expect(copied.target_duration_ms).toBe(31125);
   const newPath = "/api/v1/episodes/" + copied.id;
@@ -164,6 +170,7 @@ test("STORY-03：复制草稿持久化、独立版本、正确派生和重新审
   ).toBe(409);
   await page.reload();
   await openWorkspacePanels(page);
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")

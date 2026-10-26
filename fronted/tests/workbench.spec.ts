@@ -1,4 +1,9 @@
-import { openWorkspacePanels, signOut } from "./workspace-helpers";
+import {
+  openWorkspacePanels,
+  openDirectory,
+  closeDirectory,
+  signOut,
+} from "./workspace-helpers";
 import { test, expect } from "@playwright/test";
 
 test("真实 API：注册、创建项目剧集、双审核、画布保存、人工新版本与刷新登录", async ({
@@ -182,15 +187,19 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
       partner.getByRole("radio", { name: "创作画布", exact: true }),
     ).toBeVisible();
     await openWorkspacePanels(partner);
+    await openDirectory(partner);
     await expect(
       partner.getByText("你当前拥有只读权限", { exact: true }),
     ).toBeVisible();
+    await closeDirectory(partner);
     await expect(
       partner.getByRole("button", { name: "自己写分镜", exact: true }),
     ).toHaveCount(0);
+    await openDirectory(partner);
     await expect(
       partner.getByRole("button", { name: "＋ 添加一集", exact: true }),
     ).toHaveCount(0);
+    await closeDirectory(partner);
     await expect(
       partner.getByRole("button", { name: "项目设置与归档", exact: true }),
     ).toHaveCount(0);
@@ -213,15 +222,19 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
       partner.getByRole("radio", { name: "创作画布", exact: true }),
     ).toBeVisible();
     await openWorkspacePanels(partner);
+    await openDirectory(partner);
     await expect(
       partner.getByText("你可以编辑与创建任务", { exact: true }),
     ).toBeVisible();
+    await closeDirectory(partner);
     await expect(
       partner.getByRole("button", { name: "自己写分镜", exact: true }),
     ).toBeVisible();
+    await openDirectory(partner);
     await expect(
       partner.getByRole("button", { name: "＋ 添加一集", exact: true }),
     ).toBeVisible();
+    await closeDirectory(partner);
     await page
       .getByRole("button", { name: "项目设置与归档", exact: true })
       .click();
@@ -243,6 +256,7 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     await expect(
       partner.getByRole("button", { name: "自己写分镜", exact: true }),
     ).toHaveCount(0);
+    await openDirectory(partner);
     await expect(
       partner.getByRole("button", { name: "＋ 添加一集", exact: true }),
     ).toHaveCount(0);

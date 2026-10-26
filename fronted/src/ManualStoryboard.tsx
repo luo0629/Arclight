@@ -21,6 +21,7 @@ type Props = {
   act: Act;
   latestNo: number;
   onCreated: VersionCreated;
+  resumeSourceId?: string;
 };
 
 export default function ManualStoryboard(props: Props) {
@@ -51,7 +52,18 @@ export default function ManualStoryboard(props: Props) {
           approved.push(...rows.filter((row) => row.status === "APPROVED"));
           if (rows.length < 100) break;
         }
-        if (!controller.signal.aborted) setScripts(approved);
+        if (!controller.signal.aborted) {
+          setScripts(approved);
+          if (props.resumeSourceId) {
+            const restored = approved.find(
+              (row) => row.id === props.resumeSourceId,
+            );
+            if (restored) {
+              setSource(restored);
+              setSelectedId(restored.id);
+            } else setError("草稿来源剧本已不可用。草稿仍保留，请刷新后重试。");
+          }
+        }
       } catch (error) {
         if (!controller.signal.aborted) setError(message(error));
       } finally {
@@ -59,7 +71,7 @@ export default function ManualStoryboard(props: Props) {
       }
     })();
     return () => controller.abort();
-  }, [props.episode.id, attempt]);
+  }, [props.episode.id, props.resumeSourceId, attempt]);
 
   if (source)
     return (

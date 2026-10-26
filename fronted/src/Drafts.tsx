@@ -17,7 +17,9 @@ type Store = {
 const DraftContext = createContext<Store | null>(null);
 
 function read(key: string): Drafts {
-  const value: unknown = JSON.parse(sessionStorage.getItem(key) ?? "{}");
+  const saved = localStorage.getItem(key);
+  const legacy = saved === null ? sessionStorage.getItem(key) : null;
+  const value: unknown = JSON.parse(saved ?? legacy ?? "{}");
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid draft store");
   const result: Drafts = {};
@@ -31,6 +33,10 @@ function read(key: string): Drafts {
     )
       throw new Error("Invalid draft entry");
     result[id] = row as Draft;
+  }
+  if (legacy !== null) {
+    localStorage.setItem(key, JSON.stringify(result));
+    sessionStorage.removeItem(key);
   }
   return result;
 }
@@ -67,7 +73,7 @@ export function DraftProvider({
     current.current = next;
     setDrafts(next);
     try {
-      sessionStorage.setItem(storageKey, JSON.stringify(next));
+      localStorage.setItem(storageKey, JSON.stringify(next));
       setStorageError(false);
     } catch {
       setStorageError(true);
@@ -87,7 +93,7 @@ export function DraftProvider({
     <DraftContext.Provider value={{ drafts, write }}>
       {storageError && (
         <Notice tone="error" role="alert" className="mx-4 my-3">
-          本标签页草稿存储不可用或已有记录损坏。新输入暂留内存，切换页面仍可恢复；刷新、关闭或退出登录前请先保存，避免丢失。
+          本机草稿存储不可用或已有记录损坏。新输入暂留内存，切换页面仍可恢复；刷新、关闭或退出登录前请先保存，避免丢失。
         </Notice>
       )}
       {children}

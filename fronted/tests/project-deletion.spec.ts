@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openWorkspacePanels } from "./workspace-helpers";
+import { openWorkspacePanels, openDirectory } from "./workspace-helpers";
 
 async function setup(page: Page, archived = true) {
   const registration = await page.request.post("/api/v1/auth/register", {
@@ -252,6 +252,7 @@ test("STORY-04：删除成功后目录故障不重发操作或保留旧编辑器
       exact: true,
     }),
   ).toBeVisible();
+  await openDirectory(page);
   await expect(
     page.getByRole("combobox", { name: "选择项目", exact: true }),
   ).toContainText(project.name);

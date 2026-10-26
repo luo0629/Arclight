@@ -1,4 +1,9 @@
-import { openWorkspacePanels, chooseProject } from "./workspace-helpers";
+import {
+  openWorkspacePanels,
+  chooseProject,
+  openDirectory,
+  closeDirectory,
+} from "./workspace-helpers";
 import { test, expect, type Page, type Route } from "@playwright/test";
 
 async function account(page: Page) {
@@ -59,6 +64,7 @@ test("TXT-04：真实项目和剧集超过100条、选择保留、新建与设�
   await expect(
     page.getByRole("heading", { name: "第 1 集 · 历史剧集1", exact: true }),
   ).toBeVisible();
+  await openDirectory(page);
   await expect(pager(page, "项目")).toContainText("已加载 100 条 · 可继续加载");
   await page.getByRole("combobox", { name: "选择项目" }).click();
   await expect(page.getByRole("option")).toHaveCount(100);
@@ -70,16 +76,19 @@ test("TXT-04：真实项目和剧集超过100条、选择保留、新建与设�
   await chooseProject(page, first);
   await page.reload();
   await openWorkspacePanels(page);
+  await openDirectory(page);
   await expect(page.getByRole("combobox", { name: "选择项目" })).toHaveText(
     first.name,
   );
   await expect
     .poll(() => page.evaluate(() => localStorage.getItem("arclight-project")))
     .toBe(first.id);
+  await closeDirectory(page);
   await expect(
     page.getByText("我的故事 / 最早的项目", { exact: true }),
   ).toBeVisible();
   await chooseProject(page, project);
+  await openDirectory(page);
   await expect(pager(page, "剧集")).toContainText("已加载 100 条 · 可继续加载");
   await expect(
     page.getByRole("navigation", { name: "剧集列表" }).getByRole("button"),
@@ -96,14 +105,19 @@ test("TXT-04：真实项目和剧集超过100条、选择保留、新建与设�
   await expect(
     page.getByRole("heading", { name: "第 105 集 · 历史剧集105", exact: true }),
   ).toBeVisible();
+  await openDirectory(page);
   await pager(page, "剧集")
     .getByRole("button", { name: "刷新剧集", exact: true })
     .click();
+  await expect(pager(page, "剧集")).toHaveAttribute("aria-busy", "false");
+  await closeDirectory(page);
   await expect(
     page.getByRole("heading", { name: "第 105 集 · 历史剧集105", exact: true }),
   ).toBeVisible();
+  await closeDirectory(page);
   await page.getByRole("button", { name: "项目设置与归档" }).click();
   await expect(page.locator(".episode-settings > li")).toHaveCount(105);
+  await openDirectory(page);
   await page.getByRole("button", { name: "＋ 添加一集", exact: true }).click();
   await page.getByLabel("剧集标题", { exact: true }).fill("新增尾页剧集");
   await expect(page.getByLabel("集数", { exact: true })).toHaveValue("106");
@@ -537,10 +551,12 @@ test("TXT-04：追加去重仍按原始offset推进，切换剧集取消迟到�
     .getByRole("button", { name: "加载更多任务", exact: true })
     .click();
   await expect.poll(() => started).toBeTruthy();
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button", { name: /空白剧集/ })
     .click();
+  await closeDirectory(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
   release();
   await expect(pager(page, "任务")).toContainText("已加载 0 条 · 已全部加载");

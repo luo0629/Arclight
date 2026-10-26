@@ -1,3 +1,4 @@
+import { openDirectory, closeDirectory } from "./workspace-helpers";
 import { expect, test, type Page } from "@playwright/test";
 
 async function noOverflow(page: Page) {
@@ -201,6 +202,7 @@ test("现代组件：项目键盘选择、账号菜单、提示与小屏弹层�
     expect(created.status()).toBe(201);
   }
   await page.goto("/");
+  await openDirectory(page);
   const picker = page.getByRole("combobox", { name: "选择项目", exact: true });
   await expect(picker).toContainText("月亮与星星的第二个故事");
   await picker.focus();
@@ -216,6 +218,7 @@ test("现代组件：项目键盘选择、账号菜单、提示与小屏弹层�
   await page.keyboard.press("Enter");
   await expect(picker).toContainText("森林里的第一封信");
   await expect(picker).toBeFocused();
+  await closeDirectory(page);
   const account = page.getByRole("button", { name: "账号菜单", exact: true });
   await account.focus();
   await page.keyboard.press("Enter");
@@ -223,11 +226,13 @@ test("现代组件：项目键盘选择、账号菜单、提示与小屏弹层�
   await expect(page.getByRole("menu")).toContainText(session.user.email);
   await page.keyboard.press("Escape");
   await expect(account).toBeFocused();
+  await openDirectory(page);
   await page.getByRole("button", { name: "刷新项目", exact: true }).focus();
   await expect(page.getByRole("tooltip")).toContainText("重新获取项目列表");
   await page.keyboard.press("Escape");
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
+    await openDirectory(page);
     await picker.click();
     const popup = page.getByRole("listbox");
     await expect(popup).toBeVisible();
@@ -236,6 +241,7 @@ test("现代组件：项目键盘选择、账号菜单、提示与小屏弹层�
     expect(box!.x + box!.width).toBeLessThanOrEqual(width);
     await noOverflow(page);
     await page.keyboard.press("Escape");
+    await closeDirectory(page);
     await account.click();
     const menu = page.getByRole("menu");
     await expect(menu).toBeVisible();

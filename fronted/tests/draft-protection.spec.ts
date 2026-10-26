@@ -1,5 +1,6 @@
 import {
   openWorkspacePanels,
+  openDirectory,
   chooseProject,
   signOut,
 } from "./workspace-helpers";
@@ -98,7 +99,7 @@ async function drafts(
   key: string,
 ): Promise<Record<string, { label: string; value: unknown }>> {
   return page.evaluate(
-    (key) => JSON.parse(sessionStorage.getItem(key) ?? "{}"),
+    (key) => JSON.parse(localStorage.getItem(key) ?? "{}"),
     key,
   );
 }
@@ -139,6 +140,7 @@ test("TXT-06：精确版本隔离，切换视图、任务、设置、剧集和�
     "甲的未保存修改",
   );
   await page.getByRole("radio", { name: "创作画布", exact: true }).click();
+  await openWorkspacePanels(page);
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "甲的未保存修改",
   );
@@ -151,12 +153,14 @@ test("TXT-06：精确版本隔离，切换视图、任务、设置、剧集和�
   await page
     .getByRole("button", { name: "项目设置与归档", exact: true })
     .click();
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
     .filter({ hasText: "第二集" })
     .click();
   await expect(page.locator(".episode-drafts")).toHaveCount(0);
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
@@ -227,22 +231,27 @@ test("TXT-06：手机人工起稿和灵感切集及刷新恢复，显式放弃�
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "手机未完成的剧本",
   );
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
     .filter({ hasText: "第二集" })
     .click();
+  await openWorkspacePanels(page);
   await expect(page.getByLabel("故事灵感", { exact: true })).toHaveValue("");
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
     .filter({ hasText: "第一集" })
     .click();
+  await openWorkspacePanels(page);
   await expect(page.getByLabel("故事灵感", { exact: true })).toHaveValue(
     "雨夜的女孩和猫",
   );
   page.on("dialog", (dialog) => dialog.accept());
   await page.reload();
+  await openWorkspacePanels(page);
   await openWorkspacePanels(page);
   await expect(page.getByLabel("故事灵感", { exact: true })).toHaveValue(
     "雨夜的女孩和猫",
@@ -386,13 +395,15 @@ test("TXT-06：存储拒绝写入时明确警告，内存草稿跨剧集恢复�
   await setup(page);
   await newScript(page, "内存里的草稿");
   await expect(
-    page.getByRole("alert").filter({ hasText: "本标签页草稿存储不可用" }),
+    page.getByRole("alert").filter({ hasText: "本机草稿存储不可用" }),
   ).toBeVisible();
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
     .filter({ hasText: "第二集" })
     .click();
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
@@ -417,8 +428,8 @@ test("TXT-06：损坏存储不崩溃，不读取其他账号草稿", async ({ pa
   const { episode, storageKey } = await setup(page);
   await page.evaluate(
     ({ key, episodeId }) => {
-      sessionStorage.setItem(key, "broken-json");
-      sessionStorage.setItem(
+      localStorage.setItem(key, "broken-json");
+      localStorage.setItem(
         "arclight:drafts:v1:another-user",
         JSON.stringify({
           other: { episodeId, label: "其他账号机密", value: "绝不能显示" },
@@ -429,12 +440,13 @@ test("TXT-06：损坏存储不崩溃，不读取其他账号草稿", async ({ pa
   );
   await page.reload();
   await openWorkspacePanels(page);
-  await expect(page.getByRole("alert")).toContainText("本标签页草稿存储不可用");
+  await expect(page.getByRole("alert")).toContainText("本机草稿存储不可用");
+  await openWorkspacePanels(page);
   await expect(page.getByLabel("故事灵感", { exact: true })).toHaveValue("");
   await expect(page.locator(".episode-drafts")).toHaveCount(0);
   await page.evaluate(
     ({ key, episodeId }) => {
-      sessionStorage.setItem(
+      localStorage.setItem(
         key,
         JSON.stringify({
           [JSON.stringify([episodeId, "script", null, null])]: {
@@ -481,11 +493,13 @@ test("TXT-06：迟到的保存回执不能清除切回后继续输入的新草�
   await page.getByRole("button", { name: "保存人工剧本", exact: true }).click();
   await entered;
   await expect(page.getByLabel("剧本标题", { exact: true })).toBeDisabled();
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
     .filter({ hasText: "第二集" })
     .click();
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")
@@ -541,6 +555,7 @@ test("TXT-06：归档后恢复历史版本草稿不会绕过只读限制", async
   await expect(
     page.getByRole("button", { name: "恢复项目", exact: true }),
   ).toBeVisible();
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button")

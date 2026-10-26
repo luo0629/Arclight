@@ -168,7 +168,7 @@ export default function ProjectProductionSettings({
 
   return (
     <section
-      className="settings-section flex min-w-0 flex-col gap-4 rounded-xl border bg-background/60 p-4 production-settings"
+      className="settings-section studio-settings-section flex min-w-0 flex-col gap-4 production-settings"
       aria-labelledby={id + "-heading"}
     >
       <h3 id={id + "-heading"}>视觉风格与画幅</h3>

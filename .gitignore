@@ -30,3 +30,6 @@ playwright-report/
 
 # Local-only project todo checklist
 /todo.md
+
+# Local screenshots and acceptance artifacts
+/artifacts/

@@ -31,6 +31,7 @@ async function setup(page: Page) {
   );
   await page.goto("/");
   await openSources(page);
+  await page.getByRole("button", { name: "导入故事文件", exact: true }).click();
   return { headers, project, episode, path };
 }
 
@@ -47,6 +48,14 @@ async function fill(
   buffer = Buffer.from("# 雨夜\r\n原始故事"),
   mimeType = "text/markdown",
 ) {
+  if (
+    !(await page
+      .locator('[data-slot="sheet-content"][data-state="open"]')
+      .count())
+  )
+    await page
+      .getByRole("button", { name: "导入故事文件", exact: true })
+      .click();
   await page
     .getByLabel("故事文件", { exact: true })
     .setInputFiles({ name, mimeType, buffer });
@@ -211,7 +220,10 @@ test("STORY-05：保存成功后目录失败仍显示精确回执，可刷新恢
   ).toBeVisible();
   expect(failed).toBe(true);
   await expect(page.getByLabel("原始故事文本")).toContainText("原始故事");
-  await expect(save(page)).toBeDisabled();
+  await expect(
+    page.locator('[data-slot="sheet-content"][data-state="open"]'),
+  ).toHaveCount(0);
+  await expect(save(page)).toHaveCount(0);
   await page.unroute(`**${path}?*`);
   await page.getByRole("button", { name: "刷新故事来源", exact: true }).click();
   await expect(
@@ -327,6 +339,8 @@ test("STORY-05：切换来源时迟到响应不覆盖当前预览，失败可重
 
 test("STORY-05：超过首批的来源可以继续加载并精确读取", async ({ page }) => {
   const { headers, path } = await setup(page);
+  await page.keyboard.press("Escape");
+  await expect(page.locator('[data-slot="sheet-overlay"]')).toHaveCount(0);
   for (let number = 1; number <= 101; number++) {
     const result = await page.request.post(path, {
       headers,

@@ -1,4 +1,9 @@
-import { openWorkspacePanels, chooseProject } from "./workspace-helpers";
+import {
+  openWorkspacePanels,
+  chooseProject,
+  openDirectory,
+  closeDirectory,
+} from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 async function setup(page: Page, config: Record<string, unknown> = {}) {
@@ -420,12 +425,14 @@ test("TXT-03：仅 Owner 可修改配置，归档只读与恢复后继续编辑"
         ).toBeTruthy();
       await partner.goto("/");
       await openWorkspacePanels(partner);
+      await openDirectory(partner);
       await expect(
         partner.getByText(
           role === "viewer" ? "你当前拥有只读权限" : "你可以编辑与创建任务",
           { exact: true },
         ),
       ).toBeVisible();
+      await closeDirectory(partner);
       await expect(
         partner.getByRole("button", { name: "项目设置与归档" }),
       ).toHaveCount(0);

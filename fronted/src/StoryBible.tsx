@@ -1,3 +1,5 @@
+import { BookOpen, Plus } from "lucide-react";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -86,14 +88,18 @@ export default function StoryBible({ projectId, writable }: Props) {
   }
   return (
     <PagePanel
+      className="studio-page story-bible"
       eyebrow="写清每一个小宇宙"
       title="故事设定"
       description="世界观、角色、地点、物品与场景使用稳定标识；新编剧任务保存设定快照，修改不回写历史稿件。"
     >
-      <Notice tone="info">
-        这不是视觉资产中心。只有绑定已批准的精确资产版本才构成正式资产引用；名称或设定
-        ID 不等于资产。活动任务期间不可修改。
-      </Notice>
+      <details className="studio-disclosure">
+        <summary>关于设定、资产与历史快照</summary>
+        <Notice tone="info">
+          这不是视觉资产中心。只有绑定已批准的精确资产版本才构成正式资产引用；名称或设定
+          ID 不等于资产。活动任务期间不可修改。
+        </Notice>
+      </details>
       {!writable && (
         <Notice tone="info">当前项目只读，可查看设定与关联。</Notice>
       )}
@@ -102,28 +108,36 @@ export default function StoryBible({ projectId, writable }: Props) {
           {notice}
         </Notice>
       )}
-      <div className="grid min-w-0 gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside
-          className="flex min-w-0 flex-col gap-3"
-          aria-label="故事设定目录"
-        >
+      <div className="studio-split">
+        <aside className="studio-index" aria-label="故事设定目录">
+          <div className="studio-index-heading">
+            <BookOpen className="size-4" />
+            <h3>设定目录</h3>
+            <span>{list.rows.length}</span>
+          </div>
           {writable && (
             <Button disabled={busy} onClick={() => choose(null)}>
+              <Plus className="size-4" />
               新建设定
             </Button>
           )}
-          {list.rows.map((row) => (
-            <Button
-              key={row.id}
-              variant={selected?.id === row.id ? "secondary" : "outline"}
-              disabled={busy}
-              className="h-auto justify-start whitespace-normal break-all text-left"
-              onClick={() => choose(row)}
-            >
-              {kinds[row.kind]} · {row.name}
-              {row.archived ? "（已归档）" : ""}
-            </Button>
-          ))}
+          <ScrollArea className="studio-index-scroll">
+            <div className="studio-index-items">
+              {list.rows.map((row) => (
+                <Button
+                  key={row.id}
+                  variant={selected?.id === row.id ? "secondary" : "ghost"}
+                  aria-pressed={selected?.id === row.id}
+                  disabled={busy}
+                  className="h-auto justify-start whitespace-normal break-all text-left"
+                  onClick={() => choose(row)}
+                >
+                  {kinds[row.kind]} · {row.name}
+                  {row.archived ? "（已归档）" : ""}
+                </Button>
+              ))}
+            </div>
+          </ScrollArea>
           <fieldset disabled={busy}>
             <ListPagination
               {...list}
@@ -280,7 +294,10 @@ function StoryEntryEditor({
       links[relation].targets.includes(row.kind),
   );
   return (
-    <section aria-label="故事设定编辑" className="flex min-w-0 flex-col gap-4">
+    <section
+      aria-label="故事设定编辑"
+      className="studio-detail flex min-w-0 flex-col gap-4"
+    >
       <h2 className="text-lg font-semibold">
         {entry ? entry.name + " · 修订 " + entry.revision : "新建设定"}
       </h2>
@@ -358,7 +375,7 @@ function StoryEntryEditor({
               maxLength={5009}
             />
           </FormLabel>
-          <fieldset className="flex min-w-0 flex-col gap-2 rounded-xl border p-3">
+          <fieldset className="studio-form-section flex min-w-0 flex-col gap-3">
             <legend>稳定关联</legend>
             {relations.map((link, index) => (
               <div
@@ -437,7 +454,7 @@ function StoryEntryEditor({
             </p>
           </fieldset>
           {kind !== "WORLD" && (
-            <fieldset className="grid min-w-0 gap-3 rounded-xl border p-3">
+            <fieldset className="studio-form-section grid min-w-0 gap-3">
               <legend>正式资产引用（可选）</legend>
               <FormLabel>
                 资产 ID

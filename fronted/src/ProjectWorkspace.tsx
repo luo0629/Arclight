@@ -5,6 +5,7 @@ import {
   Users,
   Settings2,
   Leaf,
+  BookOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -13,6 +14,14 @@ import { Button } from "@/components/ui/button";
 
 import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetTrigger,
+  SheetClose,
+} from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { api, json, message, type Episode, type Project } from "./api";
@@ -34,12 +43,16 @@ export default function ProjectWorkspace({
   reloadProjects,
   onProjectSaved,
   onDeleted,
+  directoryOpen,
+  setDirectoryOpen,
 }: {
   onDeleted: () => void;
   project: Project;
   projectPicker: React.ReactNode;
   reloadProjects: () => Promise<void>;
   onProjectSaved: (project: Project) => void;
+  directoryOpen: boolean;
+  setDirectoryOpen: (open: boolean) => void;
 }) {
   const episodeList = usePagedList<Episode>(`/projects/${project.id}/episodes`);
   const { rows: episodes, reload: loadEpisodes } = episodeList;
@@ -51,9 +64,6 @@ export default function ProjectWorkspace({
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState("canvas");
-  const [directoryOpen, setDirectoryOpen] = useState(
-    () => !window.matchMedia("(max-width: 900px)").matches,
-  );
   const reload = useCallback(async () => {
     const [rows, access] = await Promise.all([
       loadEpisodes(),
@@ -109,6 +119,7 @@ export default function ProjectWorkspace({
       setPinnedEpisode(row);
       setEpisodeId(row.id);
       setAdding(false);
+      setDirectoryOpen(false);
       setPage("canvas");
     } catch (error) {
       setError(message(error));
@@ -117,356 +128,369 @@ export default function ProjectWorkspace({
     }
   }
   return (
-    <div className="app-shell min-h-[calc(100dvh-65px)]">
-      <nav
-        aria-label="项目功能"
-        className="flex flex-wrap items-center gap-2 border-b bg-card px-4 py-3 lg:px-6"
-      >
-        <Button
-          variant="ghost"
-          aria-expanded={directoryOpen}
-          aria-controls="project-directory"
-          onClick={() => setDirectoryOpen(!directoryOpen)}
+    <Sheet open={directoryOpen} onOpenChange={setDirectoryOpen}>
+      <div className="app-shell project-shell">
+        <nav
+          aria-label="项目功能"
+          className="flex flex-wrap items-center gap-2 border-b bg-card px-4 py-3 lg:px-6"
         >
-          {directoryOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
-          {directoryOpen ? "收起目录" : "展开目录"}
-        </Button>
-        <Separator
-          orientation="vertical"
-          className="mx-1 hidden h-5 sm:block"
-        />
-        <Button
-          variant={page === "canvas" ? "secondary" : "ghost"}
-          aria-pressed={page === "canvas"}
-          onClick={() => setPage("canvas")}
-        >
-          <LayoutDashboard />
-          故事创作
-        </Button>
-        <Button
-          variant={page === "members" ? "secondary" : "ghost"}
-          aria-pressed={page === "members"}
-          onClick={() => setPage("members")}
-        >
-          <Users />
-          创作伙伴
-        </Button>
-        <Button
-          variant={page === "story" ? "secondary" : "ghost"}
-          aria-pressed={page === "story"}
-          onClick={() => setPage("story")}
-        >
-          故事设定
-        </Button>
-        {owner && (
-          <Button
-            variant={page === "settings" ? "secondary" : "ghost"}
-            aria-pressed={page === "settings"}
-            onClick={() => setPage("settings")}
-          >
-            <Settings2 />
-            项目设置与归档
-          </Button>
-        )}
-      </nav>
-      <div
-        className={cn(
-          "grid min-w-0 grid-cols-1",
-          directoryOpen && "lg:grid-cols-[224px_minmax(0,1fr)]",
-        )}
-      >
-        <aside
-          id="project-directory"
-          hidden={!directoryOpen}
-          className="sidebar flex min-w-0 flex-col gap-4 border-b bg-card/80 p-4 lg:border-r lg:border-b-0"
-        >
-          {projectPicker}
-          <Separator />
-          <div className="section-heading flex flex-wrap items-center justify-between gap-2">
-            <h2>剧集目录</h2>
-            <span
-              className="count rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
-              title="已加载剧集数，不代表总数"
-            >
-              {episodes.length}
-              {episodeList.hasMore ? "+" : ""}
-            </span>
-          </div>
-          <nav
-            aria-label="剧集列表"
-            className="episode-nav flex max-h-64 flex-col gap-1 overflow-y-auto lg:max-h-[45dvh]"
-          >
-            {(episode && !episodes.some((row) => row.id === episode.id)
-              ? [...episodes, episode]
-              : episodes
-            ).map((row) => (
-              <Button
-                variant={row.id === episodeId ? "secondary" : "ghost"}
-                size="lg"
-                aria-pressed={row.id === episodeId}
-                className={cn(
-                  "h-auto justify-start gap-3 px-2 py-3 text-left whitespace-normal [&_small]:mt-1 [&_small]:block [&_small]:text-xs [&_small]:font-normal [&_small]:text-muted-foreground",
-                  row.id === episodeId && "active",
-                )}
-                key={row.id}
-                onClick={() => {
-                  setPinnedEpisode(row);
-                  setEpisodeId(row.id);
-                  setPage("canvas");
-                }}
-              >
-                <span className="episode-number flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-xs text-secondary-foreground">
-                  {String(row.episode_no).padStart(2, "0")}
-                </span>
-                <span>
-                  {row.title}
-                  <small>
-                    {row.status === "ARCHIVED"
-                      ? "已归档"
-                      : `${row.target_duration_ms / 1000} 秒目标时长`}
-                  </small>
-                </span>
-              </Button>
-            ))}
-          </nav>
-          <ListPagination
-            {...episodeList}
-            reload={reload}
-            label="剧集"
-            count={episodes.length}
+          <SheetTrigger asChild>
+            <Button variant="ghost">
+              {directoryOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+              {directoryOpen ? "收起目录" : "展开目录"}
+            </Button>
+          </SheetTrigger>
+          <Separator
+            orientation="vertical"
+            className="mx-1 hidden h-5 sm:block"
           />
-          {writable && (
+          <Button
+            variant={page === "canvas" ? "secondary" : "ghost"}
+            aria-pressed={page === "canvas"}
+            onClick={() => setPage("canvas")}
+          >
+            <LayoutDashboard />
+            故事创作
+          </Button>
+          <Button
+            variant={page === "members" ? "secondary" : "ghost"}
+            aria-pressed={page === "members"}
+            onClick={() => setPage("members")}
+          >
+            <Users />
+            创作伙伴
+          </Button>
+          <Button
+            variant={page === "story" ? "secondary" : "ghost"}
+            aria-pressed={page === "story"}
+            onClick={() => setPage("story")}
+          >
+            <BookOpen />
+            故事设定
+          </Button>
+          {owner && (
             <Button
-              variant="outline"
-              size="lg"
-              className="dashed-button w-full border-dashed"
-              onClick={() => setAdding(true)}
+              variant={page === "settings" ? "secondary" : "ghost"}
+              aria-pressed={page === "settings"}
+              onClick={() => setPage("settings")}
             >
-              ＋ 添加一集
+              <Settings2 />
+              项目设置与归档
             </Button>
           )}
-          <div className="sidebar-bottom mt-auto flex flex-col gap-2 pt-6">
-            <p className="hint text-xs leading-relaxed text-muted-foreground">
-              {owner
-                ? "你是项目拥有者"
-                : role === "editor"
-                  ? "你可以编辑与创建任务"
-                  : "你当前拥有只读权限"}
-            </p>
-            <p className="version-note mt-4 text-[10px] leading-relaxed text-muted-foreground">
-              每一份灵感，都值得好好收藏。
-            </p>
-          </div>
-        </aside>
-        <main
-          className={`workspace min-w-0 p-4 lg:p-6 ${page !== "canvas" ? "mx-auto w-full max-w-5xl" : ""}`}
+        </nav>
+        <div
+          className={cn("project-body", directoryOpen && "directory-is-open")}
+          aria-busy={!loaded || episodeList.loading}
         >
-          <div className="workspace-top mb-5 flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="breadcrumb mb-1 text-xs text-muted-foreground">
-                我的故事 / {project.name}
-                {project.archived ? " / 已归档" : ""}
-              </p>
-              <h1>
-                {page === "members"
-                  ? "创作伙伴"
-                  : page === "story"
-                    ? "故事设定"
-                    : page === "settings"
-                      ? "项目设置"
-                      : episode
-                        ? `第 ${episode.episode_no} 集 · ${episode.title}`
-                        : "你的故事，准备开场"}
-              </h1>
-              {page === "canvas" && episode && role !== "viewer" && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <EpisodeEditor
-                    key={episode.id}
-                    episode={episode}
-                    disabled={!writable || episode.status === "ARCHIVED"}
-                    onSaved={updateEpisode}
-                  />
-                  <EpisodeCopy
-                    key={"copy-" + episode.id}
-                    episode={episode}
-                    suggestedNumber={
-                      Math.max(
-                        episode.episode_no,
-                        ...episodes.map((row) => row.episode_no),
-                      ) + 1
-                    }
-                    disabled={!writable || episode.status === "ARCHIVED"}
-                    onCopied={(copied) => {
-                      setPinnedEpisode(copied);
-                      setEpisodeId(copied.id);
-                      // A successful copy stays successful even if the directory refresh fails.
-                      void loadEpisodes().catch((error) =>
-                        setError(message(error)),
-                      );
-                    }}
-                  />
-                </div>
-              )}
+          <SheetContent
+            id="project-directory"
+            side="left"
+            showCloseButton={false}
+            aria-describedby={undefined}
+            className="studio-directory"
+          >
+            <div className="directory-heading">
+              <SheetTitle>项目与剧集</SheetTitle>
+              <SheetClose asChild>
+                <Button variant="ghost" size="icon" aria-label="关闭项目目录">
+                  <PanelLeftClose />
+                </Button>
+              </SheetClose>
             </div>
-            <span className="hidden items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs text-accent-foreground md:flex">
-              <Leaf className="size-3.5" />
-              让灵感慢慢生长
-            </span>
-          </div>
-          {error && (
-            <Notice
-              tone="error"
-              className="error workspace-error mb-4"
-              role="alert"
-            >
-              {error}
+            {projectPicker}
+            <Separator />
+            <div className="section-heading flex flex-wrap items-center justify-between gap-2">
+              <h2>剧集目录</h2>
+              <span
+                className="count rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground"
+                title="已加载剧集数，不代表总数"
+              >
+                {episodes.length}
+                {episodeList.hasMore ? "+" : ""}
+              </span>
+            </div>
+            <ScrollArea className="directory-episodes">
+              <nav
+                aria-label="剧集列表"
+                className="episode-nav flex flex-col gap-1"
+              >
+                {(episode && !episodes.some((row) => row.id === episode.id)
+                  ? [...episodes, episode]
+                  : episodes
+                ).map((row) => (
+                  <Button
+                    variant={row.id === episodeId ? "secondary" : "ghost"}
+                    size="lg"
+                    aria-pressed={row.id === episodeId}
+                    className={cn(
+                      "h-auto justify-start gap-3 px-2 py-3 text-left whitespace-normal [&_small]:mt-1 [&_small]:block [&_small]:text-xs [&_small]:font-normal [&_small]:text-muted-foreground",
+                      row.id === episodeId && "active",
+                    )}
+                    key={row.id}
+                    onClick={() => {
+                      setPinnedEpisode(row);
+                      setEpisodeId(row.id);
+                      setPage("canvas");
+                      setDirectoryOpen(false);
+                    }}
+                  >
+                    <span className="episode-number flex size-9 shrink-0 items-center justify-center rounded-lg bg-secondary text-xs text-secondary-foreground">
+                      {String(row.episode_no).padStart(2, "0")}
+                    </span>
+                    <span>
+                      {row.title}
+                      <small>
+                        {row.status === "ARCHIVED"
+                          ? "已归档"
+                          : `${row.target_duration_ms / 1000} 秒目标时长`}
+                      </small>
+                    </span>
+                  </Button>
+                ))}
+              </nav>
+            </ScrollArea>
+            <ListPagination
+              {...episodeList}
+              reload={reload}
+              label="剧集"
+              count={episodes.length}
+            />
+            {writable && (
               <Button
                 variant="outline"
                 size="lg"
-                onClick={() =>
-                  void reload().catch((error) => setError(message(error)))
-                }
+                className="dashed-button w-full border-dashed"
+                onClick={() => setAdding(true)}
               >
-                重试
+                ＋ 添加一集
               </Button>
-            </Notice>
-          )}
-          {page === "members" ? (
-            <Members
-              key={project.id}
-              projectId={project.id}
-              owner={owner}
-              writable={writable}
-            />
-          ) : page === "story" ? (
-            <StoryBible
-              key={project.id}
-              projectId={project.id}
-              writable={writable}
-            />
-          ) : page === "settings" ? (
-            <Settings
-              onDeleted={onDeleted}
-              project={project}
-              episodes={
-                episode && !episodes.some((row) => row.id === episode.id)
-                  ? [...episodes, episode]
-                  : episodes
-              }
-              pagination={
-                <ListPagination
-                  {...episodeList}
-                  reload={reload}
-                  label="剧集"
-                  count={episodes.length}
-                />
-              }
-              onProjectSaved={onProjectSaved}
-              onEpisodeSaved={updateEpisode}
-              reload={async () => {
-                await reloadProjects();
-                await reload();
-              }}
-            />
-          ) : episode ? (
-            <EpisodeWorkspace
-              key={episode.id}
-              episode={episode}
-              owner={owner}
-              writable={writable && episode.status !== "ARCHIVED"}
-            />
-          ) : (
-            <EmptyState className="empty">
-              <h2>{loaded ? "写下第一集的名字吧" : "正在载入剧集…"}</h2>
-              <p>每一集都有独立的剧本、分镜、画布与任务记录。</p>
-              {writable && (
-                <Button
-                  variant="default"
-                  size="lg"
-                  className=""
-                  onClick={() => setAdding(true)}
-                >
-                  添加第一集
-                </Button>
-              )}
-            </EmptyState>
-          )}
-        </main>
-      </div>
-      {adding && (
-        <Dialog
-          labelledBy="episode-title"
-          busy={busy}
-          onDismiss={() => setAdding(false)}
-        >
-          <h2 id="episode-title">开始新的一集</h2>
-          <form className="flex min-w-0 flex-col gap-4" onSubmit={create}>
-            <FieldGroup className="contents">
-              <FormLabel>
-                剧集标题
-                <Input name="title" required maxLength={160} autoFocus />
-              </FormLabel>
-              <div className="field-pair grid min-w-0 grid-cols-1 items-start gap-4 sm:grid-cols-2">
-                <FormLabel>
-                  集数
-                  {episodeList.hasMore && (
-                    <small className="hint text-xs leading-relaxed text-muted-foreground">
-                      目录尚未全部加载，请核对集数，避免重复。
-                    </small>
-                  )}
-                  <Input
-                    name="number"
-                    type="number"
-                    min="1"
-                    defaultValue={
-                      Math.max(0, ...episodes.map((row) => row.episode_no)) + 1
-                    }
-                    required
-                  />
-                </FormLabel>
-                <FormLabel>
-                  目标时长（秒）
-                  <Input
-                    name="duration"
-                    type="number"
-                    min="2.5"
-                    max="1800"
-                    step="0.001"
-                    defaultValue={
-                      project.story_settings.default_episode_duration_ms / 1000
-                    }
-                    required
-                  />
-                </FormLabel>
+            )}
+            <div className="sidebar-bottom mt-auto flex flex-col gap-2 pt-6">
+              <p className="hint text-xs leading-relaxed text-muted-foreground">
+                {owner
+                  ? "你是项目拥有者"
+                  : role === "editor"
+                    ? "你可以编辑与创建任务"
+                    : "你当前拥有只读权限"}
+              </p>
+              <p className="version-note mt-4 text-[10px] leading-relaxed text-muted-foreground">
+                每一份灵感，都值得好好收藏。
+              </p>
+            </div>
+          </SheetContent>
+          <main
+            className={`workspace project-main ${page === "canvas" ? "is-creation" : "is-management"}`}
+          >
+            <div className="workspace-top flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="breadcrumb mb-1 text-xs text-muted-foreground">
+                  我的故事 / {project.name}
+                  {project.archived ? " / 已归档" : ""}
+                </p>
+                <h1>
+                  {page === "members"
+                    ? "创作伙伴"
+                    : page === "story"
+                      ? "故事设定"
+                      : page === "settings"
+                        ? "项目设置"
+                        : episode
+                          ? `第 ${episode.episode_no} 集 · ${episode.title}`
+                          : "你的故事，准备开场"}
+                </h1>
+                {page === "canvas" && episode && role !== "viewer" && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <EpisodeEditor
+                      key={episode.id}
+                      episode={episode}
+                      disabled={!writable || episode.status === "ARCHIVED"}
+                      onSaved={updateEpisode}
+                    />
+                    <EpisodeCopy
+                      key={"copy-" + episode.id}
+                      episode={episode}
+                      suggestedNumber={
+                        Math.max(
+                          episode.episode_no,
+                          ...episodes.map((row) => row.episode_no),
+                        ) + 1
+                      }
+                      disabled={!writable || episode.status === "ARCHIVED"}
+                      onCopied={(copied) => {
+                        setPinnedEpisode(copied);
+                        setEpisodeId(copied.id);
+                        // A successful copy stays successful even if the directory refresh fails.
+                        void loadEpisodes().catch((error) =>
+                          setError(message(error)),
+                        );
+                      }}
+                    />
+                  </div>
+                )}
               </div>
-              {error && (
-                <Notice tone="error" className="error" role="alert">
-                  {error}
-                </Notice>
-              )}
-              <div className="button-row flex flex-wrap items-center gap-2">
+              <span className="hidden items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs text-accent-foreground md:flex">
+                <Leaf className="size-3.5" />
+                让灵感慢慢生长
+              </span>
+            </div>
+            {error && (
+              <Notice
+                tone="error"
+                className="error workspace-error mb-4"
+                role="alert"
+              >
+                {error}
                 <Button
                   variant="outline"
                   size="lg"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setAdding(false)}
+                  onClick={() =>
+                    void reload().catch((error) => setError(message(error)))
+                  }
                 >
-                  取消
+                  重试
                 </Button>
-                <Button
-                  variant="default"
-                  size="lg"
-                  className=""
-                  disabled={busy}
-                >
-                  {busy ? "创建中…" : "创建剧集"}
-                </Button>
-              </div>
-            </FieldGroup>
-          </form>
-        </Dialog>
-      )}
-    </div>
+              </Notice>
+            )}
+            {page === "members" ? (
+              <Members
+                key={project.id}
+                projectId={project.id}
+                owner={owner}
+                writable={writable}
+              />
+            ) : page === "story" ? (
+              <StoryBible
+                key={project.id}
+                projectId={project.id}
+                writable={writable}
+              />
+            ) : page === "settings" ? (
+              <Settings
+                onDeleted={onDeleted}
+                project={project}
+                episodes={
+                  episode && !episodes.some((row) => row.id === episode.id)
+                    ? [...episodes, episode]
+                    : episodes
+                }
+                pagination={
+                  <ListPagination
+                    {...episodeList}
+                    reload={reload}
+                    label="剧集"
+                    count={episodes.length}
+                  />
+                }
+                onProjectSaved={onProjectSaved}
+                onEpisodeSaved={updateEpisode}
+                reload={async () => {
+                  await reloadProjects();
+                  await reload();
+                }}
+              />
+            ) : episode ? (
+              <EpisodeWorkspace
+                key={episode.id}
+                episode={episode}
+                owner={owner}
+                writable={writable && episode.status !== "ARCHIVED"}
+              />
+            ) : (
+              <EmptyState className="empty">
+                <h2>{loaded ? "写下第一集的名字吧" : "正在载入剧集…"}</h2>
+                <p>每一集都有独立的剧本、分镜、画布与任务记录。</p>
+                {writable && (
+                  <Button
+                    variant="default"
+                    size="lg"
+                    className=""
+                    onClick={() => setAdding(true)}
+                  >
+                    添加第一集
+                  </Button>
+                )}
+              </EmptyState>
+            )}
+          </main>
+        </div>
+        {adding && (
+          <Dialog
+            labelledBy="episode-title"
+            busy={busy}
+            onDismiss={() => setAdding(false)}
+          >
+            <h2 id="episode-title">开始新的一集</h2>
+            <form className="flex min-w-0 flex-col gap-4" onSubmit={create}>
+              <FieldGroup className="contents">
+                <FormLabel>
+                  剧集标题
+                  <Input name="title" required maxLength={160} autoFocus />
+                </FormLabel>
+                <div className="field-pair grid min-w-0 grid-cols-1 items-start gap-4 sm:grid-cols-2">
+                  <FormLabel>
+                    集数
+                    {episodeList.hasMore && (
+                      <small className="hint text-xs leading-relaxed text-muted-foreground">
+                        目录尚未全部加载，请核对集数，避免重复。
+                      </small>
+                    )}
+                    <Input
+                      name="number"
+                      type="number"
+                      min="1"
+                      defaultValue={
+                        Math.max(0, ...episodes.map((row) => row.episode_no)) +
+                        1
+                      }
+                      required
+                    />
+                  </FormLabel>
+                  <FormLabel>
+                    目标时长（秒）
+                    <Input
+                      name="duration"
+                      type="number"
+                      min="2.5"
+                      max="1800"
+                      step="0.001"
+                      defaultValue={
+                        project.story_settings.default_episode_duration_ms /
+                        1000
+                      }
+                      required
+                    />
+                  </FormLabel>
+                </div>
+                {error && (
+                  <Notice tone="error" className="error" role="alert">
+                    {error}
+                  </Notice>
+                )}
+                <div className="button-row flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setAdding(false)}
+                  >
+                    取消
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="lg"
+                    className=""
+                    disabled={busy}
+                  >
+                    {busy ? "创建中…" : "创建剧集"}
+                  </Button>
+                </div>
+              </FieldGroup>
+            </form>
+          </Dialog>
+        )}
+      </div>
+    </Sheet>
   );
 }

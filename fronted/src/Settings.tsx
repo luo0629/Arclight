@@ -54,6 +54,7 @@ export default function Settings({
   }
   return (
     <PagePanel
+      className="studio-page studio-settings"
       eyebrow="收好每一个小宇宙"
       title="项目设置"
       description="归档不会删除历史版本；归档前请先完成或取消所有进行中的任务。预算当前仅保存额度，尚未执行模型费用扣费。"
@@ -125,7 +126,7 @@ export default function Settings({
         onBusyChange={setBusy}
         onSaved={onProjectSaved}
       />
-      <section className="settings-section flex min-w-0 flex-col gap-4 rounded-xl border bg-background/60 p-4">
+      <section className="settings-section studio-settings-section flex min-w-0 flex-col gap-4">
         <h3>{project.archived ? "恢复这个故事项目" : "归档项目"}</h3>
         <p>归档期间，所有成员只能查看内容。</p>
         <Button
@@ -148,7 +149,7 @@ export default function Settings({
           {project.archived ? "恢复项目" : "归档项目"}
         </Button>
       </section>
-      <section className="settings-section flex min-w-0 flex-col gap-4 rounded-xl border bg-background/60 p-4">
+      <section className="settings-section studio-settings-section flex min-w-0 flex-col gap-4">
         <h3>剧集管理</h3>
         <ul className="episode-settings flex flex-col gap-3 [&>li]:flex [&>li]:flex-wrap [&>li]:items-center [&>li]:justify-between [&>li]:gap-3 [&>li]:rounded-lg [&>li]:border [&>li]:bg-card [&>li]:p-4 [&_small]:block">
           {episodes.map((episode) => (

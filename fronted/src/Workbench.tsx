@@ -38,6 +38,7 @@ export default function Workbench({
   const { rows: allProjects, reload: loadProjects } = projectList;
   const projects = allProjects.filter((row) => !excludedIds.has(row.id));
   const [projectNotice, setProjectNotice] = useState("");
+  const [directoryOpen, setDirectoryOpen] = useState(false);
   const [servicesOpen, setServicesOpen] = useState(false);
   const [pinnedProject, setPinnedProject] = useState<Project | null>(null);
   const [projectId, setProjectId] = useState(
@@ -142,7 +143,13 @@ export default function Workbench({
   }
   const projectPicker = (
     <>
-      <Button variant="outline" onClick={() => setTrashOpen(true)}>
+      <Button
+        variant="outline"
+        onClick={() => {
+          setDirectoryOpen(false);
+          setTrashOpen(true);
+        }}
+      >
         项目回收站
       </Button>
       <FormLabel className="project-picker text-xs text-muted-foreground">
@@ -185,7 +192,10 @@ export default function Workbench({
     </>
   );
   return (
-    <div className="application min-h-dvh">
+    <div
+      className="application min-h-dvh"
+      aria-busy={!loaded || projectList.loading}
+    >
       <header className="app-header flex min-h-16 flex-wrap items-center justify-between gap-3 border-b bg-card px-4 py-3 lg:px-6">
         <a
           className="brand flex items-center gap-3 font-semibold tracking-tight no-underline [&_small]:block [&_small]:text-[10px] [&_small]:font-normal [&_small]:tracking-[.2em] [&_small]:text-muted-foreground"
@@ -231,10 +241,12 @@ export default function Workbench({
         <ProjectWorkspace
           key={project.id}
           project={project}
+          directoryOpen={directoryOpen}
+          setDirectoryOpen={setDirectoryOpen}
+          onDeleted={deleted}
           projectPicker={projectPicker}
           reloadProjects={reload}
           onProjectSaved={updateProject}
-          onDeleted={deleted}
         />
       ) : (
         <div className="app-shell grid min-h-[calc(100dvh-81px)] grid-cols-1 lg:grid-cols-[250px_minmax(0,1fr)]">

@@ -1,4 +1,8 @@
-import { openWorkspacePanels } from "./workspace-helpers";
+import {
+  openDirectory,
+  closeDirectory,
+  openWorkspacePanels,
+} from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 async function setup(page: Page) {
@@ -73,9 +77,11 @@ test("TXT-02：Owner 保存毫秒精度，目录、标题、画布同步，设�
   await expect(
     page.getByRole("button", { name: "编辑剧集", exact: true }),
   ).toBeFocused();
+  await openDirectory(page);
   await expect(
     page.getByRole("navigation", { name: "剧集列表" }),
   ).toContainText("31.125 秒目标时长");
+  await closeDirectory(page);
   await expect(page.locator(".paper-node.episode")).toContainText("星光新标题");
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await expect(page.locator(".version-list")).toContainText("星光新标题");
@@ -97,6 +103,7 @@ test("TXT-02：Owner 保存毫秒精度，目录、标题、画布同步，设�
     "1800 秒目标时长",
   );
   await expect(page.locator(".episode-settings")).toContainText("星光新标题");
+  await openDirectory(page);
   await page
     .getByRole("navigation", { name: "剧集列表" })
     .getByRole("button", { name: /第二集终稿/ })
@@ -236,7 +243,10 @@ test("TXT-02：Viewer 无编辑入口，Editor 可编辑，剧集和项目归档
     await partner.goto("/");
     await openWorkspacePanels(partner);
     await expect(
-      partner.getByText("你当前拥有只读权限", { exact: true }),
+      partner.getByText(
+        "当前为只读模式：项目／剧集已归档，或你的角色是查看者。",
+        { exact: true },
+      ),
     ).toBeVisible();
     await expect(partner.getByRole("button", { name: "编辑剧集" })).toHaveCount(
       0,

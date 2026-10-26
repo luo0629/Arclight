@@ -100,7 +100,7 @@ export default function EpisodeCopy({
       </DialogTrigger>
       <DialogContent
         showCloseButton={false}
-        className="max-h-[90dvh] overflow-y-auto"
+        className="studio-action-dialog max-h-[90dvh] overflow-y-auto"
         onInteractOutside={(event) => event.preventDefault()}
         onEscapeKeyDown={(event) => {
           if (saving.current) event.preventDefault();

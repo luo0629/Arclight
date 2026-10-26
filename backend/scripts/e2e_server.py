@@ -1,5 +1,6 @@
 """浏览器验收专用：独立临时库与本地 Mock 执行器，不连接用户数据库。"""
 
+import os
 import tempfile
 import threading
 from pathlib import Path
@@ -49,7 +50,12 @@ def main():
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()
     try:
-        uvicorn.run(create_app(settings), host="127.0.0.1", port=8766, log_level="warning")
+        uvicorn.run(
+            create_app(settings),
+            host="127.0.0.1",
+            port=int(os.environ.get("ARCLIGHT_E2E_API_PORT", "8766")),
+            log_level="warning",
+        )
     finally:
         stop.set()
         thread.join(timeout=10)

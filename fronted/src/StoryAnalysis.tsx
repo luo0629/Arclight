@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { BookOpenText, Sparkles } from "lucide-react";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Notice, PagePanel, StatusBadge } from "@/components/ui-kit";
 import { api, json, message, type Run } from "./api";
@@ -202,89 +204,96 @@ export default function StoryAnalysis({
     }
   }
   return (
-    <div className="grid min-w-0 gap-6">
+    <div className="studio-analysis">
       <PagePanel
+        className="studio-page studio-analysis-compose"
         eyebrow="读懂故事，再开始创作"
         title="故事提炼"
         description="提取摘要、主要冲突、关键事件与角色表。每次结果独立保存，不会自动生成剧本或角色资产。"
       >
         {!writable && <Notice>当前为只读模式，可查看历史提炼结果。</Notice>}
-        <form onSubmit={submit} className="grid min-w-0 gap-4">
-          <FieldGroup>
-            <Field>
-              <FieldLabel htmlFor="analysis-mode">故事输入方式</FieldLabel>
-              <ChoiceSelect
-                id="analysis-mode"
-                aria-label="故事输入方式"
-                value={mode}
-                onValueChange={setMode}
-                disabled={!writable || busy}
-                options={[
-                  { value: "manual", label: "手动输入" },
-                  { value: "source", label: "已导入来源" },
-                ]}
-              />
-            </Field>
-            {mode === "manual" ? (
+        <details className="studio-analysis-input" open>
+          <summary>输入故事与提炼选项</summary>
+          <form onSubmit={submit} className="grid min-w-0 gap-4">
+            <FieldGroup className="studio-analysis-fields">
               <Field>
-                <FieldLabel htmlFor="analysis-story">待提炼故事</FieldLabel>
-                <Textarea
-                  id="analysis-story"
-                  rows={7}
-                  value={story}
-                  onChange={(e) => setStory(e.target.value)}
-                  disabled={!writable || busy}
-                  required
-                  maxLength={20000}
-                  placeholder="粘贴需要理解的故事原文…"
-                />
-                <p className="text-sm text-muted-foreground">
-                  {story.length} / 20000 字；服务配置可能有更低限制。
-                </p>
-              </Field>
-            ) : (
-              <Field>
-                <FieldLabel htmlFor="analysis-source">选择故事来源</FieldLabel>
+                <FieldLabel htmlFor="analysis-mode">故事输入方式</FieldLabel>
                 <ChoiceSelect
-                  id="analysis-source"
-                  aria-label="选择故事来源"
-                  value={sourceId}
-                  onValueChange={setSourceId}
+                  id="analysis-mode"
+                  aria-label="故事输入方式"
+                  value={mode}
+                  onValueChange={setMode}
                   disabled={!writable || busy}
-                  placeholder="请选择已导入来源"
-                  options={sources.rows.map((row) => ({
-                    value: row.id,
-                    label: `#${row.import_no} ${row.original_name}`,
-                  }))}
-                />
-                <p className="text-sm text-muted-foreground">
-                  按所选版本的完整原文提炼；超过服务限制时会拒绝，不会截断。请先在“故事来源”导入文件。
-                </p>
-                <ListPagination
-                  {...sources}
-                  count={sources.rows.length}
-                  label="可选来源"
+                  options={[
+                    { value: "manual", label: "手动输入" },
+                    { value: "source", label: "已导入来源" },
+                  ]}
                 />
               </Field>
-            )}
-          </FieldGroup>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              type="submit"
-              disabled={
-                !writable ||
-                busy ||
-                active(run) ||
-                (mode === "manual" ? !story.trim() : !sourceId)
-              }
-            >
-              {busy ? "正在提交…" : "开始提炼"}
-            </Button>
-            <Button type="button" variant="outline" onClick={onTasks}>
-              查看任务与审核
-            </Button>
-          </div>
-        </form>
+              {mode === "manual" ? (
+                <Field>
+                  <FieldLabel htmlFor="analysis-story">待提炼故事</FieldLabel>
+                  <Textarea
+                    id="analysis-story"
+                    rows={7}
+                    value={story}
+                    onChange={(e) => setStory(e.target.value)}
+                    disabled={!writable || busy}
+                    required
+                    maxLength={20000}
+                    placeholder="粘贴需要理解的故事原文…"
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    {story.length} / 20000 字；服务配置可能有更低限制。
+                  </p>
+                </Field>
+              ) : (
+                <Field>
+                  <FieldLabel htmlFor="analysis-source">
+                    选择故事来源
+                  </FieldLabel>
+                  <ChoiceSelect
+                    id="analysis-source"
+                    aria-label="选择故事来源"
+                    value={sourceId}
+                    onValueChange={setSourceId}
+                    disabled={!writable || busy}
+                    placeholder="请选择已导入来源"
+                    options={sources.rows.map((row) => ({
+                      value: row.id,
+                      label: `#${row.import_no} ${row.original_name}`,
+                    }))}
+                  />
+                  <p className="text-sm text-muted-foreground">
+                    按所选版本的完整原文提炼；超过服务限制时会拒绝，不会截断。请先在“故事来源”导入文件。
+                  </p>
+                  <ListPagination
+                    {...sources}
+                    count={sources.rows.length}
+                    label="可选来源"
+                  />
+                </Field>
+              )}
+            </FieldGroup>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="submit"
+                disabled={
+                  !writable ||
+                  busy ||
+                  active(run) ||
+                  (mode === "manual" ? !story.trim() : !sourceId)
+                }
+              >
+                <Sparkles className="size-4" />
+                {busy ? "正在提交…" : "开始提炼"}
+              </Button>
+              <Button type="button" variant="outline" onClick={onTasks}>
+                查看任务与审核
+              </Button>
+            </div>
+          </form>
+        </details>
         {notice && <Notice role="status">{notice}</Notice>}
         {error && (
           <Notice tone="error" role="alert">
@@ -304,6 +313,7 @@ export default function StoryAnalysis({
         )}
       </PagePanel>
       <PagePanel
+        className="studio-page studio-analysis-index"
         title="提炼版本记录"
         description="选择版本查看结构化结果及当时的原文快照。"
       >
@@ -311,26 +321,29 @@ export default function StoryAnalysis({
         {list.loaded && list.rows.length === 0 && (
           <p className="text-muted-foreground">还没有提炼结果。</p>
         )}
-        <div className="grid min-w-0 gap-2">
-          {list.rows.map((row) => (
-            <Button
-              key={row.id}
-              variant={selected?.id === row.id ? "secondary" : "outline"}
-              className="h-auto justify-start whitespace-normal break-words text-left"
-              onClick={() => void show(row)}
-            >
-              提炼 v{row.version_no} · {row.source_name} ·{" "}
-              {new Date(row.created_at).toLocaleString("zh-CN")}
-            </Button>
-          ))}
-        </div>
+        <ScrollArea className="studio-index-scroll">
+          <div className="studio-index-items">
+            {list.rows.map((row) => (
+              <Button
+                key={row.id}
+                variant={selected?.id === row.id ? "secondary" : "outline"}
+                aria-pressed={selected?.id === row.id}
+                className="h-auto justify-start whitespace-normal break-words text-left"
+                onClick={() => void show(row)}
+              >
+                提炼 v{row.version_no} · {row.source_name} ·{" "}
+                {new Date(row.created_at).toLocaleString("zh-CN")}
+              </Button>
+            ))}
+          </div>
+        </ScrollArea>
       </PagePanel>
-      {selected && (
+      {selected ? (
         <section
           ref={preview}
           tabIndex={-1}
           aria-label="提炼结果详情"
-          className="grid min-w-0 gap-4 rounded-xl border bg-card p-4 break-words sm:p-6"
+          className="studio-detail studio-analysis-result grid min-w-0 gap-4 break-words"
         >
           <h3 className="text-lg font-semibold">
             提炼 v{selected.version_no} · {selected.source_name}
@@ -373,7 +386,7 @@ export default function StoryAnalysis({
               <h4 className="font-semibold">角色表</h4>
               {!detail.content.characters.length && <p>未提取到明确角色。</p>}
               {detail.content.characters.map((item) => (
-                <article key={item.name} className="rounded-lg border p-3">
+                <article key={item.name} className="studio-analysis-character">
                   <strong>{item.name}</strong>
                   {item.aliases.length > 0 && (
                     <p>别名：{item.aliases.join("、")}</p>
@@ -382,7 +395,7 @@ export default function StoryAnalysis({
                   <p>动机：{item.motivation}</p>
                 </article>
               ))}
-              <details>
+              <details className="studio-disclosure">
                 <summary className="cursor-pointer">
                   查看原文快照与来源校验
                 </summary>
@@ -400,6 +413,14 @@ export default function StoryAnalysis({
               </details>
             </>
           )}
+        </section>
+      ) : (
+        <section className="studio-analysis-empty" aria-label="提炼结果详情">
+          <BookOpenText className="size-8" strokeWidth={1.2} />
+          <h3>选择一个提炼版本</h3>
+          <p>
+            在左侧查看版本，或先输入故事开始提炼。摘要、冲突、事件与角色会在这里展示。
+          </p>
         </section>
       )}
     </div>

@@ -85,6 +85,7 @@ export default function Canvas({
   episodeId,
   writable,
   onSelect,
+  onOpenShot,
   selectedId,
   focusId,
 }: {
@@ -94,6 +95,7 @@ export default function Canvas({
   episodeId: string;
   writable: boolean;
   onSelect: (node: GraphNode) => void;
+  onOpenShot: (node: GraphNode) => void;
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Paper>(
     buildNodes(graph).map((node) => ({
@@ -160,7 +162,7 @@ export default function Canvas({
     }
   }
   return (
-    <div className="canvas-wrap relative h-[max(480px,calc(100dvh-390px))] min-w-0 overflow-hidden rounded-2xl border bg-card shadow-sm">
+    <div className="canvas-wrap relative min-w-0 overflow-hidden bg-card">
       <div
         className="canvas-note pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-24px)] rounded-lg border bg-card/90 px-3 py-2 text-xs text-muted-foreground"
         role="status"
@@ -171,6 +173,9 @@ export default function Canvas({
         nodes={nodes}
         edges={graph.edges}
         nodeTypes={nodeTypes}
+        onNodeDoubleClick={(_, node) => {
+          if (node.data.kind === "shot") onOpenShot(node.data);
+        }}
         onNodesChange={onNodesChange}
         onInit={setInstance}
         onNodeClick={(_, node) => onSelect(node.data)}

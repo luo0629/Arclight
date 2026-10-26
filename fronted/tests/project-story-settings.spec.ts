@@ -1,5 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openWorkspacePanels, chooseProject } from "./workspace-helpers";
+import {
+  openWorkspacePanels,
+  chooseProject,
+  openDirectory,
+} from "./workspace-helpers";
 
 async function setup(page: Page) {
   const response = await page.request.post("/api/v1/auth/register", {
@@ -101,6 +105,7 @@ test("STORY-01：业务字段持久化、新剧集继承默认时长、旧剧集
     path: testInfo.outputPath("story-settings-desktop.png"),
     fullPage: true,
   });
+  await openDirectory(page);
   await page.getByRole("button", { name: "＋ 添加一集", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(

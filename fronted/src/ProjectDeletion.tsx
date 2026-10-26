@@ -59,7 +59,7 @@ export default function ProjectDeletion({
     onDeleted();
   }
   return (
-    <section className="settings-section flex min-w-0 flex-col gap-4 rounded-xl border border-destructive/40 bg-background/60 p-4">
+    <section className="settings-section studio-settings-section flex min-w-0 flex-col gap-4">
       <h3>删除项目</h3>
       <p className="text-sm text-muted-foreground">
         仅所有者可删除已归档、无活动任务的项目。删除后所有成员失去访问权限；30
@@ -82,7 +82,7 @@ export default function ProjectDeletion({
         </DialogTrigger>
         <DialogContent
           showCloseButton={false}
-          className="max-h-[90dvh] overflow-y-auto"
+          className="studio-action-dialog max-h-[90dvh] overflow-y-auto"
           onInteractOutside={(event) => event.preventDefault()}
           onEscapeKeyDown={(event) => {
             if (saving.current) event.preventDefault();

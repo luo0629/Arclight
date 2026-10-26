@@ -120,7 +120,7 @@ export default function ProjectStorySettings({
   }
   return (
     <section
-      className="settings-section flex min-w-0 flex-col gap-4 rounded-xl border bg-background/60 p-4"
+      className="settings-section studio-settings-section flex min-w-0 flex-col gap-5"
       aria-labelledby={id + "-heading"}
     >
       <h3 id={id + "-heading"}>项目业务设定</h3>
@@ -129,9 +129,13 @@ export default function ProjectStorySettings({
       </p>
       <form onSubmit={save}>
         <FieldSet disabled={locked}>
-          <FieldGroup>
+          <FieldGroup className="studio-settings-fields">
             {textFields.map((field) => (
-              <Field key={field.key} data-disabled={locked}>
+              <Field
+                key={field.key}
+                data-disabled={locked}
+                className={field.multiline ? "studio-field-wide" : undefined}
+              >
                 <FormLabel htmlFor={id + "-" + field.key}>
                   {field.label}
                 </FormLabel>

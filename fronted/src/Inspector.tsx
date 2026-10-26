@@ -34,6 +34,7 @@ export default function Inspector({
   retryVersion,
   onCreated,
   focusVersionId,
+  draftId,
 }: {
   node: GraphNode | null;
   episode: Episode;
@@ -50,6 +51,7 @@ export default function Inspector({
   retryVersion: () => Promise<unknown>;
   onCreated: VersionCreated;
   focusVersionId?: string;
+  draftId?: string;
 }) {
   const storyId = useId();
   const storyDraft = useSessionDraft({
@@ -64,8 +66,20 @@ export default function Inspector({
   const episodeDrafts = Object.values(drafts).filter(
     (draft) => draft.episodeId === episode.id,
   );
-  const [creating, setCreating] = useState(false);
-  const [creatingBoard, setCreatingBoard] = useState(false);
+  const resumeKey: unknown = (() => {
+    try {
+      return draftId ? JSON.parse(draftId) : null;
+    } catch {
+      return null;
+    }
+  })();
+  const resume = Array.isArray(resumeKey) ? resumeKey : [];
+  const [creating, setCreating] = useState(
+    resume[1] === "script" && !resume[2],
+  );
+  const [creatingBoard, setCreatingBoard] = useState(
+    resume[1] === "storyboard" && !resume[2],
+  );
   const panel = useRef<HTMLElement>(null);
   const directorKey = useRef({ scriptId: "", key: "" });
   const requestKey = useRef({ story: "", key: "" });
@@ -130,7 +144,7 @@ export default function Inspector({
         <Notice tone="info" role="status" className="episode-drafts">
           本剧集有未保存草稿：
           {episodeDrafts.map((draft) => draft.label).join("、")}。
-          重新打开对应版本或人工起稿入口即可恢复。仅限当前标签页，不会自动提交。
+          重新打开对应版本或人工起稿入口即可恢复。保存在此浏览器，不会自动提交。
         </Notice>
       )}
       {!node || node.kind === "episode" ? (
@@ -181,6 +195,9 @@ export default function Inspector({
               </Button>
               {creatingBoard && (
                 <ManualStoryboard
+                  resumeSourceId={
+                    typeof resume[3] === "string" ? resume[3] : undefined
+                  }
                   episode={episode}
                   writable={writable}
                   busy={busy}

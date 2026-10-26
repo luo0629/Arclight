@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { openWorkspacePanels } from "./workspace-helpers";
+import { openWorkspacePanels, openDirectory } from "./workspace-helpers";
 
 async function account(page: Page) {
   const response = await page.request.post("/api/v1/auth/register", {
@@ -70,6 +70,7 @@ test("工作区辅助函数：无剧集项目刷新后仍可展开目录", async
       page.getByRole("button", { name: "展开目录", exact: true }),
     ).toHaveAttribute("aria-expanded", "false");
     await openWorkspacePanels(page);
+    await openDirectory(page);
     await expect(page.getByRole("combobox", { name: "选择项目" })).toHaveText(
       project.name,
     );
@@ -77,8 +78,8 @@ test("工作区辅助函数：无剧集项目刷新后仍可展开目录", async
       .poll(() => page.evaluate(() => localStorage.getItem("arclight-project")))
       .toBe(project.id);
     await expect(
-      page.getByRole("button", { name: "收起目录", exact: true }),
-    ).toHaveAttribute("aria-expanded", "true");
+      page.getByRole("button", { name: "关闭项目目录", exact: true }),
+    ).toBeVisible();
   }
 });
 
@@ -90,16 +91,16 @@ test("工作区辅助函数：有剧集时展开目录和内容且重复调用�
   await page.goto("/");
   for (let visit = 0; visit < 2; visit++) {
     if (visit) await page.reload();
-    // 窄屏默认版本列表，切到画布后才有可折叠的内容面板。
+    // 窄屏也以画布为主，目录按需覆盖，不占用画布空间。
     await page.getByRole("radio", { name: "创作画布", exact: true }).click();
     await openWorkspacePanels(page);
     await openWorkspacePanels(page);
     await expect(
-      page.getByRole("button", { name: "收起目录", exact: true }),
-    ).toHaveAttribute("aria-expanded", "true");
+      page.getByRole("button", { name: "展开目录", exact: true }),
+    ).toHaveAttribute("aria-expanded", "false");
     await expect(
-      page.getByRole("button", { name: "收起内容面板", exact: true }),
-    ).toHaveAttribute("aria-expanded", "true");
+      page.getByRole("heading", { name: "先写下你的灵感", exact: true }),
+    ).toBeVisible();
     await expect(
       page.getByRole("heading", {
         name: "第 1 集 · 辅助函数验收",

@@ -1,4 +1,8 @@
-import { openWorkspacePanels } from "./workspace-helpers";
+import {
+  openWorkspacePanels,
+  openDirectory,
+  closeDirectory,
+} from "./workspace-helpers";
 import { test, expect, type Page } from "@playwright/test";
 
 const content = (title: string) => ({
@@ -85,6 +89,7 @@ test("TXT-05：从旧剧本另存，精确选中 POST 回执而非并发最新�
   await page.getByRole("button", { name: "编辑并另存新版本" }).click();
   await page.getByLabel("剧本标题", { exact: true }).fill("我的精确新稿");
   await page.getByRole("radio", { name: "创作画布", exact: true }).click();
+  await page.getByRole("button", { name: "展开内容面板", exact: true }).click();
   let createdId = "";
   await page.route("**" + prefix + "/scripts", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
@@ -150,8 +155,10 @@ test("TXT-05：手机从零保存自动打开待审核稿，审核后提示同�
     "待审核",
   );
   await expect(detail(page)).toBeFocused();
-  await expect(page.locator(".version-row.active")).toContainText("手机新稿");
   await expect(detail(page)).toBeInViewport();
+  await page.getByRole("radio", { name: "版本列表", exact: true }).click();
+  await expect(page.locator(".version-row.active")).toContainText("手机新稿");
+  await detail(page).scrollIntoViewIfNeeded();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
@@ -284,7 +291,9 @@ test("TXT-05：保存响应迟到时不污染已切换的剧集", async ({ page 
   await expect(
     page.getByRole("button", { name: "保存中…", exact: true }),
   ).toBeDisabled();
+  await openDirectory(page);
   await page.getByRole("button", { name: "02 第二集", exact: false }).click();
+  await closeDirectory(page);
   await expect(
     page.getByRole("heading", { name: "第 2 集 · 第二集" }),
   ).toBeVisible();

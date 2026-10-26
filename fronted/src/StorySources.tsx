@@ -1,3 +1,12 @@
+import { FileText, Upload } from "lucide-react";
+import {
+  Sheet,
+  SheetContent,
+  SheetTitle,
+  SheetDescription,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +42,7 @@ export default function StorySources({
   episodeId: string;
   writable: boolean;
 }) {
+  const [importOpen, setImportOpen] = useState(false);
   const path = `/episodes/${episodeId}/story-sources`;
   const list = usePagedList<Source>(path);
   const [file, setFile] = useState<File | null>(null);
@@ -128,6 +138,7 @@ export default function StorySources({
     setDetailLoading(false);
     setDetailError("");
     setNotice("故事来源已保存，未启动生成。");
+    setImportOpen(false);
     setFile(null);
     if (fileInput.current) fileInput.current.value = "";
     setConfirmed("no");
@@ -145,6 +156,7 @@ export default function StorySources({
   }
   return (
     <PagePanel
+      className="studio-page story-sources"
       eyebrow="保留故事的来处"
       title="故事来源"
       description="导入这一集的原始故事，保留原文件与来源说明。每次导入独立保存，历史内容不会被覆盖。"
@@ -163,111 +175,162 @@ export default function StorySources({
         </Notice>
       )}
       {writable && (
-        <form
-          onSubmit={upload}
-          aria-label="导入故事文件"
-          aria-busy={busy}
-          className="flex min-w-0 flex-col gap-4 rounded-xl border p-4"
+        <Sheet
+          open={importOpen}
+          onOpenChange={(open) => {
+            if (!saving.current) setImportOpen(open);
+          }}
         >
-          <FormLabel>
-            故事文件
-            <Input
-              ref={fileInput}
-              type="file"
-              accept=".txt,.md,.markdown,text/plain,text/markdown"
-              disabled={busy}
-              onChange={(event) => {
-                setFile(event.target.files?.[0] ?? null);
-                setError("");
-              }}
-              required
-            />
-          </FormLabel>
-          <FormLabel>
-            文件编码
-            <ChoiceSelect
-              value={encoding}
-              onValueChange={setEncoding}
-              disabled={busy}
-              aria-label="文件编码"
-              options={[
-                { value: "utf-8", label: "UTF-8（含 BOM）" },
-                { value: "gb18030", label: "GB18030（旧版中文文本）" },
-              ]}
-            />
-          </FormLabel>
-          <FormLabel>
-            来源说明
-            <Input
-              value={origin}
-              onChange={(event) => setOrigin(event.target.value)}
-              disabled={busy}
-              maxLength={1000}
-              required
-              placeholder="例如：本人原创初稿，或来源链接与作者"
-            />
-          </FormLabel>
-          <FormLabel>
-            授权说明
-            <Textarea
-              aria-label="授权说明"
-              value={rights}
-              onChange={(event) => setRights(event.target.value)}
-              disabled={busy}
-              maxLength={1000}
-              required
-              placeholder="说明原创权利或已获得的使用许可"
-            />
-          </FormLabel>
-          <FormLabel>
-            使用权确认
-            <ChoiceSelect
-              value={confirmed}
-              onValueChange={setConfirmed}
-              disabled={busy}
-              aria-label="使用权确认"
-              options={[
-                { value: "no", label: "请选择确认" },
-                { value: "yes", label: "我确认拥有导入和使用此故事的权利" },
-              ]}
-            />
-          </FormLabel>
-          {error && (
-            <Notice tone="error" role="alert">
-              {error}
-            </Notice>
-          )}
-          <Button
-            type="submit"
-            disabled={
-              busy ||
-              !file ||
-              !origin.trim() ||
-              !rights.trim() ||
-              confirmed !== "yes"
-            }
-          >
-            {busy ? "正在导入…" : "保存故事来源"}
-          </Button>
-        </form>
-      )}
-      <div className="grid min-w-0 gap-5 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside
-          aria-label="故事来源目录"
-          className="flex min-w-0 flex-col gap-3"
-        >
-          {list.loaded && !list.rows.length && <p>尚未导入故事文件</p>}
-          {list.rows.map((row) => (
-            <Button
-              key={row.id}
-              variant={selected?.id === row.id ? "secondary" : "outline"}
-              disabled={busy}
-              className="h-auto justify-start whitespace-normal break-all text-left"
-              onClick={() => void show(row)}
-            >
-              导入 {row.import_no} · {row.original_name}
+          <SheetTrigger asChild>
+            <Button className="self-start">
+              <Upload className="size-4" />
+              导入故事文件
             </Button>
-          ))}
+          </SheetTrigger>
+          <SheetContent
+            className="studio-import-sheet"
+            onCloseAutoFocus={(event) => {
+              if (detail) {
+                event.preventDefault();
+                preview.current?.focus();
+              }
+            }}
+            onInteractOutside={(event) => {
+              if (saving.current) event.preventDefault();
+            }}
+            onEscapeKeyDown={(event) => {
+              if (saving.current) event.preventDefault();
+            }}
+          >
+            <SheetTitle>导入故事文件</SheetTitle>
+            <SheetDescription>
+              保留原稿与授权记录，不自动启动生成。支持 TXT / Markdown，最大 256
+              KiB。
+            </SheetDescription>
+            <ScrollArea className="studio-import-scroll">
+              <form
+                onSubmit={upload}
+                aria-label="导入故事文件"
+                aria-busy={busy}
+                className="flex min-w-0 flex-col gap-5"
+              >
+                <FormLabel>
+                  故事文件
+                  <Input
+                    ref={fileInput}
+                    type="file"
+                    accept=".txt,.md,.markdown,text/plain,text/markdown"
+                    disabled={busy}
+                    onChange={(event) => {
+                      setFile(event.target.files?.[0] ?? null);
+                      setError("");
+                    }}
+                    required
+                  />
+                </FormLabel>
+                {file && (
+                  <p className="text-xs text-muted-foreground">
+                    已选择：{file.name} · {Math.ceil(file.size / 1024)} KiB
+                  </p>
+                )}
+                <FormLabel>
+                  文件编码
+                  <ChoiceSelect
+                    value={encoding}
+                    onValueChange={setEncoding}
+                    disabled={busy}
+                    aria-label="文件编码"
+                    options={[
+                      { value: "utf-8", label: "UTF-8（含 BOM）" },
+                      { value: "gb18030", label: "GB18030（旧版中文文本）" },
+                    ]}
+                  />
+                </FormLabel>
+                <FormLabel>
+                  来源说明
+                  <Input
+                    value={origin}
+                    onChange={(event) => setOrigin(event.target.value)}
+                    disabled={busy}
+                    maxLength={1000}
+                    required
+                    placeholder="例如：本人原创初稿，或来源链接与作者"
+                  />
+                </FormLabel>
+                <FormLabel>
+                  授权说明
+                  <Textarea
+                    aria-label="授权说明"
+                    value={rights}
+                    onChange={(event) => setRights(event.target.value)}
+                    disabled={busy}
+                    maxLength={1000}
+                    required
+                    placeholder="说明原创权利或已获得的使用许可"
+                  />
+                </FormLabel>
+                <FormLabel>
+                  使用权确认
+                  <ChoiceSelect
+                    value={confirmed}
+                    onValueChange={setConfirmed}
+                    disabled={busy}
+                    aria-label="使用权确认"
+                    options={[
+                      { value: "no", label: "请选择确认" },
+                      {
+                        value: "yes",
+                        label: "我确认拥有导入和使用此故事的权利",
+                      },
+                    ]}
+                  />
+                </FormLabel>
+                {error && (
+                  <Notice tone="error" role="alert">
+                    {error}
+                  </Notice>
+                )}
+                <Button
+                  type="submit"
+                  disabled={
+                    busy ||
+                    !file ||
+                    !origin.trim() ||
+                    !rights.trim() ||
+                    confirmed !== "yes"
+                  }
+                >
+                  {busy ? "正在导入…" : "保存故事来源"}
+                </Button>
+              </form>
+            </ScrollArea>
+          </SheetContent>
+        </Sheet>
+      )}
+      <div className="studio-split">
+        <aside aria-label="故事来源目录" className="studio-index">
+          <div className="studio-index-heading">
+            <FileText className="size-4" />
+            <h3>原始故事</h3>
+            <span>{list.rows.length}</span>
+          </div>
+          {list.loaded && !list.rows.length && <p>尚未导入故事文件</p>}
+          <ScrollArea className="studio-index-scroll">
+            <div className="studio-index-items">
+              {list.rows.map((row) => (
+                <Button
+                  key={row.id}
+                  variant={selected?.id === row.id ? "secondary" : "ghost"}
+                  aria-pressed={selected?.id === row.id}
+                  disabled={busy}
+                  className="h-auto justify-start whitespace-normal break-all text-left"
+                  onClick={() => void show(row)}
+                >
+                  导入 {row.import_no} · {row.original_name}
+                </Button>
+              ))}
+            </div>
+          </ScrollArea>
           <fieldset disabled={busy}>
             <ListPagination
               {...list}
@@ -281,7 +344,7 @@ export default function StorySources({
           tabIndex={-1}
           aria-label="故事来源预览"
           aria-busy={detailLoading}
-          className="flex min-w-0 flex-col gap-3 rounded-xl border p-4 focus-visible:outline-2"
+          className="studio-detail source-preview flex min-w-0 flex-col gap-3 focus-visible:outline-2"
         >
           {!selected && <p>选择一个来源查看文本与授权记录。</p>}
           {detailLoading && <p role="status">正在读取故事来源…</p>}

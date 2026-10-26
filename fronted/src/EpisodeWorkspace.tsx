@@ -1,4 +1,12 @@
-import { PenLine, PanelRightOpen, X, RefreshCw } from "lucide-react";
+import {
+  Maximize2,
+  Minimize2,
+  Film,
+  PenLine,
+  PanelRightOpen,
+  X,
+  RefreshCw,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Notice, EmptyState, StatusBadge } from "@/components/ui-kit";
@@ -19,6 +27,8 @@ import { lazy, Suspense } from "react";
 import { LoadingState } from "@/components/ui-kit";
 const Canvas = lazy(() => import("./Canvas"));
 import Inspector from "./Inspector";
+import AssetLibrary from "./AssetLibrary";
+import ShotViewer from "./ShotViewer";
 
 import Tasks from "./Tasks";
 import StorySources from "./StorySources";
@@ -53,9 +63,17 @@ export default function EpisodeWorkspace({
   } | null>(null);
   const [savedRefreshError, setSavedRefreshError] = useState("");
   const [showSavedNotice, setShowSavedNotice] = useState(false);
-  const [view, setView] = useState(() =>
-    window.matchMedia("(max-width: 900px)").matches ? "list" : "canvas",
-  );
+  const [view, setView] = useState("canvas");
+  const [focused, setFocused] = useState(false);
+  const [shotId, setShotId] = useState("");
+  const [draftId, setDraftId] = useState<string>();
+  useEffect(() => {
+    const escape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFocused(false);
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, []);
   const [inspectorOpen, setInspectorOpen] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -224,13 +242,25 @@ export default function EpisodeWorkspace({
     </>
   );
   return (
-    <>
+    <section
+      className={cn(
+        "episode-studio",
+        view === "canvas" && "is-canvas",
+        focused && view === "canvas" && "canvas-focused",
+      )}
+      aria-label="剧集工作区"
+    >
       <div className="workspace-toolbar mb-4 flex flex-wrap items-center justify-between gap-3">
         <ToggleGroup
           type="single"
           value={view}
           onValueChange={(value) => {
-            if (value) setView(value);
+            if (value) {
+              setView(value);
+              setFocused(false);
+              setInspectorOpen(false);
+              setDraftId(undefined);
+            }
           }}
           variant="outline"
           aria-label="工作区视图"
@@ -238,6 +268,7 @@ export default function EpisodeWorkspace({
         >
           {[
             ["canvas", "创作画布"],
+            ["library", "素材库"],
             ["list", "版本列表"],
             ["tasks", "任务与审核"],
             ["sources", "故事来源"],
@@ -257,12 +288,26 @@ export default function EpisodeWorkspace({
             <Button
               onClick={() => {
                 setSelectedId("");
+                setDraftId(undefined);
                 setView("create");
               }}
               aria-pressed={view === "create"}
             >
               <PenLine />
               开始创作
+            </Button>
+          )}
+          {view === "canvas" && (
+            <Button
+              variant="ghost"
+              aria-pressed={focused}
+              onClick={() => {
+                setFocused(!focused);
+                setInspectorOpen(false);
+              }}
+            >
+              {focused ? <Minimize2 /> : <Maximize2 />}
+              {focused ? "退出专注" : "全屏画布"}
             </Button>
           )}
           {view === "canvas" && (
@@ -351,6 +396,39 @@ export default function EpisodeWorkspace({
           <h2>正在整理这一集的便签…</h2>
           <p>如果载入失败，请检查 API 服务并点击刷新内容。</p>
         </EmptyState>
+      ) : view === "library" ? (
+        <AssetLibrary
+          episodeId={episode.id}
+          scripts={scriptRows}
+          boards={boardRows}
+          graph={data.graph}
+          pagination={versionPagination}
+          onOpen={(node) => {
+            if (node.kind === "shot") setShotId(node.id);
+            else {
+              setSelectedId(node.id);
+              setView("list");
+              setInspectorOpen(true);
+            }
+          }}
+          onResume={(id) => {
+            setDraftId(id);
+            try {
+              const key = JSON.parse(id);
+              if (key[2]) {
+                setSelectedId(key[1] + ":" + key[2]);
+                setView("list");
+              } else {
+                setSelectedId("");
+                setView("create");
+              }
+            } catch {
+              setSelectedId("");
+              setView("create");
+            }
+            setInspectorOpen(true);
+          }}
+        />
       ) : view === "sources" ? (
         <StorySources
           key={episode.id}
@@ -384,6 +462,7 @@ export default function EpisodeWorkspace({
         <div
           className={cn(
             "editor-layout relative min-w-0",
+            view === "canvas" && "canvas-layout",
             view === "list" &&
               "grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px]",
             view === "create" && "mx-auto max-w-3xl py-3",
@@ -408,6 +487,7 @@ export default function EpisodeWorkspace({
                   }
                   episodeId={episode.id}
                   writable={writable}
+                  onOpenShot={(node) => setShotId(node.id)}
                   onSelect={(node: GraphNode) => {
                     setSelectedId(node.id);
                     setInspectorOpen(true);
@@ -485,7 +565,19 @@ export default function EpisodeWorkspace({
                   </Button>
                 </div>
               )}
+              {selected?.kind === "shot" && view !== "create" && (
+                <Button
+                  className="mb-3 w-full"
+                  variant="outline"
+                  onClick={() => setShotId(selected.id)}
+                >
+                  <Film />
+                  独立查看镜头
+                </Button>
+              )}
               <Inspector
+                key={draftId ?? "default-inspector"}
+                draftId={draftId}
                 node={view === "create" ? null : selected}
                 episode={episode}
                 scripts={scriptRows}
@@ -512,6 +604,22 @@ export default function EpisodeWorkspace({
           )}
         </div>
       )}
-    </>
+      {shotId && data && (
+        <ShotViewer
+          graph={data.graph}
+          shotId={shotId}
+          boards={boardRows}
+          ensureBoard={ensureBoard}
+          onSelect={setShotId}
+          onClose={() => setShotId("")}
+          onOpenBoard={(id) => {
+            setShotId("");
+            setSelectedId(id);
+            setView("list");
+            setInspectorOpen(true);
+          }}
+        />
+      )}
+    </section>
   );
 }

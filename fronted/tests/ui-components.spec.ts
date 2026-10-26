@@ -62,6 +62,10 @@ test("组件化：视图单选支持键盘，Dialog 返回焦点，成员与设�
   const list = page.getByRole("radio", { name: "版本列表", exact: true });
   await canvas.focus();
   await page.keyboard.press("ArrowRight");
+  await expect(
+    page.getByRole("radio", { name: "素材库", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowRight");
   await expect(list).toBeFocused();
   await page.keyboard.press("Space");
   await expect(list).toBeChecked();

@@ -1,6 +1,8 @@
 import { defineConfig, devices } from "@playwright/test";
 
 const externalUrl = process.env.ARCLIGHT_E2E_BASE_URL;
+const apiPort = process.env.ARCLIGHT_E2E_API_PORT ?? "8766";
+const webPort = process.env.ARCLIGHT_E2E_WEB_PORT ?? "4177";
 
 export default defineConfig({
   testDir: "./tests",
@@ -8,7 +10,7 @@ export default defineConfig({
   workers: 1,
   timeout: 60000,
   use: {
-    baseURL: externalUrl ?? "http://127.0.0.1:4177",
+    baseURL: externalUrl ?? `http://127.0.0.1:${webPort}`,
     trace: "retain-on-failure",
   },
   projects: [
@@ -29,15 +31,15 @@ export default defineConfig({
               ? '".venv/Scripts/python.exe" scripts/e2e_server.py'
               : ".venv/bin/python scripts/e2e_server.py",
           cwd: "../backend",
-          url: "http://127.0.0.1:8766/health/ready",
+          url: `http://127.0.0.1:${apiPort}/health/ready`,
           reuseExistingServer: false,
           timeout: 60000,
         },
         {
-          command: "npm run dev -- --port 4177 --strictPort",
-          url: "http://127.0.0.1:4177",
+          command: `npm run dev -- --port ${webPort} --strictPort`,
+          url: `http://127.0.0.1:${webPort}`,
           reuseExistingServer: false,
-          env: { ARCLIGHT_API_PROXY: "http://127.0.0.1:8766" },
+          env: { ARCLIGHT_API_PROXY: `http://127.0.0.1:${apiPort}` },
         },
       ],
 });
