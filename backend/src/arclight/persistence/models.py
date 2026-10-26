@@ -7,8 +7,10 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
+    LargeBinary,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -60,6 +62,34 @@ class Episode(Entity, Base):
         UniqueConstraint("project_id", "episode_no"),
         CheckConstraint("episode_no > 0", name="episode_positive"),
         CheckConstraint("target_duration_ms > 0", name="duration_positive"),
+    )
+
+
+class StorySource(Entity, Base):
+    """Append-only imported source; exact bytes and text are loaded only on detail reads."""
+
+    __tablename__ = "story_sources"
+    episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)
+    import_no: Mapped[int]
+    import_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    original_name: Mapped[str] = mapped_column(String(160))
+    source_type: Mapped[str] = mapped_column(String(16))
+    media_type: Mapped[str] = mapped_column(String(64))
+    encoding: Mapped[str] = mapped_column(String(16))
+    byte_size: Mapped[int]
+    sha256: Mapped[str] = mapped_column(String(64))
+    raw_bytes: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
+    text: Mapped[str] = mapped_column(Text, deferred=True)
+    source_note: Mapped[str] = mapped_column(String(1000))
+    rights_note: Mapped[str] = mapped_column(String(1000))
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (
+        UniqueConstraint("episode_id", "import_key", name="uq_story_sources_episode_import_key"),
+        UniqueConstraint("episode_id", "import_no", name="uq_story_sources_episode_import_no"),
+        CheckConstraint("import_no > 0", name="source_import_positive"),
+        CheckConstraint("byte_size > 0 AND byte_size <= 262144", name="source_byte_size"),
+        CheckConstraint("source_type IN ('TXT', 'MARKDOWN')", name="source_type"),
     )
 
 

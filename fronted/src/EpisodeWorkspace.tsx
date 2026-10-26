@@ -21,6 +21,7 @@ const Canvas = lazy(() => import("./Canvas"));
 import Inspector from "./Inspector";
 
 import Tasks from "./Tasks";
+import StorySources from "./StorySources";
 
 import usePagedList from "./usePagedList";
 import ListPagination from "./ListPagination";
@@ -238,6 +239,7 @@ export default function EpisodeWorkspace({
             ["canvas", "创作画布"],
             ["list", "版本列表"],
             ["tasks", "任务与审核"],
+            ["sources", "故事来源"],
           ].map(([key, label]) => (
             <ToggleGroupItem key={key} value={key}>
               {label}
@@ -347,6 +349,12 @@ export default function EpisodeWorkspace({
           <h2>正在整理这一集的便签…</h2>
           <p>如果载入失败，请检查 API 服务并点击刷新内容。</p>
         </EmptyState>
+      ) : view === "sources" ? (
+        <StorySources
+          key={episode.id}
+          episodeId={episode.id}
+          writable={writable}
+        />
       ) : view === "tasks" ? (
         <Tasks
           runs={runs.rows}

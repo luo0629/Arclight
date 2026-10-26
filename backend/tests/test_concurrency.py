@@ -153,3 +153,56 @@ def test_postgres_delete_and_unarchive_cannot_both_succeed(client, settings, epi
     with ThreadPoolExecutor(max_workers=2) as pool:
         deleted, unarchived = list(pool.map(change, ["DELETE", "PATCH"]))
     assert (deleted.status_code, unarchived.status_code) in [(200, 404), (409, 200)]
+
+
+def test_postgres_concurrent_source_import_is_one_record_and_audit(client, settings, episode):
+    from test_story_sources import source_payload, sources_path
+
+    require_postgres(settings)
+    path, payload = sources_path(episode), source_payload()
+    responses = race(client.app, path, payload, {"Authorization": "Bearer test-token"})
+    assert [row.status_code for row in responses] == [201, 201]
+    assert responses[0].json() == responses[1].json()
+    assert len(client.get(path).json()) == 1
+    events = client.get(f"/api/v1/projects/{episode['project_id']}/audit-events").json()
+    assert sum(row["action"] == "story_source.imported" for row in events) == 1
+
+
+def test_postgres_source_import_rechecks_episode_after_waiting_for_write_gate(
+    client, settings, episode, monkeypatch
+):
+    from threading import Event
+    from uuid import UUID
+
+    from test_story_sources import source_payload, sources_path
+
+    from arclight.api import story_sources
+    from arclight.persistence.models import Episode
+
+    require_postgres(settings)
+    loaded, attempt = Event(), Event()
+    original = story_sources.require_episode
+
+    def cached_episode(db, episode_id, actor, **options):
+        # Keep the old ORM object alive, just as require_episode does before its lock wait.
+        cached = db.get(Episode, episode_id)
+        loaded.set()
+        assert attempt.wait(10)
+        result = original(db, episode_id, actor, **options)
+        assert result is cached
+        return result
+
+    monkeypatch.setattr(story_sources, "require_episode", cached_episode)
+    path = sources_path(episode)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(client.post, path, json=source_payload())
+        assert loaded.wait(10)
+        with client.app.state.session_factory.begin() as db:
+            archived = db.get(Episode, UUID(episode["id"]))
+            archived.status = "ARCHIVED"
+        attempt.set()
+        response = pending.result(timeout=15)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "EPISODE_ARCHIVED"
+    monkeypatch.setattr(story_sources, "require_episode", original)
+    assert client.get(path).json() == []
