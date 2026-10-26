@@ -25,6 +25,9 @@ class Project(Entity, Base):
     style_guide: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     output_profile: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
     archived: Mapped[bool] = mapped_column(default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    restore_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deletion_id: Mapped[UUID | None] = mapped_column(nullable=True)
     budget_limit: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     __table_args__ = (CheckConstraint("budget_limit >= 0", name="budget_nonnegative"),)
 

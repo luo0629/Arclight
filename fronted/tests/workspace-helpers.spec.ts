@@ -108,3 +108,30 @@ test("工作区辅助函数：有剧集时展开目录和内容且重复调用�
     ).toBeVisible();
   }
 });
+
+test("工作区辅助函数：加载中的临时空态不能跳过内容面板展开", async ({
+  page,
+}) => {
+  // 定向重放 trace 中的竞态：已完成的欢迎空态与下一次列表请求重叠。
+  await page.setContent(`
+    <section aria-label="项目分页" aria-busy="true"><p role="status">尚未加载 · 加载中…</p></section>
+    <h1>新的一页，等你落笔</h1>
+  `);
+  let finished = false;
+  const opening = openWorkspacePanels(page).then(() => {
+    finished = true;
+  });
+  // 浏览器侧握手而非 sleep：加载时辅助函数必须仍在等待。
+  await expect(page.getByRole("heading")).toBeVisible();
+  expect(finished).toBe(false);
+  await page.evaluate(() => {
+    document.body.innerHTML = `
+      <section aria-label="项目分页" aria-busy="false"><p role="status">已加载 1 条 · 已全部加载</p></section>
+      <section class="workspace-toolbar"><button aria-expanded="false" onclick="this.textContent='收起内容面板';this.setAttribute('aria-expanded','true')">展开内容面板</button></section>
+    `;
+  });
+  await opening;
+  await expect(
+    page.getByRole("button", { name: "收起内容面板", exact: true }),
+  ).toHaveAttribute("aria-expanded", "true");
+});

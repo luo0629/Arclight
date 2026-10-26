@@ -293,4 +293,7 @@ def test_migration_0005_preserves_0004_and_guards_even_archived_entries(client, 
     assert archive(client, episode, row).status_code == 200
     with pytest.raises(RuntimeError, match="Story entries exist"):
         command.downgrade(migrated, "0004")
+    # A failed multi-revision downgrade may already have removed newer columns.
+    # Restore the current application schema before exercising the current ORM.
+    command.upgrade(migrated, "head")
     assert client.get(path(episode)).json()[0]["archived"] is True

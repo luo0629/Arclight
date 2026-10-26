@@ -37,8 +37,11 @@ from arclight.workflows.production import DIRECTOR_WORKFLOW_VERSION, WORKFLOW_VE
 def require_project(
     db: Session, project_id: UUID, actor: str, *, write: bool = False, owner: bool = False
 ) -> Project:
-    project = db.get(Project, project_id)
-    if project is None:
+    # Refresh after the shared write gate to avoid stale pre-deletion ORM state.
+    project = db.get(
+        Project, project_id, populate_existing=write or owner, with_for_update=write or owner
+    )
+    if project is None or project.deleted_at is not None:
         raise DomainError("NOT_FOUND", "项目不存在", 404)
     if project.owner_id != actor:
         membership = (

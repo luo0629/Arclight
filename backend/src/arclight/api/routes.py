@@ -69,7 +69,7 @@ def list_projects(
         )
     rows = db.scalars(
         select(Project)
-        .where(visible)
+        .where(visible, Project.deleted_at.is_(None))
         .order_by(Project.updated_at.desc(), Project.id)
         .limit(limit)
         .offset(offset)

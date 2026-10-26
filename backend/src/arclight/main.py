@@ -15,6 +15,7 @@ from arclight.api.canvas import router as canvas_router
 from arclight.api.collaboration import router as collaboration_router
 from arclight.api.content import router as content_router
 from arclight.api.model_services import router as model_services_router
+from arclight.api.project_deletion import router as project_deletion_router
 from arclight.api.protection import RequestProtection
 from arclight.api.routes import router
 from arclight.api.story_bible import router as story_bible_router
@@ -121,6 +122,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(content_router)
     app.include_router(canvas_router)
     app.include_router(story_bible_router)
+    app.include_router(project_deletion_router)
     return app
 
 

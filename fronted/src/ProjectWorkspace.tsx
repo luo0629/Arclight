@@ -33,7 +33,9 @@ export default function ProjectWorkspace({
   projectPicker,
   reloadProjects,
   onProjectSaved,
+  onDeleted,
 }: {
+  onDeleted: () => void;
   project: Project;
   projectPicker: React.ReactNode;
   reloadProjects: () => Promise<void>;
@@ -344,6 +346,7 @@ export default function ProjectWorkspace({
             />
           ) : page === "settings" ? (
             <Settings
+              onDeleted={onDeleted}
               project={project}
               episodes={
                 episode && !episodes.some((row) => row.id === episode.id)

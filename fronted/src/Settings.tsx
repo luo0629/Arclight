@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { useState, type FormEvent } from "react";
 import EpisodeEditor from "./EpisodeEditor";
 import ProjectProductionSettings from "./ProjectProductionSettings";
+import ProjectDeletion from "./ProjectDeletion";
 import ProjectStorySettings from "./ProjectStorySettings";
 import { api, json, message, type Episode, type Project } from "./api";
 
@@ -16,7 +17,9 @@ export default function Settings({
   reload,
   onEpisodeSaved,
   onProjectSaved,
+  onDeleted,
 }: {
+  onDeleted: () => void;
   project: Project;
   episodes: Episode[];
   pagination: React.ReactNode;
@@ -104,6 +107,11 @@ export default function Settings({
           </Button>
         </FieldGroup>
       </form>
+      <ProjectDeletion
+        project={project}
+        disabled={busy}
+        onDeleted={onDeleted}
+      />
       <ProjectStorySettings
         key={project.id}
         project={project}

@@ -22,6 +22,7 @@ import Dialog from "./Dialog";
 import usePagedList from "./usePagedList";
 import ListPagination from "./ListPagination";
 
+import ProjectTrash from "./ProjectTrash";
 import ProjectWorkspace from "./ProjectWorkspace";
 export default function Workbench({
   user,
@@ -31,7 +32,12 @@ export default function Workbench({
   logout: () => Promise<void>;
 }) {
   const projectList = usePagedList<Project>("/projects");
-  const { rows: projects, reload: loadProjects } = projectList;
+  const [trashOpen, setTrashOpen] = useState(false);
+  const [excludedIds, setExcludedIds] = useState<Set<string>>(new Set());
+  const excluded = useRef(new Set<string>());
+  const { rows: allProjects, reload: loadProjects } = projectList;
+  const projects = allProjects.filter((row) => !excludedIds.has(row.id));
+  const [projectNotice, setProjectNotice] = useState("");
   const [servicesOpen, setServicesOpen] = useState(false);
   const [pinnedProject, setPinnedProject] = useState<Project | null>(null);
   const [projectId, setProjectId] = useState(
@@ -45,7 +51,9 @@ export default function Workbench({
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const reload = useCallback(async () => {
-    const rows = await loadProjects();
+    const rows = (await loadProjects()).filter(
+      (row) => !excluded.current.has(row.id),
+    );
     const id = currentProjectId.current;
     if (id && !rows.some((row) => row.id === id)) {
       try {
@@ -69,17 +77,48 @@ export default function Workbench({
   useEffect(() => {
     void reload().catch((error) => setError(message(error)));
   }, [reload]);
-  const project =
-    projects.find((row) => row.id === projectId) ??
-    (pinnedProject?.id === projectId ? pinnedProject : null);
+  const project = excludedIds.has(projectId)
+    ? null
+    : (projects.find((row) => row.id === projectId) ??
+      (pinnedProject?.id === projectId ? pinnedProject : null));
   function updateProject(updated: Project) {
     projectList.update(updated);
     setPinnedProject(updated);
   }
   function select(id: string) {
     setPinnedProject(projects.find((row) => row.id === id) ?? null);
+    currentProjectId.current = id;
     setProjectId(id);
     localStorage.setItem("arclight-project", id);
+  }
+  function deleted() {
+    const id = currentProjectId.current;
+    excluded.current.add(id);
+    setExcludedIds((previous) => new Set(previous).add(id));
+    currentProjectId.current = "";
+    setProjectId("");
+    setPinnedProject(null);
+    localStorage.removeItem("arclight-project");
+    setProjectNotice("项目已移入回收站，30 天内可恢复。");
+    void reload().catch((error) =>
+      setError("删除已成功；项目目录刷新失败：" + message(error)),
+    );
+  }
+  function restored(row: Project) {
+    excluded.current.delete(row.id);
+    setExcludedIds((previous) => {
+      const next = new Set(previous);
+      next.delete(row.id);
+      return next;
+    });
+    currentProjectId.current = row.id;
+    select(row.id);
+    setPinnedProject(row);
+    setTrashOpen(false);
+    setProjectNotice("项目已恢复，仍为归档状态。需要编辑时请先解除归档。");
+    void reload().catch((error) =>
+      setError("恢复已成功；项目目录刷新失败：" + message(error)),
+    );
   }
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -103,6 +142,9 @@ export default function Workbench({
   }
   const projectPicker = (
     <>
+      <Button variant="outline" onClick={() => setTrashOpen(true)}>
+        项目回收站
+      </Button>
       <FormLabel className="project-picker text-xs text-muted-foreground">
         我的故事
         <ChoiceSelect
@@ -163,6 +205,11 @@ export default function Workbench({
           <AccountMenu user={user} logout={logout} />
         </div>
       </header>
+      {projectNotice && (
+        <Notice className="mx-4 my-3" role="status">
+          {projectNotice}
+        </Notice>
+      )}
       {servicesOpen && (
         <ServiceSettings onDismiss={() => setServicesOpen(false)} />
       )}
@@ -187,6 +234,7 @@ export default function Workbench({
           projectPicker={projectPicker}
           reloadProjects={reload}
           onProjectSaved={updateProject}
+          onDeleted={deleted}
         />
       ) : (
         <div className="app-shell grid min-h-[calc(100dvh-81px)] grid-cols-1 lg:grid-cols-[250px_minmax(0,1fr)]">
@@ -209,6 +257,12 @@ export default function Workbench({
             </Button>
           </EmptyState>
         </div>
+      )}
+      {trashOpen && (
+        <ProjectTrash
+          onDismiss={() => setTrashOpen(false)}
+          onRestored={restored}
+        />
       )}
       {creating && (
         <Dialog
