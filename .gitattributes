@@ -1,0 +1,2 @@
+# Match Prettier line endings for front-end files on every platform.
+/fronted/** text=auto eol=lf
