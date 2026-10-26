@@ -50,6 +50,7 @@ type Comparison = { base: Snapshot | null; target: Snapshot };
 const names: Record<string, string> = {
   title: "标题",
   summary: "梗概",
+  estimated_duration_ms: "剧本估算时长（毫秒）",
   characters: "角色",
   scenes: "场景",
   dialogue: "对白",

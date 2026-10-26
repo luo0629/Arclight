@@ -84,6 +84,7 @@ class ScriptContent(Contract):
     schema_version: Literal["2.0"] = "2.0"
     title: str = Field(min_length=1, max_length=160)
     summary: str = Field(min_length=1, max_length=3000)
+    estimated_duration_ms: int | None = Field(default=None, strict=True, gt=0)
     characters: list[str] = Field(min_length=1, max_length=50)
     character_assets: list[CharacterAsset] = Field(default_factory=list, max_length=50)
     scenes: list[Scene] = Field(min_length=1, max_length=50)
@@ -139,7 +140,7 @@ class ShotContent(Contract):
     shot_no: int = Field(gt=0)
     scene_no: int = Field(gt=0)
     scene_id: Identifier | None = None
-    duration_ms: int = Field(ge=500, le=30000)
+    duration_ms: int = Field(strict=True, ge=500, le=30000)
     shot_size: Literal["wide", "full", "medium", "close_up"] = "medium"
     visual_description: str = Field(min_length=1, max_length=3000)
     characters: list[str] = Field(default_factory=list, max_length=50)

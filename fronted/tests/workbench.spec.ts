@@ -177,6 +177,10 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     ).toHaveText("编辑者");
     const partner = await memberContext.newPage();
     await partner.goto("/");
+    // 已知项目有剧集：等待最终工作区，避免把加载中的空态当成面板已就绪。
+    await expect(
+      partner.getByRole("radio", { name: "创作画布", exact: true }),
+    ).toBeVisible();
     await openWorkspacePanels(partner);
     await expect(
       partner.getByText("你当前拥有只读权限", { exact: true }),
@@ -204,6 +208,10 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     await page.getByRole("option", { name: "编辑者", exact: true }).click();
     await expect(page.getByLabel("小伙伴的角色")).toBeEnabled();
     await partner.reload();
+    // 已知项目有剧集：等待最终工作区，避免把加载中的空态当成面板已就绪。
+    await expect(
+      partner.getByRole("radio", { name: "创作画布", exact: true }),
+    ).toBeVisible();
     await openWorkspacePanels(partner);
     await expect(
       partner.getByText("你可以编辑与创建任务", { exact: true }),
@@ -227,6 +235,10 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     ).toBeVisible();
     await expect(page.getByLabel("项目名称")).toBeDisabled();
     await partner.reload();
+    // 已知项目有剧集：等待最终工作区，避免把加载中的空态当成面板已就绪。
+    await expect(
+      partner.getByRole("radio", { name: "创作画布", exact: true }),
+    ).toBeVisible();
     await openWorkspacePanels(partner);
     await expect(
       partner.getByRole("button", { name: "自己写分镜", exact: true }),

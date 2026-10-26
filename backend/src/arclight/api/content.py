@@ -1,7 +1,7 @@
 from typing import cast
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from pydantic import Field
 from sqlalchemy import func, select
 
@@ -12,6 +12,7 @@ from arclight.api.content_history import router as history_router
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input, ScriptRead, StoryboardRead
 from arclight.application.commands import require_episode
+from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
     validate_storyboard_assets,
@@ -59,12 +60,17 @@ def next_version(db, model, episode_id, expected):
 
 @router.post("/episodes/{episode_id}/scripts", status_code=201)
 def save_script(
-    episode_id: UUID, payload: ScriptVersionInput, db: Database, actor: Actor
+    episode_id: UUID, payload: ScriptVersionInput, request: Request, db: Database, actor: Actor
 ) -> ScriptRead:
     episode = lock_edit(db, episode_id, actor)
     if payload.base_version_id:
         require_version(db, Script, episode_id, payload.base_version_id)
     validate_script_assets(db, episode.project_id, payload.content)
+    validate_duration(
+        payload.content,
+        episode.target_duration_ms,
+        request.app.state.settings.text_duration_tolerance_percent,
+    )
     version = Script(
         episode_id=episode_id,
         run_id=None,
@@ -87,7 +93,7 @@ def save_script(
 
 @router.post("/episodes/{episode_id}/storyboards", status_code=201)
 def save_storyboard(
-    episode_id: UUID, payload: StoryboardVersionInput, db: Database, actor: Actor
+    episode_id: UUID, payload: StoryboardVersionInput, request: Request, db: Database, actor: Actor
 ) -> StoryboardRead:
     episode = lock_edit(db, episode_id, actor)
     script = db.get(Script, payload.script_version_id)
@@ -97,6 +103,11 @@ def save_storyboard(
         raise DomainError("SCRIPT_NOT_APPROVED", "分镜必须引用已批准的剧本版本", 409)
     source = ScriptContent.model_validate(script.content_json)
     validate_script_assets(db, episode.project_id, source)
+    validate_duration(
+        source,
+        episode.target_duration_ms,
+        request.app.state.settings.text_duration_tolerance_percent,
+    )
     try:
         payload.content.validate_against(source)
     except ValueError:
@@ -104,6 +115,11 @@ def save_storyboard(
     if payload.base_version_id:
         require_version(db, Storyboard, episode_id, payload.base_version_id)
     validate_storyboard_assets(db, episode.project_id, payload.content)
+    validate_duration(
+        payload.content,
+        episode.target_duration_ms,
+        request.app.state.settings.text_duration_tolerance_percent,
+    )
     version = Storyboard(
         episode_id=episode_id,
         run_id=None,
@@ -147,6 +163,7 @@ def review_content(
     resource_type: str,
     version_id: UUID,
     payload: ContentReview,
+    request: Request,
     db: Database,
     actor: Actor,
 ) -> dict:
@@ -173,6 +190,14 @@ def review_content(
             validate_storyboard_assets(
                 db, episode.project_id, StoryboardContent.model_validate(version.content_json)
             )
+        parsed = (
+            ScriptContent if isinstance(version, Script) else StoryboardContent
+        ).model_validate(version.content_json)
+        validate_duration(
+            parsed,
+            episode.target_duration_ms,
+            request.app.state.settings.text_duration_tolerance_percent,
+        )
     version.status = "APPROVED" if payload.decision == "APPROVE" else "REJECTED"
     if isinstance(version, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == version.id)):

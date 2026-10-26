@@ -39,6 +39,7 @@ async function setup(page: Page) {
       expected_version_no: 0,
       content: {
         title: "稳定台词稿",
+        estimated_duration_ms: 30000,
         summary: "女孩在雨夜找到猫。",
         characters: ["女孩", "猫"],
         scenes: [

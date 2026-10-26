@@ -26,6 +26,7 @@ export type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 type Script = {
   title: string;
   summary: string;
+  estimated_duration_ms?: number | null;
   characters: string[];
   character_assets?: { character: string; asset: unknown }[];
   scenes: {
@@ -139,7 +140,8 @@ export default function VersionEditor({
       scene_asset: source?.scenes[0]?.scene_asset ?? null,
       location_asset: source?.scenes[0]?.location_asset ?? null,
       props: source?.scenes[0]?.props ?? [],
-      duration_ms: 3000,
+      duration_ms:
+        shotNo === 1 ? Math.min(episode.target_duration_ms, 30000) : 3000,
       shot_size: "medium",
       visual_description: "",
       characters: [],
@@ -155,6 +157,7 @@ export default function VersionEditor({
         : {
             title: "",
             summary: "",
+            estimated_duration_ms: episode.target_duration_ms,
             characters: ["主角"],
             scenes: [
               {
@@ -251,6 +254,15 @@ export default function VersionEditor({
       disabled={busy || !writable || active}
       className="flex min-w-0 flex-col gap-4"
     >
+      {kind === "storyboard" && (
+        <p className="text-sm text-muted-foreground" aria-live="polite">
+          镜头总时长：
+          {board.shots.reduce((total, shot) => total + shot.duration_ms, 0) /
+            1000}{" "}
+          秒 · 目标 {episode.target_duration_ms / 1000}{" "}
+          秒，保存及批准由服务端校验。
+        </p>
+      )}
       <div className="section-heading flex flex-wrap items-center justify-between gap-2">
         <h3>
           {kind === "script" ? "剧本" : "分镜"}{" "}
@@ -343,6 +355,34 @@ export default function VersionEditor({
                   }
                 />
               </Field>
+              <Field>
+                <FormLabel htmlFor={`${editorId}-estimated-duration`}>
+                  剧本估算时长（秒）
+                </FormLabel>
+                <Input
+                  id={`${editorId}-estimated-duration`}
+                  type="number"
+                  min="0.001"
+                  step="0.001"
+                  value={
+                    script.estimated_duration_ms == null
+                      ? ""
+                      : script.estimated_duration_ms / 1000
+                  }
+                  onChange={(event) =>
+                    mutate((value) => {
+                      value.estimated_duration_ms =
+                        event.target.value === ""
+                          ? null
+                          : Math.round(Number(event.target.value) * 1000);
+                    })
+                  }
+                />
+                <small className="text-muted-foreground">
+                  目标 {episode.target_duration_ms / 1000}{" "}
+                  秒，允许范围由服务端配置；估算值不是实测配音时长。旧稿缺失时需填写后另存。
+                </small>
+              </Field>
               <FormLabel>
                 角色（用中文逗号分隔）
                 <Input
@@ -361,6 +401,13 @@ export default function VersionEditor({
             <>
               <h3>{script.title}</h3>
               <p>{script.summary}</p>
+              <p className="text-sm text-muted-foreground">
+                剧本估算时长：
+                {script.estimated_duration_ms == null
+                  ? "旧稿未填写"
+                  : `${script.estimated_duration_ms / 1000} 秒`}{" "}
+                · 目标 {episode.target_duration_ms / 1000} 秒
+              </p>
               <p className="muted text-sm text-muted-foreground">
                 登场角色：{script.characters.join("、")}
               </p>

@@ -3,6 +3,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 const scriptContent = (title: string) => ({
   title,
+  estimated_duration_ms: 30000,
+
   summary: "女孩提灯寻找雨夜里的星光。",
   characters: ["女孩", "猫"],
   scenes: [
@@ -22,7 +24,7 @@ const boardContent = (description: string, subtitle = "") => ({
     {
       shot_no: 1,
       scene_no: 1,
-      duration_ms: 3000,
+      duration_ms: 30000,
       shot_size: "medium",
       visual_description: description,
       characters: ["女孩"],

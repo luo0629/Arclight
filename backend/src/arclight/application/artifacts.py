@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from arclight.agents.contracts import ScriptContent, StoryboardContent, read_content
+from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
     validate_storyboard_assets,
@@ -14,10 +15,19 @@ from arclight.workflows.production import Artifacts
 
 
 class ArtifactStore(Artifacts):
-    def __init__(self, factory: sessionmaker, run_id: UUID, episode_id: UUID):
+    def __init__(
+        self,
+        factory: sessionmaker,
+        run_id: UUID,
+        episode_id: UUID,
+        target_duration_ms: int,
+        tolerance_percent: int,
+    ):
         self.factory = factory
         self.run_id = run_id
         self.episode_id = episode_id
+        self.target_duration_ms = target_duration_ms
+        self.tolerance_percent = tolerance_percent
 
     def script(self, generate: Callable[[], dict]) -> tuple[str, dict]:
         with self.factory.begin() as db:
@@ -32,6 +42,7 @@ class ArtifactStore(Artifacts):
             if episode is None:
                 raise ValueError("剧集不存在")
             validate_script_assets(db, episode.project_id, parsed)
+            validate_duration(parsed, self.target_duration_ms, self.tolerance_percent)
             content = parsed.model_dump(mode="json")
             version = (
                 db.scalar(
@@ -57,15 +68,17 @@ class ArtifactStore(Artifacts):
             existing = db.scalar(select(Storyboard).where(Storyboard.run_id == self.run_id))
             if existing:
                 return str(existing.id), read_content(existing.content_json)
-            parsed = StoryboardContent.model_validate(generate())
             script = db.get(Script, UUID(script_id))
             episode = db.get(Episode, self.episode_id)
             if script is None or episode is None or script.episode_id != self.episode_id:
                 raise ValueError("分镜必须引用当前剧集的剧本版本")
             source = ScriptContent.model_validate(script.content_json)
             validate_script_assets(db, episode.project_id, source)
+            validate_duration(source, self.target_duration_ms, self.tolerance_percent)
+            parsed = StoryboardContent.model_validate(generate())
             parsed.validate_against(source)
             validate_storyboard_assets(db, episode.project_id, parsed)
+            validate_duration(parsed, self.target_duration_ms, self.tolerance_percent)
             content = parsed.model_dump(mode="json")
             version = (
                 db.scalar(

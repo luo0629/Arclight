@@ -7,6 +7,8 @@ import { test, expect, type Page } from "@playwright/test";
 
 const content = (title: string) => ({
   title,
+  estimated_duration_ms: 30000,
+
   summary: "一份用于草稿保护验收的剧本。",
   characters: ["主角"],
   scenes: [

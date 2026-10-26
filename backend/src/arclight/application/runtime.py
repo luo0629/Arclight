@@ -9,6 +9,7 @@ from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
 from arclight.application.model_services import run_settings
 from arclight.core.config import Settings
+from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
 from arclight.persistence.models import WorkflowRun
 from arclight.providers.text import build_provider
@@ -36,7 +37,13 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
             with open_checkpointer(settings) as saver:
                 graph = build_graph(
                     build_provider(run_settings(settings, run.input_json.get("_text_service"))),
-                    ArtifactStore(factory, run.id, run.episode_id),
+                    ArtifactStore(
+                        factory,
+                        run.id,
+                        run.episode_id,
+                        run.input_json["target_duration_ms"],
+                        settings.text_duration_tolerance_percent,
+                    ),
                     saver,
                     director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
                 )
@@ -70,6 +77,16 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
             # 不把供应商响应、凭证、输入正文或内部路径写到业务错误响应。
             logger.error("workflow_failed run_id=%s error_type=%s", run_id, type(exc).__name__)
             run.status = RunStatus.FAILED
-            run.error_code = "WORKFLOW_EXECUTION_FAILED"
+            run.error_code = (
+                exc.code
+                if isinstance(exc, DomainError)
+                and exc.code
+                in {
+                    "SCRIPT_DURATION_REQUIRED",
+                    "SCRIPT_DURATION_OUT_OF_RANGE",
+                    "STORYBOARD_DURATION_OUT_OF_RANGE",
+                }
+                else "WORKFLOW_EXECUTION_FAILED"
+            )
             run.revision += 1
             emit(db, run, "workflow.failed", {"code": run.error_code})

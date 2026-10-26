@@ -30,6 +30,8 @@ async function setup(page: Page, withHistory = false) {
         expected_version_no: 0,
         content: {
           title: "寄往春天的信",
+          estimated_duration_ms: 30000,
+
           summary:
             "小鹿在森林邮局发现一封没有收件人的信，和萤火虫一起寻找春天。",
           characters: ["小鹿", "萤火虫"],
@@ -69,7 +71,7 @@ async function setup(page: Page, withHistory = false) {
             {
               shot_no: 1,
               scene_no: 1,
-              duration_ms: 5000,
+              duration_ms: 30000,
               visual_description:
                 "树屋邮局的窗沿上落着一片新叶，小鹿展开信纸。",
               characters: ["小鹿"],
@@ -94,6 +96,8 @@ async function setup(page: Page, withHistory = false) {
           content: {
             ...script.content_json,
             title: "寄往春天的信 · 第二稿",
+            estimated_duration_ms: 30000,
+
             summary: "小鹿和萤火虫沿着溪流，把信送给了第一朵迎春花。",
           },
         },

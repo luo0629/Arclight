@@ -39,7 +39,9 @@ def build_graph(
 ):
     def write_script(state: ProductionState) -> dict:
         version_id, content = artifacts.script(
-            lambda: provider.script(state["story"], state["style_guide"]).model_dump()
+            lambda: provider.script(
+                state["story"], state["style_guide"], state["target_duration_ms"]
+            ).model_dump()
         )
         return {"script": content, "script_version_id": version_id}
 

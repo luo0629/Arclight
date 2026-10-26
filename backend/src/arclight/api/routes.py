@@ -126,7 +126,15 @@ def create_script_run(
 ) -> AcceptedRun:
     if len(payload.story) > request.app.state.settings.max_story_chars:
         raise DomainError("STORY_TOO_LARGE", "故事超出当前服务长度限制", 422)
-    run = start_run(db, episode_id, actor, payload.story, key, request.state.request_id)
+    run = start_run(
+        db,
+        episode_id,
+        actor,
+        payload.story,
+        key,
+        request.state.request_id,
+        settings=request.app.state.settings,
+    )
     return AcceptedRun(
         run_id=run.id,
         status=run.status,
@@ -151,6 +159,7 @@ def create_storyboard_run(
         "",
         key,
         request.state.request_id,
+        settings=request.app.state.settings,
         script_version_id=payload.script_version_id,
     )
     return AcceptedRun(
@@ -167,9 +176,11 @@ def get_run(run_id: UUID, db: Database, actor: Actor) -> RunRead:
 
 
 @router.post("/runs/{run_id}/resume", tags=["workflows"], status_code=202)
-def review_and_resume(run_id: UUID, payload: ReviewCreate, db: Database, actor: Actor) -> RunRead:
+def review_and_resume(
+    run_id: UUID, payload: ReviewCreate, request: Request, db: Database, actor: Actor
+) -> RunRead:
     run = require_run(db, run_id, actor, lock=True)
-    resume_run(db, run, actor, payload)
+    resume_run(db, run, actor, payload, request.app.state.settings)
     db.flush()
     return RunRead.model_validate(run)
 

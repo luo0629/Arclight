@@ -46,7 +46,11 @@ def legacy_script():
 def save_script(client, episode, content=None, approve=True):
     path = f"/api/v1/episodes/{episode['id']}"
     result = client.post(
-        path + "/scripts", json={"expected_version_no": 0, "content": content or legacy_script()}
+        path + "/scripts",
+        json={
+            "expected_version_no": 0,
+            "content": {"estimated_duration_ms": 30000, **(content or legacy_script())},
+        },
     )
     assert result.status_code == 201, result.text
     row = result.json()
@@ -90,6 +94,7 @@ def board_content(script):
         .model_dump()
     )
     content["shots"] = content["shots"][:1]
+    content["shots"][0]["duration_ms"] = 30000
     return content
 
 
@@ -177,6 +182,7 @@ def test_old_rows_read_only_normalization_and_exact_dialogue_endpoint(client, ep
     )
     changed = copy.deepcopy(read["content_json"])
     changed["scenes"][0]["dialogue"][0]["text"] = "另一句对白"
+    changed["estimated_duration_ms"] = 30000
     saved = client.post(
         path + "/scripts",
         json={"expected_version_no": 1, "base_version_id": str(version_id), "content": changed},
@@ -382,8 +388,8 @@ def test_fake_provider_invalid_asset_cannot_persist_and_explicit_retry_recovers(
     client, episode, settings, monkeypatch
 ):
     class Broken(MockTextProvider):
-        def script(self, story, style):
-            data = legacy_script()
+        def script(self, story, style, duration_ms=30000):
+            data = {**legacy_script(), "estimated_duration_ms": duration_ms}
             data["character_assets"] = [
                 {
                     "character": "主角",
@@ -496,8 +502,10 @@ def test_workflow_approval_rechecks_references_without_consuming_review(
     client, episode, assets, settings, monkeypatch
 ):
     class Bound(MockTextProvider):
-        def script(self, story, style):
-            return ScriptContent.model_validate(bound_script(assets))
+        def script(self, story, style, duration_ms=30000):
+            return ScriptContent.model_validate(
+                {**bound_script(assets), "estimated_duration_ms": duration_ms}
+            )
 
     monkeypatch.setattr(runtime, "build_provider", lambda _: Bound())
     response = client.post(

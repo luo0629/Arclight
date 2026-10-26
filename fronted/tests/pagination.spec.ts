@@ -26,6 +26,8 @@ const pager = (page: Page, label: string) =>
   page.getByRole("region", { name: label + "分页", exact: true });
 const content = (n: number) => ({
   title: "历史剧本" + n,
+  estimated_duration_ms: 30000,
+
   summary: "用于真实历史分页验收。",
   characters: ["女孩"],
   scenes: [
@@ -155,7 +157,7 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
           {
             shot_no: 1,
             scene_no: 1,
-            duration_ms: 3000,
+            duration_ms: 30000,
             shot_size: "medium",
             visual_description: "历史分镜" + i,
             characters: ["女孩"],

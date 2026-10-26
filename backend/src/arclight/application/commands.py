@@ -7,11 +7,13 @@ from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import ScriptContent, StoryboardContent
 from arclight.api.schemas import ReviewCreate
+from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
     validate_storyboard_assets,
 )
 from arclight.application.model_services import text_snapshot
+from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.persistence.models import (
@@ -90,6 +92,7 @@ def start_run(
     key: str,
     request_id: str,
     *,
+    settings: Settings,
     script_version_id: UUID | None = None,
 ) -> WorkflowRun:
     episode = require_episode(db, episode_id, actor, write=True)
@@ -131,7 +134,11 @@ def start_run(
             raise DomainError("NOT_FOUND", "指定剧本版本不存在", 404)
         if script.status != AssetStatus.APPROVED:
             raise DomainError("SCRIPT_NOT_APPROVED", "只能从已批准的剧本版本生成分镜")
-        validate_script_assets(db, project.id, ScriptContent.model_validate(script.content_json))
+        source = ScriptContent.model_validate(script.content_json)
+        validate_script_assets(db, project.id, source)
+        validate_duration(
+            source, episode.target_duration_ms, settings.text_duration_tolerance_percent
+        )
         # 固定精确版本和正文快照，不在 Worker 执行时重新选择“最新版”。
         inputs = {
             "script_version_id": str(script.id),
@@ -168,7 +175,9 @@ def start_run(
     return run
 
 
-def resume_run(db: Session, run: WorkflowRun, actor: str, review: ReviewCreate) -> WorkflowRun:
+def resume_run(
+    db: Session, run: WorkflowRun, actor: str, review: ReviewCreate, settings: Settings
+) -> WorkflowRun:
     require_episode(db, run.episode_id, actor, write=True, owner=True)
     if run.status != RunStatus.WAITING_REVIEW or not run.pending_review:
         raise DomainError("NOT_WAITING_REVIEW", "当前工作流不在人工审核节点")
@@ -194,6 +203,12 @@ def resume_run(db: Session, run: WorkflowRun, actor: str, review: ReviewCreate) 
             validate_storyboard_assets(
                 db, episode.project_id, StoryboardContent.model_validate(artifact.content_json)
             )
+        parsed = (
+            ScriptContent if isinstance(artifact, Script) else StoryboardContent
+        ).model_validate(artifact.content_json)
+        validate_duration(
+            parsed, run.input_json["target_duration_ms"], settings.text_duration_tolerance_percent
+        )
     artifact.status = AssetStatus.APPROVED if review.decision == "APPROVE" else AssetStatus.REJECTED
     if isinstance(artifact, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):

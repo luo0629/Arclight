@@ -129,7 +129,7 @@ def test_failure_is_sanitized_and_explicit_retry_recovers(client, episode, setti
     from arclight.providers.text import MockTextProvider
 
     class BrokenProvider(MockTextProvider):
-        def script(self, story, style):
+        def script(self, story, style, duration_ms=30000):
             raise RuntimeError("secret-provider-key-must-not-leak")
 
     run_id = start(client, episode).json()["run_id"]
@@ -205,11 +205,11 @@ def test_postgres_concurrent_duplicate_delivery(client, episode, settings, monke
     lock = Lock()
 
     class CountedProvider(MockTextProvider):
-        def script(self, story, style):
+        def script(self, story, style, duration_ms=30000):
             nonlocal count
             with lock:
                 count += 1
-            return super().script(story, style)
+            return super().script(story, style, duration_ms)
 
     monkeypatch.setattr(runtime, "build_provider", lambda _: CountedProvider())
     run_id = UUID(start(client, episode).json()["run_id"])

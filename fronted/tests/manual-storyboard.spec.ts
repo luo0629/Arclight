@@ -3,6 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 const scriptContent = (title: string) => ({
   title,
+  estimated_duration_ms: 30000,
   summary: "女孩在森林中找到了星星。",
   characters: ["女孩", "星星"],
   scenes: [
@@ -25,7 +26,7 @@ const boardContent = {
     {
       shot_no: 1,
       scene_no: 1,
-      duration_ms: 3000,
+      duration_ms: 30000,
       shot_size: "medium",
       visual_description: "另一位编辑保存的画面",
       characters: [],
@@ -149,7 +150,7 @@ test("TXT-01：选择旧的精确已批准剧本，空白起稿、镜头增删�
   await page.getByLabel("场景编号", { exact: true }).selectOption("2");
   await page.getByLabel("时长（秒）").fill("0.4");
   await expect(save).toBeDisabled();
-  await page.getByLabel("时长（秒）").fill("4.5");
+  await page.getByLabel("时长（秒）").fill("26.5");
   await page.getByLabel("出场角色（用中文逗号分隔）").fill("女孩，星星");
   await page.getByLabel("字幕", { exact: true }).fill("找到你啦。");
   await page.getByRole("button", { name: "添加镜头", exact: true }).click();
@@ -204,7 +205,7 @@ test("TXT-01：选择旧的精确已批准剧本，空白起稿、镜头增删�
     {
       shot_no: 1,
       scene_no: 2,
-      duration_ms: 4500,
+      duration_ms: 26500,
       characters: ["女孩", "星星"],
       subtitle: "找到你啦。",
     },

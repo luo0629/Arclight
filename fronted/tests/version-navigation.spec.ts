@@ -3,6 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 
 const content = (title: string) => ({
   title,
+  estimated_duration_ms: 30000,
   summary: "女孩提灯寻找星光。",
   characters: ["女孩"],
   scenes: [

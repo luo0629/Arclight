@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60
     service_encryption_key: SecretStr = SecretStr("")
     model_service_allowed_hosts: list[str] = Field(default_factory=lambda: ["api.openai.com"])
+    text_duration_tolerance_percent: int = Field(default=10, ge=0, le=100)
     max_story_chars: int = 20000
     jwt_secret: SecretStr = SecretStr("arclight-local-jwt-secret-change-before-deploying")
     access_token_minutes: int = Field(default=15, ge=1, le=60)
