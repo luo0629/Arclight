@@ -56,6 +56,7 @@ export type ContentVersion = {
   script_version_id?: string;
 };
 export type Run = {
+  workflow_type: string;
   id: string;
   status: string;
   revision: number;

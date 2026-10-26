@@ -93,6 +93,23 @@ class StorySource(Entity, Base):
     )
 
 
+class StoryAnalysis(Entity, Base):
+    __tablename__ = "story_analyses"
+    episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("workflow_runs.id"), unique=True)
+    version_no: Mapped[int]
+    source_id: Mapped[UUID | None] = mapped_column(ForeignKey("story_sources.id"), nullable=True)
+    source_name: Mapped[str] = mapped_column(String(160))
+    source_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    story_sha256: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(100))
+    content_json: Mapped[dict] = mapped_column(JSON_TYPE)
+    __table_args__ = (
+        UniqueConstraint("episode_id", "version_no"),
+        CheckConstraint("version_no > 0", name="analysis_version_positive"),
+    )
+
+
 class WorkflowRun(Entity, Base):
     __tablename__ = "workflow_runs"
     episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)

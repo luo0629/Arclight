@@ -22,6 +22,7 @@ import Inspector from "./Inspector";
 
 import Tasks from "./Tasks";
 import StorySources from "./StorySources";
+import StoryAnalysis from "./StoryAnalysis";
 
 import usePagedList from "./usePagedList";
 import ListPagination from "./ListPagination";
@@ -240,6 +241,7 @@ export default function EpisodeWorkspace({
             ["list", "版本列表"],
             ["tasks", "任务与审核"],
             ["sources", "故事来源"],
+            ["analysis", "故事提炼"],
           ].map(([key, label]) => (
             <ToggleGroupItem key={key} value={key}>
               {label}
@@ -354,6 +356,17 @@ export default function EpisodeWorkspace({
           key={episode.id}
           episodeId={episode.id}
           writable={writable}
+        />
+      ) : view === "analysis" ? (
+        <StoryAnalysis
+          key={episode.id}
+          episodeId={episode.id}
+          writable={writable}
+          onQueued={reload}
+          onTasks={() => {
+            setView("tasks");
+            void reload().catch((error) => setError(message(error)));
+          }}
         />
       ) : view === "tasks" ? (
         <Tasks

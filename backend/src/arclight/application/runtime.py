@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
 from arclight.application.model_services import run_settings
+from arclight.application.story_analysis import ANALYSIS_VERSION, extract
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
@@ -29,6 +30,23 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
         if run is None or run.status != RunStatus.QUEUED or run.revision != revision:
             return
         try:
+            if run.workflow_type == "story_analysis":
+                if run.workflow_version != ANALYSIS_VERSION:
+                    raise ValueError("不兼容的提炼版本")
+                run.status = RunStatus.RUNNING
+                emit(db, run, "workflow.started", {"revision": revision})
+                analysis_id, version = extract(factory, settings, run)
+                run.status = RunStatus.SUCCEEDED
+                run.error_code = None
+                run.pending_review = None
+                run.revision += 1
+                emit(
+                    db,
+                    run,
+                    "workflow.finished",
+                    {"status": run.status, "analysis_id": analysis_id, "version_no": version},
+                )
+                return
             if run.workflow_version not in {WORKFLOW_VERSION, DIRECTOR_WORKFLOW_VERSION}:
                 raise ValueError("不兼容的工作流版本")
             run.status = RunStatus.RUNNING
