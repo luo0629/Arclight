@@ -22,6 +22,7 @@ import Members from "./Members";
 import Settings from "./Settings";
 import StoryBible from "./StoryBible";
 import EpisodeEditor from "./EpisodeEditor";
+import EpisodeCopy from "./EpisodeCopy";
 import Dialog from "./Dialog";
 import usePagedList from "./usePagedList";
 import ListPagination from "./ListPagination";
@@ -276,12 +277,33 @@ export default function ProjectWorkspace({
                         : "你的故事，准备开场"}
               </h1>
               {page === "canvas" && episode && role !== "viewer" && (
-                <EpisodeEditor
-                  key={episode.id}
-                  episode={episode}
-                  disabled={!writable || episode.status === "ARCHIVED"}
-                  onSaved={updateEpisode}
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                  <EpisodeEditor
+                    key={episode.id}
+                    episode={episode}
+                    disabled={!writable || episode.status === "ARCHIVED"}
+                    onSaved={updateEpisode}
+                  />
+                  <EpisodeCopy
+                    key={"copy-" + episode.id}
+                    episode={episode}
+                    suggestedNumber={
+                      Math.max(
+                        episode.episode_no,
+                        ...episodes.map((row) => row.episode_no),
+                      ) + 1
+                    }
+                    disabled={!writable || episode.status === "ARCHIVED"}
+                    onCopied={(copied) => {
+                      setPinnedEpisode(copied);
+                      setEpisodeId(copied.id);
+                      // A successful copy stays successful even if the directory refresh fails.
+                      void loadEpisodes().catch((error) =>
+                        setError(message(error)),
+                      );
+                    }}
+                  />
+                </div>
               )}
             </div>
             <span className="hidden items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs text-accent-foreground md:flex">

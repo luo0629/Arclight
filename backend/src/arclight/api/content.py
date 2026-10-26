@@ -10,13 +10,14 @@ from arclight.api.collaboration import audit, require_idle
 from arclight.api.content_history import require_version
 from arclight.api.content_history import router as history_router
 from arclight.api.dependencies import Actor, Database
-from arclight.api.schemas import Input, ScriptRead, StoryboardRead
+from arclight.api.schemas import EpisodeRead, Input, ScriptRead, StoryboardRead
 from arclight.application.commands import require_episode
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
     validate_storyboard_assets,
 )
+from arclight.application.episode_copy import copy_episode
 from arclight.core.errors import DomainError
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 
@@ -56,6 +57,20 @@ def next_version(db, model, episode_id, expected):
     if latest != expected:
         raise DomainError("VERSION_CONFLICT", "内容已有新版本，请刷新后再保存", 409)
     return latest + 1
+
+
+class EpisodeCopyInput(Input):
+    episode_no: int = Field(strict=True, gt=0, le=2147483647)
+    title: str = Field(min_length=1, max_length=160)
+    reuse_assets: bool = Field(default=True, strict=True)
+
+
+@router.post("/episodes/{episode_id}/copy", status_code=201)
+def duplicate_episode(
+    episode_id: UUID, payload: EpisodeCopyInput, db: Database, actor: Actor
+) -> EpisodeRead:
+    source = lock_edit(db, episode_id, actor)
+    return EpisodeRead.model_validate(copy_episode(db, source, actor, **payload.model_dump()))
 
 
 @router.post("/episodes/{episode_id}/scripts", status_code=201)
@@ -187,6 +202,9 @@ def review_content(
                 db, episode.project_id, ScriptContent.model_validate(version.content_json)
             )
         else:
+            source = db.get(Script, version.script_version_id)
+            if source is None or source.episode_id != episode_id or source.status != "APPROVED":
+                raise DomainError("SCRIPT_NOT_APPROVED", "请先批准本剧集的来源剧本版本", 409)
             validate_storyboard_assets(
                 db, episode.project_id, StoryboardContent.model_validate(version.content_json)
             )
