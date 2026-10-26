@@ -17,6 +17,7 @@ from arclight.api.content import router as content_router
 from arclight.api.model_services import router as model_services_router
 from arclight.api.protection import RequestProtection
 from arclight.api.routes import router
+from arclight.api.story_bible import router as story_bible_router
 from arclight.core.config import Settings, get_settings
 from arclight.core.errors import DomainError
 from arclight.persistence.session import build_engine, session_factory
@@ -119,6 +120,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(collaboration_router)
     app.include_router(content_router)
     app.include_router(canvas_router)
+    app.include_router(story_bible_router)
     return app
 
 

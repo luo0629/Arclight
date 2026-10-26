@@ -1,3 +1,21 @@
+export type StoryKind = "WORLD" | "CHARACTER" | "LOCATION" | "PROP" | "SCENE";
+export type StoryRelation = {
+  relation: "governs" | "located_in" | "appears_in" | "uses";
+  target_id: string;
+};
+export type StoryEntry = {
+  id: string;
+  project_id: string;
+  kind: StoryKind;
+  name: string;
+  description: string;
+  rules: string[];
+  relations: StoryRelation[];
+  asset: { asset_id: string; asset_version_id: string } | null;
+  archived: boolean;
+  revision: number;
+  created_by: string;
+};
 export type User = { id: string; email: string; display_name: string };
 export type Session = { access_token: string; user: User };
 export type ProjectStorySettings = {
@@ -157,7 +175,11 @@ export const json = (method: string, body?: unknown): RequestInit => ({
 export function message(error: unknown) {
   if (error instanceof ApiError)
     return `${error.message}${error.requestId ? ` · 请求 ${error.requestId}` : ""}`;
-  return error instanceof Error ? error.message : "连接失败，请检查网络后重试";
+  return error instanceof TypeError
+    ? "网络连接失败，请检查网络后重试"
+    : error instanceof Error
+      ? error.message
+      : "连接失败，请检查网络后重试";
 }
 export const statusText: Record<string, string> = {
   DRAFT: "草稿",

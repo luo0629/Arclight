@@ -388,7 +388,9 @@ def test_fake_provider_invalid_asset_cannot_persist_and_explicit_retry_recovers(
     client, episode, settings, monkeypatch
 ):
     class Broken(MockTextProvider):
-        def script(self, story, style, duration_ms=30000, *, story_settings=None):
+        def script(
+            self, story, style, duration_ms=30000, *, story_settings=None, story_context=None
+        ):
             data = {**legacy_script(), "estimated_duration_ms": duration_ms}
             data["character_assets"] = [
                 {
@@ -502,7 +504,9 @@ def test_workflow_approval_rechecks_references_without_consuming_review(
     client, episode, assets, settings, monkeypatch
 ):
     class Bound(MockTextProvider):
-        def script(self, story, style, duration_ms=30000, *, story_settings=None):
+        def script(
+            self, story, style, duration_ms=30000, *, story_settings=None, story_context=None
+        ):
             return ScriptContent.model_validate(
                 {**bound_script(assets), "estimated_duration_ms": duration_ms}
             )

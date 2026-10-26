@@ -265,7 +265,9 @@ def test_fake_over_duration_generation_fails_without_artifact_and_explicit_retry
     client, episode, settings, monkeypatch, stage
 ):
     class Broken(MockTextProvider):
-        def script(self, story, style, duration_ms=30000, *, story_settings=None):
+        def script(
+            self, story, style, duration_ms=30000, *, story_settings=None, story_context=None
+        ):
             content = super().script(story, style, duration_ms)
             if stage == "script":
                 content.estimated_duration_ms = duration_ms * 2

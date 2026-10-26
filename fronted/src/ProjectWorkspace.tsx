@@ -20,6 +20,7 @@ import { api, json, message, type Episode, type Project } from "./api";
 import Members from "./Members";
 
 import Settings from "./Settings";
+import StoryBible from "./StoryBible";
 import EpisodeEditor from "./EpisodeEditor";
 import Dialog from "./Dialog";
 import usePagedList from "./usePagedList";
@@ -147,6 +148,13 @@ export default function ProjectWorkspace({
           <Users />
           创作伙伴
         </Button>
+        <Button
+          variant={page === "story" ? "secondary" : "ghost"}
+          aria-pressed={page === "story"}
+          onClick={() => setPage("story")}
+        >
+          故事设定
+        </Button>
         {owner && (
           <Button
             variant={page === "settings" ? "secondary" : "ghost"}
@@ -259,11 +267,13 @@ export default function ProjectWorkspace({
               <h1>
                 {page === "members"
                   ? "创作伙伴"
-                  : page === "settings"
-                    ? "项目设置"
-                    : episode
-                      ? `第 ${episode.episode_no} 集 · ${episode.title}`
-                      : "你的故事，准备开场"}
+                  : page === "story"
+                    ? "故事设定"
+                    : page === "settings"
+                      ? "项目设置"
+                      : episode
+                        ? `第 ${episode.episode_no} 集 · ${episode.title}`
+                        : "你的故事，准备开场"}
               </h1>
               {page === "canvas" && episode && role !== "viewer" && (
                 <EpisodeEditor
@@ -302,6 +312,12 @@ export default function ProjectWorkspace({
               key={project.id}
               projectId={project.id}
               owner={owner}
+              writable={writable}
+            />
+          ) : page === "story" ? (
+            <StoryBible
+              key={project.id}
+              projectId={project.id}
               writable={writable}
             />
           ) : page === "settings" ? (

@@ -29,6 +29,23 @@ class Project(Entity, Base):
     __table_args__ = (CheckConstraint("budget_limit >= 0", name="budget_nonnegative"),)
 
 
+class StoryEntry(Entity, Base):
+    __tablename__ = "story_entries"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(16))
+    name: Mapped[str] = mapped_column(String(100))
+    data_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    archived: Mapped[bool] = mapped_column(default=False)
+    revision: Mapped[int] = mapped_column(default=0)
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (
+        CheckConstraint("revision >= 0", name="story_revision_nonnegative"),
+        CheckConstraint(
+            "kind IN ('WORLD', 'CHARACTER', 'LOCATION', 'PROP', 'SCENE')", name="story_kind"
+        ),
+    )
+
+
 class Episode(Entity, Base):
     __tablename__ = "episodes"
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)

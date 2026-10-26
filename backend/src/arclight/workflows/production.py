@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
@@ -16,6 +16,7 @@ class ProductionState(TypedDict, total=False):
     story: str
     style_guide: dict
     story_settings: dict
+    story_context: dict
     target_duration_ms: int
     script: dict
     script_version_id: str
@@ -41,10 +42,13 @@ def build_graph(
     def write_script(state: ProductionState) -> dict:
         def generate() -> dict:
             args = (state["story"], state["style_guide"], state["target_duration_ms"])
-            # Old checkpoints have no brief: never inject today's project settings.
-            if "story_settings" not in state:
-                return provider.script(*args).model_dump()
-            return provider.script(*args, story_settings=state["story_settings"]).model_dump()
+            # Missing keys on legacy checkpoints stay missing; never load live project facts.
+            kwargs: dict[str, Any] = {}
+            if "story_settings" in state:
+                kwargs["story_settings"] = state["story_settings"]
+            if "story_context" in state:
+                kwargs["story_context"] = state["story_context"]
+            return provider.script(*args, **kwargs).model_dump()
 
         version_id, content = artifacts.script(generate)
         return {"script": content, "script_version_id": version_id}

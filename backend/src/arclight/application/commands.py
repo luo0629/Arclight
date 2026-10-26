@@ -13,6 +13,7 @@ from arclight.application.content_references import (
     validate_storyboard_assets,
 )
 from arclight.application.model_services import text_snapshot
+from arclight.application.story_context import build_story_context
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus, RunStatus
@@ -130,6 +131,9 @@ def start_run(
         "story_settings": ProjectStorySettings.model_validate(project.story_settings).model_dump(),
         "target_duration_ms": episode.target_duration_ms,
     }
+    if script_version_id is None:
+        db.execute(select(Project.id).where(Project.id == project.id).with_for_update())
+        inputs["story_context"] = build_story_context(db, project.id)
     if script_version_id is not None:
         script = db.get(Script, script_version_id)
         if script is None or script.episode_id != episode_id:

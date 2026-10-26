@@ -182,7 +182,9 @@ def test_snapshot_retry_and_history_are_isolated(client, episode, settings, monk
     requests = []
 
     class RecordingProvider(MockTextProvider):
-        def script(self, story, style, duration_ms=30000, *, story_settings=None):
+        def script(
+            self, story, style, duration_ms=30000, *, story_settings=None, story_context=None
+        ):
             requests.append((story_settings, duration_ms))
             if len(requests) == 1:
                 raise RuntimeError("transient fake failure")
@@ -223,7 +225,9 @@ def test_legacy_run_without_brief_does_not_load_current_settings(
     run_id = start(client, episode).json()["run_id"]
     with client.app.state.session_factory.begin() as db:
         run = db.get(WorkflowRun, UUID(run_id))
-        run.input_json = {k: v for k, v in run.input_json.items() if k != "story_settings"}
+        run.input_json = {
+            k: v for k, v in run.input_json.items() if k not in {"story_settings", "story_context"}
+        }
         db.get(Project, UUID(episode["project_id"])).story_settings = BRIEF
     calls = []
 
