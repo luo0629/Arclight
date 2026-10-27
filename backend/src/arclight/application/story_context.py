@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from arclight.application.content_references import require_asset
 from arclight.core.errors import DomainError
+from arclight.domain.character_names import canonical_name
 from arclight.domain.story_bible import StoryEntryInput
 from arclight.persistence.models import StoryEntry
 
@@ -21,7 +22,33 @@ RELATIONS = {
 }
 
 
-def validate_entry(db: Session, project_id: UUID, value: StoryEntryInput, entry_id=None) -> None:
+def validate_entry(
+    db: Session,
+    project_id: UUID,
+    value: StoryEntryInput,
+    entry_id=None,
+    *,
+    check_names: bool = True,
+) -> None:
+    if value.kind == "CHARACTER" and check_names:
+        names = {canonical_name(name) for name in [value.name, *value.aliases]}
+        others = db.scalars(
+            select(StoryEntry).where(
+                StoryEntry.project_id == project_id, StoryEntry.kind == "CHARACTER"
+            )
+        )
+        for other in others:
+            if other.id == entry_id:
+                continue
+            other_names = {
+                canonical_name(name) for name in [other.name, *other.data_json.get("aliases", [])]
+            }
+            if names & other_names:
+                raise DomainError(
+                    "CHARACTER_NAME_CONFLICT",
+                    "角色名或别名已被使用（含归档角色），请复用或恢复现有角色",
+                    409,
+                )
     for link in value.relations:
         target = db.get(StoryEntry, link.target_id)
         source_kinds, target_kinds = RELATIONS[link.relation]
@@ -54,7 +81,7 @@ def build_story_context(db: Session, project_id: UUID, *, validate_assets: bool 
             {"kind": row.kind, "name": row.name, **row.data_json}
         )
         if validate_assets:
-            validate_entry(db, project_id, value, row.id)
+            validate_entry(db, project_id, value, row.id, check_names=False)
         entries.append(
             {"id": str(row.id), "revision": row.revision, **value.model_dump(mode="json")}
         )

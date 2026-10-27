@@ -9,6 +9,7 @@ import { Notice, PagePanel, StatusBadge } from "@/components/ui-kit";
 import { api, json, message, type Run } from "./api";
 import ListPagination from "./ListPagination";
 import usePagedList from "./usePagedList";
+import CharacterMatching from "./CharacterMatching";
 
 type Source = { id: string; import_no: number; original_name: string };
 type Analysis = {
@@ -183,6 +184,7 @@ export default function StoryAnalysis({
       "提炼任务已提交，输入已保存。可在任务与审核中取消排队任务或重试失败任务。",
     );
     setRun({
+      episode_id: episodeId,
       id: accepted.run_id,
       status: accepted.status,
       workflow_type: "story_analysis",
@@ -384,6 +386,13 @@ export default function StoryAnalysis({
                 ))}
               </ol>
               <h4 className="font-semibold">角色表</h4>
+              <CharacterMatching
+                episodeId={episodeId}
+                sourceType="story-analyses"
+                versionId={detail.id}
+                writable={writable}
+                busy={busy}
+              />
               {!detail.content.characters.length && <p>未提取到明确角色。</p>}
               {detail.content.characters.map((item) => (
                 <article key={item.name} className="studio-analysis-character">

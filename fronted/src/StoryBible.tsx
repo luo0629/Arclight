@@ -217,6 +217,7 @@ function StoryEntryEditor({
   const [name, setName] = useState(entry?.name ?? "");
   const [description, setDescription] = useState(entry?.description ?? "");
   const [rules, setRules] = useState(entry?.rules.join("\n") ?? "");
+  const [aliases, setAliases] = useState(entry?.aliases?.join("\n") ?? "");
   const [relations, setRelations] = useState<StoryRelation[]>(
     entry?.relations ?? [],
   );
@@ -277,6 +278,13 @@ function StoryEntryEditor({
         kind,
         name,
         description,
+        aliases:
+          kind === "CHARACTER"
+            ? aliases
+                .split("\n")
+                .map((value) => value.trim())
+                .filter(Boolean)
+            : [],
         rules: parsedRules,
         relations,
         asset: assetId.trim()
@@ -357,6 +365,17 @@ function StoryEntryEditor({
               maxLength={100}
             />
           </FormLabel>
+          {kind === "CHARACTER" && (
+            <FormLabel>
+              角色别名（每行一个，最多 10 个）
+              <Textarea
+                aria-label="角色别名（每行一个，最多 10 个）"
+                value={aliases}
+                onChange={(event) => setAliases(event.target.value)}
+                placeholder="例如：小雨、雨姐。名称和别名不能与其他角色重复。"
+              />
+            </FormLabel>
+          )}
           <FormLabel>
             设定说明
             <Textarea

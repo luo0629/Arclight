@@ -256,6 +256,7 @@ export default function StoryOutline({
       );
       if (!live.current) return;
       setRun({
+        episode_id: episode.id,
         id: accepted.run_id,
         status: accepted.status,
         workflow_type: "story_outline",
@@ -315,6 +316,7 @@ export default function StoryOutline({
       );
       if (!live.current) return;
       setRun({
+        episode_id: episode.id,
         id: accepted.run_id,
         status: accepted.status,
         workflow_type: "script_storyboard",

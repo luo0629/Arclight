@@ -1,16 +1,13 @@
 """Bounded extraction contract; names describe source characters, never asset identities."""
 
-import unicodedata
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from arclight.domain.character_names import canonical_name
+
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=3000)]
 Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
-
-
-def canonical_name(value: str) -> str:
-    return unicodedata.normalize("NFKC", value).casefold()
 
 
 class ExtractionModel(BaseModel):

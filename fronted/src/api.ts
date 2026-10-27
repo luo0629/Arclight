@@ -8,6 +8,7 @@ export type StoryEntry = {
   project_id: string;
   kind: StoryKind;
   name: string;
+  aliases: string[];
   description: string;
   rules: string[];
   relations: StoryRelation[];
@@ -56,6 +57,7 @@ export type ContentVersion = {
   script_version_id?: string;
 };
 export type Run = {
+  episode_id: string;
   workflow_type: string;
   id: string;
   status: string;

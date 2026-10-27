@@ -17,6 +17,7 @@ import VersionEditor, { type Act, type VersionCreated } from "./VersionEditor";
 import ManualStoryboard from "./ManualStoryboard";
 import VersionComparison from "./VersionComparison";
 import ScriptRewrite from "./ScriptRewrite";
+import CharacterMatching from "./CharacterMatching";
 import { useDraftStore, useSessionDraft } from "./Drafts";
 
 export default function Inspector({
@@ -296,6 +297,15 @@ export default function Inspector({
             )}
             active={active}
           />
+          {node.kind === "script" && (
+            <CharacterMatching
+              episodeId={episode.id}
+              sourceType="scripts"
+              versionId={version.id}
+              writable={writable}
+              busy={busy}
+            />
+          )}
           {node.kind === "script" && (
             <ScriptRewrite
               key={`rewrite:${version.id}`}

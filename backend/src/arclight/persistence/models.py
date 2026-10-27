@@ -51,6 +51,31 @@ class StoryEntry(Entity, Base):
     )
 
 
+class CharacterConfirmation(Entity, Base):
+    """Append-only human identity decisions for an exact immutable source version."""
+
+    __tablename__ = "character_confirmations"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    script_id: Mapped[UUID | None] = mapped_column(ForeignKey("scripts.id"))
+    analysis_id: Mapped[UUID | None] = mapped_column(ForeignKey("story_analyses.id"))
+    source_name: Mapped[str] = mapped_column(String(100))
+    entry_id: Mapped[UUID] = mapped_column(ForeignKey("story_entries.id"))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE)
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (
+        UniqueConstraint("script_id", "source_name", name="uq_character_confirmations_script_name"),
+        UniqueConstraint(
+            "analysis_id", "source_name", name="uq_character_confirmations_analysis_name"
+        ),
+        CheckConstraint(
+            "(script_id IS NOT NULL AND analysis_id IS NULL) OR "
+            "(script_id IS NULL AND analysis_id IS NOT NULL)",
+            name="character_confirmation_source",
+        ),
+    )
+
+
 class Episode(Entity, Base):
     __tablename__ = "episodes"
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)

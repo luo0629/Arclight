@@ -11,6 +11,7 @@ import { useEffect, useState } from "react";
 import usePagedList from "./usePagedList";
 import ListPagination from "./ListPagination";
 import { api, json, type Run } from "./api";
+import CharacterMatching from "./CharacterMatching";
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 export default function Tasks({
@@ -130,6 +131,15 @@ export default function Tasks({
                     </Button>
                   </div>
                 </>
+              )}
+              {run.pending_review?.resource_type === "script" && (
+                <CharacterMatching
+                  episodeId={run.episode_id}
+                  sourceType="scripts"
+                  versionId={run.pending_review.version_id}
+                  writable={writable}
+                  busy={busy}
+                />
               )}
               <div className="button-row flex flex-wrap items-center gap-2">
                 {writable &&
