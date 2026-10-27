@@ -1,4 +1,32 @@
 export type VisualAssetType = "CHARACTER" | "SCENE" | "PROP" | "STYLE";
+export type ExactAssetReference = {
+  asset_id: string;
+  asset_version_id: string;
+};
+export type ReferenceImage = {
+  id: string;
+  asset_id: string;
+  asset_name: string;
+  asset_type: string;
+  version_no: number;
+  status: string;
+  stale: boolean;
+};
+export type CharacterProfile = {
+  fixed_features: string[];
+  variable_features: string[];
+  expressions: string[];
+  outfits: { id: string; name: string; description: string }[];
+  default_outfit_id: string | null;
+  images: {
+    id: string;
+    label: string;
+    kind: "INITIAL" | "ANGLE";
+    angle: string;
+    source: ExactAssetReference;
+  }[];
+  standard_image_id: string | null;
+};
 export type AssetMetadata = {
   description: string;
   tags: string[];
@@ -27,6 +55,7 @@ export type VisualAsset = {
   metadata: AssetMetadata;
   creation_source: { kind: "MANUAL" | "IMPORTED"; note: string } | null;
   created_by: string | null;
+  character_profile: CharacterProfile | null;
   created_at: string;
   updated_at: string;
 };

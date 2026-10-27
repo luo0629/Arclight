@@ -167,6 +167,7 @@ def test_metadata_migration_refuses_data_loss(client, episode, migrated):
     row = create(client, episode["project_id"])
     with pytest.raises(RuntimeError, match="Asset metadata exists"):
         command.downgrade(migrated, "0012")
+    command.upgrade(migrated, "head")
     assert client.get(path(row["project_id"]) + "/" + row["id"]).json() == row
     config = Config(migrated.config_file_name, output_buffer=StringIO())
     config.attributes["database_url"] = "postgresql+psycopg://unused:unused@localhost/unused"

@@ -28,6 +28,87 @@ async function setup(page: Page) {
 }
 const save = (page: Page) =>
   page.getByRole("button", { name: "保存视觉资产", exact: true });
+
+test("ASSET-03：固定可变特征、服装表情持久化与草稿冲突", async ({
+  page,
+}, testInfo) => {
+  const { path, headers } = await setup(page);
+  await create(page, "角色设定验收");
+  await page.getByRole("button", { name: "编辑角色设定", exact: true }).click();
+  await page.getByLabel("固定特征（每行一项）", { exact: true }).fill("黑发");
+  await page
+    .getByLabel("允许变化特征（每行一项）", { exact: true })
+    .fill("姿势");
+  await page.getByLabel("表情（每行一项）", { exact: true }).fill("微笑");
+  await page.getByRole("button", { name: "添加可选服装", exact: true }).click();
+  await page.getByLabel("服装1名称", { exact: true }).fill("蓝色常服");
+  await page.getByLabel("服装1说明", { exact: true }).fill("棉布外套");
+  await page.getByRole("combobox", { name: "默认服装", exact: true }).click();
+  await page.getByRole("option", { name: "蓝色常服", exact: true }).click();
+  await page.getByRole("button", { name: "添加可选服装", exact: true }).click();
+  await page.getByLabel("服装2名称", { exact: true }).fill("雨衣");
+  await page.getByRole("button", { name: "保存设定", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  expect(row.character_profile.fixed_features).toEqual(["黑发"]);
+  expect(row.character_profile.outfits.length).toBe(2);
+  expect(row.character_profile.default_outfit_id).toBe(
+    row.character_profile.outfits[0].id,
+  );
+  expect(row.current_version_id).toBeNull();
+  await page.reload();
+  await openWorkspacePanels(page);
+  await page.getByRole("button", { name: "视觉资产", exact: true }).click();
+  await page
+    .getByRole("button", { name: "角色 · 角色设定验收", exact: true })
+    .click();
+  await expect(
+    page.getByText("蓝色常服（默认） · 棉布外套", { exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("character-desktop.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "编辑角色设定", exact: true }).click();
+  await page
+    .getByLabel("固定特征（每行一项）", { exact: true })
+    .fill("本地草稿");
+  const url = path + "/" + row.id + "/character-profile";
+  await page.route("**" + url, (route) => route.abort("failed"));
+  await page.getByRole("button", { name: "保存设定", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByLabel("固定特征（每行一项）", { exact: true }),
+  ).toHaveValue("本地草稿");
+  await page.unroute("**" + url);
+  expect(
+    (
+      await page.request.put(path + "/" + row.id, {
+        headers,
+        data: { name: "远端角色", expected_revision: 1 },
+      })
+    ).status(),
+  ).toBe(200);
+  await page.getByRole("button", { name: "保存设定", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("资产已被修改");
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("character-mobile.png"),
+    fullPage: true,
+  });
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(
+    page.getByText("放弃未保存的设定？", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "放弃修改并关闭", exact: true })
+    .click();
+});
 async function create(page: Page, name: string, kind = "角色") {
   await page.getByRole("button", { name: "新建视觉资产", exact: true }).click();
   await page.getByRole("combobox", { name: "资产类型", exact: true }).click();
@@ -38,6 +119,77 @@ async function create(page: Page, name: string, kind = "角色") {
     page.getByRole("heading", { name: `${name} · 修订 0`, exact: true }),
   ).toBeVisible();
 }
+
+test("ASSET-03：参考图选择控件绑定精确版本并允许人工标准选择", async ({
+  page,
+}) => {
+  const { path, project } = await setup(page);
+  await create(page, "参考图角色");
+  const assetId = crypto.randomUUID(),
+    versionId = crypto.randomUUID();
+  // UI contract fixture only; actual reference ownership/status persistence is tested in the backend.
+  const referencesPath = "/api/v1/projects/" + project.id + "/reference-images";
+  let failed = true;
+  await page.route("**" + referencesPath + "?*", (route) =>
+    failed
+      ? route.abort("failed")
+      : route.fulfill({
+          json: [
+            {
+              id: versionId,
+              asset_id: assetId,
+              asset_name: "已批准参考",
+              asset_type: "IMAGE",
+              version_no: 7,
+              status: "APPROVED",
+              stale: false,
+            },
+          ],
+        }),
+  );
+  await page.getByRole("button", { name: "编辑角色设定", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "重试加载参考图版本", exact: true }),
+  ).toBeVisible();
+  failed = false;
+  await page
+    .getByRole("button", { name: "重试加载参考图版本", exact: true })
+    .click();
+  await page
+    .getByRole("combobox", { name: "已有精确图片版本", exact: true })
+    .click();
+  await page
+    .getByRole("option", { name: "已批准参考 · V7 · APPROVED", exact: true })
+    .click();
+  await page.getByRole("combobox", { name: "参考图用途", exact: true }).click();
+  await page.getByRole("option", { name: "初始设定图", exact: true }).click();
+  await page.getByLabel("参考图名称", { exact: true }).fill("人工标准正面");
+  await page
+    .getByRole("button", { name: "添加精确参考图", exact: true })
+    .click();
+  await page.getByRole("combobox", { name: "标准参考图", exact: true }).click();
+  await page.getByRole("option", { name: "人工标准正面", exact: true }).click();
+  let payload: Record<string, any> | null = null;
+  await page.route("**" + path + "/*/character-profile", (route) => {
+    payload = route.request().postDataJSON();
+    return route.abort("failed");
+  });
+  await page.getByRole("button", { name: "保存设定", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  expect(payload!.profile.images[0].source).toEqual({
+    asset_id: assetId,
+    asset_version_id: versionId,
+  });
+  expect(payload!.profile.standard_image_id).toBe(
+    payload!.profile.images[0].id,
+  );
+  await page
+    .getByRole("button", { name: "移除参考图 人工标准正面", exact: true })
+    .click();
+  await expect(
+    page.getByRole("combobox", { name: "标准参考图", exact: true }),
+  ).toContainText("未指定");
+});
 
 test("ASSET-02：来源、外观和声明范围持久化及移动端", async ({
   page,
@@ -405,6 +557,7 @@ test("ASSET-01：Viewer 可查目录和详情但不能修改", async ({ page }) 
     "新建视觉资产",
     "编辑资产名称",
     "编辑资产资料",
+    "编辑角色设定",
     "归档视觉资产",
   ])
     await expect(page.getByRole("button", { name, exact: true })).toHaveCount(

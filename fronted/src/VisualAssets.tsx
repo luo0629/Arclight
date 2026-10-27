@@ -22,6 +22,7 @@ import Dialog from "./Dialog";
 import ListPagination from "./ListPagination";
 import usePagedList from "./usePagedList";
 import AssetMetadataPanel from "./AssetMetadata";
+import CharacterPanel from "./CharacterProfile";
 
 const kinds: Record<VisualAssetType, string> = {
   CHARACTER: "角色",
@@ -235,6 +236,15 @@ export default function VisualAssets({
                 writable={writable}
                 onSaved={saved}
               />
+              {selected.asset_type === "CHARACTER" && (
+                <CharacterPanel
+                  key={"character-" + selected.id}
+                  asset={selected}
+                  path={path}
+                  writable={writable}
+                  onSaved={saved}
+                />
+              )}
               <p className="text-sm text-muted-foreground">
                 目录修改保留已有媒体版本、选用指针与历史引用。归档后不能用于新的文本资产引用；恢复保留归档前状态。
               </p>

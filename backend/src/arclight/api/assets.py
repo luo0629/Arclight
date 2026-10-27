@@ -12,10 +12,12 @@ from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
+from arclight.application.asset_profiles import validate_character_profile
 from arclight.application.commands import require_project
 from arclight.core.errors import DomainError
 from arclight.domain.asset_metadata import AssetMetadata, AssetOrigin
-from arclight.persistence.models import Episode, VisualAsset
+from arclight.domain.asset_profiles import CharacterProfile
+from arclight.persistence.models import AssetVersion, Episode, VisualAsset
 
 router = APIRouter(prefix="/api/v1", tags=["visual-assets"])
 AssetType = Literal["CHARACTER", "SCENE", "PROP", "STYLE"]
@@ -32,6 +34,20 @@ class AssetCreate(Input):
 class AssetMetadataUpdate(Input):
     metadata: AssetMetadata
     expected_revision: int = Field(strict=True, ge=0)
+
+
+class CharacterProfileUpdate(Input):
+    profile: CharacterProfile
+    expected_revision: int = Field(strict=True, ge=0)
+
+
+class ReferenceImageRead(Resource):
+    asset_id: UUID
+    asset_name: str
+    asset_type: str
+    version_no: int
+    status: str
+    stale: bool
 
 
 class AssetRename(Input):
@@ -55,6 +71,7 @@ class AssetRead(Resource):
     metadata: AssetMetadata = Field(validation_alias="metadata_json")
     creation_source: AssetOrigin | None
     created_by: str | None
+    character_profile: CharacterProfile | None
 
 
 def validate_scope(db: Session, project_id: UUID, metadata: AssetMetadata) -> None:
@@ -103,6 +120,63 @@ def list_assets(
 def get_asset(project_id: UUID, asset_id: UUID, db: Database, actor: Actor) -> AssetRead:
     require_project(db, project_id, actor)
     return AssetRead.model_validate(find_asset(db, project_id, asset_id))
+
+
+@router.get("/projects/{project_id}/reference-images")
+def list_reference_images(
+    project_id: UUID, db: Database, actor: Actor, limit: Limit = 20, offset: Offset = 0
+) -> list[ReferenceImageRead]:
+    require_project(db, project_id, actor)
+    rows = db.execute(
+        select(AssetVersion, VisualAsset)
+        .join(VisualAsset, AssetVersion.asset_id == VisualAsset.id)
+        .where(
+            VisualAsset.project_id == project_id,
+            VisualAsset.asset_type.in_(
+                ("CHARACTER", "SCENE", "PROP", "STYLE", "IMAGE", "SHOT_IMAGE")
+            ),
+        )
+        .order_by(AssetVersion.created_at, AssetVersion.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [
+        ReferenceImageRead(
+            id=v.id,
+            created_at=v.created_at,
+            updated_at=v.updated_at,
+            asset_id=a.id,
+            asset_name=a.name,
+            asset_type=a.asset_type,
+            version_no=v.version_no,
+            status=v.status,
+            stale=v.stale,
+        )
+        for v, a in rows
+    ]
+
+
+@router.put("/projects/{project_id}/assets/{asset_id}/character-profile")
+def update_character_profile(
+    project_id: UUID, asset_id: UUID, payload: CharacterProfileUpdate, db: Database, actor: Actor
+) -> AssetRead:
+    require_project(db, project_id, actor, write=True)
+    row = find_asset(db, project_id, asset_id)
+    if row.asset_type != "CHARACTER":
+        raise DomainError("INVALID_ASSET_TYPE", "只有角色资产可以维护角色特征", 422)
+    if row.status in {"ARCHIVED", "LOCKED"}:
+        raise DomainError("ASSET_READ_ONLY", "已归档或锁定的资产不可编辑", 409)
+    validate_character_profile(db, project_id, row, payload.profile)
+    change_asset(
+        db,
+        row,
+        payload.expected_revision,
+        character_profile=payload.profile.model_dump(mode="json"),
+    )
+    audit(
+        db, project_id, actor, "asset.character_profile_updated", row.id, {"revision": row.revision}
+    )
+    return AssetRead.model_validate(row)
 
 
 @router.post("/projects/{project_id}/assets", status_code=201)

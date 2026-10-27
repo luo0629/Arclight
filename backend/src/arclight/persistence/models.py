@@ -297,6 +297,7 @@ class VisualAsset(Entity, Base):
     metadata_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, server_default="{}")
     creation_source: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    character_profile: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     __table_args__ = (CheckConstraint("revision >= 0", name="asset_directory_revision"),)
 
 
