@@ -118,6 +118,41 @@ class StorySource(Entity, Base):
     )
 
 
+class StorySourceRevision(Entity, Base):
+    """Identity and immutable storage contract for one exact source version."""
+
+    __tablename__ = "story_source_revisions"
+    source_id: Mapped[UUID] = mapped_column(ForeignKey("story_sources.id"), unique=True)
+    root_source_id: Mapped[UUID] = mapped_column(ForeignKey("story_sources.id"), index=True)
+    parent_source_id: Mapped[UUID | None] = mapped_column(ForeignKey("story_sources.id"))
+    version_no: Mapped[int]
+    change_note: Mapped[str] = mapped_column(String(1000))
+    origin_kind: Mapped[str] = mapped_column(String(16))
+    rights_status: Mapped[str] = mapped_column(String(16))
+    storage_backend: Mapped[str] = mapped_column(String(16), default="database")
+    object_key: Mapped[str] = mapped_column(String(160), unique=True)
+    __table_args__ = (
+        UniqueConstraint("root_source_id", "version_no", name="uq_source_revision_root_version"),
+        UniqueConstraint("parent_source_id", name="uq_source_revision_parent"),
+        CheckConstraint(
+            "(parent_source_id IS NULL AND source_id = root_source_id AND version_no = 1) OR "
+            "(parent_source_id IS NOT NULL AND source_id <> root_source_id AND version_no > 1)",
+            name="source_revision_shape",
+        ),
+        CheckConstraint("origin_kind IN ('FILE', 'INLINE', 'TEXT')", name="source_origin_kind"),
+        CheckConstraint(
+            "rights_status IN ('CONFIRMED', 'UNDECLARED')", name="source_rights_status"
+        ),
+        CheckConstraint("storage_backend = 'database'", name="source_storage_backend"),
+    )
+
+
+class StorySourceBinding(Entity, Base):
+    __tablename__ = "story_source_bindings"
+    source_id: Mapped[UUID] = mapped_column(ForeignKey("story_sources.id"), index=True)
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("workflow_runs.id"), unique=True)
+
+
 class StoryAnalysis(Entity, Base):
     __tablename__ = "story_analyses"
     episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)

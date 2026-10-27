@@ -1,9 +1,16 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
 from arclight.domain.project_settings import ProjectStorySettings
@@ -45,13 +52,21 @@ class EpisodeRead(Resource, EpisodeCreate):
 
 
 class RunCreate(Input):
-    story: str | None = Field(default=None, min_length=1, max_length=20000)
+    story: Annotated[str, StringConstraints(strip_whitespace=False)] | None = Field(
+        default=None, min_length=1, max_length=20000
+    )
     outline_version_id: UUID | None = None
+    source_id: UUID | None = None
 
     @model_validator(mode="after")
     def one_source(self) -> "RunCreate":
-        if (self.story is None) == (self.outline_version_id is None):
-            raise ValueError("请提供故事文本或已确认的精确大纲版本，二选一")
+        if (
+            sum(
+                value is not None for value in (self.story, self.outline_version_id, self.source_id)
+            )
+            != 1
+        ):
+            raise ValueError("请提供故事文本、精确来源或已确认的精确大纲版本，三选一")
         return self
 
 

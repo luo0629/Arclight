@@ -340,13 +340,13 @@ def test_outline_migration_empty_roundtrip_and_queued_guard(client, episode, mig
     command.upgrade(migrated, "head")
     command.check(migrated)
     assert start(client, episode).status_code == 202
-    with pytest.raises(RuntimeError, match="Story outline data exists"):
+    with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0008")
 
 
 def test_outline_migration_refuses_losing_saved_data(client, episode, settings, migrated):
     generate(client, episode, settings)
-    with pytest.raises(RuntimeError, match="Story outline data exists"):
+    with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0008")
 
 

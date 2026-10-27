@@ -3,22 +3,37 @@
 import hashlib
 import json
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID
 
 from fastapi import APIRouter, Response
-from pydantic import Field, field_validator
-from sqlalchemy import func, select
+from pydantic import BaseModel, Field, StringConstraints, field_validator
+from sqlalchemy import or_, select
 
-from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
 from arclight.application.commands import require_episode
+from arclight.application.story_sources import (
+    SourceDraft,
+    decode_inline_text,
+    provenance,
+    revision_snapshot,
+    save_source,
+)
 from arclight.core.errors import DomainError
 from arclight.domain.story_import import MAX_BASE64_LENGTH, decode_source
-from arclight.persistence.models import StorySource
+from arclight.persistence.models import (
+    Episode,
+    Script,
+    StoryAnalysis,
+    StoryOutline,
+    StorySource,
+    StorySourceBinding,
+    StorySourceRevision,
+    WorkflowRun,
+)
 
 router = APIRouter(prefix="/api/v1/episodes/{episode_id}/story-sources", tags=["story-sources"])
 
@@ -32,6 +47,8 @@ class SourceImport(Input):
     source_note: str = Field(min_length=1, max_length=1000)
     rights_note: str = Field(min_length=1, max_length=1000)
     rights_confirmed: Literal[True]
+    base_source_id: UUID | None = None
+    change_note: str = Field(default="", max_length=1000)
 
     @field_validator("rights_confirmed", mode="before")
     @classmethod
@@ -41,7 +58,40 @@ class SourceImport(Input):
         return value
 
 
-class SourceRead(Resource):
+class SourceText(SourceImport):
+    # Reuse rights and revision validation, while file data is not accepted.
+    content_base64: Literal[""] = ""
+    original_name: str = Field(default="故事.txt", min_length=1, max_length=160)
+    media_type: Literal["text/plain"] = "text/plain"
+    encoding: Literal["utf-8"] = "utf-8"
+    text: Annotated[str, StringConstraints(strip_whitespace=False)] = Field(
+        min_length=1, max_length=262144
+    )
+
+
+class ObjectReference(BaseModel):
+    backend: Literal["database"]
+    key: str
+    sha256: str
+    byte_size: int
+
+
+class SourceProvenance(BaseModel):
+    source_id: UUID
+    root_source_id: UUID
+    parent_source_id: UUID | None
+    version_no: int
+    change_note: str
+    origin_kind: Literal["FILE", "INLINE", "TEXT"]
+    rights_status: Literal["CONFIRMED", "UNDECLARED"]
+    source_note: str
+    rights_note: str
+    encoding: str
+    sha256: str
+    object_ref: ObjectReference
+
+
+class SourceMetadata(Resource):
     episode_id: UUID
     import_no: int
     original_name: str
@@ -61,8 +111,27 @@ class SourceRead(Resource):
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
+class SourceRead(SourceMetadata):
+    provenance: SourceProvenance
+
+
 class SourceDetail(SourceRead):
     text: str
+
+
+def source_read(row: StorySource, revision: StorySourceRevision | None) -> SourceRead:
+    return SourceRead(
+        **SourceMetadata.model_validate(row).model_dump(),
+        provenance=SourceProvenance.model_validate(revision_snapshot(row, revision)),
+    )
+
+
+def source_detail(db: Database, row: StorySource) -> SourceDetail:
+    return SourceDetail(
+        **SourceMetadata.model_validate(row).model_dump(),
+        provenance=SourceProvenance.model_validate(provenance(db, row)),
+        text=row.text,
+    )
 
 
 def require_source(db: Database, episode_id: UUID, source_id: UUID, actor: str) -> StorySource:
@@ -79,9 +148,10 @@ def list_sources(
 ) -> list[SourceRead]:
     require_episode(db, episode_id, actor)
     return [
-        SourceRead.model_validate(row)
-        for row in db.scalars(
-            select(StorySource)
+        source_read(row, revision)
+        for row, revision in db.execute(
+            select(StorySource, StorySourceRevision)
+            .outerjoin(StorySourceRevision, StorySourceRevision.source_id == StorySource.id)
             .where(StorySource.episode_id == episode_id)
             .order_by(StorySource.import_no.desc())
             .limit(limit)
@@ -102,71 +172,158 @@ def import_source(
     decoded = decode_source(
         payload.original_name, payload.media_type, payload.encoding, payload.content_base64
     )
+    values = payload.model_dump(mode="json", exclude={"content_base64", "import_key"})
+    if payload.base_source_id is None and not payload.change_note:
+        # Preserve pre-0011 file-import idempotency fingerprints.
+        values.pop("base_source_id")
+        values.pop("change_note")
     fingerprint = hashlib.sha256(
         json.dumps(
             {
-                **payload.model_dump(mode="json", exclude={"content_base64", "import_key"}),
+                **values,
                 "sha256": decoded.sha256,
             },
             sort_keys=True,
             ensure_ascii=False,
         ).encode()
     ).hexdigest()
-    # require_episode acquired the project write gate, also serializing concurrent imports.
-    existing = db.scalar(
-        select(StorySource).where(
-            StorySource.episode_id == episode_id, StorySource.import_key == payload.import_key
-        )
-    )
-    if existing:
-        if existing.request_fingerprint != fingerprint:
-            raise DomainError("IDEMPOTENCY_CONFLICT", "同一导入凭证不能用于不同文件或说明", 409)
-        return SourceDetail.model_validate(existing)
-    number = (
-        db.scalar(
-            select(func.max(StorySource.import_no)).where(StorySource.episode_id == episode_id)
-        )
-        or 0
-    ) + 1
-    row = StorySource(
-        episode_id=episode_id,
-        import_no=number,
-        import_key=payload.import_key,
-        request_fingerprint=fingerprint,
-        original_name=payload.original_name,
-        source_type=decoded.source_type,
-        media_type=payload.media_type,
-        encoding=decoded.encoding,
-        byte_size=len(decoded.raw),
-        sha256=decoded.sha256,
-        raw_bytes=decoded.raw,
-        text=decoded.text,
-        source_note=payload.source_note,
-        rights_note=payload.rights_note,
-        created_by=actor,
-    )
-    db.add(row)
-    db.flush()
-    audit(
+    row = save_source(
         db,
-        episode.project_id,
+        episode,
         actor,
-        "story_source.imported",
-        row.id,
-        {
-            "episode_id": str(episode_id),
-            "source_id": str(row.id),
-            "sha256": row.sha256,
-            "byte_size": row.byte_size,
-            "rights_confirmed": True,
-        },
+        SourceDraft(
+            payload.original_name,
+            payload.media_type,
+            decoded,
+            payload.source_note,
+            payload.rights_note,
+            base_source_id=payload.base_source_id,
+            change_note=payload.change_note,
+        ),
+        payload.import_key,
+        fingerprint,
     )
-    return SourceDetail.model_validate(row)
+    return source_detail(db, row)
+
+
+@router.post("/text", status_code=201)
+def save_text_source(
+    episode_id: UUID, payload: SourceText, db: Database, actor: Actor
+) -> SourceDetail:
+    episode = require_episode(db, episode_id, actor, write=True)
+    db.refresh(episode)
+    if episode.status == "ARCHIVED":
+        raise DomainError("EPISODE_ARCHIVED", "归档剧集只允许查看", 409)
+    decoded = decode_inline_text(payload.text, payload.original_name)
+    fingerprint = hashlib.sha256(
+        json.dumps(payload.model_dump(mode="json"), sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+    row = save_source(
+        db,
+        episode,
+        actor,
+        SourceDraft(
+            payload.original_name,
+            "text/plain",
+            decoded,
+            payload.source_note,
+            payload.rights_note,
+            origin_kind="TEXT",
+            base_source_id=payload.base_source_id,
+            change_note=payload.change_note,
+        ),
+        payload.import_key,
+        fingerprint,
+    )
+    return source_detail(db, row)
+
+
+@router.get("/{source_id}/history")
+def source_history(
+    episode_id: UUID,
+    source_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[SourceRead]:
+    row = require_source(db, episode_id, source_id, actor)
+    root = UUID(provenance(db, row)["root_source_id"])
+    return [
+        source_read(source, revision)
+        for source, revision in db.execute(
+            select(StorySource, StorySourceRevision)
+            .join(StorySourceRevision, StorySourceRevision.source_id == StorySource.id)
+            .where(StorySource.episode_id == episode_id, StorySourceRevision.root_source_id == root)
+            .order_by(StorySourceRevision.version_no.desc())
+            .limit(limit)
+            .offset(offset)
+        )
+    ]
+
+
+class SourceUsage(BaseModel):
+    id: UUID
+    run_id: UUID
+    episode_id: UUID
+    workflow_type: str
+    status: str
+    analysis_id: UUID | None
+    outline_id: UUID | None
+    script_id: UUID | None
+
+
+@router.get("/{source_id}/usages")
+def source_usages(
+    episode_id: UUID,
+    source_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[SourceUsage]:
+    require_source(db, episode_id, source_id, actor)
+    episode = require_episode(db, episode_id, actor)
+    rows = db.execute(
+        select(
+            WorkflowRun.id.label("id"),
+            WorkflowRun.id.label("run_id"),
+            WorkflowRun.episode_id,
+            WorkflowRun.workflow_type,
+            WorkflowRun.status,
+            StoryAnalysis.id.label("analysis_id"),
+            StoryOutline.id.label("outline_id"),
+            Script.id.label("script_id"),
+        )
+        .join(Episode, Episode.id == WorkflowRun.episode_id)
+        .outerjoin(StorySourceBinding, StorySourceBinding.run_id == WorkflowRun.id)
+        .outerjoin(StoryAnalysis, StoryAnalysis.run_id == WorkflowRun.id)
+        .outerjoin(StoryOutline, StoryOutline.run_id == WorkflowRun.id)
+        .outerjoin(Script, Script.run_id == WorkflowRun.id)
+        .where(
+            Episode.project_id == episode.project_id,
+            or_(
+                StorySourceBinding.source_id == source_id,
+                StoryAnalysis.source_id == source_id,
+                WorkflowRun.input_json["source_id"].as_string() == str(source_id),
+                WorkflowRun.input_json["source_snapshot"]["source_id"].as_string()
+                == str(source_id),
+                WorkflowRun.input_json["outline_context"]["source_snapshot"][
+                    "source_id"
+                ].as_string()
+                == str(source_id),
+            ),
+        )
+        .order_by(WorkflowRun.created_at.desc(), WorkflowRun.id.desc())
+        .limit(limit)
+        .offset(offset)
+    ).mappings()
+    return [SourceUsage.model_validate(row) for row in rows]
 
 
 @router.get("/{source_id}")
 def get_source(episode_id: UUID, source_id: UUID, db: Database, actor: Actor) -> SourceDetail:
-    return SourceDetail.model_validate(require_source(db, episode_id, source_id, actor))
+    return source_detail(db, require_source(db, episode_id, source_id, actor))
 
 
 @router.get("/{source_id}/original")

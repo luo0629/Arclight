@@ -14,6 +14,12 @@ from arclight.application.content_references import (
 )
 from arclight.application.model_services import text_snapshot
 from arclight.application.story_context import build_story_context
+from arclight.application.story_sources import (
+    bind_source,
+    capture_inline,
+    provenance,
+    require_source,
+)
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus, RunStatus
@@ -28,6 +34,7 @@ from arclight.persistence.models import (
     Script,
     Shot,
     Storyboard,
+    StorySource,
     WorkflowEvent,
     WorkflowRun,
 )
@@ -100,6 +107,7 @@ def start_run(
     settings: Settings,
     script_version_id: UUID | None = None,
     outline_version_id: UUID | None = None,
+    source_id: UUID | None = None,
 ) -> WorkflowRun:
     episode = require_episode(db, episode_id, actor, write=True)
     # 同一剧集写入串行化，同时保护版本号分配；唯一约束作为最终防线。
@@ -115,6 +123,8 @@ def start_run(
     )
     if outline_version_id is not None:
         payload = {"outline_version_id": str(outline_version_id)}
+    if source_id is not None:
+        payload = {"source_id": str(source_id)}
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -133,7 +143,7 @@ def start_run(
     )
     if active:
         raise DomainError("EPISODE_BUSY", "该剧集已有未完成工作流")
-    inputs = {
+    inputs: dict = {
         "story": story,
         "style_guide": project.style_guide,
         "story_settings": ProjectStorySettings.model_validate(project.story_settings).model_dump(),
@@ -165,6 +175,23 @@ def start_run(
         outline = writer_outline(db, episode, outline_version_id)
         inputs["outline_context"] = outline
         inputs["story"] = outline["source_snapshot"]["story"]
+    story_source = None
+    if script_version_id is None:
+        if source_id is not None:
+            story_source = require_source(db, episode_id, source_id)
+            inputs["story"] = story_source.text
+        elif outline_version_id is not None:
+            fixed_source = inputs["outline_context"]["source_snapshot"].get("source_id")
+            if fixed_source:
+                story_source = db.get(StorySource, UUID(fixed_source))
+                origin_episode = db.get(Episode, story_source.episode_id) if story_source else None
+                if origin_episode is None or origin_episode.project_id != project.id:
+                    raise DomainError("NOT_FOUND", "大纲来源不存在", 404)
+        if not inputs["story"] or len(inputs["story"]) > min(20000, settings.max_story_chars):
+            raise DomainError("STORY_TOO_LARGE", "故事不能为空且不能超过服务长度限制", 422)
+        if story_source is None:
+            story_source = capture_inline(db, episode, actor, inputs["story"])
+        inputs["source_revision"] = provenance(db, story_source)
     snapshot = text_snapshot(db, actor)
     if snapshot:
         inputs["_text_service"] = snapshot
@@ -181,6 +208,8 @@ def start_run(
     )
     db.add(run)
     db.flush()
+    if story_source is not None:
+        bind_source(db, run, story_source.id)
     db.add(
         AuditEvent(
             project_id=episode.project_id,

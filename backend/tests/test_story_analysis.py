@@ -80,7 +80,11 @@ def test_extraction_is_independent_immutable_and_replayable(client, episode, set
     assert detail["content"] == content()
     assert detail["source_text"] == text
     assert detail["story_sha256"] == hashlib.sha256(text.encode()).hexdigest()
-    assert detail["source_id"] is None and detail["source_name"] == "手动输入"
+    saved_source = client.get(path(episode) + "/story-sources/" + detail["source_id"]).json()
+    assert saved_source["text"] == text
+    assert saved_source["provenance"]["rights_status"] == "UNDECLARED"
+    assert detail["source_sha256"] == saved_source["sha256"]
+    assert detail["source_name"] == "手动输入"
     assert "_text_service" not in json.dumps(detail)
     assert client.put(detail_path, json={"content": {}}).status_code == 405
     assert client.delete(detail_path).status_code == 405
@@ -330,7 +334,7 @@ def test_migration_roundtrip_and_queued_run_downgrade_guard(client, episode, mig
     command.upgrade(migrated, "head")
     command.check(migrated)
     start(client, episode)
-    with pytest.raises(RuntimeError, match="Story analysis data exists"):
+    with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0007")
 
 
@@ -430,7 +434,7 @@ def test_custom_provider_snapshot_is_used_and_never_exposed(client, settings, mo
 
 def test_nonempty_analysis_downgrade_guard(client, episode, settings, migrated):
     execute(client, settings, start(client, episode).json()["run_id"])
-    with pytest.raises(RuntimeError, match="Story analysis data exists"):
+    with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0007")
     assert len(client.get(path(episode) + "/story-analyses").json()) == 1
 

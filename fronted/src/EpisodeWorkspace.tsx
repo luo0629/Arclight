@@ -440,6 +440,11 @@ export default function EpisodeWorkspace({
           key={episode.id}
           episodeId={episode.id}
           writable={writable}
+          onQueued={reload}
+          onTasks={() => {
+            setView("tasks");
+            void reload().catch((error) => setError(message(error)));
+          }}
         />
       ) : view === "outline" ? (
         <StoryOutline

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.application.commands import emit, require_episode
 from arclight.application.model_services import run_settings, text_snapshot
+from arclight.application.story_sources import bind_source, capture_inline, provenance
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
@@ -99,6 +100,10 @@ def start_outline(
         raise DomainError(
             "STORY_OUTLINE_INPUT_INVALID", "故事不能为空，且不能超过服务长度限制", 422
         )
+    if source is None and analysis and analysis.source_id:
+        source = db.get(StorySource, analysis.source_id)
+    if source is None:
+        source = capture_inline(db, episode, actor, story)
     count = payload.get("target_episode_count") or brief["target_episode_count"]
     duration = payload.get("episode_duration_ms") or brief["default_episode_duration_ms"]
     snapshot = {
@@ -119,6 +124,7 @@ def start_outline(
         "story_settings": brief,
         "target_episode_count": count,
         "episode_duration_ms": duration,
+        "source_revision": provenance(db, source),
     }
     inputs = {
         "source_snapshot": snapshot,
@@ -139,6 +145,7 @@ def start_outline(
     )
     db.add(run)
     db.flush()
+    bind_source(db, run, source.id)
     db.add(
         AuditEvent(
             project_id=episode.project_id,

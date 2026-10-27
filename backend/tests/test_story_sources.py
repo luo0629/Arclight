@@ -244,7 +244,7 @@ def test_migration_roundtrip_and_nonempty_downgrade_protection(client, episode, 
     command.downgrade(migrated, "0006")
     command.upgrade(migrated, "head")
     row = client.post(sources_path(episode), json=source_payload()).json()
-    with pytest.raises(RuntimeError, match="Story sources exist"):
+    with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0006")
     assert client.get(sources_path(episode) + "/" + row["id"]).json() == row
 

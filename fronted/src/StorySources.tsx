@@ -16,33 +16,25 @@ import { FormLabel, Notice, PagePanel } from "@/components/ui-kit";
 import { api, json, message } from "./api";
 import ListPagination from "./ListPagination";
 import usePagedList from "./usePagedList";
-
-type Source = {
-  id: string;
-  episode_id: string;
-  import_no: number;
-  original_name: string;
-  source_type: string;
-  media_type: string;
-  encoding: string;
-  byte_size: number;
-  sha256: string;
-  source_note: string;
-  rights_note: string;
-  created_by: string;
-  created_at: string;
-};
-type Detail = Source & { text: string };
+import type { Source, SourceDetail as Detail } from "./story-source-types";
+import SourceRevisionEditor from "./SourceRevisionEditor";
+import SourceHistory from "./SourceHistory";
 const maxBytes = 256 * 1024;
 
 export default function StorySources({
   episodeId,
   writable,
+  onQueued,
+  onTasks,
 }: {
   episodeId: string;
   writable: boolean;
+  onQueued: () => Promise<void>;
+  onTasks: () => void;
 }) {
   const [importOpen, setImportOpen] = useState(false);
+  const [fileBase, setFileBase] = useState<Detail | null>(null);
+  const [changeNote, setChangeNote] = useState("");
   const path = `/episodes/${episodeId}/story-sources`;
   const list = usePagedList<Source>(path);
   const [file, setFile] = useState<File | null>(null);
@@ -63,6 +55,8 @@ export default function StorySources({
   const sequence = useRef(0);
   const live = useRef(true);
   const requestKey = useRef({ fingerprint: "", key: "" });
+  const runKey = useRef({ sourceId: "", key: "" });
+  const launching = useRef(false);
   useEffect(() => {
     live.current = true;
     return () => {
@@ -117,6 +111,8 @@ export default function StorySources({
         source_note: origin.trim(),
         rights_note: rights.trim(),
         rights_confirmed: true,
+        base_source_id: fileBase?.id,
+        change_note: fileBase ? changeNote.trim() : undefined,
       };
       const fingerprint = JSON.stringify(body);
       if (requestKey.current.fingerprint !== fingerprint)
@@ -154,12 +150,56 @@ export default function StorySources({
       if (live.current) setBusy(false);
     }
   }
+  async function savedText(saved: Detail) {
+    ++sequence.current;
+    setSelected(saved);
+    setDetail(saved);
+    setDetailError("");
+    setDetailLoading(false);
+    setNotice("故事来源版本已保存，历史内容与任务输入保持原样。");
+    try {
+      await list.reload();
+    } catch {
+      if (live.current)
+        setNotice(
+          "来源版本已保存；目录刷新失败，请重新加载目录，无需再次保存。",
+        );
+    }
+  }
+  async function writeFromSource() {
+    if (!detail || !writable || launching.current) return;
+    launching.current = true;
+    setBusy(true);
+    setError("");
+    if (runKey.current.sourceId !== detail.id)
+      runKey.current = { sourceId: detail.id, key: crypto.randomUUID() };
+    try {
+      await api(`/episodes/${episodeId}/script-runs`, {
+        ...json("POST", { source_id: detail.id }),
+        headers: { "Idempotency-Key": runKey.current.key },
+      });
+      if (!live.current) return;
+      setNotice("已从此精确来源版本创建编剧任务。");
+      runKey.current = { sourceId: "", key: "" };
+      try {
+        await onQueued();
+      } catch {
+        setNotice("编剧任务已创建，工作区刷新失败；请进入任务与审核重新加载。");
+      }
+      onTasks();
+    } catch (error) {
+      if (live.current) setError(message(error));
+    } finally {
+      launching.current = false;
+      if (live.current) setBusy(false);
+    }
+  }
   return (
     <PagePanel
       className="studio-page story-sources"
       eyebrow="保留故事的来处"
       title="故事来源"
-      description="导入这一集的原始故事，保留原文件与来源说明。每次导入独立保存，历史内容不会被覆盖。"
+      description="保留这一集的原始文本、文件与修订记录。指定来源版本派生，历史内容和任务输入不会被覆盖。"
     >
       <p className="text-sm text-muted-foreground">
         支持 TXT、MD、Markdown，单文件最多 256 KiB。默认 UTF-8（含
@@ -174,6 +214,12 @@ export default function StorySources({
           {notice}
         </Notice>
       )}
+      {error && !importOpen && <Notice tone="error">{error}</Notice>}
+      {writable && (
+        <div className="flex flex-wrap gap-2">
+          <SourceRevisionEditor episodeId={episodeId} onSaved={savedText} />
+        </div>
+      )}
       {writable && (
         <Sheet
           open={importOpen}
@@ -182,7 +228,13 @@ export default function StorySources({
           }}
         >
           <SheetTrigger asChild>
-            <Button className="self-start">
+            <Button
+              className="self-start"
+              onClick={() => {
+                setFileBase(null);
+                setChangeNote("");
+              }}
+            >
               <Upload className="size-4" />
               导入故事文件
             </Button>
@@ -202,7 +254,9 @@ export default function StorySources({
               if (saving.current) event.preventDefault();
             }}
           >
-            <SheetTitle>导入故事文件</SheetTitle>
+            <SheetTitle>
+              {fileBase ? "以文件保存来源修订" : "导入故事文件"}
+            </SheetTitle>
             <SheetDescription>
               保留原稿与授权记录，不自动启动生成。支持 TXT / Markdown，最大 256
               KiB。
@@ -285,6 +339,18 @@ export default function StorySources({
                     ]}
                   />
                 </FormLabel>
+                {fileBase && (
+                  <FormLabel>
+                    文件修订说明
+                    <Input
+                      value={changeNote}
+                      onChange={(event) => setChangeNote(event.target.value)}
+                      disabled={busy}
+                      required
+                      maxLength={1000}
+                    />
+                  </FormLabel>
+                )}
                 {error && (
                   <Notice tone="error" role="alert">
                     {error}
@@ -297,6 +363,7 @@ export default function StorySources({
                     !file ||
                     !origin.trim() ||
                     !rights.trim() ||
+                    (!!fileBase && !changeNote.trim()) ||
                     confirmed !== "yes"
                   }
                 >
@@ -327,6 +394,9 @@ export default function StorySources({
                   onClick={() => void show(row)}
                 >
                   导入 {row.import_no} · {row.original_name}
+                  {row.provenance.version_no > 1
+                    ? ` · 修订 v${row.provenance.version_no}`
+                    : ""}
                 </Button>
               ))}
             </div>
@@ -368,7 +438,11 @@ export default function StorySources({
               </p>
               <p className="text-sm break-all">来源：{detail.source_note}</p>
               <p className="text-sm break-all">
-                授权（已确认使用权）：{detail.rights_note}
+                授权（
+                {detail.provenance.rights_status === "CONFIRMED"
+                  ? "已确认使用权"
+                  : "未单独声明"}
+                ）：{detail.rights_note}
               </p>
               <p className="text-sm break-all">导入者：{detail.created_by}</p>
               <p className="text-xs break-all text-muted-foreground">
@@ -380,6 +454,72 @@ export default function StorySources({
               >
                 {detail.text}
               </pre>
+              <p className="text-sm">
+                来源版本 v{detail.provenance.version_no} ·{" "}
+                {detail.provenance.change_note}
+              </p>
+              {detail.provenance.rights_status === "UNDECLARED" && (
+                <Notice>
+                  此文本随创作任务保存，未补录授权声明。确认权利后可另存来源修订；历史声明保持原样。
+                </Notice>
+              )}
+              <details className="text-xs text-muted-foreground">
+                <summary>查看精确来源标识</summary>
+                <p className="mt-2 break-all">来源：{detail.id}</p>
+                <p className="break-all">
+                  根来源：{detail.provenance.root_source_id}
+                </p>
+                {detail.provenance.parent_source_id && (
+                  <p className="break-all">
+                    上一版本：{detail.provenance.parent_source_id}
+                  </p>
+                )}
+                <p className="break-all">
+                  原稿引用：{detail.provenance.object_ref.key}
+                </p>
+                <p>原稿保存在应用内，读取仍需项目权限。</p>
+              </details>
+              {writable && (
+                <div className="flex flex-wrap gap-2">
+                  <SourceRevisionEditor
+                    key={detail.id}
+                    episodeId={episodeId}
+                    base={detail}
+                    onSaved={savedText}
+                  />
+                  <Button
+                    variant="outline"
+                    disabled={busy}
+                    onClick={() => {
+                      setFileBase(detail);
+                      setChangeNote("");
+                      setOrigin(detail.source_note);
+                      setRights(
+                        detail.provenance.rights_status === "CONFIRMED"
+                          ? detail.rights_note
+                          : "",
+                      );
+                      setConfirmed("no");
+                      setError("");
+                      setImportOpen(true);
+                    }}
+                  >
+                    使用文件修订
+                  </Button>
+                  <Button
+                    disabled={busy}
+                    onClick={() => void writeFromSource()}
+                  >
+                    从此版本编剧
+                  </Button>
+                </div>
+              )}
+              <SourceHistory
+                key={detail.id + "-history"}
+                episodeId={episodeId}
+                source={detail}
+                onOpen={(row) => void show(row)}
+              />
             </>
           )}
         </section>

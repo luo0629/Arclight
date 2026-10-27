@@ -143,6 +143,7 @@ def create_script_run(
         request.state.request_id,
         settings=request.app.state.settings,
         outline_version_id=payload.outline_version_id,
+        source_id=payload.source_id,
     )
     return AcceptedRun(
         run_id=run.id,
