@@ -252,6 +252,7 @@ export default function ProjectOverview({
           <div className="grid min-w-0 gap-5 lg:grid-cols-2">
             <PagePanel
               title="审核与确认"
+              drawing="review"
               description="统计未归档剧集的所有待审版本；归档项目保留历史待处理数。仅拥有者可在对应工作区执行审核。"
             >
               <dl className="grid grid-cols-[1fr_auto] gap-3 text-sm">
@@ -276,6 +277,7 @@ export default function ProjectOverview({
             </PagePanel>
             <PagePanel
               title="成本与成片"
+              drawing="film"
               description="如实区分已配置预算、实际账单和交付记录。"
             >
               <dl className="flex flex-col gap-3 text-sm">

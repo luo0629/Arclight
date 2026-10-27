@@ -14,7 +14,7 @@ export function StoryDrawing({
   variant = "writer",
   className,
 }: {
-  variant?: "writer" | "landscape" | "book" | "plane";
+  variant?: "writer" | "landscape" | "book" | "plane" | "review" | "film";
   className?: string;
 }) {
   return (
@@ -100,6 +100,38 @@ export function StoryDrawing({
               d="M54 32c14-2 19-7 21-22 2 15 7 20 21 22-14 2-19 7-21 22-2-15-7-20-21-22z"
               fill="var(--accent)"
             />
+          </>
+        ) : variant === "review" ? (
+          <>
+            <path d="m78 40 91 7-8 112-91-7z" fill="var(--secondary)" />
+            <path d="m65 35 91-5 7 114-91 5z" fill="var(--background)" />
+            <path d="m93 29 33-2 2 16-34 2z" fill="var(--accent)" />
+            <path d="m83 66 49-3m-48 19 39-2m-38 19 30-2m-29 19 21-1" />
+            <path
+              d="M187 125c2 17-10 31-27 32-18 1-31-11-32-28-1-17 11-30 28-31 17-1 30 10 31 27z"
+              fill="var(--accent)"
+            />
+            <path d="m144 128 10 10 19-24" strokeWidth="3.2" />
+            <path d="M27 142c15 6 28 2 33-10" strokeDasharray="4 7" />
+            <path d="m181 49 6-12m4 24 13-3" />
+          </>
+        ) : variant === "film" ? (
+          <>
+            <path
+              d="M70 76h119v70c0 5-3 8-8 8H78c-5 0-8-3-8-8z"
+              fill="var(--background)"
+            />
+            <path d="m68 58 116-22 4 21L72 79z" fill="var(--accent)" />
+            <path d="m88 54 17 18m15-24 17 18m15-24 17 18M70 91h119" />
+            <path d="m119 105 24 14-24 14z" fill="var(--secondary)" />
+            <path
+              d="M36 141v12c0 6 11 10 24 10s24-4 24-10v-12"
+              fill="var(--secondary)"
+            />
+            <ellipse cx="60" cy="141" rx="24" ry="10" fill="var(--accent)" />
+            <path d="M36 147c0 6 11 10 24 10s24-4 24-10m-30-6h12" />
+            <path d="M164 172c18 4 31-1 39-12" strokeDasharray="4 7" />
+            <path d="m40 73-9-6m17-5-2-11" />
           </>
         ) : (
           <>

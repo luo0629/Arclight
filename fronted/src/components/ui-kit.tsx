@@ -82,12 +82,14 @@ export function PagePanel({
   description,
   children,
   className,
+  drawing = "plane",
 }: {
   eyebrow?: string;
   title: string;
   description?: string;
   children: ReactNode;
   className?: string;
+  drawing?: ComponentProps<typeof StoryDrawing>["variant"];
 }) {
   return (
     <Card className={cn("page-panel gap-6 shadow-none", className)}>
@@ -108,7 +110,7 @@ export function PagePanel({
           )}
         </div>
         <StoryDrawing
-          variant="plane"
+          variant={drawing}
           className="panel-drawing hidden sm:block"
         />
       </CardHeader>
