@@ -17,6 +17,7 @@ class ProductionState(TypedDict, total=False):
     style_guide: dict
     story_settings: dict
     story_context: dict
+    outline_context: dict
     target_duration_ms: int
     script: dict
     script_version_id: str
@@ -48,6 +49,8 @@ def build_graph(
                 kwargs["story_settings"] = state["story_settings"]
             if "story_context" in state:
                 kwargs["story_context"] = state["story_context"]
+            if "outline_context" in state:
+                kwargs["outline_context"] = state["outline_context"]
             return provider.script(*args, **kwargs).model_dump()
 
         version_id, content = artifacts.script(generate)

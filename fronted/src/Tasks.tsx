@@ -68,11 +68,13 @@ export default function Tasks({
             >
               <div className="task-heading flex flex-wrap items-center justify-between gap-2">
                 <strong>
-                  {run.workflow_type === "story_analysis"
-                    ? "故事提炼"
-                    : run.workflow_type === "storyboard"
-                      ? "分镜创作"
-                      : "剧本与分镜创作"}
+                  {run.workflow_type === "story_outline"
+                    ? "分集大纲"
+                    : run.workflow_type === "story_analysis"
+                      ? "故事提炼"
+                      : run.workflow_type === "storyboard"
+                        ? "分镜创作"
+                        : "剧本与分镜创作"}
                 </strong>
                 <StatusBadge status={run.status} />
               </div>

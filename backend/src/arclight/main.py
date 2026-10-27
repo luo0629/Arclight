@@ -20,6 +20,7 @@ from arclight.api.protection import RequestProtection
 from arclight.api.routes import router
 from arclight.api.story_analysis import router as story_analysis_router
 from arclight.api.story_bible import router as story_bible_router
+from arclight.api.story_outline import router as story_outline_router
 from arclight.api.story_sources import router as story_sources_router
 from arclight.core.config import Settings, get_settings
 from arclight.core.errors import DomainError
@@ -127,6 +128,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(project_deletion_router)
     app.include_router(story_sources_router)
     app.include_router(story_analysis_router)
+    app.include_router(story_outline_router)
     return app
 
 

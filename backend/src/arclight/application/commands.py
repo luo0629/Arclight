@@ -99,10 +99,13 @@ def start_run(
     *,
     settings: Settings,
     script_version_id: UUID | None = None,
+    outline_version_id: UUID | None = None,
 ) -> WorkflowRun:
     episode = require_episode(db, episode_id, actor, write=True)
     # 同一剧集写入串行化，同时保护版本号分配；唯一约束作为最终防线。
-    db.execute(select(Episode).where(Episode.id == episode_id).with_for_update(key_share=True))
+    db.refresh(episode, with_for_update={"key_share": True})
+    if episode.status == "ARCHIVED":
+        raise DomainError("EPISODE_ARCHIVED", "归档剧集只允许查看", 409)
     project = require_project(db, episode.project_id, actor)
     # 旧请求指纹保持不变；两种启动方式共享剧集内的幂等键空间。
     payload = (
@@ -110,6 +113,8 @@ def start_run(
         if script_version_id is None
         else {"script_version_id": str(script_version_id)}
     )
+    if outline_version_id is not None:
+        payload = {"outline_version_id": str(outline_version_id)}
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -154,6 +159,12 @@ def start_run(
             "script": script.content_json,
             "target_duration_ms": episode.target_duration_ms,
         }
+    if outline_version_id is not None:
+        from arclight.application.story_outline import writer_outline
+
+        outline = writer_outline(db, episode, outline_version_id)
+        inputs["outline_context"] = outline
+        inputs["story"] = outline["source_snapshot"]["story"]
     snapshot = text_snapshot(db, actor)
     if snapshot:
         inputs["_text_service"] = snapshot

@@ -110,6 +110,34 @@ class StoryAnalysis(Entity, Base):
     )
 
 
+class StoryOutline(Entity, Base):
+    __tablename__ = "story_outlines"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"))
+    run_id: Mapped[UUID | None] = mapped_column(ForeignKey("workflow_runs.id"), unique=True)
+    base_version_id: Mapped[UUID | None] = mapped_column(ForeignKey("story_outlines.id"))
+    version_no: Mapped[int]
+    content_json: Mapped[dict] = mapped_column(JSON_TYPE)
+    source_snapshot: Mapped[dict] = mapped_column(JSON_TYPE, deferred=True)
+    created_by: Mapped[str] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(16), default="DRAFT")
+    confirmed_by: Mapped[str | None] = mapped_column(String(100))
+    confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    save_key: Mapped[str | None] = mapped_column(String(128))
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64))
+    __table_args__ = (
+        UniqueConstraint("project_id", "version_no"),
+        UniqueConstraint("project_id", "save_key"),
+        CheckConstraint("version_no > 0", name="outline_version_positive"),
+        CheckConstraint("status IN ('DRAFT', 'APPROVED')", name="outline_status"),
+        CheckConstraint(
+            "(status = 'DRAFT' AND confirmed_by IS NULL AND confirmed_at IS NULL) OR "
+            "(status = 'APPROVED' AND confirmed_by IS NOT NULL AND confirmed_at IS NOT NULL)",
+            name="outline_confirmation",
+        ),
+    )
+
+
 class WorkflowRun(Entity, Base):
     __tablename__ = "workflow_runs"
     episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)

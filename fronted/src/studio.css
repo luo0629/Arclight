@@ -1117,3 +1117,25 @@
     gap: 20px;
   }
 }
+
+.studio-outline {
+  display: grid;
+  gap: 1rem;
+  min-width: 0;
+}
+.studio-outline-browser {
+  display: grid;
+  grid-template-columns: minmax(12rem, 16rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+.studio-outline-entry {
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  padding: 1rem;
+}
+@media (max-width: 800px) {
+  .studio-outline-browser {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

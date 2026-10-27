@@ -36,6 +36,12 @@ class Impact(BaseModel):
     storyboards: list[Reference]
 
 
+class OutlineReference(BaseModel):
+    id: UUID
+    version_no: int
+    episode_no: int
+
+
 class VersionSnapshot(Reference):
     created_at: datetime
     content_json: dict
@@ -43,6 +49,7 @@ class VersionSnapshot(Reference):
     author: Author | None
     base_version: Reference | None
     script_version: Reference | None
+    outline_version: OutlineReference | None = None
     run_id: UUID | None
     impact: Impact
 
@@ -129,6 +136,16 @@ def snapshot(db: Session, row: Script | Storyboard, project_id: UUID) -> Version
         shot_filter = Shot.storyboard_id == row.id
         board_count, run_count, previews = 0, 0, []
         script = require_version(db, Script, row.episode_id, row.script_version_id)
+    outline = None
+    if isinstance(row, Script) and row.run_id:
+        run = db.get(WorkflowRun, row.run_id)
+        context = run.input_json.get("outline_context") if run else None
+        if context:
+            outline = OutlineReference(
+                id=context["version_id"],
+                version_no=context["version_no"],
+                episode_no=context["episode"]["episode_no"],
+            )
     return VersionSnapshot(
         id=row.id,
         version_no=row.version_no,
@@ -140,6 +157,7 @@ def snapshot(db: Session, row: Script | Storyboard, project_id: UUID) -> Version
         base_version=base,
         script_version=Reference.model_validate(script, from_attributes=True) if script else None,
         run_id=row.run_id,
+        outline_version=outline,
         impact=Impact(
             storyboard_count=board_count,
             shot_count=db.scalar(select(func.count()).select_from(Shot).where(shot_filter)) or 0,

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
 from arclight.domain.project_settings import ProjectStorySettings
@@ -45,7 +45,14 @@ class EpisodeRead(Resource, EpisodeCreate):
 
 
 class RunCreate(Input):
-    story: str = Field(min_length=1, max_length=20000)
+    story: str | None = Field(default=None, min_length=1, max_length=20000)
+    outline_version_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def one_source(self) -> "RunCreate":
+        if (self.story is None) == (self.outline_version_id is None):
+            raise ValueError("请提供故事文本或已确认的精确大纲版本，二选一")
+        return self
 
 
 class StoryboardRunCreate(Input):

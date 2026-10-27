@@ -33,6 +33,7 @@ import ShotViewer from "./ShotViewer";
 import Tasks from "./Tasks";
 import StorySources from "./StorySources";
 import StoryAnalysis from "./StoryAnalysis";
+import StoryOutline from "./StoryOutline";
 
 import usePagedList from "./usePagedList";
 import ListPagination from "./ListPagination";
@@ -273,6 +274,7 @@ export default function EpisodeWorkspace({
             ["tasks", "任务与审核"],
             ["sources", "故事来源"],
             ["analysis", "故事提炼"],
+            ["outline", "分集大纲"],
           ].map(([key, label]) => (
             <ToggleGroupItem key={key} value={key}>
               {label}
@@ -434,6 +436,18 @@ export default function EpisodeWorkspace({
           key={episode.id}
           episodeId={episode.id}
           writable={writable}
+        />
+      ) : view === "outline" ? (
+        <StoryOutline
+          key={episode.id}
+          episode={episode}
+          writable={writable}
+          owner={owner}
+          onQueued={reload}
+          onTasks={() => {
+            setView("tasks");
+            void reload().catch((error) => setError(message(error)));
+          }}
         />
       ) : view === "analysis" ? (
         <StoryAnalysis

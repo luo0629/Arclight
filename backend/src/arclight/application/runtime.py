@@ -9,6 +9,7 @@ from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
 from arclight.application.model_services import run_settings
 from arclight.application.story_analysis import ANALYSIS_VERSION, extract
+from arclight.application.story_outline import OUTLINE_VERSION, generate_outline
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
@@ -30,12 +31,16 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
         if run is None or run.status != RunStatus.QUEUED or run.revision != revision:
             return
         try:
-            if run.workflow_type == "story_analysis":
-                if run.workflow_version != ANALYSIS_VERSION:
-                    raise ValueError("不兼容的提炼版本")
+            if run.workflow_type in {"story_analysis", "story_outline"}:
+                expected_version = (
+                    ANALYSIS_VERSION if run.workflow_type == "story_analysis" else OUTLINE_VERSION
+                )
+                if run.workflow_version != expected_version:
+                    raise ValueError("不兼容的素材工作流版本")
                 run.status = RunStatus.RUNNING
                 emit(db, run, "workflow.started", {"revision": revision})
-                analysis_id, version = extract(factory, settings, run)
+                generate = extract if run.workflow_type == "story_analysis" else generate_outline
+                artifact_id, version = generate(factory, settings, run)
                 run.status = RunStatus.SUCCEEDED
                 run.error_code = None
                 run.pending_review = None
@@ -44,7 +49,13 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                     db,
                     run,
                     "workflow.finished",
-                    {"status": run.status, "analysis_id": analysis_id, "version_no": version},
+                    {
+                        "status": run.status,
+                        "analysis_id"
+                        if run.workflow_type == "story_analysis"
+                        else "outline_id": artifact_id,
+                        "version_no": version,
+                    },
                 )
                 return
             if run.workflow_version not in {WORKFLOW_VERSION, DIRECTOR_WORKFLOW_VERSION}:

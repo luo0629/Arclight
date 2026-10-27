@@ -129,16 +129,20 @@ def create_script_run(
     actor: Actor,
     key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
 ) -> AcceptedRun:
-    if len(payload.story) > request.app.state.settings.max_story_chars:
+    if (
+        payload.story is not None
+        and len(payload.story) > request.app.state.settings.max_story_chars
+    ):
         raise DomainError("STORY_TOO_LARGE", "故事超出当前服务长度限制", 422)
     run = start_run(
         db,
         episode_id,
         actor,
-        payload.story,
+        payload.story or "",
         key,
         request.state.request_id,
         settings=request.app.state.settings,
+        outline_version_id=payload.outline_version_id,
     )
     return AcceptedRun(
         run_id=run.id,

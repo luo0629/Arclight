@@ -37,6 +37,11 @@ type Snapshot = Reference & {
   author: { actor_id: string; display_name: string | null } | null;
   base_version: Reference | null;
   script_version: Reference | null;
+  outline_version?: {
+    id: string;
+    version_no: number;
+    episode_no: number;
+  } | null;
   run_id: string | null;
   impact: {
     storyboard_count: number;
@@ -194,6 +199,12 @@ function Metadata({
             {row.script_version
               ? `v${row.script_version.version_no} · ${row.script_version.id}`
               : "未记录"}
+          </p>
+        )}
+        {row.outline_version && (
+          <p>
+            引用大纲：v{row.outline_version.version_no}，第
+            {row.outline_version.episode_no}集 · {row.outline_version.id}
           </p>
         )}
         {row.run_id && <p>生成任务：{row.run_id}</p>}
