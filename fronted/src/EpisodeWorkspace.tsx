@@ -418,7 +418,9 @@ export default function EpisodeWorkspace({
             try {
               const key = JSON.parse(id);
               if (key[2]) {
-                setSelectedId(key[1] + ":" + key[2]);
+                setSelectedId(
+                  (key[1] === "rewrite" ? "script" : key[1]) + ":" + key[2],
+                );
                 setView("list");
               } else {
                 setSelectedId("");

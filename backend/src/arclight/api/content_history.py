@@ -50,6 +50,7 @@ class VersionSnapshot(Reference):
     base_version: Reference | None
     script_version: Reference | None
     outline_version: OutlineReference | None = None
+    rewrite: dict | None = None
     run_id: UUID | None
     impact: Impact
 
@@ -137,8 +138,20 @@ def snapshot(db: Session, row: Script | Storyboard, project_id: UUID) -> Version
         board_count, run_count, previews = 0, 0, []
         script = require_version(db, Script, row.episode_id, row.script_version_id)
     outline = None
+    rewrite = None
     if isinstance(row, Script) and row.run_id:
         run = db.get(WorkflowRun, row.run_id)
+        if run and run.workflow_type == "script_rewrite":
+            inputs = run.input_json["rewrite_input"]
+            request = inputs["request"]
+            candidate = db.get(Script, UUID(request["base_version_id"]))
+            if candidate and candidate.episode_id == row.episode_id:
+                base = Reference.model_validate(candidate, from_attributes=True)
+            rewrite = {
+                "source_sha256": inputs["source_sha256"],
+                "target": request["target"],
+                "instructions": request["instructions"],
+            }
         context = run.input_json.get("outline_context") if run else None
         if context:
             outline = OutlineReference(
@@ -158,6 +171,7 @@ def snapshot(db: Session, row: Script | Storyboard, project_id: UUID) -> Version
         script_version=Reference.model_validate(script, from_attributes=True) if script else None,
         run_id=row.run_id,
         outline_version=outline,
+        rewrite=rewrite,
         impact=Impact(
             storyboard_count=board_count,
             shot_count=db.scalar(select(func.count()).select_from(Shot).where(shot_filter)) or 0,

@@ -42,6 +42,11 @@ type Snapshot = Reference & {
     version_no: number;
     episode_no: number;
   } | null;
+  rewrite?: {
+    source_sha256: string;
+    target: { scope: string };
+    instructions: Record<string, unknown>;
+  } | null;
   run_id: string | null;
   impact: {
     storyboard_count: number;
@@ -208,6 +213,23 @@ function Metadata({
           </p>
         )}
         {row.run_id && <p>生成任务：{row.run_id}</p>}
+        {row.rewrite && (
+          <details>
+            <summary>局部改写来源与指令</summary>
+            <p>
+              范围：
+              {row.rewrite.target.scope === "chapter"
+                ? "章节（连续场景）"
+                : row.rewrite.target.scope === "scene"
+                  ? "单个场景"
+                  : "选定段落"}
+            </p>
+            <p>来源 SHA-256：{row.rewrite.source_sha256}</p>
+            <pre className="whitespace-pre-wrap break-all">
+              {JSON.stringify(row.rewrite, null, 2)}
+            </pre>
+          </details>
+        )}
         <div
           className="mt-1 rounded-lg bg-muted p-3"
           aria-label={`${label}下游影响`}

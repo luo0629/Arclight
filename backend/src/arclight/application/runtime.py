@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
 from arclight.application.model_services import run_settings
+from arclight.application.script_rewrite import generate_rewrite
 from arclight.application.story_analysis import ANALYSIS_VERSION, extract
 from arclight.application.story_outline import OUTLINE_VERSION, generate_outline
 from arclight.core.config import Settings
@@ -17,6 +18,7 @@ from arclight.persistence.models import WorkflowRun
 from arclight.providers.text import build_provider
 from arclight.workflows.checkpoints import open_checkpointer
 from arclight.workflows.production import DIRECTOR_WORKFLOW_VERSION, WORKFLOW_VERSION, build_graph
+from arclight.workflows.rewrite import REWRITE_VERSION, build_rewrite_graph
 
 logger = logging.getLogger(__name__)
 
@@ -58,24 +60,40 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                     },
                 )
                 return
-            if run.workflow_version not in {WORKFLOW_VERSION, DIRECTOR_WORKFLOW_VERSION}:
+            if run.workflow_version not in {
+                WORKFLOW_VERSION,
+                DIRECTOR_WORKFLOW_VERSION,
+                REWRITE_VERSION,
+            } or (
+                run.workflow_version == REWRITE_VERSION and run.workflow_type != "script_rewrite"
+            ):
                 raise ValueError("不兼容的工作流版本")
             run.status = RunStatus.RUNNING
             # 不提前 flush：SQLite 的测试模式不允许跨连接同时写业务数据库。
             emit(db, run, "workflow.started", {"revision": revision})
             with open_checkpointer(settings) as saver:
-                graph = build_graph(
-                    build_provider(run_settings(settings, run.input_json.get("_text_service"))),
-                    ArtifactStore(
-                        factory,
-                        run.id,
-                        run.episode_id,
-                        run.input_json["target_duration_ms"],
-                        settings.text_duration_tolerance_percent,
-                    ),
-                    saver,
-                    director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
+                artifacts = ArtifactStore(
+                    factory,
+                    run.id,
+                    run.episode_id,
+                    run.input_json["target_duration_ms"],
+                    settings.text_duration_tolerance_percent,
                 )
+                if run.workflow_version == REWRITE_VERSION:
+                    graph = build_rewrite_graph(
+                        artifacts,
+                        saver,
+                        lambda inputs: generate_rewrite(
+                            inputs, run_settings(settings, run.input_json.get("_text_service"))
+                        ),
+                    )
+                else:
+                    graph = build_graph(
+                        build_provider(run_settings(settings, run.input_json.get("_text_service"))),
+                        artifacts,
+                        saver,
+                        director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
+                    )
                 config = {"configurable": {"thread_id": str(run.id)}}
                 snapshot = graph.get_state(config)
                 value: dict | Command | None = None
@@ -97,7 +115,12 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                     run.pending_review = snapshot.interrupts[0].value
                     emit(db, run, "workflow.waiting_review", run.pending_review)
                 else:
-                    approved = snapshot.values.get("storyboard_approved", False)
+                    approved = snapshot.values.get(
+                        "script_approved"
+                        if run.workflow_version == REWRITE_VERSION
+                        else "storyboard_approved",
+                        False,
+                    )
                     run.status = RunStatus.SUCCEEDED if approved else RunStatus.REJECTED
                     run.pending_review = None
                     emit(db, run, "workflow.finished", {"status": run.status})
