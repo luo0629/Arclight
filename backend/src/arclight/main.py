@@ -17,6 +17,7 @@ from arclight.api.collaboration import router as collaboration_router
 from arclight.api.content import router as content_router
 from arclight.api.model_services import router as model_services_router
 from arclight.api.project_deletion import router as project_deletion_router
+from arclight.api.project_overview import router as project_overview_router
 from arclight.api.protection import RequestProtection
 from arclight.api.routes import router
 from arclight.api.script_rewrite import router as script_rewrite_router
@@ -133,6 +134,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(story_outline_router)
     app.include_router(script_rewrite_router)
     app.include_router(character_matching_router)
+    app.include_router(project_overview_router)
     return app
 
 

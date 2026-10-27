@@ -6,6 +6,7 @@ import {
   Settings2,
   Leaf,
   BookOpen,
+  ChartNoAxesCombined,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,7 @@ import usePagedList from "./usePagedList";
 import ListPagination from "./ListPagination";
 
 import EpisodeWorkspace from "./EpisodeWorkspace";
+import ProjectOverview from "./ProjectOverview";
 export default function ProjectWorkspace({
   project,
   projectPicker,
@@ -64,6 +66,7 @@ export default function ProjectWorkspace({
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState("canvas");
+  const [episodeView, setEpisodeView] = useState<"canvas" | "tasks">("canvas");
   const reload = useCallback(async () => {
     const [rows, access] = await Promise.all([
       loadEpisodes(),
@@ -120,6 +123,7 @@ export default function ProjectWorkspace({
       setEpisodeId(row.id);
       setAdding(false);
       setDirectoryOpen(false);
+      setEpisodeView("canvas");
       setPage("canvas");
     } catch (error) {
       setError(message(error));
@@ -151,6 +155,14 @@ export default function ProjectWorkspace({
           >
             <LayoutDashboard />
             故事创作
+          </Button>
+          <Button
+            variant={page === "overview" ? "secondary" : "ghost"}
+            aria-pressed={page === "overview"}
+            onClick={() => setPage("overview")}
+          >
+            <ChartNoAxesCombined data-icon="inline-start" />
+            项目总览
           </Button>
           <Button
             variant={page === "members" ? "secondary" : "ghost"}
@@ -231,6 +243,7 @@ export default function ProjectWorkspace({
                     onClick={() => {
                       setPinnedEpisode(row);
                       setEpisodeId(row.id);
+                      setEpisodeView("canvas");
                       setPage("canvas");
                       setDirectoryOpen(false);
                     }}
@@ -289,15 +302,17 @@ export default function ProjectWorkspace({
                   {project.archived ? " / 已归档" : ""}
                 </p>
                 <h1>
-                  {page === "members"
-                    ? "创作伙伴"
-                    : page === "story"
-                      ? "故事设定"
-                      : page === "settings"
-                        ? "项目设置"
-                        : episode
-                          ? `第 ${episode.episode_no} 集 · ${episode.title}`
-                          : "你的故事，准备开场"}
+                  {page === "overview"
+                    ? "项目总览"
+                    : page === "members"
+                      ? "创作伙伴"
+                      : page === "story"
+                        ? "故事设定"
+                        : page === "settings"
+                          ? "项目设置"
+                          : episode
+                            ? `第 ${episode.episode_no} 集 · ${episode.title}`
+                            : "你的故事，准备开场"}
                 </h1>
                 {page === "canvas" && episode && role !== "viewer" && (
                   <div className="flex flex-wrap items-center gap-2">
@@ -320,6 +335,7 @@ export default function ProjectWorkspace({
                       onCopied={(copied) => {
                         setPinnedEpisode(copied);
                         setEpisodeId(copied.id);
+                        setEpisodeView("canvas");
                         // A successful copy stays successful even if the directory refresh fails.
                         void loadEpisodes().catch((error) =>
                           setError(message(error)),
@@ -352,7 +368,19 @@ export default function ProjectWorkspace({
                 </Button>
               </Notice>
             )}
-            {page === "members" ? (
+            {page === "overview" ? (
+              <ProjectOverview
+                key={project.id}
+                projectId={project.id}
+                onOpen={(row, view) => {
+                  setPinnedEpisode(row);
+                  setEpisodeId(row.id);
+                  setEpisodeView(view);
+                  setPage("canvas");
+                  setDirectoryOpen(false);
+                }}
+              />
+            ) : page === "members" ? (
               <Members
                 key={project.id}
                 projectId={project.id}
@@ -391,7 +419,8 @@ export default function ProjectWorkspace({
               />
             ) : episode ? (
               <EpisodeWorkspace
-                key={episode.id}
+                key={`${episode.id}-${episodeView}`}
+                initialView={episodeView}
                 episode={episode}
                 owner={owner}
                 writable={writable && episode.status !== "ARCHIVED"}

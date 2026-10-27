@@ -44,10 +44,12 @@ export default function EpisodeWorkspace({
   episode,
   owner,
   writable,
+  initialView = "canvas",
 }: {
   episode: Episode;
   owner: boolean;
   writable: boolean;
+  initialView?: "canvas" | "tasks";
 }) {
   const [data, setData] = useState<EpisodeData | null>(null);
   const prefix = `/episodes/${episode.id}`;
@@ -64,7 +66,7 @@ export default function EpisodeWorkspace({
   } | null>(null);
   const [savedRefreshError, setSavedRefreshError] = useState("");
   const [showSavedNotice, setShowSavedNotice] = useState(false);
-  const [view, setView] = useState("canvas");
+  const [view, setView] = useState<string>(initialView);
   const [focused, setFocused] = useState(false);
   const [shotId, setShotId] = useState("");
   const [draftId, setDraftId] = useState<string>();

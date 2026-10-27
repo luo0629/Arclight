@@ -175,14 +175,24 @@ test("Unicode paragraph selection preserves prefix, suffix and every other field
   await page.setViewportSize({ width: 390, height: 844 });
   const env = await setup(page);
   await choose(page, "改写范围", "选定段落");
+  await expect(
+    page.getByRole("combobox", { name: "改写范围", exact: true }),
+  ).toBeFocused();
   const original = page.getByLabel("原文（可选中要改写的段落）", {
     exact: true,
   });
-  await original.focus();
+  await original.click();
+  await expect(original).toBeFocused();
   await original.evaluate((input: HTMLTextAreaElement) => {
-    input.setSelectionRange(4, 8); // JS UTF-16: prefix includes a surrogate pair.
-    input.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    input.setSelectionRange(4, 8); // UTF-16 offsets include the emoji surrogate pair.
+    document.dispatchEvent(new Event("selectionchange"));
   });
+  expect(
+    await original.evaluate((input: HTMLTextAreaElement) => [
+      input.selectionStart,
+      input.selectionEnd,
+    ]),
+  ).toEqual([4, 8]);
   await expect(page.getByLabel("选定改写原文", { exact: true })).toHaveText(
     "改写目标",
   );
