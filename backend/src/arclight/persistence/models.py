@@ -294,6 +294,9 @@ class VisualAsset(Entity, Base):
     lock_version: Mapped[int] = mapped_column(default=0)
     revision: Mapped[int] = mapped_column(default=0, server_default="0")
     archived_from_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict, server_default="{}")
+    creation_source: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     __table_args__ = (CheckConstraint("revision >= 0", name="asset_directory_revision"),)
 
 

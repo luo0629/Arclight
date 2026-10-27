@@ -92,6 +92,7 @@ export default function ListPagination({
               </SelectContent>
             </Select>
             <Button
+              type="button"
               variant="outline"
               size="sm"
               disabled={loading}
@@ -106,6 +107,7 @@ export default function ListPagination({
         <Tooltip>
           <TooltipTrigger asChild>
             <Button
+              type="button"
               variant="outline"
               size="sm"
               disabled={loading}

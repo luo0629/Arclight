@@ -14,7 +14,8 @@ from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
 from arclight.application.commands import require_project
 from arclight.core.errors import DomainError
-from arclight.persistence.models import VisualAsset
+from arclight.domain.asset_metadata import AssetMetadata, AssetOrigin
+from arclight.persistence.models import Episode, VisualAsset
 
 router = APIRouter(prefix="/api/v1", tags=["visual-assets"])
 AssetType = Literal["CHARACTER", "SCENE", "PROP", "STYLE"]
@@ -24,6 +25,13 @@ DIRECTORY_TYPES = ("CHARACTER", "SCENE", "PROP", "STYLE")
 class AssetCreate(Input):
     asset_type: AssetType
     name: str = Field(min_length=1, max_length=160)
+    metadata: AssetMetadata = Field(default_factory=AssetMetadata)
+    creation_source: AssetOrigin = Field(default_factory=AssetOrigin)
+
+
+class AssetMetadataUpdate(Input):
+    metadata: AssetMetadata
+    expected_revision: int = Field(strict=True, ge=0)
 
 
 class AssetRename(Input):
@@ -44,6 +52,16 @@ class AssetRead(Resource):
     current_version_id: UUID | None
     lock_version: int
     revision: int
+    metadata: AssetMetadata = Field(validation_alias="metadata_json")
+    creation_source: AssetOrigin | None
+    created_by: str | None
+
+
+def validate_scope(db: Session, project_id: UUID, metadata: AssetMetadata) -> None:
+    for episode_id in metadata.usage_scope.episode_ids:
+        episode = db.get(Episode, episode_id)
+        if episode is None or episode.project_id != project_id:
+            raise DomainError("INVALID_ASSET_SCOPE", "使用范围只能包含本项目剧集", 422)
 
 
 def find_asset(db: Session, project_id: UUID, asset_id: UUID) -> VisualAsset:
@@ -90,7 +108,15 @@ def get_asset(project_id: UUID, asset_id: UUID, db: Database, actor: Actor) -> A
 @router.post("/projects/{project_id}/assets", status_code=201)
 def create_asset(project_id: UUID, payload: AssetCreate, db: Database, actor: Actor) -> AssetRead:
     require_project(db, project_id, actor, write=True)
-    row = VisualAsset(project_id=project_id, asset_type=payload.asset_type, name=payload.name)
+    validate_scope(db, project_id, payload.metadata)
+    row = VisualAsset(
+        project_id=project_id,
+        asset_type=payload.asset_type,
+        name=payload.name,
+        metadata_json=payload.metadata.model_dump(mode="json"),
+        creation_source=payload.creation_source.model_dump(mode="json"),
+        created_by=actor,
+    )
     db.add(row)
     db.flush()
     db.refresh(row)
@@ -108,6 +134,22 @@ def rename_asset(
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定的资产不可编辑", 409)
     change_asset(db, row, payload.expected_revision, name=payload.name)
     audit(db, project_id, actor, "asset.updated", row.id, {"revision": row.revision})
+    return AssetRead.model_validate(row)
+
+
+@router.put("/projects/{project_id}/assets/{asset_id}/metadata")
+def update_metadata(
+    project_id: UUID, asset_id: UUID, payload: AssetMetadataUpdate, db: Database, actor: Actor
+) -> AssetRead:
+    require_project(db, project_id, actor, write=True)
+    row = find_asset(db, project_id, asset_id)
+    if row.status in {"ARCHIVED", "LOCKED"}:
+        raise DomainError("ASSET_READ_ONLY", "已归档或锁定的资产不可编辑", 409)
+    validate_scope(db, project_id, payload.metadata)
+    change_asset(
+        db, row, payload.expected_revision, metadata_json=payload.metadata.model_dump(mode="json")
+    )
+    audit(db, project_id, actor, "asset.metadata_updated", row.id, {"revision": row.revision})
     return AssetRead.model_validate(row)
 
 

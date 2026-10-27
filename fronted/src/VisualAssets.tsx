@@ -21,6 +21,7 @@ import {
 import Dialog from "./Dialog";
 import ListPagination from "./ListPagination";
 import usePagedList from "./usePagedList";
+import AssetMetadataPanel from "./AssetMetadata";
 
 const kinds: Record<VisualAssetType, string> = {
   CHARACTER: "角色",
@@ -126,7 +127,7 @@ export default function VisualAssets({
       className="studio-page"
       eyebrow="项目共用"
       title="视觉资产"
-      description="管理角色、场景、道具与风格的稳定目录。当前可维护名称与归档状态；媒体生成、版本选用和锁定尚未开放。"
+      description="管理角色、场景、道具与风格的目录、结构化资料和使用范围。媒体生成、版本选用和锁定尚未开放。"
     >
       {!writable && <Notice tone="info">当前项目只读，可查看视觉资产。</Notice>}
       {notice && (
@@ -227,6 +228,13 @@ export default function VisualAssets({
                   <dd>{selected.current_version_id ?? "尚未选用媒体版本"}</dd>
                 </div>
               </dl>
+              <AssetMetadataPanel
+                key={selected.id}
+                asset={selected}
+                path={path}
+                writable={writable}
+                onSaved={saved}
+              />
               <p className="text-sm text-muted-foreground">
                 目录修改保留已有媒体版本、选用指针与历史引用。归档后不能用于新的文本资产引用；恢复保留归档前状态。
               </p>
@@ -323,6 +331,8 @@ function AssetEditor({
   onSaved: (row: VisualAsset) => Promise<void>;
 }) {
   const [name, setName] = useState(asset?.name ?? "");
+  const [origin, setOrigin] = useState("MANUAL");
+  const [originNote, setOriginNote] = useState("");
   const [kind, setKind] = useState<VisualAssetType>(
     asset?.asset_type ?? "CHARACTER",
   );
@@ -331,7 +341,10 @@ function AssetEditor({
   const [discard, setDiscard] = useState(false);
   const submitting = useRef(false);
   const dirty =
-    name !== (asset?.name ?? "") || kind !== (asset?.asset_type ?? "CHARACTER");
+    name !== (asset?.name ?? "") ||
+    kind !== (asset?.asset_type ?? "CHARACTER") ||
+    origin !== "MANUAL" ||
+    originNote !== "";
   useEffect(() => {
     function beforeUnload(event: BeforeUnloadEvent) {
       if (dirty || busy) {
@@ -360,7 +373,10 @@ function AssetEditor({
           name,
           ...(asset
             ? { expected_revision: asset.revision }
-            : { asset_type: kind }),
+            : {
+                asset_type: kind,
+                creation_source: { kind: origin, note: originNote },
+              }),
         }),
       );
       await onSaved(row);
@@ -407,6 +423,34 @@ function AssetEditor({
                   }))}
                 />
               </Field>
+              {!asset && (
+                <>
+                  <Field>
+                    <FieldLabel htmlFor="asset-origin">创建来源</FieldLabel>
+                    <ChoiceSelect
+                      id="asset-origin"
+                      aria-label="创建来源"
+                      value={origin}
+                      onValueChange={setOrigin}
+                      options={[
+                        { value: "MANUAL", label: "人工创建" },
+                        { value: "IMPORTED", label: "人工登记导入" },
+                      ]}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="asset-origin-note">
+                      来源说明
+                    </FieldLabel>
+                    <Input
+                      id="asset-origin-note"
+                      maxLength={2000}
+                      value={originNote}
+                      onChange={(event) => setOriginNote(event.target.value)}
+                    />
+                  </Field>
+                </>
+              )}
               <Field>
                 <FieldLabel htmlFor="asset-name">资产名称</FieldLabel>
                 <Input

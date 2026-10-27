@@ -1,4 +1,20 @@
 export type VisualAssetType = "CHARACTER" | "SCENE" | "PROP" | "STYLE";
+export type AssetMetadata = {
+  description: string;
+  tags: string[];
+  appearance: Record<
+    | "age_range"
+    | "appearance"
+    | "hairstyle"
+    | "clothing"
+    | "build"
+    | "expressions"
+    | "colors"
+    | "materials",
+    string
+  >;
+  usage_scope: { kind: "PROJECT" | "EPISODES"; episode_ids: string[] };
+};
 export type VisualAsset = {
   id: string;
   project_id: string;
@@ -8,6 +24,9 @@ export type VisualAsset = {
   current_version_id: string | null;
   lock_version: number;
   revision: number;
+  metadata: AssetMetadata;
+  creation_source: { kind: "MANUAL" | "IMPORTED"; note: string } | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -39,6 +39,125 @@ async function create(page: Page, name: string, kind = "角色") {
   ).toBeVisible();
 }
 
+test("ASSET-02：来源、外观和声明范围持久化及移动端", async ({
+  page,
+}, testInfo) => {
+  const { headers, path, project } = await setup(page);
+  const episode = await page.request.post(
+    "/api/v1/projects/" + project.id + "/episodes",
+    { headers, data: { episode_no: 1, title: "范围集" } },
+  );
+  expect(episode.status()).toBe(201);
+  await page.getByRole("button", { name: "新建视觉资产", exact: true }).click();
+  await page.getByLabel("资产名称", { exact: true }).fill("资料角色");
+  await page.getByRole("combobox", { name: "创建来源", exact: true }).click();
+  await page.getByRole("option", { name: "人工登记导入", exact: true }).click();
+  await page.getByLabel("来源说明", { exact: true }).fill("授权参考登记");
+  await save(page).click();
+  await page.getByRole("button", { name: "编辑资产资料", exact: true }).click();
+  await page.getByLabel("资产简介", { exact: true }).fill("雨中的少年");
+  await page.getByLabel("资产标签（逗号分隔）").fill("主角，雨夜");
+  await page.getByLabel("发型", { exact: true }).fill("黑色短发");
+  await page.getByRole("combobox", { name: "使用范围", exact: true }).click();
+  await page.getByRole("option", { name: "指定剧集", exact: true }).click();
+  await page.getByRole("checkbox", { name: "第1集 · 范围集" }).click();
+  await page.getByRole("button", { name: "保存资产资料", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  expect(row.metadata.description).toBe("雨中的少年");
+  expect(row.metadata.tags).toEqual(["主角", "雨夜"]);
+  expect(row.metadata.usage_scope.episode_ids).toEqual([
+    (await episode.json()).id,
+  ]);
+  expect(row.creation_source).toEqual({
+    kind: "IMPORTED",
+    note: "授权参考登记",
+  });
+  expect(row.created_by).toBeTruthy();
+  await page.reload();
+  await openWorkspacePanels(page);
+  await page.getByRole("button", { name: "视觉资产", exact: true }).click();
+  await page
+    .getByRole("button", { name: "角色 · 资料角色", exact: true })
+    .click();
+  await expect(page.getByText("黑色短发", { exact: true })).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("metadata-desktop.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "编辑资产资料", exact: true }).click();
+  await expect(page.getByLabel("资产简介", { exact: true })).toHaveValue(
+    "雨中的少年",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("metadata-mobile.png"),
+    fullPage: true,
+  });
+});
+
+test("ASSET-02：失败保留资料草稿、冲突拒绝覆盖与防重提交", async ({ page }) => {
+  const { headers, path } = await setup(page);
+  await create(page, "冲突资料");
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  const url = path + "/" + row.id + "/metadata";
+  await page.getByRole("button", { name: "编辑资产资料", exact: true }).click();
+  await page.getByLabel("资产简介", { exact: true }).fill("本地资料");
+  await page.route("**" + url, (route) => route.abort("failed"));
+  await page.getByRole("button", { name: "保存资产资料", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(page.getByLabel("资产简介", { exact: true })).toHaveValue(
+    "本地资料",
+  );
+  await page.unroute("**" + url);
+  let puts = 0;
+  await page.route("**" + url, async (route) => {
+    puts++;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await route.continue();
+  });
+  await page
+    .getByRole("button", { name: "保存资产资料", exact: true })
+    .evaluate((button: HTMLButtonElement) => {
+      button.click();
+      button.click();
+    });
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(puts).toBe(1);
+  await page.unroute("**" + url);
+  await page.getByRole("button", { name: "编辑资产资料", exact: true }).click();
+  expect(
+    (
+      await page.request.put(path + "/" + row.id, {
+        headers,
+        data: { name: "远程名称", expected_revision: 1 },
+      })
+    ).status(),
+  ).toBe(200);
+  await page.getByLabel("资产简介", { exact: true }).fill("过期资料草稿");
+  await page.getByRole("button", { name: "保存资产资料", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("资产已被修改");
+  await expect(page.getByLabel("资产简介", { exact: true })).toHaveValue(
+    "过期资料草稿",
+  );
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await expect(
+    page.getByText("放弃未保存的资产资料？", { exact: true }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "放弃修改并关闭", exact: true })
+    .click();
+  expect(
+    (await (await page.request.get(path + "/" + row.id, { headers })).json())
+      .metadata.description,
+  ).toBe("本地资料");
+});
+
 test("ASSET-01：四类目录持久化、修改、归档恢复与移动端", async ({
   page,
 }, testInfo) => {
@@ -282,7 +401,12 @@ test("ASSET-01：Viewer 可查目录和详情但不能修改", async ({ page }) 
   await expect(
     page.getByText("当前项目只读，可查看视觉资产。", { exact: true }),
   ).toBeVisible();
-  for (const name of ["新建视觉资产", "编辑资产名称", "归档视觉资产"])
+  for (const name of [
+    "新建视觉资产",
+    "编辑资产名称",
+    "编辑资产资料",
+    "归档视觉资产",
+  ])
     await expect(page.getByRole("button", { name, exact: true })).toHaveCount(
       0,
     );

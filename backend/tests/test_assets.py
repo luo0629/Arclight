@@ -241,7 +241,13 @@ def test_locked_asset_cannot_be_renamed_or_archived_and_legacy_types_stay_untouc
 def test_migration_round_trip_preserves_existing_assets_and_guards_revision(
     client, episode, migrated
 ):
-    row = create(client, episode["project_id"])
+    # Use historical data so this ASSET-01 downgrade remains legal.
+    with client.app.state.session_factory.begin() as db:
+        legacy = VisualAsset(project_id=UUID(episode["project_id"]), asset_type="PROP", name="旧灯")
+        db.add(legacy)
+        db.flush()
+        legacy_id = legacy.id
+    row = client.get(path(episode["project_id"]) + "/" + str(legacy_id)).json()
     with client.app.state.session_factory.begin() as db:
         reference = make_asset(db, episode["project_id"], "CHARACTER")
         media = db.get(VisualAsset, UUID(reference["asset_id"]))
@@ -269,6 +275,7 @@ def test_migration_round_trip_preserves_existing_assets_and_guards_revision(
     assert rename(client, row).status_code == 200
     with pytest.raises(RuntimeError, match="Asset directory history exists"):
         command.downgrade(migrated, "0011")
+    command.upgrade(migrated, "head")
     assert client.get(path(row["project_id"]) + "/" + row["id"]).json()["revision"] == 1
 
 
