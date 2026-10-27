@@ -3,6 +3,19 @@ export type ExactAssetReference = {
   asset_id: string;
   asset_version_id: string;
 };
+export type SceneProfile = {
+  layout: string;
+  time_of_day: string;
+  lighting: string;
+  palette: string;
+  environment: string;
+  reference: ExactAssetReference | null;
+};
+export type PropProfile = {
+  appearance: string;
+  story_state: string;
+  holder: ExactAssetReference | null;
+};
 export type ReferenceImage = {
   id: string;
   asset_id: string;
@@ -56,6 +69,8 @@ export type VisualAsset = {
   creation_source: { kind: "MANUAL" | "IMPORTED"; note: string } | null;
   created_by: string | null;
   character_profile: CharacterProfile | null;
+  scene_profile: SceneProfile | null;
+  prop_profile: PropProfile | null;
   created_at: string;
   updated_at: string;
 };

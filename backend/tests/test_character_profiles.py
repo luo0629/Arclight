@@ -187,6 +187,7 @@ def test_character_profile_migration_protection(client, episode, migrated):
     assert save_profile(client, row, {"expressions": ["笑"]}).status_code == 200
     with pytest.raises(RuntimeError, match="Character profiles exist"):
         command.downgrade(migrated, "0013")
+    command.upgrade(migrated, "head")
     config = Config(migrated.config_file_name, output_buffer=StringIO())
     config.attributes["database_url"] = "postgresql+psycopg://unused:unused@localhost/unused"
     with pytest.raises(RuntimeError, match="online preservation check"):

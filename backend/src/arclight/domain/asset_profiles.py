@@ -13,6 +13,21 @@ class ReferenceVersion(AssetFields):
     asset_version_id: UUID
 
 
+class SceneProfile(AssetFields):
+    layout: str = Field(default="", max_length=4000)
+    time_of_day: str = Field(default="", max_length=160)
+    lighting: str = Field(default="", max_length=2000)
+    palette: str = Field(default="", max_length=1000)
+    environment: str = Field(default="", max_length=2000)
+    reference: ReferenceVersion | None = None
+
+
+class PropProfile(AssetFields):
+    appearance: str = Field(default="", max_length=2000)
+    holder: ReferenceVersion | None = None
+    story_state: str = Field(default="", max_length=2000)
+
+
 class Outfit(AssetFields):
     id: UUID
     name: ShortText

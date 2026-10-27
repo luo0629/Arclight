@@ -29,6 +29,76 @@ async function setup(page: Page) {
 const save = (page: Page) =>
   page.getByRole("button", { name: "保存视觉资产", exact: true });
 
+test("ASSET-04：场景与关键道具设定真实持久化、冲突及移动端", async ({
+  page,
+}, testInfo) => {
+  const { path, headers } = await setup(page);
+  await create(page, "书房", "场景");
+  await page.getByRole("button", { name: "编辑场景设定", exact: true }).click();
+  for (const [name, value] of [
+    ["空间布局", "东窗西门"],
+    ["时间段", "雨夜"],
+    ["灯光", "暖台灯"],
+    ["场景配色", "蓝灰"],
+    ["环境描述", "安静书房"],
+  ])
+    await page.getByLabel(name, { exact: true }).fill(value);
+  await page.getByRole("button", { name: "保存设定", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText("东窗西门", { exact: true })).toBeVisible();
+  await create(page, "铜钥匙", "道具");
+  await page.getByRole("button", { name: "编辑道具设定", exact: true }).click();
+  await page.getByLabel("关键道具外观", { exact: true }).fill("磨损铜钥匙");
+  await page.getByLabel("剧情状态", { exact: true }).fill("缺一齿，已交给主角");
+  await page.getByRole("button", { name: "保存设定", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const rows = await (await page.request.get(path, { headers })).json();
+  const prop = rows.find(
+    (row: { asset_type: string }) => row.asset_type === "PROP",
+  );
+  expect(prop.prop_profile).toEqual({
+    appearance: "磨损铜钥匙",
+    story_state: "缺一齿，已交给主角",
+    holder: null,
+  });
+  await page.reload();
+  await openWorkspacePanels(page);
+  await page.getByRole("button", { name: "视觉资产", exact: true }).click();
+  await page
+    .getByRole("button", { name: "道具 · 铜钥匙", exact: true })
+    .click();
+  await expect(page.getByText("磨损铜钥匙", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "编辑道具设定", exact: true }).click();
+  await page.getByLabel("剧情状态", { exact: true }).fill("本地草稿");
+  expect(
+    (
+      await page.request.put(path + "/" + prop.id, {
+        headers,
+        data: { name: "远端钥匙", expected_revision: 1 },
+      })
+    ).status(),
+  ).toBe(200);
+  await page.getByRole("button", { name: "保存设定", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("资产已被修改");
+  await expect(page.getByLabel("剧情状态", { exact: true })).toHaveValue(
+    "本地草稿",
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("scene-prop-desktop.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("scene-prop-mobile.png"),
+    fullPage: true,
+  });
+});
+
 test("ASSET-03：固定可变特征、服装表情持久化与草稿冲突", async ({
   page,
 }, testInfo) => {

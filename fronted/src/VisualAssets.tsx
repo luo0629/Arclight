@@ -23,6 +23,7 @@ import ListPagination from "./ListPagination";
 import usePagedList from "./usePagedList";
 import AssetMetadataPanel from "./AssetMetadata";
 import CharacterPanel from "./CharacterProfile";
+import ScenePropPanel from "./ScenePropProfile";
 
 const kinds: Record<VisualAssetType, string> = {
   CHARACTER: "角色",
@@ -239,6 +240,15 @@ export default function VisualAssets({
               {selected.asset_type === "CHARACTER" && (
                 <CharacterPanel
                   key={"character-" + selected.id}
+                  asset={selected}
+                  path={path}
+                  writable={writable}
+                  onSaved={saved}
+                />
+              )}
+              {["SCENE", "PROP"].includes(selected.asset_type) && (
+                <ScenePropPanel
+                  key={"scene-prop-" + selected.id}
                   asset={selected}
                   path={path}
                   writable={writable}
