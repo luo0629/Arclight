@@ -502,3 +502,30 @@ def test_postgres_outline_refreshes_stale_episode(client, episode, settings, ope
         archived.set()
         assert result.result(timeout=15) == "EPISODE_ARCHIVED"
     assert client.get(path(episode) + "/story-outlines/" + row["id"]).json() == row
+
+
+def test_outline_unique_constraints_have_distinct_names(settings, migrated):
+    from sqlalchemy import inspect
+
+    from arclight.persistence.models import StoryOutline
+    from arclight.persistence.session import build_engine
+
+    expected = {
+        ("project_id", "version_no"): "uq_story_outlines_project_version",
+        ("project_id", "save_key"): "uq_story_outlines_project_save_key",
+    }
+    metadata = {
+        tuple(column.name for column in constraint.columns): constraint.name
+        for constraint in StoryOutline.__table__.constraints
+        if constraint.__class__.__name__ == "UniqueConstraint"
+    }
+    engine = build_engine(settings)
+    try:
+        reflected = {
+            tuple(row["column_names"]): row["name"]
+            for row in inspect(engine).get_unique_constraints("story_outlines")
+        }
+        for columns, name in expected.items():
+            assert metadata[columns] == reflected[columns] == name
+    finally:
+        engine.dispose()

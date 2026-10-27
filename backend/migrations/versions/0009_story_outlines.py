@@ -31,8 +31,8 @@ def upgrade() -> None:
         sa.Column("save_key", sa.String(128), nullable=True),
         sa.Column("request_fingerprint", sa.String(64), nullable=True),
         sa.UniqueConstraint("run_id"),
-        sa.UniqueConstraint("project_id", "version_no"),
-        sa.UniqueConstraint("project_id", "save_key"),
+        sa.UniqueConstraint("project_id", "version_no", name="uq_story_outlines_project_version"),
+        sa.UniqueConstraint("project_id", "save_key", name="uq_story_outlines_project_save_key"),
         sa.CheckConstraint("version_no > 0", name="outline_version_positive"),
         sa.CheckConstraint("status IN ('DRAFT', 'APPROVED')", name="outline_status"),
         sa.CheckConstraint(

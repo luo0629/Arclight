@@ -126,8 +126,8 @@ class StoryOutline(Entity, Base):
     save_key: Mapped[str | None] = mapped_column(String(128))
     request_fingerprint: Mapped[str | None] = mapped_column(String(64))
     __table_args__ = (
-        UniqueConstraint("project_id", "version_no"),
-        UniqueConstraint("project_id", "save_key"),
+        UniqueConstraint("project_id", "version_no", name="uq_story_outlines_project_version"),
+        UniqueConstraint("project_id", "save_key", name="uq_story_outlines_project_save_key"),
         CheckConstraint("version_no > 0", name="outline_version_positive"),
         CheckConstraint("status IN ('DRAFT', 'APPROVED')", name="outline_status"),
         CheckConstraint(
