@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from arclight.api.assets import router as assets_router
 from arclight.api.auth import router as auth_router
 from arclight.api.canvas import router as canvas_router
 from arclight.api.character_matching import router as character_matching_router
@@ -123,6 +124,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(model_services_router)
     app.include_router(auth_router)
+    app.include_router(assets_router)
     app.include_router(router)
     app.include_router(collaboration_router)
     app.include_router(content_router)

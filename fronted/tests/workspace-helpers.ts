@@ -25,15 +25,26 @@ export async function openWorkspacePanels(page: Page) {
     const pagination = page.locator(
       '[aria-label="项目分页"], [aria-label="剧集分页"]',
     );
-    for (const list of await pagination.all()) {
-      await expect(list).toHaveAttribute("aria-busy", "false");
-      await expect(list.locator('[role="status"]')).toContainText("已加载");
+    // 列表会在加载期间卸载重建。每轮检查当前快照，让外层重试重新定位，
+    // 避免单个已卸载节点的自动等待耗尽整个就绪检查。
+    const lists = await pagination.evaluateAll((elements) =>
+      elements.map((element) => ({
+        busy: element.getAttribute("aria-busy"),
+        status: element.querySelector('[role="status"]')?.textContent ?? "",
+      })),
+    );
+    for (const list of lists) {
+      expect(list.busy).toBe("false");
+      expect(list.status).toContain("已加载");
     }
     await expect(ready.first()).toBeVisible();
-    for (const surface of await page
+    const surfaces = await page
       .locator(".application, .project-body")
-      .all()) {
-      await expect(surface).toHaveAttribute("aria-busy", "false");
+      .evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("aria-busy")),
+      );
+    for (const busy of surfaces) {
+      expect(busy).toBe("false");
     }
   }).toPass({ timeout: 5000 });
   await closeDirectory(page);

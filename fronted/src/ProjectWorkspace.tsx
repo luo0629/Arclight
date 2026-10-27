@@ -39,6 +39,7 @@ import ListPagination from "./ListPagination";
 
 import EpisodeWorkspace from "./EpisodeWorkspace";
 import ProjectOverview from "./ProjectOverview";
+import VisualAssets from "./VisualAssets";
 export default function ProjectWorkspace({
   project,
   projectPicker,
@@ -179,6 +180,14 @@ export default function ProjectWorkspace({
           >
             <BookOpen />
             故事设定
+          </Button>
+          <Button
+            variant={page === "assets" ? "secondary" : "ghost"}
+            aria-pressed={page === "assets"}
+            onClick={() => setPage("assets")}
+          >
+            <Leaf data-icon="inline-start" />
+            视觉资产
           </Button>
           {owner && (
             <Button
@@ -379,6 +388,12 @@ export default function ProjectWorkspace({
                   setPage("canvas");
                   setDirectoryOpen(false);
                 }}
+              />
+            ) : page === "assets" ? (
+              <VisualAssets
+                key={project.id}
+                projectId={project.id}
+                writable={writable}
               />
             ) : page === "members" ? (
               <Members

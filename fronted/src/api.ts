@@ -1,3 +1,16 @@
+export type VisualAssetType = "CHARACTER" | "SCENE" | "PROP" | "STYLE";
+export type VisualAsset = {
+  id: string;
+  project_id: string;
+  asset_type: VisualAssetType;
+  name: string;
+  status: string;
+  current_version_id: string | null;
+  lock_version: number;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+};
 export type StoryKind = "WORLD" | "CHARACTER" | "LOCATION" | "PROP" | "SCENE";
 export type StoryRelation = {
   relation: "governs" | "located_in" | "appears_in" | "uses";

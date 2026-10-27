@@ -292,6 +292,9 @@ class VisualAsset(Entity, Base):
         ForeignKey("asset_versions.id", use_alter=True), nullable=True
     )
     lock_version: Mapped[int] = mapped_column(default=0)
+    revision: Mapped[int] = mapped_column(default=0, server_default="0")
+    archived_from_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    __table_args__ = (CheckConstraint("revision >= 0", name="asset_directory_revision"),)
 
 
 class AssetVersion(Entity, Base):
