@@ -313,7 +313,14 @@ class AssetVersion(Entity, Base):
     created_by: Mapped[str] = mapped_column(String(100))
     status: Mapped[str] = mapped_column(String(32), default="DRAFT")
     stale: Mapped[bool] = mapped_column(default=False)
-    __table_args__ = (UniqueConstraint("asset_id", "version_no"),)
+    revision: Mapped[int] = mapped_column(default=0, server_default="0")
+    creation_key: Mapped[UUID | None] = mapped_column(nullable=True)
+    archived_from_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("asset_id", "version_no"),
+        UniqueConstraint("asset_id", "creation_key", name="uq_asset_version_creation"),
+        CheckConstraint("revision >= 0", name="asset_version_revision"),
+    )
 
 
 class AssetDependency(Entity, Base):

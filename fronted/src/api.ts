@@ -1,4 +1,26 @@
 export type VisualAssetType = "CHARACTER" | "SCENE" | "PROP" | "STYLE";
+export type AssetVersion = {
+  id: string;
+  asset_id: string;
+  version_no: number;
+  checksum: string;
+  created_by: string;
+  created_at: string;
+  status: string;
+  stale: boolean;
+  revision: number;
+  archived_from_status: string | null;
+  media: {
+    media_type: string;
+    byte_size: number;
+    width: number;
+    height: number;
+    original_name: string;
+    source_note: string;
+    rights_note: string;
+  } | null;
+  asset_snapshot: VisualAsset | null;
+};
 export type ExactAssetReference = {
   asset_id: string;
   asset_version_id: string;
@@ -218,11 +240,11 @@ export async function refreshSession(): Promise<Session> {
   }
   return pendingRefresh;
 }
-export async function api<T>(
+async function request(
   path: string,
   init: RequestInit = {},
   retry = true,
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(init.headers);
   if (token) headers.set("Authorization", `Bearer ${token}`);
   if (init.body) headers.set("Content-Type", "application/json");
@@ -237,15 +259,30 @@ export async function api<T>(
     } catch {
       token = "";
       unauthorized();
-      return parse<T>(response);
+      return response;
     }
-    return api<T>(path, init, false);
+    return request(path, init, false);
   }
   if (response.status === 401 && !retry) {
     token = "";
     unauthorized();
   }
-  return parse<T>(response);
+  return response;
+}
+export async function api<T>(
+  path: string,
+  init: RequestInit = {},
+  retry = true,
+): Promise<T> {
+  return parse<T>(await request(path, init, retry));
+}
+export async function apiBlob(
+  path: string,
+  signal: AbortSignal,
+): Promise<Blob> {
+  const response = await request(path, { signal });
+  if (!response.ok) return parse<never>(response);
+  return response.blob();
 }
 export const json = (method: string, body?: unknown): RequestInit => ({
   method,

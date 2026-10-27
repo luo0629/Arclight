@@ -394,6 +394,7 @@ export default function ProjectWorkspace({
                 key={project.id}
                 projectId={project.id}
                 writable={writable}
+                owner={owner}
               />
             ) : page === "members" ? (
               <Members

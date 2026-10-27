@@ -29,6 +29,215 @@ async function setup(page: Page) {
 const save = (page: Page) =>
   page.getByRole("button", { name: "保存视觉资产", exact: true });
 
+const versionPng =
+  "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAMCAIAAADQ/GvKAAAAFUlEQVR4nGNkYPjPgA0wYRVlGMkSADciARf1YEhDAAAAAElFTkSuQmCC";
+async function fillImageImport(page: Page) {
+  await page
+    .getByRole("button", { name: "导入新图片版本", exact: true })
+    .click();
+  await page.getByLabel("版本图片", { exact: true }).setInputFiles({
+    name: "scene.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(versionPng, "base64"),
+  });
+  await page
+    .getByLabel("图片来源说明", { exact: true })
+    .fill("自行绘制的验收图");
+  await page
+    .getByLabel("图片使用权说明", { exact: true })
+    .fill("拥有测试图片使用权");
+  await page
+    .getByRole("checkbox", {
+      name: "我确认拥有此图片的使用权并同意保存到项目私有目录",
+    })
+    .check();
+}
+
+test("ASSET-05：真实原图版本、人工批准、归档历史和精确回执", async ({
+  page,
+}, testInfo) => {
+  const { path, headers } = await setup(page);
+  await create(page, "图片版本场景", "场景");
+  await fillImageImport(page);
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const details = page.getByLabel("精确资产版本详情", { exact: true });
+  await expect(details.getByRole("heading")).toContainText(
+    "版本 v1 · 候选草稿",
+  );
+  await expect(
+    details.getByRole("img", { name: "精确资产版本原图" }),
+  ).toBeVisible();
+  await expect(
+    details.getByText("scene.png · 8×12 · 78 字节", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
+  await expect(details.getByRole("heading")).toContainText("待人工审核");
+  await page.getByRole("button", { name: "批准此版本", exact: true }).click();
+  await expect(details.getByRole("heading")).toContainText("已批准");
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  const versionPath = path + "/" + row.id + "/versions";
+  const first = (
+    await (await page.request.get(versionPath, { headers })).json()
+  )[0];
+  expect(first.status).toBe("APPROVED");
+  expect(row.current_version_id).toBeNull();
+  const image = await page.request.get(
+    versionPath + "/" + first.id + "/image",
+    { headers },
+  );
+  expect((await image.body()).equals(Buffer.from(versionPng, "base64"))).toBe(
+    true,
+  );
+  await page.getByRole("button", { name: "归档此版本", exact: true }).click();
+  await expect(details.getByRole("heading")).toContainText("已归档");
+  await expect(details.getByRole("img")).toBeVisible();
+  await page
+    .getByRole("button", { name: "恢复归档前状态", exact: true })
+    .click();
+  await expect(details.getByRole("heading")).toContainText("已批准");
+  await fillImageImport(page);
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(details.getByRole("heading")).toContainText(
+    "版本 v2 · 候选草稿",
+  );
+  await page
+    .getByRole("button", { name: "查看资产版本 v1 · 已批准", exact: true })
+    .click();
+  await expect(details.getByRole("heading")).toContainText("版本 v1 · 已批准");
+  await page.screenshot({
+    path: testInfo.outputPath("asset-versions-desktop.png"),
+    fullPage: true,
+  });
+  await details.getByRole("img").scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("asset-versions-preview-desktop.png"),
+    fullPage: true,
+  });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("asset-versions-mobile.png"),
+    fullPage: true,
+  });
+  await details.getByRole("img").scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("asset-versions-preview-mobile.png"),
+    fullPage: true,
+  });
+  await page.reload();
+  await openWorkspacePanels(page);
+  await page.getByRole("button", { name: "视觉资产", exact: true }).click();
+  await page
+    .getByRole("button", { name: "场景 · 图片版本场景", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "查看资产版本 v1 · 已批准", exact: true })
+    .click();
+  await expect(details.getByRole("img")).toBeVisible();
+  expect(
+    (
+      await (
+        await page.request.get(versionPath + "/" + first.id, { headers })
+      ).json()
+    ).checksum,
+  ).toBe(first.checksum);
+});
+
+test("ASSET-05：未知提交结果幂等重放、状态冲突保留说明和图片失败重试", async ({
+  page,
+}) => {
+  const { path, headers } = await setup(page);
+  await create(page, "重试版本");
+  await fillImageImport(page);
+  let dropped = false;
+  await page.route("**/assets/*/versions", async (route) => {
+    if (route.request().method() === "POST" && !dropped) {
+      dropped = true;
+      const response = await route.fetch();
+      expect(response.status()).toBe(201);
+      await route.abort();
+    } else await route.continue();
+  });
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await expect(page.getByRole("dialog").getByRole("alert")).toBeVisible();
+  await expect(page.getByLabel("图片来源说明", { exact: true })).toHaveValue(
+    "自行绘制的验收图",
+  );
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  const versionPath = path + "/" + row.id + "/versions";
+  const versions = await (
+    await page.request.get(versionPath, { headers })
+  ).json();
+  expect(versions).toHaveLength(1);
+  const version = versions[0];
+  await page.getByLabel("版本状态说明", { exact: true }).fill("本地审核草稿");
+  const changed = await page.request.patch(
+    versionPath + "/" + version.id + "/state",
+    {
+      headers,
+      data: { expected_revision: 0, status: "READY_FOR_REVIEW" },
+    },
+  );
+  expect(changed.status()).toBe(200);
+  await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("资产版本状态已改变");
+  await expect(page.getByLabel("版本状态说明", { exact: true })).toHaveValue(
+    "本地审核草稿",
+  );
+  await page.getByRole("button", { name: "刷新资产版本", exact: true }).click();
+  let imageAvailable = false;
+  await page.route("**/versions/*/image", async (route) => {
+    if (!imageAvailable) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "TEST_UNAVAILABLE", message: "测试图片暂不可读" },
+        }),
+      });
+    } else await route.continue();
+  });
+  // Remount the exact preview to exercise a failed authenticated GET and a GET-only retry.
+  await fillImageImport(page);
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await page
+    .getByRole("button", { name: "放弃导入并关闭", exact: true })
+    .click();
+  await page.reload();
+  await openWorkspacePanels(page);
+  await page.getByRole("button", { name: "视觉资产", exact: true }).click();
+  await page
+    .getByRole("button", { name: "角色 · 重试版本", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "查看资产版本 v1 · 待人工审核", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "重试读取图片", exact: true }),
+  ).toBeVisible();
+  imageAvailable = true;
+  await page.getByRole("button", { name: "重试读取图片", exact: true }).click();
+  await expect(
+    page.getByRole("img", { name: "精确资产版本原图" }),
+  ).toBeVisible();
+});
+
 test("ASSET-04：场景与关键道具设定真实持久化、冲突及移动端", async ({
   page,
 }, testInfo) => {
@@ -594,6 +803,11 @@ test("ASSET-01：项目归档只读与跨项目页面隔离", async ({ page }) =
 test("ASSET-01：Viewer 可查目录和详情但不能修改", async ({ page }) => {
   const { project, headers } = await setup(page);
   await create(page, "只读资产");
+  await fillImageImport(page);
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   const registered = await page.request.post("/api/v1/auth/register", {
     data: {
       email: `asset-viewer-${crypto.randomUUID()}@example.com`,
@@ -618,8 +832,20 @@ test("ASSET-01：Viewer 可查目录和详情但不能修改", async ({ page }) 
     .getByRole("button", { name: "角色 · 只读资产", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "只读资产 · 修订 0", exact: true }),
+    page.getByRole("heading", { name: "只读资产 · 修订 1", exact: true }),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "查看资产版本 v1 · 候选草稿", exact: true })
+    .click();
+  await expect(
+    page.getByRole("img", { name: "精确资产版本原图" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "导入新图片版本", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "提交版本审核", exact: true }),
+  ).toHaveCount(0);
   await expect(
     page.getByText("当前项目只读，可查看视觉资产。", { exact: true }),
   ).toBeVisible();

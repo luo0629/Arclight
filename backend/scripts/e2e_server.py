@@ -28,6 +28,7 @@ def main():
         database_url="sqlite:///" + (folder / "business.db").as_posix(),
         checkpoint_url="sqlite:///" + (folder / "checkpoints.db").as_posix(),
         auth_requests_per_minute=300,
+        asset_storage_path=folder / "asset-objects",
     )
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url

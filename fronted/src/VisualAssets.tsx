@@ -24,6 +24,7 @@ import usePagedList from "./usePagedList";
 import AssetMetadataPanel from "./AssetMetadata";
 import CharacterPanel from "./CharacterProfile";
 import ScenePropPanel from "./ScenePropProfile";
+import AssetVersions from "./AssetVersions";
 
 const kinds: Record<VisualAssetType, string> = {
   CHARACTER: "角色",
@@ -36,9 +37,11 @@ type Editor = { asset: VisualAsset | null };
 export default function VisualAssets({
   projectId,
   writable,
+  owner,
 }: {
   projectId: string;
   writable: boolean;
+  owner: boolean;
 }) {
   const path = `/projects/${projectId}/assets`;
   const list = usePagedList<VisualAsset>(path);
@@ -235,6 +238,14 @@ export default function VisualAssets({
                 asset={selected}
                 path={path}
                 writable={writable}
+                onSaved={saved}
+              />
+              <AssetVersions
+                key={"versions-" + selected.id}
+                asset={selected}
+                path={path}
+                writable={writable}
+                owner={owner}
                 onSaved={saved}
               />
               {selected.asset_type === "CHARACTER" && (

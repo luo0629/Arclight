@@ -33,3 +33,6 @@ playwright-report/
 
 # Local screenshots and acceptance artifacts
 /artifacts/
+
+# Private local asset objects (never commit user media)
+.local/

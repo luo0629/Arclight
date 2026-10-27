@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr, model_validator
@@ -27,6 +28,7 @@ class Settings(BaseSettings):
     refresh_token_days: int = Field(default=30, ge=1, le=90)
     allow_registration: bool = True
     max_request_bytes: int = Field(default=2_000_000, ge=1024, le=100_000_000)
+    asset_storage_path: Path | None = None
     auth_requests_per_minute: int = Field(default=30, ge=1, le=10000)
     auth_allowed_origins: list[str] = Field(default_factory=list)
 

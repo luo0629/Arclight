@@ -1,0 +1,311 @@
+"""Append-only manual image versions with separate, CAS-protected lifecycle state."""
+
+import hashlib
+import json
+from typing import Literal
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Request, Response
+from pydantic import Field, field_validator
+from sqlalchemy import func, select, update
+
+from arclight.api.assets import AssetRead, change_asset, find_asset
+from arclight.api.collaboration import audit
+from arclight.api.dependencies import Actor, Database
+from arclight.api.routes import Limit, Offset
+from arclight.api.schemas import Input, Resource
+from arclight.application.asset_objects import object_key, read_object, write_object
+from arclight.application.commands import require_project
+from arclight.core.errors import DomainError
+from arclight.domain.asset_versions import MAX_IMAGE_BASE64, decode_image, next_status
+from arclight.persistence.models import AssetVersion
+
+router = APIRouter(
+    prefix="/api/v1/projects/{project_id}/assets/{asset_id}/versions", tags=["asset-versions"]
+)
+
+
+class VersionCreate(Input):
+    creation_key: UUID
+    expected_revision: int = Field(strict=True, ge=0)
+    original_name: str = Field(min_length=1, max_length=160)
+    media_type: Literal["image/png", "image/jpeg"]
+    content_base64: str = Field(min_length=1, max_length=MAX_IMAGE_BASE64)
+    source_note: str = Field(min_length=1, max_length=1000)
+    rights_note: str = Field(min_length=1, max_length=1000)
+    rights_confirmed: Literal[True]
+
+    @field_validator("rights_confirmed", mode="before")
+    @classmethod
+    def confirm_rights(cls, value: object) -> object:
+        if value is not True:
+            raise ValueError("必须明确确认图片使用权")
+        return value
+
+    @field_validator("original_name")
+    @classmethod
+    def safe_name(cls, value: str) -> str:
+        if any(ord(char) < 32 for char in value) or "/" in value or "\\" in value:
+            raise ValueError("文件名不能包含路径或控制字符")
+        return value
+
+
+class VersionState(Input):
+    expected_revision: int = Field(strict=True, ge=0)
+    status: Literal["READY_FOR_REVIEW", "APPROVED", "REJECTED", "STALE", "ARCHIVED", "RESTORE"]
+    comment: str = Field(default="", max_length=1000)
+
+
+class VersionRead(Resource):
+    asset_id: UUID
+    version_no: int
+    checksum: str
+    created_by: str
+    status: str
+    stale: bool
+    revision: int
+    archived_from_status: str | None
+    # Only this service's allowlisted, server-produced metadata is public.
+    media: dict | None
+    asset_snapshot: dict | None
+
+
+def read_version(row: AssetVersion) -> VersionRead:
+    local = row.creation_key is not None and row.metadata_json.get("storage_backend") == "LOCAL"
+    return VersionRead(
+        id=row.id,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        asset_id=row.asset_id,
+        version_no=row.version_no,
+        checksum=row.checksum,
+        created_by=row.created_by,
+        status=row.status,
+        stale=row.stale,
+        revision=row.revision,
+        archived_from_status=row.archived_from_status,
+        media=row.metadata_json.get("media") if local else None,
+        asset_snapshot=row.metadata_json.get("asset_snapshot") if local else None,
+    )
+
+
+def find_version(db: Database, asset_id: UUID, version_id: UUID) -> AssetVersion:
+    row = db.get(AssetVersion, version_id, populate_existing=True)
+    if row is None or row.asset_id != asset_id:
+        raise DomainError("NOT_FOUND", "资产版本不存在", 404)
+    return row
+
+
+@router.get("")
+def list_versions(
+    project_id: UUID,
+    asset_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[VersionRead]:
+    require_project(db, project_id, actor)
+    find_asset(db, project_id, asset_id)
+    return [
+        read_version(row)
+        for row in db.scalars(
+            select(AssetVersion)
+            .where(AssetVersion.asset_id == asset_id)
+            .order_by(AssetVersion.version_no, AssetVersion.id)
+            .limit(limit)
+            .offset(offset)
+        )
+    ]
+
+
+@router.get("/{version_id}")
+def get_version(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    db: Database,
+    actor: Actor,
+) -> VersionRead:
+    require_project(db, project_id, actor)
+    find_asset(db, project_id, asset_id)
+    return read_version(find_version(db, asset_id, version_id))
+
+
+@router.get("/{version_id}/image")
+def get_image(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> Response:
+    require_project(db, project_id, actor)
+    find_asset(db, project_id, asset_id)
+    row = find_version(db, asset_id, version_id)
+    if row.creation_key is None or row.metadata_json.get("storage_backend") != "LOCAL":
+        raise DomainError("ASSET_OBJECT_UNAVAILABLE", "此历史图片尚未接入本机读取", 409)
+    data = read_object(
+        request.app.state.settings.asset_storage_path,
+        project_id,
+        row.id,
+        row.object_key,
+        row.checksum,
+    )
+    return Response(
+        data,
+        media_type=row.metadata_json["media"]["media_type"],
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'inline; filename="asset-image"',
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
+
+
+@router.post("", status_code=201)
+def create_version(
+    project_id: UUID,
+    asset_id: UUID,
+    payload: VersionCreate,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> VersionRead:
+    require_project(db, project_id, actor, write=True)
+    asset = find_asset(db, project_id, asset_id)
+    fingerprint = hashlib.sha256(
+        json.dumps(
+            payload.model_dump(mode="json", exclude={"expected_revision", "creation_key"}),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    existing = db.scalar(
+        select(AssetVersion).where(
+            AssetVersion.asset_id == asset_id, AssetVersion.creation_key == payload.creation_key
+        )
+    )
+    if existing is not None:
+        if existing.metadata_json.get("request_sha256") != fingerprint:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一导入标识不能用于不同图片或资料", 409)
+        return read_version(existing)
+    if asset.status in {"ARCHIVED", "LOCKED"}:
+        raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能创建新版本", 409)
+    image = decode_image(payload.content_base64, payload.media_type)
+    snapshot = AssetRead.model_validate(asset).model_dump(mode="json")
+    change_asset(db, asset, payload.expected_revision)
+    number = (
+        db.scalar(
+            select(func.max(AssetVersion.version_no)).where(AssetVersion.asset_id == asset_id)
+        )
+        or 0
+    ) + 1
+    row = AssetVersion(
+        id=uuid4(),
+        asset_id=asset_id,
+        version_no=number,
+        checksum=image.checksum,
+        created_by=actor,
+        creation_key=payload.creation_key,
+        status="DRAFT",
+        metadata_json={
+            "storage_backend": "LOCAL",
+            "request_sha256": fingerprint,
+            "asset_snapshot": snapshot,
+            "media": {
+                "media_type": image.media_type,
+                "byte_size": len(image.data),
+                "width": image.width,
+                "height": image.height,
+                "original_name": payload.original_name,
+                "source_note": payload.source_note,
+                "rights_note": payload.rights_note,
+                "rights_confirmed": True,
+            },
+        },
+    )
+    row.object_key = object_key(project_id, row.id)
+    write_object(db, request.app.state.settings.asset_storage_path, project_id, row.id, image.data)
+    db.add(row)
+    db.flush()
+    db.refresh(row)
+    audit(
+        db,
+        project_id,
+        actor,
+        "asset.version_created",
+        row.id,
+        {"asset_id": str(asset_id), "version_no": number, "checksum": row.checksum},
+    )
+    return read_version(row)
+
+
+@router.patch("/{version_id}/state")
+def update_version_state(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    payload: VersionState,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> VersionRead:
+    require_project(
+        db, project_id, actor, write=True, owner=payload.status in {"APPROVED", "REJECTED", "STALE"}
+    )
+    asset = find_asset(db, project_id, asset_id)
+    row = find_version(db, asset_id, version_id)
+    if asset.status in {"ARCHIVED", "LOCKED"}:
+        raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产只允许查看版本", 409)
+    if row.revision != payload.expected_revision:
+        raise DomainError("VERSION_CONFLICT", "资产版本状态已改变，请刷新后重试", 409)
+    target = next_status(row.status, payload.status, row.archived_from_status)
+    if asset.current_version_id == row.id and target == "ARCHIVED":
+        raise DomainError("ASSET_VERSION_IN_USE", "当前选用版本不能直接归档", 409)
+    if payload.status in {"REJECTED", "STALE"} and not payload.comment:
+        raise DomainError("REVIEW_COMMENT_REQUIRED", "拒绝或标记失效必须说明原因", 422)
+    if target in {"READY_FOR_REVIEW", "APPROVED"}:
+        if row.creation_key is None or row.metadata_json.get("storage_backend") != "LOCAL":
+            raise DomainError("ASSET_OBJECT_UNAVAILABLE", "历史对象须接入并核验后才能重新审核", 409)
+        read_object(
+            request.app.state.settings.asset_storage_path,
+            project_id,
+            row.id,
+            row.object_key,
+            row.checksum,
+        )
+    before = row.status
+    changed = db.scalar(
+        update(AssetVersion)
+        .where(AssetVersion.id == row.id, AssetVersion.revision == payload.expected_revision)
+        .values(
+            status=target,
+            stale=row.stale or target == "STALE",
+            revision=AssetVersion.revision + 1,
+            archived_from_status=before if target == "ARCHIVED" else None,
+        )
+        .returning(AssetVersion.id)
+        .execution_options(synchronize_session=False)
+    )
+    if changed is None:
+        raise DomainError("VERSION_CONFLICT", "资产版本状态已改变，请刷新后重试", 409)
+    db.refresh(row)
+    audit(
+        db,
+        project_id,
+        actor,
+        "asset.version_state_changed",
+        row.id,
+        {
+            "asset_id": str(asset_id),
+            "from": before,
+            "to": target,
+            "revision": row.revision,
+            "comment": payload.comment,
+        },
+    )
+    return read_version(row)

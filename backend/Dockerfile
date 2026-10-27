@@ -7,7 +7,8 @@ COPY pyproject.toml uv.lock ./
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./
-RUN uv sync --frozen --no-dev && useradd --create-home arclight
+RUN uv sync --frozen --no-dev && useradd --create-home arclight \
+    && install -d -o arclight -g arclight /app/asset-objects
 USER arclight
 EXPOSE 8000
 CMD ["/app/.venv/bin/uvicorn", "arclight.main:app", "--host", "0.0.0.0", "--port", "8000"]
