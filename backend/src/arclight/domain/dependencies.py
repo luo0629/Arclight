@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from arclight.core.errors import DomainError
+
 DependencyType = Literal[
     "CONTENT_DEPENDENCY",
     "STYLE_DEPENDENCY",
@@ -13,6 +15,46 @@ DependencyType = Literal[
     "REFERENCE_DEPENDENCY",
     "RENDER_DEPENDENCY",
 ]
+
+IMAGE_KINDS = frozenset({"CHARACTER", "SCENE", "PROP", "STYLE", "SHOT_IMAGE"})
+
+# These describe dependency contracts, not availability of media generation APIs.
+CONTENT_TARGETS = {
+    "SCRIPT": frozenset(
+        {"SCRIPT", "STORYBOARD", "SHOT_IMAGE", "SHOT_PREVIEW", "AUDIO", "SUBTITLE", "TIMELINE"}
+    ),
+    "STORYBOARD": frozenset({"STORYBOARD", "SHOT_IMAGE", "SHOT_PREVIEW", "TIMELINE"}),
+    "AUDIO": frozenset({"AUDIO", "SUBTITLE", "TIMELINE"}),
+    "SUBTITLE": frozenset({"SUBTITLE", "TIMELINE"}),
+    "SHOT_PREVIEW": frozenset({"SHOT_PREVIEW", "TIMELINE"}),
+    **{kind: IMAGE_KINDS | {"SHOT_PREVIEW", "TIMELINE"} for kind in IMAGE_KINDS},
+}
+
+
+def validate_dependency_type(source_kind: str, target_kind: str, dependency_type: str) -> None:
+    allowed = False
+    if dependency_type == "CONTENT_DEPENDENCY":
+        allowed = target_kind in CONTENT_TARGETS.get(source_kind, frozenset())
+    elif dependency_type == "STYLE_DEPENDENCY":
+        allowed = source_kind in IMAGE_KINDS | {"VISUAL_BIBLE"} and target_kind in (
+            IMAGE_KINDS | {"SCRIPT", "STORYBOARD", "SHOT_PREVIEW"}
+        )
+    elif dependency_type == "REFERENCE_DEPENDENCY":
+        allowed = source_kind in IMAGE_KINDS and target_kind in IMAGE_KINDS | {"SHOT_PREVIEW"}
+    elif dependency_type == "SEQUENCE_DEPENDENCY":
+        allowed = source_kind in {"STORYBOARD", "TIMELINE"} and target_kind in {
+            "TIMELINE",
+            "RENDER",
+        }
+    elif dependency_type == "RENDER_DEPENDENCY":
+        allowed = source_kind in IMAGE_KINDS | {
+            "SHOT_PREVIEW",
+            "AUDIO",
+            "SUBTITLE",
+            "TIMELINE",
+        } and target_kind in {"TIMELINE", "RENDER"}
+    if not allowed:
+        raise DomainError("INVALID_DEPENDENCY_TYPE", "该来源和目标不允许使用此依赖类型", 422)
 
 
 class DependencyInput(BaseModel):

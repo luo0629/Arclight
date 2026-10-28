@@ -8,14 +8,55 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, aliased
 
 from arclight.core.errors import DomainError
-from arclight.domain.dependencies import ManifestCreate
+from arclight.domain.dependencies import ManifestCreate, validate_dependency_type
 from arclight.persistence.models import (
     AssetDependency,
     AssetVersion,
     DependencyManifest,
     DependencyOutput,
+    Project,
     VisualAsset,
 )
+
+
+def lock_dependency_graph(db: Session, project_id: UUID) -> None:
+    """Serialize validation and writes, including callers outside HTTP routes."""
+    connection = db.connection()
+    if connection.dialect.name == "sqlite":
+        driver = connection.connection.driver_connection
+        assert driver is not None
+        if not driver.in_transaction:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+    project = db.get(Project, project_id, populate_existing=True, with_for_update=True)
+    if project is None or project.deleted_at is not None:
+        raise DomainError("NOT_FOUND", "项目不存在", 404)
+    if project.archived:
+        raise DomainError("PROJECT_ARCHIVED", "归档项目只允许查看", 409)
+
+
+def reject_dependency_cycle(
+    db: Session, project_id: UUID, target_id: UUID, source_ids: list[UUID]
+) -> None:
+    # UNION (not UNION ALL) terminates even if imported legacy data has a cycle.
+    reachable = (
+        select(AssetVersion.id.label("version_id"))
+        .where(AssetVersion.id == target_id)
+        .cte("dependency_reachable", recursive=True)
+    )
+    reachable = reachable.union(
+        select(AssetDependency.target_asset_version_id)
+        .join(reachable, AssetDependency.source_asset_version_id == reachable.c.version_id)
+        .join(AssetVersion, AssetVersion.id == AssetDependency.target_asset_version_id)
+        .join(VisualAsset, VisualAsset.id == AssetVersion.asset_id)
+        .where(VisualAsset.project_id == project_id)
+    )
+    if (
+        db.scalar(
+            select(reachable.c.version_id).where(reachable.c.version_id.in_(source_ids)).limit(1)
+        )
+        is not None
+    ):
+        raise DomainError("DEPENDENCY_CYCLE", "依赖不能形成自环或循环", 409)
 
 
 def exact_version(
@@ -25,6 +66,7 @@ def exact_version(
         select(AssetVersion, VisualAsset)
         .join(VisualAsset, VisualAsset.id == AssetVersion.asset_id)
         .where(AssetVersion.id == version_id, VisualAsset.project_id == project_id)
+        .execution_options(populate_existing=True)
     ).first()
     if result is None:
         raise DomainError("NOT_FOUND", "精确资产版本不存在", 404)
@@ -41,6 +83,7 @@ def require_manifest(db: Session, project_id: UUID, manifest_id: UUID) -> Depend
 def capture_manifest(
     db: Session, project_id: UUID, actor: str, payload: ManifestCreate
 ) -> tuple[DependencyManifest, bool]:
+    lock_dependency_graph(db, project_id)
     fingerprint = hashlib.sha256(
         json.dumps(
             payload.model_dump(mode="json", exclude={"creation_key"}), sort_keys=True
@@ -56,7 +99,7 @@ def capture_manifest(
         if previous.request_fingerprint != fingerprint:
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一保存键不能用于不同输入清单", 409)
         return previous, False
-    target = db.get(VisualAsset, payload.target_asset_id)
+    target = db.get(VisualAsset, payload.target_asset_id, populate_existing=True)
     if target is None or target.project_id != project_id:
         raise DomainError("NOT_FOUND", "目标资产不存在", 404)
     if target.status in {"ARCHIVED", "LOCKED"}:
@@ -64,6 +107,7 @@ def capture_manifest(
     inputs = []
     for item in payload.inputs:
         version, asset = exact_version(db, project_id, item.source_asset_version_id)
+        validate_dependency_type(asset.asset_type, target.asset_type, item.dependency_type)
         if (
             version.stale
             or version.status not in {"APPROVED", "LOCKED"}
@@ -102,7 +146,9 @@ def capture_manifest(
 def attach_output(
     db: Session, project_id: UUID, manifest_id: UUID, output: AssetVersion
 ) -> list[AssetDependency]:
+    lock_dependency_graph(db, project_id)
     manifest = require_manifest(db, project_id, manifest_id)
+    output, target = exact_version(db, project_id, output.id)
     if manifest.target_asset_id != output.asset_id or output.metadata_json.get(
         "dependency_manifest_id"
     ) != str(manifest.id):
@@ -118,6 +164,19 @@ def attach_output(
                 select(AssetDependency).where(AssetDependency.target_asset_version_id == output.id)
             )
         )
+    source_ids = []
+    for item in manifest.snapshot_json["inputs"]:
+        version, source = exact_version(db, project_id, UUID(item["source_asset_version_id"]))
+        if (
+            item["asset_id"] != str(source.id)
+            or item["asset_type"] != source.asset_type
+            or item["version_no"] != version.version_no
+            or item["checksum"] != version.checksum
+        ):
+            raise DomainError("INVALID_DEPENDENCY_INPUT", "输入清单与精确版本身份不匹配", 409)
+        validate_dependency_type(source.asset_type, target.asset_type, item["dependency_type"])
+        source_ids.append(version.id)
+    reject_dependency_cycle(db, project_id, output.id, source_ids)
     rows = [
         AssetDependency(
             source_asset_version_id=UUID(item["source_asset_version_id"]),
