@@ -1,6 +1,6 @@
 from decimal import Decimal
 from typing import Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter
 from pydantic import Field, model_validator
@@ -10,6 +10,7 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import EpisodeRead, Input, ProjectRead, RunRead
 from arclight.application.commands import require_episode, require_project
+from arclight.application.visual_bible import append_version
 from arclight.core.errors import DomainError
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.persistence.models import (
@@ -28,6 +29,7 @@ class ProjectPatch(Input):
     story_settings: ProjectStorySettings | None = None
     name: str | None = Field(default=None, min_length=1, max_length=160)
     style_guide: dict | None = None
+    expected_visual_version_no: int | None = Field(default=None, strict=True, ge=0)
     output_profile: dict | None = None
     budget_limit: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     archived: bool | None = None
@@ -107,12 +109,35 @@ def patch_project(
     project = require_project(db, project_id, actor, owner=True)
     db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
     changes = payload.model_dump(exclude_unset=True)
+    changes.pop("expected_visual_version_no", None)
     if payload.story_settings is not None:
         changes["story_settings"] = payload.story_settings.model_dump()
     if project.archived and changes != {"archived": False}:
         raise DomainError("PROJECT_ARCHIVED", "请先恢复项目再编辑", 409)
     if changes:
         require_idle(db, select(Episode.id).where(Episode.project_id == project_id))
+    if "style_guide" in changes:
+        style = changes.pop("style_guide")
+        if style != project.style_guide:
+            old_other = {k: v for k, v in project.style_guide.items() if k != "description"}
+            new_other = {k: v for k, v in style.items() if k != "description"}
+            if new_other != old_other or not isinstance(style.get("description"), str):
+                raise DomainError(
+                    "VISUAL_BIBLE_REQUIRED", "请使用字段级视觉规范编辑，旧配置只能原样保留", 422
+                )
+            if payload.expected_visual_version_no is None:
+                raise DomainError("VISUAL_BIBLE_REQUIRED", "修改风格须提供视觉规范版本号", 422)
+            row, _ = append_version(
+                db,
+                project,
+                actor,
+                payload.expected_visual_version_no,
+                uuid4(),
+                patch={"art_style": style["description"]},
+            )
+            audit(
+                db, project_id, actor, "visual_bible.saved", row.id, {"version_no": row.version_no}
+            )
     for key, value in changes.items():
         setattr(project, key, value)
     audit(db, project_id, actor, "project.updated", project_id, {"fields": list(changes)})

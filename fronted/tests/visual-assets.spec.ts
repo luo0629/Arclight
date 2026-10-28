@@ -537,6 +537,135 @@ test("ASSET-09：实际剧集场景镜头引用、失败重试和精确版本导
   ).toHaveAttribute("aria-checked", "true");
 });
 
+test("ASSET-10：视觉规范字段、历史锁定、并发草稿和旧入口保护", async ({
+  page,
+}, testInfo) => {
+  const { project, headers } = await setup(page);
+  const endpoint = `/api/v1/projects/${project.id}/visual-bible`;
+  await page.getByText("项目视觉规范（Visual Bible）", { exact: true }).click();
+  const bible = page.getByLabel("项目视觉规范", { exact: true });
+  await expect(bible).toContainText("当前视觉规范 v0");
+  await bible.getByLabel("画风描述", { exact: true }).fill("水彩第一版");
+  await bible.getByLabel("主要配色", { exact: true }).fill("蓝灰");
+  await bible
+    .getByRole("button", { name: "另存视觉规范新版本", exact: true })
+    .click();
+  await expect(bible).toContainText("已保存视觉规范 v1");
+  await bible
+    .getByRole("button", { name: "锁定画风描述", exact: true })
+    .click();
+  await expect(bible).toContainText("已保存视觉规范 v2");
+  await expect(
+    bible.getByLabel("画风描述 · 已锁定", { exact: true }),
+  ).toBeDisabled();
+  const legacy = await page.request.patch(`/api/v1/projects/${project.id}`, {
+    headers,
+    data: {
+      style_guide: { description: "绕过", palette: "蓝灰" },
+      expected_visual_version_no: 2,
+    },
+  });
+  expect(legacy.status()).toBe(409);
+  await bible.getByLabel("光照原则", { exact: true }).fill("柔光");
+  await bible
+    .getByRole("button", { name: "另存视觉规范新版本", exact: true })
+    .click();
+  await expect(bible).toContainText("已保存视觉规范 v3");
+  await bible
+    .getByRole("button", { name: "查看视觉规范历史", exact: true })
+    .click();
+  await bible
+    .getByRole("button", { name: "查看视觉规范 v1", exact: true })
+    .click();
+  const historical = bible.getByLabel("精确视觉规范版本", { exact: true });
+  await expect(historical).toContainText("画风描述：水彩第一版");
+  await expect(historical).toContainText("光照原则：未填写");
+  await bible
+    .getByRole("button", { name: "解锁画风描述", exact: true })
+    .click();
+  await expect(bible).toContainText("已保存视觉规范 v4");
+  await bible.getByLabel("画风描述", { exact: true }).fill("保留的本机草稿");
+  const external = await page.request.post(endpoint + "/versions", {
+    headers,
+    data: {
+      expected_version_no: 4,
+      creation_key: crypto.randomUUID(),
+      fields: { lighting: "另一编辑改为月光" },
+    },
+  });
+  expect(external.status()).toBe(201);
+  await bible
+    .getByRole("button", { name: "另存视觉规范新版本", exact: true })
+    .click();
+  await expect(bible.getByRole("alert")).toContainText("视觉规范已变化");
+  await expect(bible.getByLabel("画风描述", { exact: true })).toHaveValue(
+    "保留的本机草稿",
+  );
+  await bible
+    .getByRole("button", { name: "刷新规范并保留草稿", exact: true })
+    .click();
+  await expect(bible).toContainText("当前视觉规范 v5");
+  await expect(bible.getByLabel("光照原则", { exact: true })).toHaveValue(
+    "另一编辑改为月光",
+  );
+  await expect(bible.getByLabel("画风描述", { exact: true })).toHaveValue(
+    "保留的本机草稿",
+  );
+  await bible
+    .getByRole("button", { name: "另存视觉规范新版本", exact: true })
+    .click();
+  await expect(bible).toContainText("已保存视觉规范 v6");
+  const saved = await (await page.request.get(endpoint, { headers })).json();
+  expect(saved.fields.lighting).toBe("另一编辑改为月光");
+  expect(saved.fields.art_style).toBe("保留的本机草稿");
+  await bible.getByLabel("视觉负面提示词", { exact: true }).fill("不要噪点");
+  await page.route(
+    "**/visual-bible/versions",
+    async (route) => {
+      if (route.request().method() === "POST") {
+        const response = await route.fetch();
+        expect(response.status()).toBe(201);
+        await route.abort("failed");
+      } else await route.continue();
+    },
+    { times: 1 },
+  );
+  await bible
+    .getByRole("button", { name: "另存视觉规范新版本", exact: true })
+    .click();
+  await expect(
+    bible.getByRole("button", { name: "重试同一视觉规范请求", exact: true }),
+  ).toBeVisible();
+  await expect(
+    bible.getByLabel("视觉负面提示词", { exact: true }),
+  ).toBeDisabled();
+  await bible
+    .getByRole("button", { name: "重试同一视觉规范请求", exact: true })
+    .click();
+  await expect(bible).toContainText("已保存视觉规范 v7");
+  expect(
+    (await (await page.request.get(endpoint + "/versions", { headers })).json())
+      .length,
+  ).toBe(7);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  await bible
+    .getByRole("heading", { name: "Visual Bible · 项目视觉规范", exact: true })
+    .scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: testInfo.outputPath("visual-bible-mobile.png"),
+  });
+  await page.reload();
+  await page.getByText("项目视觉规范（Visual Bible）", { exact: true }).click();
+  await expect(bible.getByLabel("画风描述", { exact: true })).toHaveValue(
+    "保留的本机草稿",
+  );
+});
+
 test("ASSET-08：外部生成声明、参数与历史溯源持久化", async ({ page }) => {
   const { path, headers } = await setup(page);
   await create(page, "来源记录", "场景");

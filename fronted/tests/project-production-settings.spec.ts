@@ -105,6 +105,7 @@ test("TXT-03：Owner 键盘选择画幅、保存风格与帧率、保留扩展�
   const response = await responsePromise;
   expect(response.status()).toBe(200);
   expect(response.request().postDataJSON()).toEqual({
+    expected_visual_version_no: 0,
     style_guide: {
       description: "水彩绘本，柔和线条，避免写实血腥。",
       palette: ["暖黄", "森林绿"],

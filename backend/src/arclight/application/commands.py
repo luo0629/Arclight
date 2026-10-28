@@ -143,9 +143,12 @@ def start_run(
     )
     if active:
         raise DomainError("EPISODE_BUSY", "该剧集已有未完成工作流")
+    from arclight.application.visual_bible import snapshot as visual_snapshot
+
     inputs: dict = {
         "story": story,
         "style_guide": project.style_guide,
+        "visual_bible": visual_snapshot(db, project),
         "story_settings": ProjectStorySettings.model_validate(project.story_settings).model_dump(),
         "target_duration_ms": episode.target_duration_ms,
     }

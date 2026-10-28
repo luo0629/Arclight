@@ -5,7 +5,7 @@ import { FormLabel, Notice } from "@/components/ui-kit";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import {
   Select,
   SelectTrigger,
@@ -78,6 +78,25 @@ export default function ProjectProductionSettings({
   const saving = useRef(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const [visual, setVisual] = useState<{
+    version_no: number;
+    locked_fields: string[];
+  } | null>(null);
+  useEffect(() => {
+    let live = true;
+    void api<{ version_no: number; locked_fields: string[] }>(
+      `/projects/${project.id}/visual-bible`,
+    )
+      .then((row) => {
+        if (live) setVisual(row);
+      })
+      .catch((error) => {
+        if (live) setError(message(error));
+      });
+    return () => {
+      live = false;
+    };
+  }, [project.id]);
   const locked = disabled || busy || project.archived;
   const legacyDescription =
     Object.hasOwn(project.style_guide, "description") &&
@@ -145,14 +164,23 @@ export default function ProjectProductionSettings({
         draft.description !== values(project).description
       )
         styleGuide.description = draft.description.trim();
+      const styleChanged =
+        styleGuide.description !== project.style_guide.description;
+      if (styleChanged && !visual)
+        throw new Error("请先重新载入视觉规范，再修改风格说明。");
       const updated = await api<Project>(
         "/projects/" + project.id,
         json("PATCH", {
           style_guide: styleGuide,
+          ...(styleChanged && visual
+            ? { expected_visual_version_no: visual.version_no }
+            : {}),
           output_profile: { ...project.output_profile, width, height, fps },
         }),
       );
       onSaved(updated);
+      if (styleChanged && visual)
+        setVisual({ ...visual, version_no: visual.version_no + 1 });
       setDraft(values(updated));
       setPreset(presetFor(updated));
       setNotice("风格与画幅已保存");
@@ -195,7 +223,12 @@ export default function ProjectProductionSettings({
                 value={draft.description}
                 onChange={(event) => update("description", event.target.value)}
                 maxLength={10000}
-                disabled={locked || legacyDescription}
+                disabled={
+                  locked ||
+                  legacyDescription ||
+                  visual === null ||
+                  visual.locked_fields.includes("art_style")
+                }
                 placeholder="例如：水彩绘本，柔和线条，暖黄色与森林绿；避免写实血腥画面。"
                 aria-describedby={id + "-style-hint"}
               />
@@ -203,8 +236,9 @@ export default function ProjectProductionSettings({
                 id={id + "-style-hint"}
                 className="muted text-sm text-muted-foreground"
               >
-                可填写画风、配色、光照和需要避免的元素，最多 10000
-                字符；留空不添加额外说明。
+                保存会另存 Visual Bible
+                画风描述版本；字段锁定后请到视觉资产中显式解锁。最多 10000
+                字符。
               </small>
             </Field>
             {legacyDescription && (

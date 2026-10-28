@@ -28,6 +28,7 @@ from arclight.api.story_analysis import router as story_analysis_router
 from arclight.api.story_bible import router as story_bible_router
 from arclight.api.story_outline import router as story_outline_router
 from arclight.api.story_sources import router as story_sources_router
+from arclight.api.visual_bible import router as visual_bible_router
 from arclight.core.config import Settings, get_settings
 from arclight.core.errors import DomainError
 from arclight.persistence.session import build_engine, session_factory
@@ -128,6 +129,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(assets_router)
     app.include_router(asset_usage_router)
+    app.include_router(visual_bible_router)
     app.include_router(asset_versions_router)
     app.include_router(router)
     app.include_router(collaboration_router)

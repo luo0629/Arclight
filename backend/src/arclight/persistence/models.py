@@ -34,6 +34,31 @@ class Project(Entity, Base):
     __table_args__ = (CheckConstraint("budget_limit >= 0", name="budget_nonnegative"),)
 
 
+class VisualBibleVersion(Entity, Base):
+    __tablename__ = "visual_bible_versions"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    version_no: Mapped[int]
+    art_style: Mapped[str] = mapped_column(Text)
+    line_style: Mapped[str] = mapped_column(Text)
+    render_style: Mapped[str] = mapped_column(Text)
+    palette: Mapped[str] = mapped_column(Text)
+    lighting: Mapped[str] = mapped_column(Text)
+    composition: Mapped[str] = mapped_column(Text)
+    prohibited: Mapped[str] = mapped_column(Text)
+    negative_prompt: Mapped[str] = mapped_column(Text)
+    locked_fields: Mapped[list] = mapped_column(JSON_TYPE)
+    legacy_snapshot: Mapped[dict] = mapped_column(JSON_TYPE)
+    change_kind: Mapped[str] = mapped_column(String(16))
+    created_by: Mapped[str] = mapped_column(String(100))
+    creation_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    __table_args__ = (
+        UniqueConstraint("project_id", "version_no", name="uq_visual_bible_version_no"),
+        UniqueConstraint("project_id", "creation_key", name="uq_visual_bible_creation"),
+        CheckConstraint("version_no > 0", name="visual_bible_positive"),
+    )
+
+
 class StoryEntry(Entity, Base):
     __tablename__ = "story_entries"
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)

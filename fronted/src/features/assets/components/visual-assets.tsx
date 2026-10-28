@@ -23,6 +23,7 @@ import CharacterPanel from "@/features/assets/components/character-profile";
 import ScenePropPanel from "@/features/assets/components/scene-prop-profile";
 import AssetVersions from "@/features/assets/components/asset-versions";
 import AssetUsage from "@/features/assets/components/asset-usage";
+import VisualBible from "@/features/assets/components/visual-bible";
 
 const kinds: Record<VisualAssetType, string> = {
   CHARACTER: "角色",
@@ -143,6 +144,17 @@ export default function VisualAssets({
           {error}
         </Notice>
       )}
+      <details className="min-w-0 border-b pb-4">
+        <summary className="cursor-pointer font-semibold">
+          项目视觉规范（Visual Bible）
+        </summary>
+        <VisualBible
+          key={projectId}
+          projectId={projectId}
+          writable={writable}
+          owner={owner}
+        />
+      </details>
       <div className="studio-split">
         <aside className="studio-index" aria-label="视觉资产目录">
           <div className="studio-index-heading">
