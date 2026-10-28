@@ -18,7 +18,7 @@ from arclight.application.asset_objects import object_key, read_object, write_ob
 from arclight.application.commands import require_project
 from arclight.core.errors import DomainError
 from arclight.domain.asset_versions import MAX_IMAGE_BASE64, decode_image, next_status
-from arclight.persistence.models import AssetVersion
+from arclight.persistence.models import AssetSelectionLock, AssetVersion, VisualAsset
 
 router = APIRouter(
     prefix="/api/v1/projects/{project_id}/assets/{asset_id}/versions", tags=["asset-versions"]
@@ -250,9 +250,11 @@ def create_version(
 
 class VersionSelection(Input):
     expected_revision: int = Field(strict=True, ge=0)
+    expected_lock_version: int = Field(strict=True, ge=0)
 
 
-class VersionRestore(VersionSelection):
+class VersionRestore(Input):
+    expected_revision: int = Field(strict=True, ge=0)
     creation_key: UUID
     comment: str = Field(min_length=1, max_length=1000)
 
@@ -282,7 +284,7 @@ def select_version(
         row.checksum,
     )
     previous = asset.current_version_id
-    change_asset(db, asset, payload.expected_revision, current_version_id=row.id)
+    change_selection(db, asset, payload, current_version_id=row.id)
     audit(
         db,
         project_id,
@@ -296,6 +298,121 @@ def select_version(
         },
     )
     return AssetRead.model_validate(asset)
+
+
+def change_selection(db: Database, asset: VisualAsset, payload: VersionSelection, **values) -> None:
+    changed = db.scalar(
+        update(VisualAsset)
+        .where(
+            VisualAsset.id == asset.id,
+            VisualAsset.revision == payload.expected_revision,
+            VisualAsset.lock_version == payload.expected_lock_version,
+        )
+        .values(
+            **values, revision=VisualAsset.revision + 1, lock_version=VisualAsset.lock_version + 1
+        )
+        .returning(VisualAsset.id)
+        .execution_options(synchronize_session=False)
+    )
+    if changed is None:
+        raise DomainError("VERSION_CONFLICT", "资产选用或锁定状态已改变，请刷新后重试", 409)
+    db.refresh(asset)
+
+
+def change_lock(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    payload: VersionSelection,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    *,
+    locked: bool,
+) -> AssetRead:
+    require_project(db, project_id, actor, write=True, owner=True)
+    asset = find_asset(db, project_id, asset_id)
+    version = find_version(db, asset_id, version_id)
+    record = db.scalar(select(AssetSelectionLock).where(AssetSelectionLock.asset_id == asset_id))
+    if asset.current_version_id != version.id or asset.status == "ARCHIVED":
+        raise DomainError("ASSET_SELECTION_CONFLICT", "只能锁定或解锁当前选用的精确版本", 409)
+    before = asset.status
+    if locked:
+        if (
+            before == "LOCKED"
+            or record is not None
+            or version.status != "APPROVED"
+            or version.stale
+        ):
+            raise DomainError("ASSET_LOCK_CONFLICT", "选用版本未批准、失效或已锁定", 409)
+        read_object(
+            request.app.state.settings.asset_storage_path,
+            project_id,
+            version.id,
+            version.object_key,
+            version.checksum,
+        )
+        change_selection(db, asset, payload, status="LOCKED")
+        db.add(
+            AssetSelectionLock(
+                asset_id=asset.id, version_id=version.id, previous_status=before, created_by=actor
+            )
+        )
+        version.status = "LOCKED"
+    else:
+        if (
+            before != "LOCKED"
+            or record is None
+            or record.version_id != version.id
+            or version.status != "LOCKED"
+        ):
+            raise DomainError("ASSET_LOCK_CONFLICT", "没有可安全解除的精确选用锁", 409)
+        change_selection(db, asset, payload, status=record.previous_status)
+        db.delete(record)
+        version.status = "APPROVED"
+    version.revision += 1
+    db.flush()
+    audit(
+        db,
+        project_id,
+        actor,
+        "asset.selection_locked" if locked else "asset.selection_unlocked",
+        asset.id,
+        {
+            "version_id": str(version.id),
+            "from": before,
+            "to": asset.status,
+            "lock_version": asset.lock_version,
+            "revision": asset.revision,
+        },
+    )
+    return AssetRead.model_validate(asset)
+
+
+@router.post("/{version_id}/lock")
+def lock_selection(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    payload: VersionSelection,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> AssetRead:
+    return change_lock(project_id, asset_id, version_id, payload, request, db, actor, locked=True)
+
+
+@router.post("/{version_id}/unlock")
+def unlock_selection(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    payload: VersionSelection,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> AssetRead:
+    return change_lock(project_id, asset_id, version_id, payload, request, db, actor, locked=False)
 
 
 @router.post("/{version_id}/restore-as-new", status_code=201)

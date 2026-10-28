@@ -407,6 +407,58 @@ async function create(page: Page, name: string, kind = "角色") {
   ).toBeVisible();
 }
 
+test("ASSET-07：选用锁定、只读、解锁及并发冲突", async ({ page }) => {
+  const { path, headers } = await setup(page);
+  await create(page, "选用锁", "场景");
+  await fillImageImport(page);
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
+  await page.getByRole("button", { name: "批准此版本", exact: true }).click();
+  await page.getByRole("button", { name: "选用此版本", exact: true }).click();
+  await page.getByRole("button", { name: "锁定当前选用", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "解锁当前选用", exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "导入新图片版本", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "编辑资产名称", exact: true }),
+  ).toBeDisabled();
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  expect(row.status).toBe("LOCKED");
+  expect(row.lock_version).toBe(2);
+  await page.reload();
+  await page
+    .getByRole("button", { name: "场景 · 选用锁", exact: true })
+    .click();
+  await page.getByRole("button", { name: "解锁当前选用", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "编辑资产名称", exact: true }),
+  ).toBeEnabled();
+  const latest = (await (await page.request.get(path, { headers })).json())[0];
+  await page.request.post(
+    path + "/" + row.id + "/versions/" + row.current_version_id + "/lock",
+    {
+      headers,
+      data: {
+        expected_revision: latest.revision,
+        expected_lock_version: latest.lock_version,
+      },
+    },
+  );
+  await page.getByRole("button", { name: "锁定当前选用", exact: true }).click();
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("已锁定");
+  await page.getByRole("button", { name: "刷新视觉资产", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: "解锁当前选用", exact: true }),
+  ).toBeVisible();
+});
+
 test("ASSET-06：人工选用精确版本、历史另存与重新审核", async ({ page }) => {
   const { path, headers } = await setup(page);
   await create(page, "选用与恢复", "场景");

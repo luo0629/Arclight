@@ -24,7 +24,8 @@ def approved(client, row):
 
 def choose(client, row, version):
     return client.post(
-        versions(row) + "/" + version["id"] + "/select", json={"expected_revision": row["revision"]}
+        versions(row) + "/" + version["id"] + "/select",
+        json={"expected_revision": row["revision"], "expected_lock_version": row["lock_version"]},
     )
 
 

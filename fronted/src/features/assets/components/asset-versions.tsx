@@ -109,11 +109,44 @@ export default function AssetVersions({
     try {
       const saved = await api<VisualAsset>(
         endpoint + "/" + selected.id + "/select",
-        json("POST", { expected_revision: asset.revision }),
+        json("POST", {
+          expected_revision: asset.revision,
+          expected_lock_version: asset.lock_version,
+        }),
       );
       if (live.current) {
         await onSaved(saved);
         setNotice("已选用此精确版本");
+      }
+    } catch (error) {
+      if (live.current) setError(message(error));
+    } finally {
+      submitting.current = false;
+      if (live.current) setBusy(false);
+    }
+  }
+  async function toggleLock() {
+    if (!owner || !writable || !asset.current_version_id || submitting.current)
+      return;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const action = asset.status === "LOCKED" ? "unlock" : "lock";
+      const saved = await api<VisualAsset>(
+        endpoint + "/" + asset.current_version_id + "/" + action,
+        json("POST", {
+          expected_revision: asset.revision,
+          expected_lock_version: asset.lock_version,
+        }),
+      );
+      if (live.current) {
+        await onSaved(saved);
+        if (selected) await choose(selected);
+        await list.reload();
+        setNotice(
+          action === "lock" ? "当前选用已锁定" : "已解锁，可继续人工修改",
+        );
       }
     } catch (error) {
       if (live.current) setError(message(error));
@@ -179,6 +212,19 @@ export default function AssetVersions({
       <p className="break-all text-sm" role="status">
         当前选用：{asset.current_version_id ?? "尚未选用"}
       </p>
+      <p className="text-sm">选用锁修订：{asset.lock_version}</p>
+      {owner &&
+        writable &&
+        asset.current_version_id &&
+        asset.status !== "ARCHIVED" && (
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() => void toggleLock()}
+          >
+            {asset.status === "LOCKED" ? "解锁当前选用" : "锁定当前选用"}
+          </Button>
+        )}
       {notice && <Notice role="status">{notice}</Notice>}
       {error && (
         <Notice role="alert" tone="error">

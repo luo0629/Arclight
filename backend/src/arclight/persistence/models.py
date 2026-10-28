@@ -323,6 +323,14 @@ class AssetVersion(Entity, Base):
     )
 
 
+class AssetSelectionLock(Entity, Base):
+    __tablename__ = "asset_selection_locks"
+    asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"), unique=True)
+    version_id: Mapped[UUID] = mapped_column(ForeignKey("asset_versions.id"))
+    previous_status: Mapped[str] = mapped_column(String(32))
+    created_by: Mapped[str] = mapped_column(String(100))
+
+
 class AssetDependency(Entity, Base):
     __tablename__ = "asset_dependencies"
     source_asset_version_id: Mapped[UUID] = mapped_column(
