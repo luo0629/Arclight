@@ -417,6 +417,126 @@ async function create(page: Page, name: string, kind = "角色") {
   ).toBeVisible();
 }
 
+test("ASSET-09：实际剧集场景镜头引用、失败重试和精确版本导航", async ({
+  page,
+}, testInfo) => {
+  const { path, headers, project } = await setup(page);
+  await create(page, "实际引用场景", "场景");
+  await fillImageImport(page);
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
+  await page.getByRole("button", { name: "批准此版本", exact: true }).click();
+  const asset = (await (await page.request.get(path, { headers })).json())[0];
+  const version = (
+    await (
+      await page.request.get(`${path}/${asset.id}/versions`, { headers })
+    ).json()
+  )[0];
+  const reference = { asset_id: asset.id, asset_version_id: version.id };
+  const episodeResponse = await page.request.post(
+    `/api/v1/projects/${project.id}/episodes`,
+    {
+      headers,
+      data: { episode_no: 1, title: "引用验收", target_duration_ms: 30000 },
+    },
+  );
+  expect(episodeResponse.status()).toBe(201);
+  const episode = await episodeResponse.json();
+  const scriptResponse = await page.request.post(
+    `/api/v1/episodes/${episode.id}/scripts`,
+    {
+      headers,
+      data: {
+        expected_version_no: 0,
+        content: {
+          title: "引用剧本",
+          summary: "实际引用",
+          estimated_duration_ms: 30000,
+          characters: ["主角"],
+          scenes: [
+            {
+              scene_no: 1,
+              title: "实际街道",
+              action: "停下",
+              scene_asset: reference,
+            },
+          ],
+        },
+      },
+    },
+  );
+  expect(scriptResponse.status()).toBe(201);
+  const script = await scriptResponse.json();
+  expect(
+    (
+      await page.request.post(
+        `/api/v1/episodes/${episode.id}/scripts/${script.id}/review`,
+        {
+          headers,
+          data: { decision: "APPROVE" },
+        },
+      )
+    ).status(),
+  ).toBe(200);
+  const boardResponse = await page.request.post(
+    `/api/v1/episodes/${episode.id}/storyboards`,
+    {
+      headers,
+      data: {
+        expected_version_no: 0,
+        script_version_id: script.id,
+        content: {
+          shots: [
+            {
+              shot_no: 1,
+              scene_no: 1,
+              duration_ms: 30000,
+              visual_description: "街道",
+              scene_asset: reference,
+            },
+          ],
+        },
+      },
+    },
+  );
+  expect(boardResponse.status()).toBe(201);
+  const board = await boardResponse.json();
+  await page.route(
+    "**/assets/*/usage?*",
+    async (route) => {
+      await route.fulfill({
+        status: 503,
+        json: { error: { message: "引用查询暂不可用" } },
+      });
+    },
+    { times: 1 },
+  );
+  await page.getByRole("button", { name: "查看实际使用", exact: true }).click();
+  const usage = page.getByLabel("资产实际使用", { exact: true });
+  await expect(usage.getByRole("alert")).toBeVisible();
+  await usage
+    .getByRole("button", { name: "重试加载实际引用", exact: true })
+    .click();
+  await expect(usage.getByRole("article")).toHaveCount(2);
+  await expect(usage).toContainText("第 1 集 · 引用验收");
+  await expect(usage).toContainText("场景 1 · 实际街道");
+  await expect(usage).toContainText("场景 1 · 镜头 1");
+  await expect(usage).toContainText(version.id);
+  await usage.screenshot({ path: testInfo.outputPath("asset-usage.png") });
+  await usage
+    .getByRole("link", { name: "打开此内容版本", exact: true })
+    .last()
+    .click();
+  await expect(page).toHaveURL(
+    new RegExp(`view=list&node=storyboard%3A${board.id}`),
+  );
+  await expect(
+    page.getByRole("radio", { name: "版本列表", exact: true }),
+  ).toHaveAttribute("aria-checked", "true");
+});
+
 test("ASSET-08：外部生成声明、参数与历史溯源持久化", async ({ page }) => {
   const { path, headers } = await setup(page);
   await create(page, "来源记录", "场景");

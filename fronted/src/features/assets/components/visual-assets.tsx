@@ -22,6 +22,7 @@ import AssetMetadataPanel from "@/features/assets/components/asset-metadata";
 import CharacterPanel from "@/features/assets/components/character-profile";
 import ScenePropPanel from "@/features/assets/components/scene-prop-profile";
 import AssetVersions from "@/features/assets/components/asset-versions";
+import AssetUsage from "@/features/assets/components/asset-usage";
 
 const kinds: Record<VisualAssetType, string> = {
   CHARACTER: "角色",
@@ -244,6 +245,11 @@ export default function VisualAssets({
                 writable={writable}
                 owner={owner}
                 onSaved={saved}
+              />
+              <AssetUsage
+                key={"usage-" + selected.id}
+                projectId={projectId}
+                path={`${path}/${selected.id}`}
               />
               {selected.asset_type === "CHARACTER" && (
                 <CharacterPanel
