@@ -365,10 +365,40 @@ class AssetDependency(Entity, Base):
         ForeignKey("asset_versions.id"), index=True
     )
     dependency_type: Mapped[str] = mapped_column(String(32))
+    dependency_manifest_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("dependency_manifests.id", name="fk_dependency_manifest"),
+        nullable=True,
+        index=True,
+    )
     __table_args__ = (
         UniqueConstraint("source_asset_version_id", "target_asset_version_id", "dependency_type"),
         CheckConstraint("source_asset_version_id != target_asset_version_id", name="not_self"),
     )
+
+
+class DependencyManifest(Entity, Base):
+    """Frozen requested inputs, captured before a derived version is registered."""
+
+    __tablename__ = "dependency_manifests"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    target_asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"), index=True)
+    creation_key: Mapped[UUID]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE)
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (
+        UniqueConstraint("project_id", "creation_key", name="uq_dependency_manifest_creation"),
+    )
+
+
+class DependencyOutput(Entity, Base):
+    """An immutable receipt binding one new output to its original input manifest."""
+
+    __tablename__ = "dependency_outputs"
+    dependency_manifest_id: Mapped[UUID] = mapped_column(
+        ForeignKey("dependency_manifests.id"), index=True
+    )
+    asset_version_id: Mapped[UUID] = mapped_column(ForeignKey("asset_versions.id"), unique=True)
 
 
 Index("ix_outbox_unpublished", OutboxEvent.published_at, OutboxEvent.created_at)

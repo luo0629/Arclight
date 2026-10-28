@@ -398,25 +398,32 @@ def test_upgrade_preserves_legacy_history_and_downgrade_keeps_guards(
 ):
     engine = client.app.state.engine
     ids = seed_history(engine, episode)
+    # Compare the actual historical columns; later nullable schema additions must
+    # not be queried before their migration exists or synthesized into old rows.
+    from sqlalchemy import MetaData, Table
+
+    historical = {name: Table(name, MetaData(), autoload_with=engine) for name in MUTABLE}
     with engine.connect() as db:
         before = {
-            name: [dict(row) for row in db.execute(select(Base.metadata.tables[name])).mappings()]
+            name: [dict(row) for row in db.execute(select(historical[name])).mappings()]
             for name in MUTABLE
         }
     protect_history()
     command.check(migrated)
+    # Exercise 0019's own guard after safely removing the empty later DAG schema.
+    command.downgrade(migrated, "0019")
     with pytest.raises(RuntimeError, match="Immutable version history exists"):
         command.downgrade(migrated, "0018")
     with engine.connect() as db:
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0019"
         for name, rows in before.items():
-            assert [
-                dict(row) for row in db.execute(select(Base.metadata.tables[name])).mappings()
-            ] == rows
+            assert [dict(row) for row in db.execute(select(historical[name])).mappings()] == rows
     for name in MUTABLE:
         table = Base.metadata.tables[name]
         with pytest.raises(IntegrityError, match="IMMUTABLE_HISTORY"), engine.begin() as db:
             db.execute(table.delete().where(table.c.id == ids[name]))
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_offline_postgres_has_guards_and_refuses_unchecked_downgrade(migrated):

@@ -57,8 +57,8 @@ def settings(tmp_path):
 def migrated(settings, request):
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
-    # 0019 only adds guards, so 0018 still has the current application schema.
-    # Legacy/corrupt snapshots must be seeded BEFORE immutability is installed.
+    # Seed legacy/corrupt snapshots BEFORE 0019 installs immutability. Tests that
+    # inspect a historical schema must reflect it rather than query later columns.
     # This marker is test-only; ordinary business tests always start at head.
     target = "0018" if request.node.get_closest_marker("legacy_schema") else "head"
     command.upgrade(config, target)

@@ -95,6 +95,10 @@ export async function chooseProject(page: Page, project: { name: string }) {
   await openDirectory(page);
   await page.getByRole("combobox", { name: "选择项目", exact: true }).click();
   await page.getByRole("option", { name: project.name, exact: true }).click();
+  // 等目标项目的目录挂载，避免把路由切换的卸载间隙当成已经关闭。
+  await expect(
+    page.getByRole("combobox", { name: "选择项目", exact: true }),
+  ).toContainText(project.name);
   await closeDirectory(page);
 }
 

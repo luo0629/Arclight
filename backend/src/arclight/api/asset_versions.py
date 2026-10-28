@@ -17,6 +17,7 @@ from arclight.api.schemas import Input, Resource
 from arclight.application.asset_objects import object_key, read_object, write_object
 from arclight.application.asset_provenance import capture_provenance
 from arclight.application.commands import require_project
+from arclight.application.dependencies import attach_output, require_manifest
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
 from arclight.domain.asset_versions import MAX_IMAGE_BASE64, decode_image, next_status
@@ -37,6 +38,7 @@ class VersionCreate(Input):
     rights_note: str = Field(min_length=1, max_length=1000)
     rights_confirmed: Literal[True]
     generation: GenerationDeclaration | None = None
+    dependency_manifest_id: UUID | None = None
 
     @field_validator("rights_confirmed", mode="before")
     @classmethod
@@ -74,6 +76,7 @@ class VersionRead(Resource):
     restored_from_version_id: UUID | None = None
     restoration_note: str | None = None
     provenance: dict | None = None
+    dependency_manifest_id: UUID | None = None
 
 
 def read_version(row: AssetVersion) -> VersionRead:
@@ -95,6 +98,7 @@ def read_version(row: AssetVersion) -> VersionRead:
         restored_from_version_id=row.metadata_json.get("restored_from_version_id"),
         restoration_note=row.metadata_json.get("restoration_note"),
         provenance=row.metadata_json.get("provenance") if local else None,
+        dependency_manifest_id=row.metadata_json.get("dependency_manifest_id"),
     )
 
 
@@ -185,9 +189,13 @@ def create_version(
 ) -> VersionRead:
     require_project(db, project_id, actor, write=True)
     asset = find_asset(db, project_id, asset_id)
+    request_values = payload.model_dump(mode="json", exclude={"expected_revision", "creation_key"})
+    # Preserve idempotency fingerprints issued before optional DAG manifests existed.
+    if payload.dependency_manifest_id is None:
+        request_values.pop("dependency_manifest_id")
     fingerprint = hashlib.sha256(
         json.dumps(
-            payload.model_dump(mode="json", exclude={"expected_revision", "creation_key"}),
+            request_values,
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -204,6 +212,10 @@ def create_version(
         return read_version(existing)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能创建新版本", 409)
+    if payload.dependency_manifest_id is not None:
+        manifest = require_manifest(db, project_id, payload.dependency_manifest_id)
+        if manifest.target_asset_id != asset.id:
+            raise DomainError("INVALID_DEPENDENCY_OUTPUT", "输入清单的目标资产不匹配", 409)
     image = decode_image(payload.content_base64, payload.media_type)
     provenance = capture_provenance(db, project_id, image, payload.generation)
     snapshot = AssetRead.model_validate(asset).model_dump(mode="json")
@@ -224,6 +236,9 @@ def create_version(
         status="DRAFT",
         metadata_json={
             "storage_backend": "LOCAL",
+            "dependency_manifest_id": (
+                str(payload.dependency_manifest_id) if payload.dependency_manifest_id else None
+            ),
             "provenance": provenance,
             "request_sha256": fingerprint,
             "asset_snapshot": snapshot,
@@ -244,6 +259,8 @@ def create_version(
     db.add(row)
     db.flush()
     db.refresh(row)
+    if payload.dependency_manifest_id is not None:
+        attach_output(db, project_id, payload.dependency_manifest_id, row)
     audit(
         db,
         project_id,

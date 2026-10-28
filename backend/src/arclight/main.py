@@ -18,6 +18,7 @@ from arclight.api.canvas import router as canvas_router
 from arclight.api.character_matching import router as character_matching_router
 from arclight.api.collaboration import router as collaboration_router
 from arclight.api.content import router as content_router
+from arclight.api.dependencies_graph import router as dependencies_router
 from arclight.api.model_services import router as model_services_router
 from arclight.api.project_deletion import router as project_deletion_router
 from arclight.api.project_overview import router as project_overview_router
@@ -128,6 +129,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(model_services_router)
     app.include_router(auth_router)
     app.include_router(assets_router)
+    app.include_router(dependencies_router)
     app.include_router(asset_usage_router)
     app.include_router(visual_bible_router)
     app.include_router(asset_versions_router)
