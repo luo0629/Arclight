@@ -329,13 +329,16 @@ def test_provider_separates_data_and_checks_output(settings, monkeypatch):
     assert request["response_format"]["json_schema"]["name"] == "StoryAnalysisContent"
 
 
+@pytest.mark.legacy_schema
 def test_migration_roundtrip_and_queued_run_downgrade_guard(client, episode, migrated):
     command.downgrade(migrated, "0007")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     start(client, episode)
     with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0007")
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_offline_analysis_downgrade_requires_online_check():
@@ -432,6 +435,7 @@ def test_custom_provider_snapshot_is_used_and_never_exposed(client, settings, mo
         assert "analysis-first-secret" not in str(db.get(WorkflowRun, UUID(run_id)).input_json)
 
 
+@pytest.mark.legacy_schema
 def test_nonempty_analysis_downgrade_guard(client, episode, settings, migrated):
     execute(client, settings, start(client, episode).json()["run_id"])
     with pytest.raises(RuntimeError, match="Source provenance exists"):

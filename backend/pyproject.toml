@@ -43,6 +43,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["legacy_schema: seed historical data on 0018 before installing immutable guards"]
 
 [tool.mypy]
 python_version = "3.12"

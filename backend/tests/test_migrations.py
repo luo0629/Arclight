@@ -118,6 +118,7 @@ def test_upgrade_preserves_0001_rows_and_backfills_new_columns(settings):
     engine.dispose()
 
 
+@pytest.mark.legacy_schema
 @pytest.mark.parametrize("revision", ["0002", "head"])
 def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, revision):
     from sqlalchemy import text
@@ -132,8 +133,8 @@ def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, 
         },
     )
     assert response.status_code == 201
-    # Current application writes only against head; test old DDL after seeding.
-    command.downgrade(migrated, revision)
+    # Seed on the schema-compatible pre-guard revision, then exercise older DDL.
+    command.downgrade(migrated, "0018" if revision == "head" else revision)
     engine = client.app.state.engine
     tables_before = set(inspect(engine).get_table_names())
     with engine.connect() as db:
@@ -148,7 +149,7 @@ def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, 
     if engine.dialect.name == "postgresql":
         assert set(inspect(engine).get_table_names()) == tables_before
     # Restore head before reading through the current application model.
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     assert (
         client.get(f"/api/v1/episodes/{episode['id']}/scripts").json()[0]["id"]
         == response.json()["id"]

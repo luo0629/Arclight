@@ -247,6 +247,7 @@ def test_analysis_outline_and_cross_episode_writer_retain_exact_source(client, e
     )
 
 
+@pytest.mark.legacy_schema
 def test_0011_backfills_legacy_file_without_touching_bytes_or_run_input(client, episode, migrated):
     command.downgrade(migrated, "0010")
     raw = b"\xef\xbb\xbflegacy\r\n"
@@ -281,8 +282,7 @@ def test_0011_backfills_legacy_file_without_touching_bytes_or_run_input(client, 
         db.add(run)
         db.flush()
         run_id = run.id
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     restored = client.get(sources_path(episode) + "/" + str(source_id)).json()
     assert restored["provenance"]["version_no"] == 1
     assert restored["rights_note"] == "old rights"
@@ -297,6 +297,9 @@ def test_0011_backfills_legacy_file_without_touching_bytes_or_run_input(client, 
         }
     with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0010")
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_offline_source_revision_downgrade_requires_online_provenance_check():

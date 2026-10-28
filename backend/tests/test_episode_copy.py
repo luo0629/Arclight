@@ -158,8 +158,11 @@ def test_independent_copy_rebinds_versions_ids_and_requires_fresh_reviews(client
         assert event.details_json["source_episode_id"] == episode["id"]
 
 
+@pytest.mark.legacy_schema
 @pytest.mark.parametrize("reuse", [True, False])
-def test_reuse_exact_assets_but_not_shot_results_or_quality_approval(client, episode, reuse):
+def test_reuse_exact_assets_but_not_shot_results_or_quality_approval(
+    client, episode, reuse, protect_history
+):
     script, board, refs = source_content(client, episode, with_assets=True)
     with client.app.state.session_factory.begin() as db:
         # Even an old quality relation must not leak into the new draft.
@@ -173,6 +176,7 @@ def test_reuse_exact_assets_but_not_shot_results_or_quality_approval(client, epi
         # The copied identity is the pinned version, not the asset's newest pointer.
         asset = db.get(VisualAsset, UUID(refs["CHARACTER"]["asset_id"]))
         asset.current_version_id = UUID(refs["IMAGE"]["asset_version_id"])
+    protect_history()
     response = duplicate(client, episode, reuse_assets=reuse)
     assert response.status_code == 201, response.text
     target = response.json()
@@ -195,10 +199,13 @@ def test_reuse_exact_assets_but_not_shot_results_or_quality_approval(client, epi
         assert db.scalar(select(func.count()).select_from(VisualAsset)) == 6
 
 
+@pytest.mark.legacy_schema
 @pytest.mark.parametrize(
     "invalid", ["stale", "unapproved", "archived", "foreign", "wrong_kind", "missing"]
 )
-def test_unusable_asset_references_are_removed_without_losing_text(client, episode, invalid):
+def test_unusable_asset_references_are_removed_without_losing_text(
+    client, episode, invalid, protect_history
+):
     script, board, refs = source_content(client, episode, with_assets=True)
     with client.app.state.session_factory.begin() as db:
         version = db.get(AssetVersion, UUID(refs["CHARACTER"]["asset_version_id"]))
@@ -228,6 +235,7 @@ def test_unusable_asset_references_are_removed_without_losing_text(client, episo
                     for shot in content["shots"]:
                         shot["character_details"][0]["asset"]["asset_version_id"] = str(UUID(int=1))
                 row.content_json = content
+    protect_history()
     response = duplicate(client, episode)
     assert response.status_code == 201, response.text
     target = response.json()
@@ -296,7 +304,8 @@ def test_newest_script_does_not_pick_an_older_scripts_board(client, episode):
     assert versions(client, target, "storyboards") == []
 
 
-def test_legacy_content_and_invalid_sources(client, episode):
+@pytest.mark.legacy_schema
+def test_legacy_content_and_invalid_sources(client, episode, protect_history):
     with client.app.state.session_factory.begin() as db:
         source = Script(
             episode_id=UUID(episode["id"]),
@@ -310,6 +319,7 @@ def test_legacy_content_and_invalid_sources(client, episode):
     with client.app.state.session_factory.begin() as db:
         source = db.scalar(select(Script).where(Script.episode_id == UUID(episode["id"])))
         source.content_json = {"corrupt": True}
+    protect_history()
     failed = duplicate(client, episode, episode_no=3)
     assert failed.status_code == 409 and failed.json()["error"]["code"] == "INVALID_COPY_SOURCE"
     assert len(client.get(f"/api/v1/projects/{episode['project_id']}/episodes").json()) == 2
@@ -324,8 +334,11 @@ def test_active_workflows_block_copy(client, episode, status):
     assert response.status_code == 409 and response.json()["error"]["code"] == "ACTIVE_WORKFLOW"
 
 
+@pytest.mark.legacy_schema
 @pytest.mark.parametrize("status", ["FAILED", "CANCELLED", "SUCCEEDED", "REJECTED"])
-def test_terminal_runs_events_outbox_and_reviews_are_not_copied(client, episode, status):
+def test_terminal_runs_events_outbox_and_reviews_are_not_copied(
+    client, episode, status, protect_history
+):
     script, _, _ = source_content(client, episode)
     run = start(client, episode).json()
     with client.app.state.session_factory.begin() as db:
@@ -341,6 +354,7 @@ def test_terminal_runs_events_outbox_and_reviews_are_not_copied(client, episode,
                 decision="APPROVE",
             )
         )
+    protect_history()
     models = (WorkflowRun, WorkflowEvent, OutboxEvent, Review)
     with client.app.state.session_factory() as db:
         before = [db.scalar(select(func.count()).select_from(model)) for model in models]

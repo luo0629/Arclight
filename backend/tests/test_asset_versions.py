@@ -372,11 +372,11 @@ def test_legacy_locked_rejected_and_exact_identity(client, episode):
         assert client.get(versions(row) + "?" + query).status_code == 422
 
 
+@pytest.mark.legacy_schema
 def test_version_migration_roundtrip_and_data_guard(client, episode, migrated):
     row = create(client, episode["project_id"])
     command.downgrade(migrated, "0015")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     save(client, row)
     with pytest.raises(RuntimeError, match="Asset version lifecycle data exist"):
         command.downgrade(migrated, "0015")
@@ -385,6 +385,9 @@ def test_version_migration_roundtrip_and_data_guard(client, episode, migrated):
     config.attributes["database_url"] = "postgresql+psycopg://unused:unused@localhost/unused"
     with pytest.raises(RuntimeError, match="online preservation check"):
         command.downgrade(config, "0016:0015", sql=True)
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_parallel_creation_and_review_are_cas_serialized(

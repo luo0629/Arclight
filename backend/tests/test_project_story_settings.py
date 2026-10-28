@@ -219,8 +219,9 @@ def test_snapshot_retry_and_history_are_isolated(client, episode, settings, monk
         )
 
 
+@pytest.mark.legacy_schema
 def test_legacy_run_without_brief_does_not_load_current_settings(
-    client, episode, settings, monkeypatch
+    client, episode, settings, monkeypatch, protect_history
 ):
     run_id = start(client, episode).json()["run_id"]
     with client.app.state.session_factory.begin() as db:
@@ -229,6 +230,7 @@ def test_legacy_run_without_brief_does_not_load_current_settings(
             k: v for k, v in run.input_json.items() if k not in {"story_settings", "story_context"}
         }
         db.get(Project, UUID(episode["project_id"])).story_settings = BRIEF
+    protect_history()
     calls = []
 
     class LegacyProvider(MockTextProvider):

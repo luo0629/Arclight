@@ -280,11 +280,11 @@ def test_exact_asset_binding_and_stale_revalidation(client, episode):
     assert start(client, episode).status_code == 202
 
 
+@pytest.mark.legacy_schema
 def test_migration_0005_preserves_0004_and_guards_even_archived_entries(client, episode, migrated):
     command.downgrade(migrated, "0004")
     assert "story_entries" not in inspect(client.app.state.engine).get_table_names()
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     assert (
         client.get(f"/api/v1/projects/{episode['project_id']}").json()["id"]
         == episode["project_id"]
@@ -295,5 +295,8 @@ def test_migration_0005_preserves_0004_and_guards_even_archived_entries(client, 
         command.downgrade(migrated, "0004")
     # A failed multi-revision downgrade may already have removed newer columns.
     # Restore the current application schema before exercising the current ORM.
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     assert client.get(path(episode)).json()[0]["archived"] is True
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)

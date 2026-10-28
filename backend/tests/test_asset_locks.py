@@ -102,10 +102,10 @@ def test_only_owner_can_lock_or_unlock(client, role):
         )
 
 
+@pytest.mark.legacy_schema
 def test_lock_migration_roundtrip_and_guard(client, episode, migrated):
     command.downgrade(migrated, "0016")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     row, version = selected(client, episode["project_id"])
     locked = lock(client, row, version).json()
     with pytest.raises(RuntimeError, match="Active selection locks exist"):
@@ -113,10 +113,13 @@ def test_lock_migration_roundtrip_and_guard(client, episode, migrated):
     assert current(client, row)["status"] == "LOCKED"
     assert lock(client, locked, version, "unlock").status_code == 200
     command.downgrade(migrated, "0016")
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     config = Config(migrated.config_file_name, output_buffer=StringIO())
     with pytest.raises(RuntimeError, match="online preservation check"):
         command.downgrade(config, "0017:0016", sql=True)
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 @pytest.mark.parametrize("actions", [("lock", "lock"), ("lock", "select"), ("unlock", "unlock")])

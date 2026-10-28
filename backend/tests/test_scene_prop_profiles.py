@@ -92,11 +92,14 @@ def test_prop_holder_exact_version_and_clear(client, episode):
     assert cleared.status_code == 200 and cleared.json()["prop_profile"]["holder"] is None
 
 
+@pytest.mark.legacy_schema
 @pytest.mark.parametrize("kind", ["scene", "prop"])
 @pytest.mark.parametrize(
     "problem", ["foreign", "wrong_type", "wrong_identity", "missing", "draft", "archived", "stale"]
 )
-def test_exact_profile_references_reject_invalid_atomically(client, episode, kind, problem):
+def test_exact_profile_references_reject_invalid_atomically(
+    client, episode, kind, problem, protect_history
+):
     row = create(client, episode["project_id"], "SCENE" if kind == "scene" else "PROP")
     other = create_project(client) if problem == "foreign" else None
     with client.app.state.session_factory.begin() as db:
@@ -121,6 +124,7 @@ def test_exact_profile_references_reject_invalid_atomically(client, episode, kin
             version.status = "ARCHIVED"
         elif problem == "stale":
             version.stale = True
+    protect_history()
     field = "reference" if kind == "scene" else "holder"
     assert save_profile(client, row, {field: ref}, kind).status_code == 422
     # wrong_type deliberately alters only the fixture identity, never the profile.
@@ -175,20 +179,23 @@ def test_scene_prop_type_and_project_gates(client):
     assert save_profile(client, row, {}).status_code == 404
 
 
+@pytest.mark.legacy_schema
 def test_scene_prop_migration_preservation(client, episode, migrated):
     rows = [create(client, episode["project_id"], kind) for kind in ("SCENE", "PROP")]
     command.downgrade(migrated, "0014")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     assert client.get(path(episode["project_id"])).json() == rows
     assert save_profile(client, rows[0], {"lighting": "日光"}).status_code == 200
     with pytest.raises(RuntimeError, match="Scene/prop profiles exist"):
         command.downgrade(migrated, "0014")
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     config = Config(migrated.config_file_name, output_buffer=StringIO())
     config.attributes["database_url"] = "postgresql+psycopg://unused:unused@localhost/unused"
     with pytest.raises(RuntimeError, match="online preservation check"):
         command.downgrade(config, "0015:0014", sql=True)
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_scene_profile_concurrent_cas(client, episode, settings):

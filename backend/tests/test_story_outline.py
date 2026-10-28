@@ -335,15 +335,19 @@ def test_permissions_archived_and_deleted_access(client, settings):
     assert client.get(path(episode) + "/story-outlines/" + row["id"]).status_code == 404
 
 
+@pytest.mark.legacy_schema
 def test_outline_migration_empty_roundtrip_and_queued_guard(client, episode, migrated):
     command.downgrade(migrated, "0008")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     assert start(client, episode).status_code == 202
     with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0008")
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
+@pytest.mark.legacy_schema
 def test_outline_migration_refuses_losing_saved_data(client, episode, settings, migrated):
     generate(client, episode, settings)
     with pytest.raises(RuntimeError, match="Source provenance exists"):

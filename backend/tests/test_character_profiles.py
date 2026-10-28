@@ -171,27 +171,30 @@ def test_character_profile_permissions(client, role):
 def test_character_only_and_locked_gates(client, episode):
     row = create(client, episode["project_id"], "PROP")
     assert save_profile(client, row, {}).status_code == 422
+    row = create(client, episode["project_id"], "CHARACTER")
     with client.app.state.session_factory.begin() as db:
         asset = db.get(VisualAsset, UUID(row["id"]))
-        asset.asset_type = "CHARACTER"
         asset.status = "LOCKED"
     assert save_profile(client, row, {}).status_code == 409
 
 
+@pytest.mark.legacy_schema
 def test_character_profile_migration_protection(client, episode, migrated):
     row = create(client, episode["project_id"])
     command.downgrade(migrated, "0013")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     assert client.get(path(row["project_id"]) + "/" + row["id"]).json() == row
     assert save_profile(client, row, {"expressions": ["笑"]}).status_code == 200
     with pytest.raises(RuntimeError, match="Character profiles exist"):
         command.downgrade(migrated, "0013")
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     config = Config(migrated.config_file_name, output_buffer=StringIO())
     config.attributes["database_url"] = "postgresql+psycopg://unused:unused@localhost/unused"
     with pytest.raises(RuntimeError, match="online preservation check"):
         command.downgrade(config, "0014:0013", sql=True)
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_concurrent_profile_and_metadata_cas(client, episode, settings):

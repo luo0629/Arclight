@@ -537,7 +537,10 @@ def test_deleted_project_blocks_rewrite_and_restore_keeps_exact_versions(client,
     assert start(client, episode, body(base)).status_code == 409
 
 
-def test_input_limits_legacy_duration_and_foreign_episode(client, episode, settings):
+@pytest.mark.legacy_schema
+def test_input_limits_legacy_duration_and_foreign_episode(
+    client, episode, settings, protect_history
+):
     base = source(client, episode)
     other = client.post(
         f"/api/v1/projects/{episode['project_id']}/episodes",
@@ -556,6 +559,7 @@ def test_input_limits_legacy_duration_and_foreign_episode(client, episode, setti
         legacy.content_json = (
             content  # Isolated legacy fixture; production never overwrites content.
         )
+    protect_history()
     assert start(client, episode, body(base)).json()["error"]["code"] == "SCRIPT_DURATION_REQUIRED"
     assert client.get(prefix(episode) + "/runs").json() == []
 

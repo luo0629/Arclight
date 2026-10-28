@@ -299,9 +299,10 @@ def test_fake_over_duration_generation_fails_without_artifact_and_explicit_retry
     assert recovered["pending_review"]["resource_type"] == stage
 
 
+@pytest.mark.legacy_schema
 @pytest.mark.parametrize("stage", ["script", "storyboard"])
 def test_workflow_approval_rechecks_without_consuming_revision_or_review(
-    client, episode, settings, stage
+    client, episode, settings, stage, protect_history
 ):
     run_id = start(client, episode).json()["run_id"]
     state = advance(client, settings, run_id)
@@ -319,6 +320,7 @@ def test_workflow_approval_rechecks_without_consuming_revision_or_review(
         artifact.content_json = content
         reviews = db.scalar(select(func.count()).select_from(Review))
         outbox = db.scalar(select(func.count()).select_from(OutboxEvent))
+    protect_history()
     rejected = review(client, state)
     assert rejected.status_code == 422
     current = client.get(f"/api/v1/runs/{run_id}").json()
@@ -410,11 +412,12 @@ def test_manual_saves_honor_configured_zero_tolerance(client, episode, settings)
     assert client.post(url, json=payload).status_code == 201
 
 
+@pytest.mark.legacy_schema
 @pytest.mark.parametrize(
     "estimate,code", [(None, "SCRIPT_DURATION_REQUIRED"), (60000, "SCRIPT_DURATION_OUT_OF_RANGE")]
 )
 def test_director_rechecks_source_before_provider_call(
-    client, episode, settings, monkeypatch, estimate, code
+    client, episode, settings, monkeypatch, estimate, code, protect_history
 ):
     script = save_script(client, episode).json()
     assert approve(client, episode, "scripts", script["id"]).status_code == 200
@@ -427,6 +430,7 @@ def test_director_rechecks_source_before_provider_call(
     with client.app.state.session_factory.begin() as db:
         row = db.get(Script, UUID(script["id"]))
         row.content_json = {**row.content_json, "estimated_duration_ms": estimate}
+    protect_history()
     calls = []
 
     class NeverCalled(MockTextProvider):

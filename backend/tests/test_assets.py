@@ -238,6 +238,7 @@ def test_locked_asset_cannot_be_renamed_or_archived_and_legacy_types_stay_untouc
         assert db.get(VisualAsset, UUID(other["asset_id"])).asset_type == "COSTUME"
 
 
+@pytest.mark.legacy_schema
 def test_migration_round_trip_preserves_existing_assets_and_guards_revision(
     client, episode, migrated
 ):
@@ -263,8 +264,7 @@ def test_migration_round_trip_preserves_existing_assets_and_guards_revision(
             )
         }
     command.downgrade(migrated, "0011")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     with client.app.state.session_factory() as db:
         for cls, values in before.items():
             item = db.get(cls, values["id"])
@@ -275,8 +275,11 @@ def test_migration_round_trip_preserves_existing_assets_and_guards_revision(
     assert rename(client, row).status_code == 200
     with pytest.raises(RuntimeError, match="Asset directory history exists"):
         command.downgrade(migrated, "0011")
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     assert client.get(path(row["project_id"]) + "/" + row["id"]).json()["revision"] == 1
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_offline_downgrade_requires_preservation_check(migrated):

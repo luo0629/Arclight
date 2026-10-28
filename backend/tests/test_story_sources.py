@@ -240,9 +240,10 @@ def test_owner_editor_viewer_and_outsider_access(client):
     assert client.post(path, json=source_payload()).status_code == 401
 
 
+@pytest.mark.legacy_schema
 def test_migration_roundtrip_and_nonempty_downgrade_protection(client, episode, migrated):
     command.downgrade(migrated, "0006")
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     row = client.post(sources_path(episode), json=source_payload()).json()
     with pytest.raises(RuntimeError, match="Source provenance exists"):
         command.downgrade(migrated, "0006")

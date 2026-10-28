@@ -165,6 +165,7 @@ def test_expired_delete_retains_data_and_never_purges(client, monkeypatch):
         assert db.get(Project, UUID(project["id"])).deleted_at is not None
 
 
+@pytest.mark.legacy_schema
 def test_migration_refuses_to_resurrect_deleted_projects(client, migrated):
     project = create_project(client)
     create_episode(client, project)
@@ -178,7 +179,7 @@ def test_migration_refuses_to_resurrect_deleted_projects(client, migrated):
         }
     assert restore(client, project, receipt["deletion_id"]).status_code == 200
     command.downgrade(migrated, "0005")
-    command.upgrade(migrated, "head")
+    command.upgrade(migrated, "0018")
     assert len(client.get(f"{PREFIX}/projects/{project['id']}/episodes").json()) == 1
 
 

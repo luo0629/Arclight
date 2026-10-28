@@ -299,6 +299,7 @@ def test_conflicting_precise_asset_versions_cannot_be_confirmed(client, episode)
     assert result.json()["error"]["code"] == "CHARACTER_ASSET_CONFLICT"
 
 
+@pytest.mark.legacy_schema
 def test_confirmation_migration_refuses_loss_of_decisions(client, episode, migrated):
     source = script(client, episode)
     url = path(episode, source)
@@ -308,6 +309,7 @@ def test_confirmation_migration_refuses_loss_of_decisions(client, episode, migra
     assert client.get(url).json()["candidates"][0]["confirmation"]
 
 
+@pytest.mark.legacy_schema
 def test_alias_migration_refuses_loss_of_aliases(client, episode, migrated):
     create(client, episode, "CHARACTER", aliases=["昵称"])
     with pytest.raises(RuntimeError, match="Character identity data exists"):

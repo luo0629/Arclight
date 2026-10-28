@@ -199,11 +199,11 @@ def test_permissions_and_project_scope(client, role):
     assert client.get(path(other) + "/versions/" + saved["id"]).status_code == 404
 
 
+@pytest.mark.legacy_schema
 def test_archived_deleted_project_and_empty_migration_roundtrip(client, episode, migrated):
     project = {"id": episode["project_id"]}
     command.downgrade(migrated, "0017")
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0018")
     assert edit(client, project, art_style="safe").status_code == 201
     with pytest.raises(RuntimeError, match="Visual Bible versions exist"):
         command.downgrade(migrated, "0017")
@@ -218,6 +218,9 @@ def test_archived_deleted_project_and_empty_migration_roundtrip(client, episode,
     assert lock(client, project, 1, ["art_style"]).status_code == 409
     client.request("DELETE", endpoint, json={"confirm_name": "测试漫剧"})
     assert client.get(path(project)).status_code == 404
+    # Verify the current schema after the historical preservation assertions.
+    command.upgrade(migrated, "head")
+    command.check(migrated)
 
 
 def test_concurrent_edit_and_lock_same_base(client, episode, settings):
