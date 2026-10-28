@@ -407,6 +407,59 @@ async function create(page: Page, name: string, kind = "角色") {
   ).toBeVisible();
 }
 
+test("ASSET-06：人工选用精确版本、历史另存与重新审核", async ({ page }) => {
+  const { path, headers } = await setup(page);
+  await create(page, "选用与恢复", "场景");
+  await fillImageImport(page);
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  const details = page.getByLabel("精确资产版本详情", { exact: true });
+  await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
+  await page.getByRole("button", { name: "批准此版本", exact: true }).click();
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  const versionPath = path + "/" + row.id + "/versions";
+  const first = (
+    await (await page.request.get(versionPath, { headers })).json()
+  )[0];
+  expect(row.current_version_id).toBeNull();
+  await page.getByRole("button", { name: "选用此版本", exact: true }).click();
+  await expect(
+    page.getByText("当前选用：" + first.id, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "归档此版本", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByLabel("版本状态说明", { exact: true })
+    .fill("恢复构图并重新审核");
+  await page
+    .getByRole("button", { name: "从此版本另存新候选", exact: true })
+    .click();
+  await expect(details.getByRole("heading")).toContainText(
+    "版本 v2 · 候选草稿",
+  );
+  await expect(details).toContainText("恢复来源版本：" + first.id);
+  await expect(
+    page.getByText("当前选用：" + first.id, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    details.getByRole("button", { name: "选用此版本", exact: true }),
+  ).toHaveCount(0);
+  const records = await (
+    await page.request.get(versionPath, { headers })
+  ).json();
+  expect(records[0]).toEqual(first);
+  expect(records[1].restored_from_version_id).toBe(first.id);
+  await page.reload();
+  await page
+    .getByRole("button", { name: "场景 · 选用与恢复", exact: true })
+    .click();
+  await expect(
+    page.getByText("当前选用：" + first.id, { exact: true }),
+  ).toBeVisible();
+});
+
 test("ASSET-03：参考图选择控件绑定精确版本并允许人工标准选择", async ({
   page,
 }) => {

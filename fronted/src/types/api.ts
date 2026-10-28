@@ -20,6 +20,8 @@ export type AssetVersion = {
     rights_note: string;
   } | null;
   asset_snapshot: VisualAsset | null;
+  restored_from_version_id: string | null;
+  restoration_note: string | null;
 };
 export type ExactAssetReference = {
   asset_id: string;

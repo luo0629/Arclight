@@ -100,6 +100,53 @@ export default function AssetVersions({
       if (live.current) setBusy(false);
     }
   }
+  const restoreKey = useRef<string | null>(null);
+  async function selectCurrent() {
+    if (!selected || !editable || submitting.current) return;
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await api<VisualAsset>(
+        endpoint + "/" + selected.id + "/select",
+        json("POST", { expected_revision: asset.revision }),
+      );
+      if (live.current) {
+        await onSaved(saved);
+        setNotice("已选用此精确版本");
+      }
+    } catch (error) {
+      if (live.current) setError(message(error));
+    } finally {
+      submitting.current = false;
+      if (live.current) setBusy(false);
+    }
+  }
+  async function restoreNew() {
+    if (!selected || !editable || !comment.trim() || submitting.current) return;
+    restoreKey.current ??= crypto.randomUUID();
+    submitting.current = true;
+    setBusy(true);
+    setError("");
+    try {
+      const saved = await api<AssetVersion>(
+        endpoint + "/" + selected.id + "/restore-as-new",
+        json("POST", {
+          expected_revision: asset.revision,
+          creation_key: restoreKey.current,
+          comment,
+        }),
+      );
+      restoreKey.current = null;
+      await created(saved);
+      if (live.current) setComment("");
+    } catch (error) {
+      if (live.current) setError(message(error));
+    } finally {
+      submitting.current = false;
+      if (live.current) setBusy(false);
+    }
+  }
   async function created(version: AssetVersion) {
     if (!live.current) return;
     ++sequence.current;
@@ -126,8 +173,11 @@ export default function AssetVersions({
     >
       <h3 className="font-semibold">不可变图片版本</h3>
       <p className="text-sm text-muted-foreground">
-        人工导入原图，每次另建候选版本。批准不代表选用；锁定与当前选用入口尚未接入。支持PNG/JPEG，最大1
+        人工导入原图，每次另建候选版本。批准后可人工选用；历史图片可另存为新候选并重新审核。支持PNG/JPEG，最大1
         MiB、400万像素、最长边4096。
+      </p>
+      <p className="break-all text-sm" role="status">
+        当前选用：{asset.current_version_id ?? "尚未选用"}
       </p>
       {notice && <Notice role="status">{notice}</Notice>}
       {error && (
@@ -161,6 +211,12 @@ export default function AssetVersions({
             版本 v{selected.version_no} · {label(selected.status)} · 状态修订{" "}
             {selected.revision}
           </h4>
+          {selected.restored_from_version_id && (
+            <p className="break-all text-sm">
+              恢复来源版本：{selected.restored_from_version_id} ·{" "}
+              {selected.restoration_note}
+            </p>
+          )}
           {selected.stale && (
             <Notice>此版本已失效，仅供历史查阅，不能用于新引用。</Notice>
           )}
@@ -237,6 +293,23 @@ export default function AssetVersions({
                 />
               </Field>
               <div className="flex flex-wrap gap-2">
+                {selected.status === "APPROVED" && !selected.stale && (
+                  <Button
+                    disabled={busy || asset.current_version_id === selected.id}
+                    onClick={() => void selectCurrent()}
+                  >
+                    选用此版本
+                  </Button>
+                )}
+                {selected.media && (
+                  <Button
+                    variant="outline"
+                    disabled={busy || !comment.trim()}
+                    onClick={() => void restoreNew()}
+                  >
+                    从此版本另存新候选
+                  </Button>
+                )}
                 {selected.status === "DRAFT" && (
                   <Button
                     disabled={busy}

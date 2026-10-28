@@ -88,7 +88,9 @@ export default function ProjectWorkspace({
     : projectSections.includes(section as ProjectSection)
       ? section
       : "canvas";
+  const sectionIntent = useRef<ProjectSection | null>(null);
   function setPage(next: ProjectSection) {
+    sectionIntent.current = next;
     if (next === "canvas") {
       const row = episode ?? lastEpisode.current ?? episodes[0];
       if (row) {
@@ -149,6 +151,14 @@ export default function ProjectWorkspace({
     (!episodeId ? lastEpisode.current : null);
   const openEpisode = useCallback(
     (row: Episode, view: EpisodeView = "canvas", replace = false) => {
+      // 初始首集跳转不能覆盖用户在数据载入时明确选择的项目页面。
+      if (
+        replace &&
+        sectionIntent.current &&
+        sectionIntent.current !== "canvas"
+      )
+        return;
+      if (!replace) sectionIntent.current = null;
       setPinnedEpisode(row);
       lastEpisode.current = row;
       if (!replace) setDirectoryOpen(false);

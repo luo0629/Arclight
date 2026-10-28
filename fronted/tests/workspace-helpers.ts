@@ -71,11 +71,12 @@ export async function openWorkspacePanels(page: Page) {
 
 export async function openDirectory(page: Page) {
   const panel = page.locator('#project-directory[data-state="open"]');
-  if (await panel.count()) return;
-  // 等待上一轮关闭动画和焦点归还，避免把即将卸载的目录当作已打开。
-  await expect(page.locator("#project-directory")).toHaveCount(0);
   const trigger = page.getByRole("button", { name: "展开目录", exact: true });
-  await trigger.click();
+  // 路由导航可能在检查后改变面板；等待当前可操作入口或已打开面板。
+  await expect
+    .poll(async () => (await panel.isVisible()) || (await trigger.isVisible()))
+    .toBe(true);
+  if (!(await panel.isVisible())) await trigger.click();
   await expect(panel).toBeVisible();
 }
 

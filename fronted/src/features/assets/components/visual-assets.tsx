@@ -129,7 +129,7 @@ export default function VisualAssets({
       className="studio-page"
       eyebrow="项目共用"
       title="视觉资产"
-      description="管理角色、场景、道具与风格的目录、结构化资料和使用范围。媒体生成、版本选用和锁定尚未开放。"
+      description="管理角色、场景、道具与风格的目录、资料及精确图片版本，可人工选用或从历史另存候选。媒体生成与锁定尚未开放。"
     >
       {!writable && <Notice tone="info">当前项目只读，可查看视觉资产。</Notice>}
       {notice && (

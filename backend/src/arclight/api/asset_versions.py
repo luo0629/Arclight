@@ -68,6 +68,8 @@ class VersionRead(Resource):
     # Only this service's allowlisted, server-produced metadata is public.
     media: dict | None
     asset_snapshot: dict | None
+    restored_from_version_id: UUID | None = None
+    restoration_note: str | None = None
 
 
 def read_version(row: AssetVersion) -> VersionRead:
@@ -86,6 +88,8 @@ def read_version(row: AssetVersion) -> VersionRead:
         archived_from_status=row.archived_from_status,
         media=row.metadata_json.get("media") if local else None,
         asset_snapshot=row.metadata_json.get("asset_snapshot") if local else None,
+        restored_from_version_id=row.metadata_json.get("restored_from_version_id"),
+        restoration_note=row.metadata_json.get("restoration_note"),
     )
 
 
@@ -240,6 +244,139 @@ def create_version(
         "asset.version_created",
         row.id,
         {"asset_id": str(asset_id), "version_no": number, "checksum": row.checksum},
+    )
+    return read_version(row)
+
+
+class VersionSelection(Input):
+    expected_revision: int = Field(strict=True, ge=0)
+
+
+class VersionRestore(VersionSelection):
+    creation_key: UUID
+    comment: str = Field(min_length=1, max_length=1000)
+
+
+@router.post("/{version_id}/select")
+def select_version(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    payload: VersionSelection,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> AssetRead:
+    require_project(db, project_id, actor, write=True)
+    asset = find_asset(db, project_id, asset_id)
+    row = find_version(db, asset_id, version_id)
+    if asset.status in {"ARCHIVED", "LOCKED"}:
+        raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
+    if row.status != "APPROVED" or row.stale:
+        raise DomainError("ASSET_NOT_USABLE", "只能选用已批准且有效的精确版本", 409)
+    read_object(
+        request.app.state.settings.asset_storage_path,
+        project_id,
+        row.id,
+        row.object_key,
+        row.checksum,
+    )
+    previous = asset.current_version_id
+    change_asset(db, asset, payload.expected_revision, current_version_id=row.id)
+    audit(
+        db,
+        project_id,
+        actor,
+        "asset.version_selected",
+        asset.id,
+        {
+            "previous_version_id": str(previous) if previous else None,
+            "version_id": str(row.id),
+            "revision": asset.revision,
+        },
+    )
+    return AssetRead.model_validate(asset)
+
+
+@router.post("/{version_id}/restore-as-new", status_code=201)
+def restore_version_as_new(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    payload: VersionRestore,
+    request: Request,
+    db: Database,
+    actor: Actor,
+) -> VersionRead:
+    require_project(db, project_id, actor, write=True)
+    asset = find_asset(db, project_id, asset_id)
+    source = find_version(db, asset_id, version_id)
+    existing = db.scalar(
+        select(AssetVersion).where(
+            AssetVersion.asset_id == asset_id,
+            AssetVersion.creation_key == payload.creation_key,
+        )
+    )
+    if existing is not None:
+        if (
+            existing.metadata_json.get("restored_from_version_id") != str(source.id)
+            or existing.metadata_json.get("restoration_note") != payload.comment
+        ):
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一恢复标识不能用于不同版本或说明", 409)
+        return read_version(existing)
+    if asset.status in {"ARCHIVED", "LOCKED"}:
+        raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能恢复为新版本", 409)
+    if source.creation_key is None or source.metadata_json.get("storage_backend") != "LOCAL":
+        raise DomainError("ASSET_OBJECT_UNAVAILABLE", "此历史图片尚未接入本机读取", 409)
+    data = read_object(
+        request.app.state.settings.asset_storage_path,
+        project_id,
+        source.id,
+        source.object_key,
+        source.checksum,
+    )
+    snapshot = AssetRead.model_validate(asset).model_dump(mode="json")
+    change_asset(db, asset, payload.expected_revision)
+    number = (
+        db.scalar(
+            select(func.max(AssetVersion.version_no)).where(AssetVersion.asset_id == asset_id)
+        )
+        or 0
+    ) + 1
+    row = AssetVersion(
+        id=uuid4(),
+        asset_id=asset_id,
+        version_no=number,
+        checksum=source.checksum,
+        created_by=actor,
+        creation_key=payload.creation_key,
+        status="DRAFT",
+        stale=False,
+        metadata_json={
+            "storage_backend": "LOCAL",
+            "asset_snapshot": snapshot,
+            "media": dict(source.metadata_json["media"]),
+            "restored_from_version_id": str(source.id),
+            "restoration_note": payload.comment,
+        },
+    )
+    row.object_key = object_key(project_id, row.id)
+    write_object(db, request.app.state.settings.asset_storage_path, project_id, row.id, data)
+    db.add(row)
+    db.flush()
+    db.refresh(row)
+    audit(
+        db,
+        project_id,
+        actor,
+        "asset.version_restored_as_new",
+        row.id,
+        {
+            "asset_id": str(asset_id),
+            "source_version_id": str(source.id),
+            "version_no": number,
+            "comment": payload.comment,
+        },
     )
     return read_version(row)
 
