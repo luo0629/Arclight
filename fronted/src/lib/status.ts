@@ -1,0 +1,15 @@
+export const statusText: Record<string, string> = {
+  DRAFT: "草稿",
+  READY_FOR_REVIEW: "待审核",
+  APPROVED: "已批准",
+  REJECTED: "已驳回",
+  QUEUED: "排队中",
+  RUNNING: "创作中",
+  WAITING_REVIEW: "等待你审核",
+  SUCCEEDED: "已完成",
+  FAILED: "失败",
+  CANCELLED: "已取消",
+  ARCHIVED: "已归档",
+  LOCKED: "已锁定",
+  STALE: "需更新",
+};

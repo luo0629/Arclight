@@ -17,7 +17,26 @@ test("组件化：登录使用 Dialog/Field/Input/Button，390px 无溢出且品
   await expect(login.locator('[data-slot="input"]')).toHaveCount(2);
   const submit = login.getByRole("button", { name: "登录并继续创作" });
   await expect(submit).toHaveAttribute("data-slot", "button");
-  await expect(submit).toHaveCSS("background-color", "oklch(0.926 0.195 119)");
+  // Production CSS optimization may serialize the same color as Lab.
+  // Compare rendered color bytes instead of the CSS color notation.
+  await expect
+    .poll(() =>
+      submit.evaluate((button) => {
+        const context = document.createElement("canvas").getContext("2d")!;
+        const pixel = (color: string) => {
+          context.clearRect(0, 0, 1, 1);
+          context.fillStyle = color;
+          context.fillRect(0, 0, 1, 1);
+          return [...context.getImageData(0, 0, 1, 1).data];
+        };
+        const actual = pixel(getComputedStyle(button).backgroundColor);
+        const expected = pixel("oklch(0.926 0.195 119)");
+        return Math.max(
+          ...actual.map((value, index) => Math.abs(value - expected[index])),
+        );
+      }),
+    )
+    .toBeLessThanOrEqual(1);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

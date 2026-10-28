@@ -156,7 +156,9 @@ test("STORY-05：编码失败保留输入，显式 GB18030 重试", async ({ pag
     "text/plain",
   );
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("无法按所选编码解码");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("无法按所选编码解码");
   await expect(page.getByLabel("来源说明", { exact: true })).toHaveValue(
     "本人原创初稿",
   );
@@ -191,7 +193,9 @@ test("STORY-05：提交回执丢失后重试只导入一次", async ({ page }) =
   });
   await fill(page);
   await save(page).click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toBeVisible();
   await expect(save(page)).toBeEnabled();
   await save(page).click();
   await expect(page.getByLabel("原始故事文本")).toContainText("原始故事");
@@ -244,14 +248,20 @@ test("STORY-05：类型与大小错误不发送请求，伪装文件由服务端
   });
   await fill(page, "附件.docx", Buffer.from("PK"), "application/octet-stream");
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("仅支持 TXT");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("仅支持 TXT");
   await fill(page, "过大.txt", Buffer.alloc(262145, 65), "text/plain");
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("不能超过 256 KiB");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("不能超过 256 KiB");
   expect(posts).toBe(0);
   await fill(page, "伪装.txt", Buffer.from("%PDF-1.7"), "text/plain");
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("不是支持的纯文本");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("不是支持的纯文本");
   expect(posts).toBe(1);
   expect(await (await page.request.get(path, { headers })).json()).toHaveLength(
     0,
@@ -330,7 +340,9 @@ test("STORY-05：切换来源时迟到响应不覆盖当前预览，失败可重
   await page
     .getByRole("button", { name: "导入 1 · 第一稿.md", exact: true })
     .click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toBeVisible();
   await expect(page.getByLabel("原始故事文本")).toHaveCount(0);
   await page.unroute(`**${path}/*`);
   await page.getByRole("button", { name: "重试读取来源", exact: true }).click();

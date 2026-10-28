@@ -24,6 +24,8 @@ celerybeat-schedule*
 # Frontend build and browser test artifacts
 node_modules/
 dist/
+.next/
+out/
 test-results/
 playwright-report/
 *.tsbuildinfo

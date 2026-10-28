@@ -196,7 +196,9 @@ test("ASSET-05：未知提交结果幂等重放、状态冲突保留说明和图
   );
   expect(changed.status()).toBe(200);
   await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("资产版本状态已改变");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("资产版本状态已改变");
   await expect(page.getByLabel("版本状态说明", { exact: true })).toHaveValue(
     "本地审核草稿",
   );
@@ -288,7 +290,9 @@ test("ASSET-04：场景与关键道具设定真实持久化、冲突及移动端
     ).status(),
   ).toBe(200);
   await page.getByRole("button", { name: "保存设定", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("资产已被修改");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("资产已被修改");
   await expect(page.getByLabel("剧情状态", { exact: true })).toHaveValue(
     "本地草稿",
   );
@@ -355,7 +359,9 @@ test("ASSET-03：固定可变特征、服装表情持久化与草稿冲突", asy
   const url = path + "/" + row.id + "/character-profile";
   await page.route("**" + url, (route) => route.abort("failed"));
   await page.getByRole("button", { name: "保存设定", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   await expect(
     page.getByLabel("固定特征（每行一项）", { exact: true }),
   ).toHaveValue("本地草稿");
@@ -369,7 +375,9 @@ test("ASSET-03：固定可变特征、服装表情持久化与草稿冲突", asy
     ).status(),
   ).toBe(200);
   await page.getByRole("button", { name: "保存设定", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("资产已被修改");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("资产已被修改");
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
     await page.evaluate(
@@ -454,7 +462,9 @@ test("ASSET-03：参考图选择控件绑定精确版本并允许人工标准选
     return route.abort("failed");
   });
   await page.getByRole("button", { name: "保存设定", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   expect(payload!.profile.images[0].source).toEqual({
     asset_id: assetId,
     asset_version_id: versionId,
@@ -541,7 +551,9 @@ test("ASSET-02：失败保留资料草稿、冲突拒绝覆盖与防重提交", 
   await page.getByLabel("资产简介", { exact: true }).fill("本地资料");
   await page.route("**" + url, (route) => route.abort("failed"));
   await page.getByRole("button", { name: "保存资产资料", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   await expect(page.getByLabel("资产简介", { exact: true })).toHaveValue(
     "本地资料",
   );
@@ -572,7 +584,9 @@ test("ASSET-02：失败保留资料草稿、冲突拒绝覆盖与防重提交", 
   ).toBe(200);
   await page.getByLabel("资产简介", { exact: true }).fill("过期资料草稿");
   await page.getByRole("button", { name: "保存资产资料", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("资产已被修改");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("资产已被修改");
   await expect(page.getByLabel("资产简介", { exact: true })).toHaveValue(
     "过期资料草稿",
   );
@@ -670,7 +684,9 @@ test("ASSET-01：保存失败保留草稿、双击单次提交与修订冲突", 
       : route.continue(),
   );
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   await expect(page.getByLabel("资产名称", { exact: true })).toHaveValue(
     "保留草稿",
   );
@@ -709,7 +725,9 @@ test("ASSET-01：保存失败保留草稿、双击单次提交与修订冲突", 
   ).toBe(200);
   await page.getByLabel("资产名称", { exact: true }).fill("本地修改");
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("资产已被修改");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("资产已被修改");
   await expect(page.getByLabel("资产名称", { exact: true })).toHaveValue(
     "本地修改",
   );

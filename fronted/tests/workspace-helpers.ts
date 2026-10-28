@@ -5,7 +5,7 @@ export async function openWorkspacePanels(page: Page) {
   await closeDirectory(page);
   // 等待已载入的最终状态，避免遗漏空剧集或误把加载中的欢迎占位当作就绪。
   const ready = page
-    .locator(".login-page, .workspace-toolbar")
+    .locator(".login-page, .workspace-toolbar, .project-main.is-management")
     .or(
       page.getByRole("heading", {
         name: "新的一页，等你落笔",
@@ -39,7 +39,7 @@ export async function openWorkspacePanels(page: Page) {
     }
     await expect(ready.first()).toBeVisible();
     const surfaces = await page
-      .locator(".application, .project-body")
+      .locator(".application, .project-body, .episode-studio")
       .evaluateAll((elements) =>
         elements.map((element) => element.getAttribute("aria-busy")),
       );
@@ -56,6 +56,10 @@ export async function openWorkspacePanels(page: Page) {
   // An empty canvas has no selected content. Creation is its own page.
   if (
     (await page.locator(".workspace-toolbar").isVisible()) &&
+    (await page
+      .getByRole("radio", { name: "创作画布", exact: true })
+      .and(page.locator('[aria-checked="true"]'))
+      .isVisible()) &&
     !(await page.getByLabel("内容与属性", { exact: true }).isVisible()) &&
     (await page
       .getByRole("button", { name: "开始创作", exact: true })

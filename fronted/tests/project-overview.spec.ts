@@ -182,7 +182,9 @@ test("shows loading and retry, preserves stale data on refresh failure, and reco
     else await route.continue();
   });
   await open(page);
-  await expect(page.getByRole("alert")).toContainText("总览暂不可用");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("总览暂不可用");
   fail = false;
   await page.getByRole("button", { name: "重试总览", exact: true }).click();
   await expect(
@@ -190,15 +192,17 @@ test("shows loading and retry, preserves stale data on refresh failure, and reco
   ).toBeVisible();
   fail = true;
   await page.getByRole("button", { name: "刷新总览", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "当前保留上次成功读取的数据",
-  );
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("当前保留上次成功读取的数据");
   await expect(
     page.getByRole("button", { name: "进入第 1 集", exact: true }),
   ).toBeVisible();
   fail = false;
   await page.getByRole("button", { name: "重试总览", exact: true }).click();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toHaveCount(0);
   expect(
     (await (await page.request.get(env.url, { headers: env.headers })).json())
       .episode_count,

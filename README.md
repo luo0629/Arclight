@@ -136,15 +136,15 @@ React 画布工作台 / OpenAPI
 
 API 负责接收请求和查询结果，耗时生成在独立 Worker 中执行。业务表通过 **Alembic** 管理版本；LangGraph checkpoint 内部表通过官方持久化组件单独初始化。
 
-| 层次 | 技术 |
-| --- | --- |
-| 前端 | React、TypeScript、Vite、shadcn/ui（Radix）、Tailwind CSS v4、React Flow |
-| 语言与依赖 | Python 3.12、uv |
-| API 与数据校验 | FastAPI、Pydantic v2 |
-| Agent 编排 | LangGraph、持久化 checkpoint |
-| 业务存储与迁移 | PostgreSQL、SQLAlchemy 2、Alembic |
-| 后台任务 | Celery、Redis |
-| 本地运行与检查 | Docker Compose、pytest、Ruff、mypy、GitHub Actions 配置 |
+| 层次        | 技术                                                                   |
+| --------- | -------------------------------------------------------------------- |
+| 前端        | Next.js、React、TypeScript、shadcn/ui（Radix）、Tailwind CSS v4、React Flow |
+| 语言与依赖     | Python 3.12、uv                                                       |
+| API 与数据校验 | FastAPI、Pydantic v2                                                  |
+| Agent 编排  | LangGraph、持久化 checkpoint                                             |
+| 业务存储与迁移   | PostgreSQL、SQLAlchemy 2、Alembic                                      |
+| 后台任务      | Celery、Redis                                                         |
+| 本地运行与检查   | Docker Compose、pytest、Ruff、mypy、GitHub Actions 配置                    |
 
 SQLite 用于单进程开发和测试，不作为生产或并发 Worker 的数据库方案。
 
@@ -186,9 +186,17 @@ Arclight/
 │   ├── pyproject.toml
 │   ├── uv.lock
 │   └── Dockerfile
-├── fronted/                 # React + TypeScript 前端（目录名为 fronted）
-│   ├── src/
+├── fronted/                 # Next.js + TypeScript 前端（目录名为 fronted）
+│   ├── src/app/            # App Router 入口、布局和路由处理
+│   ├── src/features/       # 按项目、剧集、编辑器等业务组织组件
+│   ├── src/components/     # shadcn/ui 与通用展示组件
+│   ├── src/lib/            # 浏览器 API、服务端代理和公共工具
+│   ├── src/hooks/          # 通用 hooks
+│   ├── src/providers/      # 草稿等客户端上下文
+│   ├── src/styles/         # Tailwind 与产品样式
+│   ├── src/types/          # 共享 API 类型
 │   ├── tests/              # Playwright 浏览器测试
+│   ├── next.config.ts
 │   ├── package.json
 │   ├── package-lock.json
 │   ├── nginx.conf
@@ -200,6 +208,8 @@ Arclight/
 ```
 
 Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前端 npm 命令在 `fronted/` 执行；Docker Compose 在仓库根目录执行。数据库和 Redis 仍由 Compose 提供，目录调整不会改变服务名、端口或数据卷。
+
+前端本地开发使用 `npm run dev`（`http://127.0.0.1:3000`），正式构建使用 `npm run build` / `npm run start`。前端目录职责、渲染边界、测试与部署方式见 [前端开发说明](fronted/README.md)。项目与剧集使用独立 Next.js 路由，功能区、工作区视图和精确版本通过查询参数恢复，支持直达、刷新和浏览器前进后退。
 
 ## 项目文档
 

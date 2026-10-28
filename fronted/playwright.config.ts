@@ -3,6 +3,7 @@ import { defineConfig, devices } from "@playwright/test";
 const externalUrl = process.env.ARCLIGHT_E2E_BASE_URL;
 const apiPort = process.env.ARCLIGHT_E2E_API_PORT ?? "8766";
 const webPort = process.env.ARCLIGHT_E2E_WEB_PORT ?? "4177";
+const production = process.env.ARCLIGHT_E2E_PRODUCTION === "1";
 
 export default defineConfig({
   testDir: "./tests",
@@ -36,10 +37,11 @@ export default defineConfig({
           timeout: 60000,
         },
         {
-          command: `npm run dev -- --port ${webPort} --strictPort`,
+          command: `npm run ${production ? "start" : "dev"} -- --port ${webPort}`,
           url: `http://127.0.0.1:${webPort}`,
           reuseExistingServer: false,
           env: { ARCLIGHT_API_PROXY: `http://127.0.0.1:${apiPort}` },
+          timeout: 120000,
         },
       ],
 });

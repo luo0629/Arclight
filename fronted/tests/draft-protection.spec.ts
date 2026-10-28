@@ -395,7 +395,10 @@ test("TXT-06：存储拒绝写入时明确警告，内存草稿跨剧集恢复�
   await setup(page);
   await newScript(page, "内存里的草稿");
   await expect(
-    page.getByRole("alert").filter({ hasText: "本机草稿存储不可用" }),
+    page
+      .getByRole("alert")
+      .and(page.locator('[data-slot="alert"]'))
+      .filter({ hasText: "本机草稿存储不可用" }),
   ).toBeVisible();
   await openDirectory(page);
   await page
@@ -440,7 +443,9 @@ test("TXT-06：损坏存储不崩溃，不读取其他账号草稿", async ({ pa
   );
   await page.reload();
   await openWorkspacePanels(page);
-  await expect(page.getByRole("alert")).toContainText("本机草稿存储不可用");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("本机草稿存储不可用");
   await openWorkspacePanels(page);
   await expect(page.getByLabel("故事灵感", { exact: true })).toHaveValue("");
   await expect(page.locator(".episode-drafts")).toHaveCount(0);
@@ -463,7 +468,9 @@ test("TXT-06：损坏存储不崩溃，不读取其他账号草稿", async ({ pa
   await openWorkspacePanels(page);
   await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写剧本", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("本地草稿格式损坏");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("本地草稿格式损坏");
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue("");
   await page.getByRole("button", { name: "放弃草稿", exact: true }).click();
   await page.getByRole("button", { name: "确认放弃草稿", exact: true }).click();

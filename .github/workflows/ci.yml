@@ -47,7 +47,7 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -70,6 +70,8 @@ jobs:
         working-directory: fronted
       - run: npm run test:e2e
         working-directory: fronted
+        env:
+          ARCLIGHT_E2E_PRODUCTION: "1"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:

@@ -18,7 +18,19 @@ spec.loader.exec_module(verify_compose)
 
 def test_loopback_probe_ignores_system_proxy(monkeypatch):
     calls = []
-    config = {"services": {}, "volumes": {}}
+    config = {
+        "services": {
+            "frontend": {"environment": {}},
+            "api": {
+                "environment": {},
+                "volumes": [
+                    {"type": "volume", "source": "asset-objects", "target": "/app/asset-objects"}
+                ],
+            },
+        },
+        "volumes": {"asset-objects": {}},
+    }
+    generated = []
 
     def docker(*args, capture=False):
         calls.append(args)
@@ -26,6 +38,8 @@ def test_loopback_probe_ignores_system_proxy(monkeypatch):
             return json.dumps(config)
         if args[-3:] == ("port", "web", "80"):
             return "127.0.0.1:45678\n"
+        if "up" in args:
+            generated.append(json.loads(Path(args[3]).read_text(encoding="utf-8")))
         return ""
 
     def respond(request):
@@ -66,6 +80,13 @@ def test_loopback_probe_ignores_system_proxy(monkeypatch):
     assert calls[-1][-4:] == ("down", "--volumes", "--timeout", "15")
     assert calls[-1][0] == "--project-name"
     assert calls[-1][1].startswith("arclight-verify-")
+    isolated = generated[0]
+    assert isolated["services"]["frontend"]["image"] == "arclight-frontend:latest"
+    assert isolated["services"]["frontend"]["environment"] == {
+        "ARCLIGHT_API_PROXY": "http://api:8000"
+    }
+    assert isolated["services"]["api"]["environment"]["ARCLIGHT_PROVIDER"] == "mock"
+    assert isolated["volumes"]["asset-objects"]["name"].startswith(calls[-1][1] + "_")
 
 
 def test_docker_command_uses_repository_compose(monkeypatch):

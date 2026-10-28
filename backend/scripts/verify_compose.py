@@ -31,7 +31,8 @@ def main() -> None:
     config["name"] = project
     config["networks"] = {"default": {"name": project + "_default"}}
     config["volumes"] = {
-        name: {"name": project + "_" + name} for name in ("postgres-data", "redis-data")
+        name: {"name": project + "_" + name}
+        for name in ("postgres-data", "redis-data", "asset-objects")
     }
     jwt_secret = secrets.token_urlsafe(48)
     for name, service in config["services"].items():
@@ -42,6 +43,9 @@ def main() -> None:
         if name == "web":
             service["image"] = "arclight-web:latest"
             service["ports"] = [{"target": 80, "published": "0", "host_ip": "127.0.0.1"}]
+        elif name == "frontend":
+            service["image"] = "arclight-frontend:latest"
+            service["environment"]["ARCLIGHT_API_PROXY"] = "http://api:8000"
         elif name not in ("postgres", "redis"):
             service["image"] = "arclight-api:latest"
             service["environment"].update(
@@ -99,7 +103,7 @@ def main() -> None:
                 env=env,
                 check=True,
             )
-            print("Docker Nginx + API + PostgreSQL + Redis + Worker + Beat 验收通过")
+            print("Docker Nginx + Next.js + API + PostgreSQL + Redis + Worker + Beat 验收通过")
         except BaseException:
             docker(*args, "logs", "--tail", "60")
             raise

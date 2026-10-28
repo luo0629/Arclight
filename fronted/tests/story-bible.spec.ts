@@ -81,7 +81,9 @@ test("STORY-02：持久化规则、稳定关联、修订、归档依赖及恢复
     .getByRole("button", { name: "地点 · 旧书店", exact: true })
     .click();
   await page.getByRole("button", { name: "归档故事设定", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("仍有活动设定引用此项");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("仍有活动设定引用此项");
   await page.getByRole("button", { name: "角色 · 小雨", exact: true }).click();
   await page.getByRole("button", { name: "移除关联 1", exact: true }).click();
   await save(page).click();
@@ -146,7 +148,9 @@ test("STORY-02：失败保留草稿、修订冲突、放弃确认与防重复提
       : route.continue(),
   );
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   await expect(page.getByLabel("设定名称", { exact: true })).toHaveValue(
     "保留草稿",
   );
@@ -183,7 +187,9 @@ test("STORY-02：失败保留草稿、修订冲突、放弃确认与防重复提
   ).toBe(200);
   await page.getByLabel("设定名称", { exact: true }).fill("本地草稿");
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("设定已被修改");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("设定已被修改");
   await expect(page.getByLabel("设定名称", { exact: true })).toHaveValue(
     "本地草稿",
   );

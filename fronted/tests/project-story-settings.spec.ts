@@ -138,7 +138,9 @@ test("STORY-01：失败保留、活动任务拒绝、取消重试、提交防重
       : route.continue(),
   );
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   await expect(genre).toHaveValue("失败仍保留");
   await page.unroute("**" + path);
   const started = await page.request.post(
@@ -161,9 +163,9 @@ test("STORY-01：失败保留、活动任务拒绝、取消重试、提交防重
     )
     .toBe("WAITING_REVIEW");
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "请先结束或取消正在进行的工作流",
-  );
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("请先结束或取消正在进行的工作流");
   await expect(genre).toHaveValue("失败仍保留");
   expect(
     (

@@ -275,6 +275,19 @@ test("真实 API：成员角色、只读权限、归档恢复与移除成员", a
     );
     expect(hidden.status()).toBe(404);
     await partner.reload();
+    await expect(
+      partner.getByRole("heading", { name: "无法打开此项目", exact: true }),
+    ).toBeVisible();
+    await expect(partner.locator(".application")).toHaveAttribute(
+      "aria-busy",
+      "false",
+    );
+    await expect(partner.getByLabel("剧集工作区", { exact: true })).toHaveCount(
+      0,
+    );
+    await partner
+      .getByRole("link", { name: "返回我的项目", exact: true })
+      .click();
     await openWorkspacePanels(partner);
     await expect(
       partner.getByRole("heading", { name: "新的一页，等你落笔" }),

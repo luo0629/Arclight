@@ -12,7 +12,7 @@ import { Empty, EmptyHeader } from "./ui/empty";
 import { Field, FieldLabel } from "./ui/field";
 import { Skeleton } from "./ui/skeleton";
 import { cn } from "@/lib/utils";
-import { statusText } from "@/api";
+import { statusText } from "@/lib/status";
 import { StoryDrawing } from "./brand-art";
 
 export function Notice({

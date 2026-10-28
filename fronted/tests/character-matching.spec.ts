@@ -181,7 +181,9 @@ test("aliases reuse stable identities; response loss retries do not create anoth
   await page
     .getByRole("button", { name: "确认角色 小青", exact: true })
     .click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   await page
     .getByRole("button", { name: "确认角色 小青", exact: true })
     .click();
@@ -260,7 +262,9 @@ test("story bible persists aliases and blocks normalized name collisions", async
   await page.getByRole("option", { name: "角色", exact: true }).click();
   await page.getByLabel("设定名称", { exact: true }).fill("ＡＬＩＣＥ");
   await page.getByRole("button", { name: "保存故事设定", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("角色名或别名已被使用");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("角色名或别名已被使用");
   await expect(page.getByLabel("设定名称", { exact: true })).toHaveValue(
     "ＡＬＩＣＥ",
   );

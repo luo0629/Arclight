@@ -157,7 +157,9 @@ test("lost submission receipt reuses its idempotency key and prevents duplicate 
     .getByLabel("待提炼故事", { exact: true })
     .fill("收到回执前断网的故事");
   await page.getByRole("button", { name: "开始提炼", exact: true }).click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toBeVisible();
   await expect
     .poll(async () => {
       const runs = await (

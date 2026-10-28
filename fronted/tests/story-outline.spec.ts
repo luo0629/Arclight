@@ -222,7 +222,9 @@ test("lost generation receipt retries the same key and shows the committed resul
   });
   await page.getByLabel("待规划故事", { exact: true }).fill("丢回执的大纲");
   await page.getByRole("button", { name: "生成分集大纲", exact: true }).click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toBeVisible();
   await expect(async () =>
     expect(
       (await (await page.request.get(path + "/runs", { headers })).json())[0]
@@ -271,7 +273,9 @@ test("recovers a version-specific draft and retries a lost save receipt without 
   await page
     .getByRole("button", { name: "另存大纲新版本", exact: true })
     .click();
-  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toBeVisible();
   await expect(page.getByLabel("第1集转折", { exact: true })).toHaveValue(
     "本机草稿中的新转折",
   );
@@ -405,7 +409,9 @@ test("malformed local outline content warns and loads the saved version", async 
   await page.reload();
   await openOutline(page);
   await page.getByRole("button", { name: /^大纲 v1/ }).click();
-  await expect(page.getByRole("alert")).toContainText("本机草稿已损坏");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("本机草稿已损坏");
   await expect(page.getByLabel("第1集目标", { exact: true })).not.toHaveValue(
     "未保存的草稿目标",
   );

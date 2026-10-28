@@ -479,14 +479,10 @@ test("新版页面截图：桌面各功能、专注画布、服务配置与手�
       })
     ).ok(),
   ).toBeTruthy();
-  await page.evaluate(
-    (id) => localStorage.setItem("arclight-project", id),
-    disposable.id,
+  await page.goto(`/projects/${disposable.id}?section=settings`);
+  await expect(page.getByLabel("项目名称", { exact: true })).toHaveValue(
+    disposable.name,
   );
-  await page.reload();
-  await page
-    .getByRole("button", { name: "项目设置与归档", exact: true })
-    .click();
   await page.getByRole("button", { name: "删除项目", exact: true }).click();
   const deletion = page.getByRole("dialog", {
     name: "确认删除项目",
@@ -507,12 +503,8 @@ test("新版页面截图：桌面各功能、专注画布、服务配置与手�
   ).toBeVisible();
   await shot("project-trash-desktop");
   await page.keyboard.press("Escape");
-  await page.evaluate(
-    (id) => localStorage.setItem("arclight-project", id),
-    project.id,
-  );
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.reload();
+  await page.goto(`/projects/${project.id}/episodes/${episode.id}?view=list`);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page
     .locator(".version-row")

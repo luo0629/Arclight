@@ -305,7 +305,9 @@ test("TXT-03：网络失败和真实活动任务 409 保留草稿，取消后重
       : route.continue(),
   );
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText("网络连接失败");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("网络连接失败");
   await expect(page.getByLabel("视觉风格说明", { exact: true })).toHaveValue(
     "重试后保存的水彩风格",
   );
@@ -330,9 +332,9 @@ test("TXT-03：网络失败和真实活动任务 409 保留草稿，取消后重
     )
     .toBe("WAITING_REVIEW");
   await save(page).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "请先结束或取消正在进行的工作流",
-  );
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("请先结束或取消正在进行的工作流");
   expect(
     (await (await page.request.get(path, { headers })).json()).style_guide,
   ).toEqual({});
@@ -379,7 +381,9 @@ test("TXT-03：网络失败和真实活动任务 409 保留草稿，取消后重
   await expect(
     page.getByText("风格与画幅已保存", { exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toHaveCount(0);
   const persisted = await (await page.request.get(path, { headers })).json();
   expect(persisted.style_guide.description).toBe("重试后保存的水彩风格");
   expect(persisted.output_profile.width).toBe(1920);

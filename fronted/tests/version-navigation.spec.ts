@@ -213,7 +213,9 @@ test("TXT-05：POST 失败保留草稿，成功后刷新失败仍打开已保存
     return route.continue();
   });
   await page.getByRole("button", { name: "保存人工剧本", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("验收用保存冲突");
+  await expect(
+    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+  ).toContainText("验收用保存冲突");
   await expect(page.getByLabel("剧本标题", { exact: true })).toHaveValue(
     "不能重复保存的新稿",
   );
