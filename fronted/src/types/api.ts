@@ -22,6 +22,26 @@ export type AssetVersion = {
   asset_snapshot: VisualAsset | null;
   restored_from_version_id: string | null;
   restoration_note: string | null;
+  provenance: {
+    kind: "MANUAL_IMPORT" | "EXTERNAL_DECLARATION";
+    verification: string;
+    width: number;
+    height: number;
+    generation: {
+      provider: string;
+      model: string;
+      prompt: string;
+      negative_prompt: string;
+      prompt_version: string | null;
+      seed: number | null;
+      parameters: Record<string, string | number | boolean>;
+    } | null;
+    references: (ExactAssetReference & {
+      asset_name: string;
+      version_no: number;
+      checksum: string;
+    })[];
+  } | null;
 };
 export type ExactAssetReference = {
   asset_id: string;

@@ -64,7 +64,7 @@ test("ASSET-05：真实原图版本、人工批准、归档历史和精确回执
     .click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   const details = page.getByLabel("精确资产版本详情", { exact: true });
-  await expect(details.getByRole("heading")).toContainText(
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
     "版本 v1 · 候选草稿",
   );
   await expect(
@@ -74,9 +74,13 @@ test("ASSET-05：真实原图版本、人工批准、归档历史和精确回执
     details.getByText("scene.png · 8×12 · 78 字节", { exact: true }),
   ).toBeVisible();
   await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
-  await expect(details.getByRole("heading")).toContainText("待人工审核");
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
+    "待人工审核",
+  );
   await page.getByRole("button", { name: "批准此版本", exact: true }).click();
-  await expect(details.getByRole("heading")).toContainText("已批准");
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
+    "已批准",
+  );
   const row = (await (await page.request.get(path, { headers })).json())[0];
   const versionPath = path + "/" + row.id + "/versions";
   const first = (
@@ -92,24 +96,30 @@ test("ASSET-05：真实原图版本、人工批准、归档历史和精确回执
     true,
   );
   await page.getByRole("button", { name: "归档此版本", exact: true }).click();
-  await expect(details.getByRole("heading")).toContainText("已归档");
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
+    "已归档",
+  );
   await expect(details.getByRole("img")).toBeVisible();
   await page
     .getByRole("button", { name: "恢复归档前状态", exact: true })
     .click();
-  await expect(details.getByRole("heading")).toContainText("已批准");
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
+    "已批准",
+  );
   await fillImageImport(page);
   await page
     .getByRole("button", { name: "保存新候选版本", exact: true })
     .click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await expect(details.getByRole("heading")).toContainText(
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
     "版本 v2 · 候选草稿",
   );
   await page
     .getByRole("button", { name: "查看资产版本 v1 · 已批准", exact: true })
     .click();
-  await expect(details.getByRole("heading")).toContainText("版本 v1 · 已批准");
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
+    "版本 v1 · 已批准",
+  );
   await page.screenshot({
     path: testInfo.outputPath("asset-versions-desktop.png"),
     fullPage: true,
@@ -407,6 +417,46 @@ async function create(page: Page, name: string, kind = "角色") {
   ).toBeVisible();
 }
 
+test("ASSET-08：外部生成声明、参数与历史溯源持久化", async ({ page }) => {
+  const { path, headers } = await setup(page);
+  await create(page, "来源记录", "场景");
+  await fillImageImport(page);
+  await page
+    .getByRole("checkbox", { name: "此图片由外部模型生成，登记生成来源" })
+    .check();
+  await page.getByLabel("生成服务", { exact: true }).fill("外部测试服务");
+  await page.getByLabel("生成模型", { exact: true }).fill("test-model");
+  await page.getByLabel("生成提示词", { exact: true }).fill("蓝色的山谷");
+  await page.getByLabel("负面提示词", { exact: true }).fill("模糊");
+  await page.getByLabel("提示词版本", { exact: true }).fill("v3");
+  await page.getByLabel("生成 seed", { exact: true }).fill("42");
+  await page
+    .getByLabel("生成参数（每行 名称=值）", { exact: true })
+    .fill("steps=20");
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  const provenance = page.getByLabel("版本生成来源", { exact: true });
+  await expect(provenance).toContainText("人工声明，未经系统验证");
+  await expect(provenance).toContainText("外部测试服务 / test-model");
+  await expect(provenance).toContainText("提示词：蓝色的山谷");
+  await expect(provenance).toContainText("seed：42");
+  await expect(provenance).toContainText("steps：20");
+  const row = (await (await page.request.get(path, { headers })).json())[0];
+  const records = await (
+    await page.request.get(path + "/" + row.id + "/versions", { headers })
+  ).json();
+  expect(records[0].provenance.generation.prompt_version).toBe("v3");
+  await page.reload();
+  await page
+    .getByRole("button", { name: "场景 · 来源记录", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "查看资产版本 v1 · 候选草稿", exact: true })
+    .click();
+  await expect(provenance).toContainText("蓝色的山谷");
+});
+
 test("ASSET-07：选用锁定、只读、解锁及并发冲突", async ({ page }) => {
   const { path, headers } = await setup(page);
   await create(page, "选用锁", "场景");
@@ -488,7 +538,7 @@ test("ASSET-06：人工选用精确版本、历史另存与重新审核", async 
   await page
     .getByRole("button", { name: "从此版本另存新候选", exact: true })
     .click();
-  await expect(details.getByRole("heading")).toContainText(
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
     "版本 v2 · 候选草稿",
   );
   await expect(details).toContainText("恢复来源版本：" + first.id);

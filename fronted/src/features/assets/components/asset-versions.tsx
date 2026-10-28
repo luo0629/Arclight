@@ -11,6 +11,10 @@ import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
 import { api, apiBlob, json, message } from "@/lib/api/client";
 import type { AssetVersion, VisualAsset } from "@/types/api";
+import AssetProvenanceForm, {
+  emptyGeneration,
+  type GenerationDeclaration,
+} from "./asset-provenance-form";
 
 const labels: Record<string, string> = {
   DRAFT: "候选草稿",
@@ -263,6 +267,62 @@ export default function AssetVersions({
               {selected.restoration_note}
             </p>
           )}
+          <section
+            aria-label="版本生成来源"
+            className="flex min-w-0 flex-col gap-2 break-all text-sm"
+          >
+            <h4 className="font-semibold">版本生成来源</h4>
+            {!selected.provenance ? (
+              <p>历史版本未登记生成信息。</p>
+            ) : (
+              <>
+                <p>
+                  {selected.provenance.kind === "MANUAL_IMPORT"
+                    ? "人工导入，未声明模型生成"
+                    : "外部生成信息（人工声明，未经系统验证）"}
+                </p>
+                <p>
+                  原图尺寸：{selected.provenance.width}×
+                  {selected.provenance.height}
+                </p>
+                {selected.provenance.generation && (
+                  <>
+                    <p>
+                      服务 / 模型：{selected.provenance.generation.provider} /{" "}
+                      {selected.provenance.generation.model}
+                    </p>
+                    <p className="whitespace-pre-wrap">
+                      提示词：{selected.provenance.generation.prompt}
+                    </p>
+                    <p className="whitespace-pre-wrap">
+                      负面提示词：
+                      {selected.provenance.generation.negative_prompt ||
+                        "未提供"}
+                    </p>
+                    <p>
+                      提示词版本：
+                      {selected.provenance.generation.prompt_version ??
+                        "未提供"}{" "}
+                      · seed：{selected.provenance.generation.seed ?? "未提供"}
+                    </p>
+                    {Object.entries(
+                      selected.provenance.generation.parameters,
+                    ).map(([key, value]) => (
+                      <p key={key}>
+                        {key}：{String(value)}
+                      </p>
+                    ))}
+                  </>
+                )}
+                {selected.provenance.references.map((ref) => (
+                  <p key={ref.asset_version_id}>
+                    参考：{ref.asset_name} · v{ref.version_no} ·{" "}
+                    {ref.asset_version_id} · {ref.checksum}
+                  </p>
+                ))}
+              </>
+            )}
+          </section>
           {selected.stale && (
             <Notice>此版本已失效，仅供历史查阅，不能用于新引用。</Notice>
           )}
@@ -492,12 +552,16 @@ function ImportDialog({
   const [source, setSource] = useState("");
   const [rights, setRights] = useState("");
   const [confirmed, setConfirmed] = useState(false);
+  const [generation, setGeneration] = useState<GenerationDeclaration | null>(
+    null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [discard, setDiscard] = useState(false);
   const submitting = useRef(false);
   const frozenPayload = useRef<string | null>(null);
-  const dirty = !!file || !!source || !!rights || confirmed;
+  const dirty =
+    !!file || !!source || !!rights || confirmed || generation !== null;
   useEffect(() => {
     function leave(event: BeforeUnloadEvent) {
       if (dirty || busy) {
@@ -544,6 +608,7 @@ function ImportDialog({
           source_note: source,
           rights_note: rights,
           rights_confirmed: confirmed,
+          generation,
         });
       }
       const version = await api<AssetVersion>(endpoint, {
@@ -617,6 +682,25 @@ function ImportDialog({
                 onChange={(event) => setRights(event.target.value)}
               />
             </Field>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={generation !== null}
+                onChange={(event) =>
+                  setGeneration(
+                    event.target.checked ? { ...emptyGeneration } : null,
+                  )
+                }
+              />
+              此图片由外部模型生成，登记生成来源
+            </label>
+            {generation && (
+              <AssetProvenanceForm
+                projectId={asset.project_id}
+                value={generation}
+                onChange={setGeneration}
+              />
+            )}
             <label className="flex items-start gap-2 text-sm">
               <input
                 type="checkbox"

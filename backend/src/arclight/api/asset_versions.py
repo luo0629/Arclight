@@ -15,8 +15,10 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
 from arclight.application.asset_objects import object_key, read_object, write_object
+from arclight.application.asset_provenance import capture_provenance
 from arclight.application.commands import require_project
 from arclight.core.errors import DomainError
+from arclight.domain.asset_provenance import GenerationDeclaration
 from arclight.domain.asset_versions import MAX_IMAGE_BASE64, decode_image, next_status
 from arclight.persistence.models import AssetSelectionLock, AssetVersion, VisualAsset
 
@@ -34,6 +36,7 @@ class VersionCreate(Input):
     source_note: str = Field(min_length=1, max_length=1000)
     rights_note: str = Field(min_length=1, max_length=1000)
     rights_confirmed: Literal[True]
+    generation: GenerationDeclaration | None = None
 
     @field_validator("rights_confirmed", mode="before")
     @classmethod
@@ -70,6 +73,7 @@ class VersionRead(Resource):
     asset_snapshot: dict | None
     restored_from_version_id: UUID | None = None
     restoration_note: str | None = None
+    provenance: dict | None = None
 
 
 def read_version(row: AssetVersion) -> VersionRead:
@@ -90,6 +94,7 @@ def read_version(row: AssetVersion) -> VersionRead:
         asset_snapshot=row.metadata_json.get("asset_snapshot") if local else None,
         restored_from_version_id=row.metadata_json.get("restored_from_version_id"),
         restoration_note=row.metadata_json.get("restoration_note"),
+        provenance=row.metadata_json.get("provenance") if local else None,
     )
 
 
@@ -200,6 +205,7 @@ def create_version(
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能创建新版本", 409)
     image = decode_image(payload.content_base64, payload.media_type)
+    provenance = capture_provenance(db, project_id, image, payload.generation)
     snapshot = AssetRead.model_validate(asset).model_dump(mode="json")
     change_asset(db, asset, payload.expected_revision)
     number = (
@@ -218,6 +224,7 @@ def create_version(
         status="DRAFT",
         metadata_json={
             "storage_backend": "LOCAL",
+            "provenance": provenance,
             "request_sha256": fingerprint,
             "asset_snapshot": snapshot,
             "media": {
@@ -475,6 +482,7 @@ def restore_version_as_new(
             "media": dict(source.metadata_json["media"]),
             "restored_from_version_id": str(source.id),
             "restoration_note": payload.comment,
+            "provenance": source.metadata_json.get("provenance"),
         },
     )
     row.object_key = object_key(project_id, row.id)
