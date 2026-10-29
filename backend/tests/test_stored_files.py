@@ -97,8 +97,11 @@ def test_file_history_is_immutable_and_migration_refuses_loss(client, files_setu
         with pytest.raises(IntegrityError), client.app.state.session_factory.begin() as db:
             db.execute(text(sql))
     if client.app.state.engine.dialect.name == "postgresql":
-        with pytest.raises(IntegrityError), client.app.state.session_factory.begin() as db:
-            db.execute(text("TRUNCATE stored_files"))
+        with (
+            pytest.raises(IntegrityError, match="IMMUTABLE_HISTORY"),
+            client.app.state.session_factory.begin() as db,
+        ):
+            db.execute(text("TRUNCATE stored_files CASCADE"))
     with pytest.raises(RuntimeError, match="Cannot remove saved"):
         command.downgrade(migrated, "0021")
     assert len(client.get(files_url).json()) == 1

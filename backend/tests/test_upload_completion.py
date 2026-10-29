@@ -144,6 +144,13 @@ def test_completion_receipts_immutable_and_downgrade_guarded(client, transfer_se
     for sql in ("DELETE FROM upload_completions", "UPDATE upload_completions SET purpose='STORY'"):
         with pytest.raises(IntegrityError), client.app.state.session_factory.begin() as db:
             db.execute(text(sql))
+    if client.app.state.engine.dialect.name == "postgresql":
+        for table in ("upload_completions", "file_registrations"):
+            with (
+                pytest.raises(IntegrityError, match="IMMUTABLE_HISTORY"),
+                client.app.state.session_factory.begin() as db,
+            ):
+                db.execute(text(f"TRUNCATE {table} CASCADE"))
     with pytest.raises(RuntimeError, match="Cannot remove saved upload validation"):
         command.downgrade(migrated, "0023")
 
