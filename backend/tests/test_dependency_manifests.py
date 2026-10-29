@@ -230,6 +230,9 @@ def test_manifest_migration_nonempty_guard_and_offline_guard(client, episode, mi
     config = Config(migrated.config_file_name, output_buffer=StringIO())
     with pytest.raises(RuntimeError, match="online preservation check"):
         command.downgrade(config, "0020:0019", sql=True)
+    # 0020's preservation guard leaves its schema intact; restore later migrations
+    # before comparing the full current ORM metadata with the live schema.
+    command.upgrade(migrated, "head")
     command.check(migrated)
 
 

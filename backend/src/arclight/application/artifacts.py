@@ -5,11 +5,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
 from arclight.agents.contracts import ScriptContent, StoryboardContent, read_content
+from arclight.application.content_dependencies import register_content
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
     validate_storyboard_assets,
 )
+from arclight.application.dependencies import lock_dependency_graph
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 from arclight.workflows.production import Artifacts
 
@@ -31,6 +33,10 @@ class ArtifactStore(Artifacts):
 
     def script(self, generate: Callable[[], dict]) -> tuple[str, dict]:
         with self.factory.begin() as db:
+            project_id = db.scalar(select(Episode.project_id).where(Episode.id == self.episode_id))
+            if project_id is None:
+                raise ValueError("剧集不存在")
+            lock_dependency_graph(db, project_id)
             db.execute(
                 select(Episode).where(Episode.id == self.episode_id).with_for_update(key_share=True)
             )
@@ -58,10 +64,15 @@ class ArtifactStore(Artifacts):
             )
             db.add(script)
             db.flush()
+            register_content(db, script, "workflow:" + str(self.run_id))
             return str(script.id), content
 
     def storyboard(self, script_id: str, generate: Callable[[], dict]) -> tuple[str, dict]:
         with self.factory.begin() as db:
+            project_id = db.scalar(select(Episode.project_id).where(Episode.id == self.episode_id))
+            if project_id is None:
+                raise ValueError("剧集不存在")
+            lock_dependency_graph(db, project_id)
             db.execute(
                 select(Episode).where(Episode.id == self.episode_id).with_for_update(key_share=True)
             )
@@ -107,4 +118,5 @@ class ArtifactStore(Artifacts):
                         content_json=shot,
                     )
                 )
+            register_content(db, storyboard, "workflow:" + str(self.run_id))
             return str(storyboard.id), content

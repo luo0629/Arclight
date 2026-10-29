@@ -3,7 +3,7 @@
 import hashlib
 import json
 from typing import Literal
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Request, Response
 from pydantic import Field, field_validator
@@ -18,6 +18,7 @@ from arclight.application.asset_objects import object_key, read_object, write_ob
 from arclight.application.asset_provenance import capture_provenance
 from arclight.application.commands import require_project
 from arclight.application.dependencies import attach_output, require_manifest
+from arclight.application.invalidation import invalidate
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
 from arclight.domain.asset_versions import MAX_IMAGE_BASE64, decode_image, next_status
@@ -309,6 +310,23 @@ def select_version(
     )
     previous = asset.current_version_id
     change_selection(db, asset, payload, current_version_id=row.id)
+    if previous is not None and previous != row.id:
+        old = find_version(db, asset_id, previous)
+        invalidate(
+            db,
+            project_id,
+            actor,
+            uuid5(asset.id, f"selection:{asset.lock_version}"),
+            [
+                {
+                    "source_asset_version_id": str(old.id),
+                    "expected_revision": old.revision,
+                    "change_kind": "CONTENT",
+                    "selectors": [],
+                }
+            ],
+            "正式选用已切换到新版本",
+        )
     audit(
         db,
         project_id,
@@ -573,6 +591,22 @@ def update_version_state(
     if changed is None:
         raise DomainError("VERSION_CONFLICT", "资产版本状态已改变，请刷新后重试", 409)
     db.refresh(row)
+    if target in {"STALE", "ARCHIVED", "REJECTED"}:
+        invalidate(
+            db,
+            project_id,
+            actor,
+            uuid5(row.id, f"state:{row.revision}"),
+            [
+                {
+                    "source_asset_version_id": str(row.id),
+                    "expected_revision": row.revision,
+                    "change_kind": "LIFECYCLE",
+                    "selectors": [],
+                }
+            ],
+            payload.comment or "来源版本生命周期已变化",
+        )
     audit(
         db,
         project_id,

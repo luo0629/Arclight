@@ -4,7 +4,7 @@ import hashlib
 import json
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
 from arclight.core.errors import DomainError
@@ -12,6 +12,7 @@ from arclight.domain.dependencies import ManifestCreate, validate_dependency_typ
 from arclight.persistence.models import (
     AssetDependency,
     AssetVersion,
+    DependencyInvalidation,
     DependencyManifest,
     DependencyOutput,
     Project,
@@ -132,6 +133,12 @@ def capture_manifest(
         created_by=actor,
         snapshot_json={
             "schema_version": 1,
+            "invalidation_seq": db.scalar(
+                select(func.max(DependencyInvalidation.event_no)).where(
+                    DependencyInvalidation.project_id == project_id
+                )
+            )
+            or 0,
             "target": {"asset_id": str(target.id), "asset_type": target.asset_type},
             "inputs": inputs,
             "context": payload.context,
@@ -189,6 +196,20 @@ def attach_output(
     db.add(DependencyOutput(dependency_manifest_id=manifest.id, asset_version_id=output.id))
     db.add_all(rows)
     db.flush()
+    from arclight.application.invalidation import input_expired, mark_stale
+
+    if any(
+        input_expired(
+            db,
+            project_id,
+            item,
+            target.asset_type,
+            after_event_no=manifest.snapshot_json.get("invalidation_seq", 0),
+        )
+        for item in manifest.snapshot_json["inputs"]
+    ):
+        mark_stale(db, output)
+        db.flush()
     return rows
 
 

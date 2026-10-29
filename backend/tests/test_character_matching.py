@@ -58,6 +58,8 @@ def body(client, url, name="主角", entry_id=None, **values):
 
 def test_preview_never_writes_and_explicit_create_is_idempotent(client, episode):
     source = script(client, episode)
+    with client.app.state.session_factory() as db:
+        original_assets = set(db.scalars(select(VisualAsset.id)))
     url = path(episode, source)
     request = body(client, url)
     assert client.get(url).json()["candidates"][0]["matches"] == []
@@ -74,7 +76,9 @@ def test_preview_never_writes_and_explicit_create_is_idempotent(client, episode)
     after = client.get(f"/api/v1/episodes/{episode['id']}/scripts").json()[0]
     assert after["content_json"] == source["content_json"] and after["status"] == source["status"]
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(func.count()).select_from(VisualAsset)) == 0
+        # The script is now a graph node. Matching must create no new assets of
+        # any kind, including visual characters or duplicate text identities.
+        assert set(db.scalars(select(VisualAsset.id))) == original_assets
         assert db.scalar(select(func.count()).select_from(CharacterConfirmation)) == 1
 
 

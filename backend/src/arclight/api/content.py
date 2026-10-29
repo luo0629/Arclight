@@ -12,6 +12,7 @@ from arclight.api.content_history import router as history_router
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import EpisodeRead, Input, ScriptRead, StoryboardRead
 from arclight.application.commands import require_episode
+from arclight.application.content_dependencies import register_content, review_registry
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
@@ -95,6 +96,7 @@ def save_script(
     )
     db.add(version)
     db.flush()
+    register_content(db, version, actor)
     audit(
         db,
         episode.project_id,
@@ -156,6 +158,7 @@ def save_storyboard(
                 status="READY_FOR_REVIEW",
             )
         )
+    register_content(db, version, actor)
     audit(
         db,
         episode.project_id,
@@ -220,6 +223,7 @@ def review_content(
     if isinstance(version, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == version.id)):
             shot.status = version.status
+    review_registry(db, version, actor)
     audit(
         db, episode.project_id, actor, f"{resource_type}.reviewed", version.id, payload.model_dump()
     )

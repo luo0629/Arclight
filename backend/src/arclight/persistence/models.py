@@ -401,6 +401,22 @@ class DependencyOutput(Entity, Base):
     asset_version_id: Mapped[UUID] = mapped_column(ForeignKey("asset_versions.id"), unique=True)
 
 
+class DependencyInvalidation(Entity, Base):
+    """Append-only change receipt; late outputs are checked against these facts."""
+
+    __tablename__ = "dependency_invalidations"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    creation_key: Mapped[UUID]
+    event_no: Mapped[int]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE)
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (
+        UniqueConstraint("project_id", "creation_key", name="uq_dependency_invalidation_creation"),
+        UniqueConstraint("project_id", "event_no", name="uq_dependency_invalidation_event_no"),
+    )
+
+
 Index("ix_outbox_unpublished", OutboxEvent.published_at, OutboxEvent.created_at)
 
 

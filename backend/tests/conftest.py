@@ -6,10 +6,39 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from arclight.core.config import Settings
 from arclight.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def historical_content_registry(request, monkeypatch):
+    """0018 seeds predate the DAG registry; activate it once guards reach head.
+
+    Only explicit historical-schema fixtures use this adapter. All ordinary
+    API/workflow tests exercise the real current graph writes without patches.
+    """
+    if request.node.get_closest_marker("legacy_schema") is None:
+        return
+    from arclight.api import content
+    from arclight.application import artifacts, content_dependencies
+
+    def after_migration(function):
+        def seeded(db, *args, **kwargs):
+            if inspect(db.get_bind()).has_table("dependency_invalidations"):
+                return function(db, *args, **kwargs)
+            return None
+
+        return seeded
+
+    for module, name in (
+        (content, "register_content"),
+        (content, "review_registry"),
+        (artifacts, "register_content"),
+        (content_dependencies, "review_registry"),
+    ):
+        monkeypatch.setattr(module, name, after_migration(getattr(module, name)))
 
 
 @pytest.fixture

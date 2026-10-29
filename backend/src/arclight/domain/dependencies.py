@@ -16,7 +16,9 @@ DependencyType = Literal[
     "RENDER_DEPENDENCY",
 ]
 
-IMAGE_KINDS = frozenset({"CHARACTER", "SCENE", "PROP", "STYLE", "SHOT_IMAGE"})
+IMAGE_KINDS = frozenset(
+    {"CHARACTER", "SCENE", "PROP", "STYLE", "SHOT_IMAGE", "IMAGE", "LOCATION", "COSTUME"}
+)
 
 # These describe dependency contracts, not availability of media generation APIs.
 CONTENT_TARGETS = {

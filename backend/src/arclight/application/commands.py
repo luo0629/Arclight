@@ -265,6 +265,9 @@ def resume_run(
     if isinstance(artifact, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):
             shot.status = artifact.status
+    from arclight.application.content_dependencies import review_registry
+
+    review_registry(db, artifact, actor)
     db.add(
         Review(
             run_id=run.id,

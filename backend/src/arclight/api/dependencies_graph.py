@@ -16,7 +16,9 @@ from arclight.application.dependencies import (
     query_dependencies,
     require_manifest,
 )
+from arclight.application.invalidation import invalidate
 from arclight.domain.dependencies import ManifestCreate
+from arclight.domain.invalidation import InvalidationCreate
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["dependencies"])
 
@@ -40,6 +42,28 @@ class BatchQuery(Input):
     direction: Literal["incoming", "outgoing"] = "outgoing"
     limit: int = Field(default=100, strict=True, ge=1, le=1000)
     offset: int = Field(default=0, strict=True, ge=0)
+
+
+class InvalidationRead(Resource):
+    project_id: UUID
+    created_by: str
+    snapshot: dict = Field(validation_alias="snapshot_json")
+
+
+@router.post("/dependencies/invalidate", status_code=201)
+def invalidate_dependencies(
+    project_id: UUID, payload: InvalidationCreate, db: Database, actor: Actor
+) -> InvalidationRead:
+    require_project(db, project_id, actor, write=True, owner=True)
+    row, _ = invalidate(
+        db,
+        project_id,
+        actor,
+        payload.creation_key,
+        [payload.model_dump(mode="json", exclude={"creation_key", "reason", "dependency_type"})],
+        payload.reason,
+    )
+    return InvalidationRead.model_validate(row)
 
 
 @router.post("/dependency-manifests", status_code=201)
