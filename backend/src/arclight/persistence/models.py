@@ -371,6 +371,21 @@ class StoredFile(Entity, Base):
     )
 
 
+class UploadIntent(Entity, Base):
+    __tablename__ = "upload_intents"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    bucket: Mapped[str] = mapped_column(String(63))
+    object_key: Mapped[str] = mapped_column(String(512), unique=True)
+    purpose: Mapped[str] = mapped_column(String(32))
+    original_name: Mapped[str] = mapped_column(String(160))
+    declared_media_type: Mapped[str] = mapped_column(String(100))
+    byte_size: Mapped[int]
+    checksum: Mapped[str] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (CheckConstraint("byte_size > 0", name="upload_intent_size"),)
+
+
 class AssetSelectionLock(Entity, Base):
     __tablename__ = "asset_selection_locks"
     asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"), unique=True)
