@@ -19,6 +19,7 @@ dependencies = [
     "pwdlib[argon2]>=0.3,<1",
     "pillow>=11,<13",
     "cryptography>=46,<50",
+    "boto3>=1.42,<2",
 ]
 
 [dependency-groups]

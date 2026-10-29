@@ -186,6 +186,7 @@ docker compose up --build -d
 - 创作产品：`http://localhost:8080`，首次访问请创建账号。
 - Swagger：`http://localhost:8000/docs`
 - 默认使用 Mock，无需模型密钥；不会生成真实图片或视频。
+- Compose 统一启动私有 MinIO（loopback `9000`）、桶初始化及应用服务；`/health/ready` 会检查已配置的 S3。MinIO 由固定官方版本源码构建，首次构建较慢；既有本机图片卷继续保留。
 - API 调试可使用开发 Service Token：`local-development-token-change-me`，浏览器工作台使用自己的账户会话。
 - 首次启动会执行业务表迁移和 checkpoint 初始化，默认凭据仅适用于本机开发。
 

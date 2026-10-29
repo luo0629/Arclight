@@ -7,7 +7,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: backend
@@ -36,11 +36,25 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      - name: Build isolated S3 test service
+        working-directory: .
+        run: |
+          docker build -t arclight-minio:test infra/minio
+          docker run -d --name arclight-test-minio -p 127.0.0.1:19000:9000 -e MINIO_ROOT_USER=arclight-test -e MINIO_ROOT_PASSWORD=arclight-test-secret arclight-minio:test
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:19000/minio/health/ready; then exit 0; fi
+            sleep 1
+          done
+          docker logs arclight-test-minio
+          exit 1
       - name: SQLite tests
         run: uv run pytest -q
+        env:
+          ARCLIGHT_TEST_S3_ENDPOINT: http://127.0.0.1:19000
       - name: PostgreSQL tests
         run: uv run pytest -q
         env:
+          ARCLIGHT_TEST_S3_ENDPOINT: http://127.0.0.1:19000
           ARCLIGHT_TEST_DATABASE_URL: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
       - run: docker compose config --quiet
         working-directory: .

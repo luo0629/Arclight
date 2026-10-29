@@ -10,6 +10,12 @@ x-app: &app
     ARCLIGHT_JWT_SECRET: ${ARCLIGHT_JWT_SECRET:-arclight-local-jwt-secret-change-before-deploying}
     ARCLIGHT_ALLOW_REGISTRATION: ${ARCLIGHT_ALLOW_REGISTRATION:-true}
     ARCLIGHT_AUTH_ALLOWED_ORIGINS: ${ARCLIGHT_AUTH_ALLOWED_ORIGINS:-[]}
+    ARCLIGHT_OBJECT_STORAGE_BACKEND: s3
+    ARCLIGHT_S3_ENDPOINT_URL: http://minio:9000
+    ARCLIGHT_S3_PUBLIC_ENDPOINT_URL: ${ARCLIGHT_S3_PUBLIC_ENDPOINT_URL:-http://127.0.0.1:9000}
+    ARCLIGHT_S3_BUCKET: ${ARCLIGHT_S3_BUCKET:-arclight-media}
+    ARCLIGHT_S3_ACCESS_KEY: ${ARCLIGHT_S3_ACCESS_KEY:-arclight-local}
+    ARCLIGHT_S3_SECRET_KEY: ${ARCLIGHT_S3_SECRET_KEY:-arclight-local-storage-change-me}
     ARCLIGHT_PROVIDER: ${ARCLIGHT_PROVIDER:-mock}
     ARCLIGHT_TEXT_DURATION_TOLERANCE_PERCENT: ${ARCLIGHT_TEXT_DURATION_TOLERANCE_PERCENT:-10}
     ARCLIGHT_LLM_API_KEY: ${ARCLIGHT_LLM_API_KEY:-}
@@ -20,6 +26,22 @@ x-app: &app
   restart: unless-stopped
 
 services:
+  minio:
+    build: ./infra/minio
+    environment:
+      MINIO_ROOT_USER: ${ARCLIGHT_S3_ACCESS_KEY:-arclight-local}
+      MINIO_ROOT_PASSWORD: ${ARCLIGHT_S3_SECRET_KEY:-arclight-local-storage-change-me}
+    ports: ["127.0.0.1:9000:9000"]
+    volumes: ["media-objects:/data"]
+    restart: unless-stopped
+
+  storage-init:
+    <<: *app
+    restart: "no"
+    command: ["/app/.venv/bin/python", "-m", "arclight.storage.objects"]
+    depends_on:
+      minio: {condition: service_healthy}
+
   web:
     build:
       context: ./fronted
@@ -93,6 +115,7 @@ services:
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       migrate: {condition: service_completed_successfully}
+      storage-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "/app/.venv/bin/python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
@@ -105,6 +128,7 @@ services:
     command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2"]
     depends_on:
       migrate: {condition: service_completed_successfully}
+      storage-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
 
   beat:
@@ -112,9 +136,11 @@ services:
     command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "beat", "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
     depends_on:
       migrate: {condition: service_completed_successfully}
+      storage-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
 
 volumes:
   postgres-data:
   redis-data:
   asset-objects:
+  media-objects:

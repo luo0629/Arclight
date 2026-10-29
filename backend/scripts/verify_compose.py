@@ -32,7 +32,7 @@ def main() -> None:
     config["networks"] = {"default": {"name": project + "_default"}}
     config["volumes"] = {
         name: {"name": project + "_" + name}
-        for name in ("postgres-data", "redis-data", "asset-objects")
+        for name in ("postgres-data", "redis-data", "asset-objects", "media-objects")
     }
     jwt_secret = secrets.token_urlsafe(48)
     for name, service in config["services"].items():
@@ -46,9 +46,20 @@ def main() -> None:
         elif name == "frontend":
             service["image"] = "arclight-frontend:latest"
             service["environment"]["ARCLIGHT_API_PROXY"] = "http://api:8000"
+        elif name == "minio":
+            service["image"] = "arclight-minio:latest"
+            service["environment"] = {
+                "MINIO_ROOT_USER": "arclight-test",
+                "MINIO_ROOT_PASSWORD": "arclight-test-secret",
+            }
         elif name not in ("postgres", "redis"):
             service["image"] = "arclight-api:latest"
             service["environment"].update(
+                ARCLIGHT_OBJECT_STORAGE_BACKEND="s3",
+                ARCLIGHT_S3_ENDPOINT_URL="http://minio:9000",
+                ARCLIGHT_S3_ACCESS_KEY="arclight-test",
+                ARCLIGHT_S3_SECRET_KEY="arclight-test-secret",
+                ARCLIGHT_S3_BUCKET="arclight-test-media",
                 ARCLIGHT_ENVIRONMENT="development",
                 ARCLIGHT_PROVIDER="mock",
                 ARCLIGHT_LLM_API_KEY="",

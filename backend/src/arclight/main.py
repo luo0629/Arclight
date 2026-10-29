@@ -33,6 +33,7 @@ from arclight.api.visual_bible import router as visual_bible_router
 from arclight.core.config import Settings, get_settings
 from arclight.core.errors import DomainError
 from arclight.persistence.session import build_engine, session_factory
+from arclight.storage.objects import ObjectStorage
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 connection.execute(text("SELECT 1"))
         except Exception:
             raise DomainError("DATABASE_UNAVAILABLE", "数据库不可用", 503) from None
-        return {"status": "ok", "checks": {"database": "ok"}}
+        checks = {"database": "ok"}
+        if settings.object_storage_backend == "s3":
+            ObjectStorage(settings).check()
+            checks["object_storage"] = "ok"
+        return {"status": "ok", "checks": checks}
 
     app.include_router(model_services_router)
     app.include_router(auth_router)

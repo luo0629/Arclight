@@ -1,6 +1,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,8 +30,41 @@ class Settings(BaseSettings):
     allow_registration: bool = True
     max_request_bytes: int = Field(default=2_000_000, ge=1024, le=100_000_000)
     asset_storage_path: Path | None = None
+    object_storage_backend: Literal["local", "s3"] = "local"
+    s3_endpoint_url: str | None = None
+    s3_public_endpoint_url: str | None = None
+    s3_region: str = "us-east-1"
+    s3_bucket: str = Field(default="arclight-media", pattern=r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+    s3_access_key: SecretStr = SecretStr("")
+    s3_secret_key: SecretStr = SecretStr("")
     auth_requests_per_minute: int = Field(default=30, ge=1, le=10000)
     auth_allowed_origins: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_storage(self) -> "Settings":
+        if self.object_storage_backend == "s3" and (
+            not self.s3_endpoint_url
+            or not self.s3_access_key.get_secret_value()
+            or not self.s3_secret_key.get_secret_value()
+        ):
+            raise ValueError("S3 必须显式配置地址和独立凭证")
+        for endpoint in (self.s3_endpoint_url, self.s3_public_endpoint_url):
+            if endpoint is None:
+                continue
+            parsed = urlsplit(endpoint)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username
+                or parsed.password
+                or parsed.query
+                or parsed.fragment
+                or parsed.path not in {"", "/"}
+            ):
+                raise ValueError("S3 地址必须是无凭证、参数或路径的 HTTP(S) 地址")
+            if self.environment == "production" and parsed.scheme != "https":
+                raise ValueError("生产环境 S3 必须使用 HTTPS")
+        return self
 
     @model_validator(mode="after")
     def validate_secrets(self) -> "Settings":
