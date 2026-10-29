@@ -1,5 +1,6 @@
 export type VisualAssetType = "CHARACTER" | "SCENE" | "PROP" | "STYLE";
 export type AssetVersion = {
+  dependency_manifest_id?: string | null;
   id: string;
   asset_id: string;
   version_no: number;

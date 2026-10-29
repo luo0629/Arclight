@@ -108,6 +108,7 @@ def start_run(
     script_version_id: UUID | None = None,
     outline_version_id: UUID | None = None,
     source_id: UUID | None = None,
+    rebuild_from_version_id: UUID | None = None,
 ) -> WorkflowRun:
     episode = require_episode(db, episode_id, actor, write=True)
     # 同一剧集写入串行化，同时保护版本号分配；唯一约束作为最终防线。
@@ -125,6 +126,8 @@ def start_run(
         payload = {"outline_version_id": str(outline_version_id)}
     if source_id is not None:
         payload = {"source_id": str(source_id)}
+    if rebuild_from_version_id is not None:
+        payload["rebuild_from_version_id"] = str(rebuild_from_version_id)
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -143,6 +146,14 @@ def start_run(
     )
     if active:
         raise DomainError("EPISODE_BUSY", "该剧集已有未完成工作流")
+    if rebuild_from_version_id is not None:
+        original = db.get(Storyboard, rebuild_from_version_id)
+        if original is None or original.episode_id != episode_id:
+            raise DomainError("NOT_FOUND", "待重建分镜不存在", 404)
+        if original.status != "STALE" or script_version_id is None:
+            raise DomainError(
+                "INVALID_REBUILD_INPUT", "只允许按需重生成失效分镜并指定批准剧本", 409
+            )
     from arclight.application.visual_bible import snapshot as visual_snapshot
 
     inputs: dict = {
@@ -196,6 +207,8 @@ def start_run(
             story_source = capture_inline(db, episode, actor, inputs["story"])
         inputs["source_revision"] = provenance(db, story_source)
     snapshot = text_snapshot(db, actor)
+    if rebuild_from_version_id is not None:
+        inputs["rebuild_from_version_id"] = str(rebuild_from_version_id)
     if snapshot:
         inputs["_text_service"] = snapshot
     run = WorkflowRun(

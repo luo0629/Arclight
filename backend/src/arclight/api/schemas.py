@@ -72,6 +72,7 @@ class RunCreate(Input):
 
 class StoryboardRunCreate(Input):
     script_version_id: UUID
+    rebuild_from_version_id: UUID | None = None
 
 
 class ReviewCreate(Input):

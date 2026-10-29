@@ -19,6 +19,7 @@ import ScriptRewrite from "@/features/editor/components/script-rewrite";
 import CharacterMatching from "@/features/story/components/character-matching";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
 import ImpactButton from "@/features/dependencies/components/impact-button";
+import RebuildStoryboard from "@/features/dependencies/components/rebuild-storyboard";
 
 export default function Inspector({
   node,
@@ -277,6 +278,18 @@ export default function Inspector({
             kind={node.kind === "script" ? "script" : "storyboard"}
             version={version}
           />
+          {node.kind === "storyboard" &&
+            version.status === "STALE" &&
+            writable && (
+              <RebuildStoryboard
+                key={version.id}
+                episodeId={episode.id}
+                versionId={version.id}
+                disabled={busy || active}
+                reload={reload}
+                showTasks={showTasks}
+              />
+            )}
           <VersionEditor
             key={version.id}
             version={version}

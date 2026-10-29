@@ -171,6 +171,7 @@ def create_storyboard_run(
         request.state.request_id,
         settings=request.app.state.settings,
         script_version_id=payload.script_version_id,
+        rebuild_from_version_id=payload.rebuild_from_version_id,
     )
     return AcceptedRun(
         run_id=run.id,

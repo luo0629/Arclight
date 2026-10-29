@@ -12,6 +12,7 @@ import usePagedList from "@/hooks/use-paged-list";
 import { api, apiBlob, json, message } from "@/lib/api/client";
 import type { AssetVersion, VisualAsset } from "@/types/api";
 import ImpactButton from "@/features/dependencies/components/impact-button";
+import RebuildImage from "@/features/dependencies/components/rebuild-image";
 import AssetProvenanceForm, {
   emptyGeneration,
   type GenerationDeclaration,
@@ -45,6 +46,9 @@ export default function AssetVersions({
   const list = usePagedList<AssetVersion>(endpoint);
   const [selected, setSelected] = useState<AssetVersion | null>(null);
   const [importing, setImporting] = useState(false);
+  const [rebuildManifestId, setRebuildManifestId] = useState<
+    string | undefined
+  >();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -166,7 +170,7 @@ export default function AssetVersions({
       if (live.current) setBusy(false);
     }
   }
-  async function restoreNew() {
+  async function restoreNew(dependency_manifest_id?: string) {
     if (!selected || !editable || !comment.trim() || submitting.current) return;
     restoreKey.current ??= crypto.randomUUID();
     submitting.current = true;
@@ -179,6 +183,7 @@ export default function AssetVersions({
           expected_revision: asset.revision,
           creation_key: restoreKey.current,
           comment,
+          dependency_manifest_id,
         }),
       );
       restoreKey.current = null;
@@ -242,7 +247,13 @@ export default function AssetVersions({
           {error}
         </Notice>
       )}
-      <Button disabled={!editable || busy} onClick={() => setImporting(true)}>
+      <Button
+        disabled={!editable || busy}
+        onClick={() => {
+          setRebuildManifestId(undefined);
+          setImporting(true);
+        }}
+      >
         导入新图片版本
       </Button>
       <div className="flex flex-wrap gap-2">
@@ -333,6 +344,19 @@ export default function AssetVersions({
           {selected.stale && (
             <Notice>此版本已失效，仅供历史查阅，不能用于新引用。</Notice>
           )}
+          {selected.dependency_manifest_id && editable && selected.media && (
+            <RebuildImage
+              key={"rebuild:" + selected.id}
+              endpoint={endpoint + "/" + selected.id}
+              version={selected}
+              disabled={busy || !comment.trim()}
+              onReconfirm={restoreNew}
+              onImport={(identity) => {
+                setRebuildManifestId(identity);
+                setImporting(true);
+              }}
+            />
+          )}
           <dl className="grid gap-2 break-all text-sm">
             <div>
               <dt>版本 ID</dt>
@@ -419,7 +443,7 @@ export default function AssetVersions({
                     选用此版本
                   </ImpactButton>
                 )}
-                {selected.media && (
+                {selected.media && !selected.dependency_manifest_id && (
                   <Button
                     variant="outline"
                     disabled={busy || !comment.trim()}
@@ -492,6 +516,7 @@ export default function AssetVersions({
           asset={asset}
           endpoint={endpoint}
           writable={editable}
+          dependencyManifestId={rebuildManifestId}
           onSaved={created}
           onDismiss={() => setImporting(false)}
         />
@@ -554,12 +579,14 @@ function ImportDialog({
   writable,
   onSaved,
   onDismiss,
+  dependencyManifestId,
 }: {
   asset: VisualAsset;
   endpoint: string;
   writable: boolean;
   onSaved: (version: AssetVersion) => Promise<void>;
   onDismiss: () => void;
+  dependencyManifestId?: string;
 }) {
   const [revision] = useState(asset.revision);
   const [creationKey] = useState(() => crypto.randomUUID());
@@ -624,6 +651,7 @@ function ImportDialog({
           rights_note: rights,
           rights_confirmed: confirmed,
           generation,
+          dependency_manifest_id: dependencyManifestId,
         });
       }
       const version = await api<AssetVersion>(endpoint, {

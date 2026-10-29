@@ -18,6 +18,11 @@ from arclight.application.asset_objects import object_key, read_object, write_ob
 from arclight.application.asset_provenance import capture_provenance
 from arclight.application.commands import require_project
 from arclight.application.dependencies import attach_output, require_manifest
+from arclight.application.dependency_rebuild import (
+    RebuildInputs,
+    original_manifest,
+    rebuild_manifest,
+)
 from arclight.application.invalidation import check_impact, invalidate
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
@@ -284,6 +289,52 @@ class VersionRestore(Input):
     expected_revision: int = Field(strict=True, ge=0)
     creation_key: UUID
     comment: str = Field(min_length=1, max_length=1000)
+    dependency_manifest_id: UUID | None = None
+
+
+@router.get("/{version_id}/rebuild-inputs")
+def get_rebuild_inputs(
+    project_id: UUID, asset_id: UUID, version_id: UUID, db: Database, actor: Actor
+) -> dict:
+    require_project(db, project_id, actor)
+    find_asset(db, project_id, asset_id)
+    version = find_version(db, asset_id, version_id)
+    manifest = original_manifest(db, project_id, version)
+    inputs = []
+    from arclight.application.dependencies import exact_version
+
+    for item in manifest.snapshot_json["inputs"]:
+        source, asset = exact_version(db, project_id, UUID(item["source_asset_version_id"]))
+        inputs.append(
+            {
+                **item,
+                "status": source.status,
+                "stale": source.stale,
+                "current_version_id": str(asset.current_version_id)
+                if asset.current_version_id
+                else None,
+            }
+        )
+    return {"inputs": inputs, "original_manifest_id": str(manifest.id)}
+
+
+@router.post("/{version_id}/rebuild-manifest", status_code=201)
+def create_rebuild_manifest(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    payload: RebuildInputs,
+    db: Database,
+    actor: Actor,
+) -> dict:
+    require_project(db, project_id, actor, write=True)
+    asset = find_asset(db, project_id, asset_id)
+    if asset.status in {"ARCHIVED", "LOCKED"}:
+        raise DomainError("ASSET_READ_ONLY", "归档或锁定资产不能创建重建清单", 409)
+    row, _ = rebuild_manifest(
+        db, project_id, find_version(db, asset_id, version_id), actor, payload
+    )
+    return {"id": str(row.id), "snapshot": row.snapshot_json}
 
 
 @router.post("/{version_id}/select")
@@ -497,6 +548,8 @@ def restore_version_as_new(
         if (
             existing.metadata_json.get("restored_from_version_id") != str(source.id)
             or existing.metadata_json.get("restoration_note") != payload.comment
+            or existing.metadata_json.get("dependency_manifest_id")
+            != (str(payload.dependency_manifest_id) if payload.dependency_manifest_id else None)
         ):
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一恢复标识不能用于不同版本或说明", 409)
         return read_version(existing)
@@ -504,6 +557,17 @@ def restore_version_as_new(
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能恢复为新版本", 409)
     if source.creation_key is None or source.metadata_json.get("storage_backend") != "LOCAL":
         raise DomainError("ASSET_OBJECT_UNAVAILABLE", "此历史图片尚未接入本机读取", 409)
+    if (
+        source.metadata_json.get("dependency_manifest_id")
+        and payload.dependency_manifest_id is None
+    ):
+        raise DomainError("DEPENDENCY_MANIFEST_REQUIRED", "派生图片须先确认新输入清单后另存", 409)
+    if payload.dependency_manifest_id is not None:
+        manifest = require_manifest(db, project_id, payload.dependency_manifest_id)
+        if manifest.target_asset_id != asset.id or manifest.snapshot_json["context"].get(
+            "rebuild_from_version_id"
+        ) != str(source.id):
+            raise DomainError("INVALID_REBUILD_INPUT", "重建清单与原版本不匹配", 409)
     data = read_object(
         request.app.state.settings.asset_storage_path,
         project_id,
@@ -535,6 +599,9 @@ def restore_version_as_new(
             "restored_from_version_id": str(source.id),
             "restoration_note": payload.comment,
             "provenance": source.metadata_json.get("provenance"),
+            "dependency_manifest_id": str(payload.dependency_manifest_id)
+            if payload.dependency_manifest_id
+            else None,
         },
     )
     row.object_key = object_key(project_id, row.id)
@@ -542,6 +609,8 @@ def restore_version_as_new(
     db.add(row)
     db.flush()
     db.refresh(row)
+    if payload.dependency_manifest_id is not None:
+        attach_output(db, project_id, payload.dependency_manifest_id, row)
     audit(
         db,
         project_id,
