@@ -312,6 +312,8 @@ def test_invalidation_history_is_immutable_and_downgrade_guarded(client, episode
         db.execute(DependencyInvalidation.__table__.delete())
     with pytest.raises(RuntimeError, match="invalidations exist"):
         command.downgrade(migrated, "0020")
+    # Later migrations may already have been removed before 0021 refuses data loss.
+    command.upgrade(migrated, "head")
     command.check(migrated)
     output = StringIO()
     config = Config(migrated.config_file_name, output_buffer=output)

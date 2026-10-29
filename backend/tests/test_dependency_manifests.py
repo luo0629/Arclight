@@ -221,7 +221,10 @@ def test_manifest_receipt_and_new_edge_columns_are_database_immutable(client, ep
         assert dict(db.execute(select(table)).mappings().one()) == original
 
 
+@pytest.mark.legacy_schema
 def test_manifest_migration_nonempty_guard_and_offline_guard(client, episode, migrated):
+    # Seed 0020-era image data before the independent 0022 file receipts exist.
+    command.upgrade(migrated, "0021")
     derived(client, episode["project_id"])
     # Exercise 0020's guard from its own revision: PostgreSQL rolls the entire
     # downgrade transaction back, while SQLite commits earlier DDL separately.

@@ -768,6 +768,9 @@ test("ASSET-06：人工选用精确版本、历史另存与重新审核", async 
   const details = page.getByLabel("精确资产版本详情", { exact: true });
   await page.getByRole("button", { name: "提交版本审核", exact: true }).click();
   await page.getByRole("button", { name: "批准此版本", exact: true }).click();
+  await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
+    "版本 v1 · 已批准",
+  );
   const row = (await (await page.request.get(path, { headers })).json())[0];
   const versionPath = path + "/" + row.id + "/versions";
   const first = (

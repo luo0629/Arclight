@@ -202,7 +202,7 @@ def add_asset_graph(db, episode, nodes, edges):
         local_image = (
             asset.asset_type in {"CHARACTER", "SCENE", "PROP", "STYLE"}
             and version.creation_key is not None
-            and version.metadata_json.get("storage_backend") == "LOCAL"
+            and version.metadata_json.get("storage_backend") in {"LOCAL", "S3"}
         )
         node.update(
             asset_id=str(asset.id),

@@ -16,6 +16,7 @@ from arclight.core.config import Settings
 from arclight.main import create_app
 from arclight.persistence.models import WorkflowRun
 from arclight.persistence.session import build_engine, session_factory
+from arclight.storage.objects import ObjectStorage, initialize
 
 
 def main():
@@ -30,6 +31,18 @@ def main():
         auth_requests_per_minute=300,
         asset_storage_path=folder / "asset-objects",
     )
+    test_s3 = os.getenv("ARCLIGHT_E2E_S3_ENDPOINT")
+    if test_s3:
+        from uuid import uuid4
+
+        from pydantic import SecretStr
+
+        settings.object_storage_backend = "s3"
+        settings.s3_endpoint_url = test_s3
+        settings.s3_access_key = SecretStr("arclight-test")
+        settings.s3_secret_key = SecretStr("arclight-test-secret")
+        settings.s3_bucket = "arclight-test-e2e-" + uuid4().hex
+        initialize(settings)
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
     command.upgrade(config, "head")
@@ -61,6 +74,13 @@ def main():
         stop.set()
         thread.join(timeout=10)
         factory.kw["bind"].dispose()
+        if test_s3:
+            store = ObjectStorage(settings)
+            paginator = store.client.get_paginator("list_objects_v2")
+            for batch in paginator.paginate(Bucket=settings.s3_bucket):
+                for item in batch.get("Contents", []):
+                    store.delete(item["Key"])
+            store.client.delete_bucket(Bucket=settings.s3_bucket)
 
 
 if __name__ == "__main__":

@@ -348,6 +348,29 @@ class AssetVersion(Entity, Base):
     )
 
 
+class StoredFile(Entity, Base):
+    __tablename__ = "stored_files"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    asset_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("asset_versions.id"), unique=True, nullable=True
+    )
+    storage_backend: Mapped[str] = mapped_column(String(16))
+    bucket: Mapped[str | None] = mapped_column(String(63), nullable=True)
+    object_key: Mapped[str] = mapped_column(String(512))
+    checksum: Mapped[str] = mapped_column(String(64))
+    byte_size: Mapped[int]
+    media_type: Mapped[str] = mapped_column(String(100))
+    original_name: Mapped[str] = mapped_column(String(160))
+    source_note: Mapped[str] = mapped_column(Text)
+    rights_note: Mapped[str] = mapped_column(Text)
+    rights_confirmed: Mapped[bool]
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (
+        UniqueConstraint("storage_backend", "object_key", name="uq_stored_file_object"),
+        CheckConstraint("byte_size > 0", name="stored_file_size"),
+    )
+
+
 class AssetSelectionLock(Entity, Base):
     __tablename__ = "asset_selection_locks"
     asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"), unique=True)

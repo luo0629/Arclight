@@ -21,7 +21,7 @@ def historical_content_registry(request, monkeypatch):
     """
     if request.node.get_closest_marker("legacy_schema") is None:
         return
-    from arclight.api import content
+    from arclight.api import asset_versions, content
     from arclight.application import artifacts, content_dependencies
 
     def after_migration(function):
@@ -31,6 +31,15 @@ def historical_content_registry(request, monkeypatch):
             return None
 
         return seeded
+
+    original_record = asset_versions.record_asset_file
+
+    def record_on_current_schema(db, *args, **kwargs):
+        if inspect(db.get_bind()).has_table("stored_files"):
+            return original_record(db, *args, **kwargs)
+        return None
+
+    monkeypatch.setattr(asset_versions, "record_asset_file", record_on_current_schema)
 
     for module, name in (
         (content, "register_content"),

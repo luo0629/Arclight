@@ -23,6 +23,7 @@ from arclight.application.dependency_rebuild import (
     original_manifest,
     rebuild_manifest,
 )
+from arclight.application.files import record_asset_file
 from arclight.application.invalidation import check_impact, invalidate
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
@@ -87,7 +88,10 @@ class VersionRead(Resource):
 
 
 def read_version(row: AssetVersion) -> VersionRead:
-    local = row.creation_key is not None and row.metadata_json.get("storage_backend") == "LOCAL"
+    local = row.creation_key is not None and row.metadata_json.get("storage_backend") in {
+        "LOCAL",
+        "S3",
+    }
     return VersionRead(
         id=row.id,
         created_at=row.created_at,
@@ -164,10 +168,10 @@ def get_image(
     require_project(db, project_id, actor)
     find_asset(db, project_id, asset_id)
     row = find_version(db, asset_id, version_id)
-    if row.creation_key is None or row.metadata_json.get("storage_backend") != "LOCAL":
+    if row.creation_key is None or row.metadata_json.get("storage_backend") not in {"LOCAL", "S3"}:
         raise DomainError("ASSET_OBJECT_UNAVAILABLE", "此历史图片尚未接入本机读取", 409)
     data = read_object(
-        request.app.state.settings.asset_storage_path,
+        request.app.state.settings,
         project_id,
         row.id,
         row.object_key,
@@ -242,7 +246,7 @@ def create_version(
         creation_key=payload.creation_key,
         status="DRAFT",
         metadata_json={
-            "storage_backend": "LOCAL",
+            "storage_backend": request.app.state.settings.object_storage_backend.upper(),
             "dependency_manifest_id": (
                 str(payload.dependency_manifest_id) if payload.dependency_manifest_id else None
             ),
@@ -261,11 +265,12 @@ def create_version(
             },
         },
     )
-    row.object_key = object_key(project_id, row.id)
-    write_object(db, request.app.state.settings.asset_storage_path, project_id, row.id, image.data)
+    row.object_key = object_key(project_id, row.id, request.app.state.settings)
+    write_object(db, request.app.state.settings, project_id, row.id, image.data, image.media_type)
     db.add(row)
     db.flush()
     db.refresh(row)
+    record_asset_file(db, request.app.state.settings, project_id, row)
     if payload.dependency_manifest_id is not None:
         attach_output(db, project_id, payload.dependency_manifest_id, row)
     audit(
@@ -355,7 +360,7 @@ def select_version(
     if row.status != "APPROVED" or row.stale:
         raise DomainError("ASSET_NOT_USABLE", "只能选用已批准且有效的精确版本", 409)
     read_object(
-        request.app.state.settings.asset_storage_path,
+        request.app.state.settings,
         project_id,
         row.id,
         row.object_key,
@@ -460,7 +465,7 @@ def change_lock(
         ):
             raise DomainError("ASSET_LOCK_CONFLICT", "选用版本未批准、失效或已锁定", 409)
         read_object(
-            request.app.state.settings.asset_storage_path,
+            request.app.state.settings,
             project_id,
             version.id,
             version.object_key,
@@ -559,7 +564,10 @@ def restore_version_as_new(
         return read_version(existing)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能恢复为新版本", 409)
-    if source.creation_key is None or source.metadata_json.get("storage_backend") != "LOCAL":
+    if source.creation_key is None or source.metadata_json.get("storage_backend") not in {
+        "LOCAL",
+        "S3",
+    }:
         raise DomainError("ASSET_OBJECT_UNAVAILABLE", "此历史图片尚未接入本机读取", 409)
     if (
         source.metadata_json.get("dependency_manifest_id")
@@ -573,7 +581,7 @@ def restore_version_as_new(
         ) != str(source.id):
             raise DomainError("INVALID_REBUILD_INPUT", "重建清单与原版本不匹配", 409)
     data = read_object(
-        request.app.state.settings.asset_storage_path,
+        request.app.state.settings,
         project_id,
         source.id,
         source.object_key,
@@ -597,7 +605,7 @@ def restore_version_as_new(
         status="DRAFT",
         stale=False,
         metadata_json={
-            "storage_backend": "LOCAL",
+            "storage_backend": request.app.state.settings.object_storage_backend.upper(),
             "asset_snapshot": snapshot,
             "media": dict(source.metadata_json["media"]),
             "restored_from_version_id": str(source.id),
@@ -608,11 +616,19 @@ def restore_version_as_new(
             else None,
         },
     )
-    row.object_key = object_key(project_id, row.id)
-    write_object(db, request.app.state.settings.asset_storage_path, project_id, row.id, data)
+    row.object_key = object_key(project_id, row.id, request.app.state.settings)
+    write_object(
+        db,
+        request.app.state.settings,
+        project_id,
+        row.id,
+        data,
+        source.metadata_json["media"]["media_type"],
+    )
     db.add(row)
     db.flush()
     db.refresh(row)
+    record_asset_file(db, request.app.state.settings, project_id, row)
     if payload.dependency_manifest_id is not None:
         attach_output(db, project_id, payload.dependency_manifest_id, row)
     audit(
@@ -656,10 +672,13 @@ def update_version_state(
     if payload.status in {"REJECTED", "STALE"} and not payload.comment:
         raise DomainError("REVIEW_COMMENT_REQUIRED", "拒绝或标记失效必须说明原因", 422)
     if target in {"READY_FOR_REVIEW", "APPROVED"}:
-        if row.creation_key is None or row.metadata_json.get("storage_backend") != "LOCAL":
+        if row.creation_key is None or row.metadata_json.get("storage_backend") not in {
+            "LOCAL",
+            "S3",
+        }:
             raise DomainError("ASSET_OBJECT_UNAVAILABLE", "历史对象须接入并核验后才能重新审核", 409)
         read_object(
-            request.app.state.settings.asset_storage_path,
+            request.app.state.settings,
             project_id,
             row.id,
             row.object_key,
