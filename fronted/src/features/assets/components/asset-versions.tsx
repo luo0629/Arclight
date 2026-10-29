@@ -9,9 +9,10 @@ import { Notice } from "@/components/ui-kit";
 import Dialog from "@/components/shared/app-dialog";
 import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
-import { api, apiBlob, json, message } from "@/lib/api/client";
+import { api, json, message } from "@/lib/api/client";
 import type { AssetVersion, VisualAsset } from "@/types/api";
 import ImpactButton from "@/features/dependencies/components/impact-button";
+import VersionImage from "./version-image";
 import RebuildImage from "@/features/dependencies/components/rebuild-image";
 import AssetProvenanceForm, {
   emptyGeneration,
@@ -522,54 +523,6 @@ export default function AssetVersions({
         />
       )}
     </section>
-  );
-}
-
-function VersionImage({ path }: { path: string }) {
-  const [url, setUrl] = useState("");
-  const [error, setError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    const controller = new AbortController();
-    let objectUrl = "";
-    setUrl("");
-    setError("");
-    void apiBlob(path, controller.signal)
-      .then((blob) => {
-        if (!controller.signal.aborted) {
-          objectUrl = URL.createObjectURL(blob);
-          setUrl(objectUrl);
-        }
-      })
-      .catch((error) => {
-        if (!controller.signal.aborted) setError(message(error));
-      });
-    return () => {
-      controller.abort();
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [path, attempt]);
-  return (
-    <div>
-      {url && (
-        <img
-          src={url}
-          alt="精确资产版本原图"
-          className="max-h-80 max-w-full rounded-lg object-contain"
-        />
-      )}
-      {error && (
-        <Notice role="alert" tone="error">
-          {error}
-          <Button
-            variant="outline"
-            onClick={() => setAttempt((value) => value + 1)}
-          >
-            重试读取图片
-          </Button>
-        </Notice>
-      )}
-    </div>
   );
 }
 

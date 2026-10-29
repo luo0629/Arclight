@@ -493,3 +493,184 @@ test("DAG-05：只重生成所选失效分镜，新来源固定并等待重新�
     ).stale,
   ).toBe(false);
 });
+
+test("DAG-06：画布展示候选图片与精确依赖，历史失效仍可读取", async ({
+  page,
+}, testInfo) => {
+  const f = await fixture(page);
+  const response = await page.request.post(f.root + "/episodes", {
+    headers: f.headers,
+    data: { episode_no: 1, title: "资产画布" },
+  });
+  expect(response.status()).toBe(201);
+  const episode = await response.json();
+  const projectId = f.root.split("/").at(-1);
+  const url = `/projects/${projectId}/episodes/${episode.id}?node=asset-version:${f.child.version.id}`;
+  await page.goto(url);
+  const details = page.getByRole("region", {
+    name: "画布资产详情",
+    exact: true,
+  });
+  await expect(details).toContainText("候选版本");
+  await expect(details).toContainText(f.child.version.id);
+  await expect(details.getByAltText("精确资产版本原图")).toBeVisible();
+  await expect(details.getByAltText("精确资产版本原图")).toHaveJSProperty(
+    "naturalWidth",
+    8,
+  );
+  const dependencies = page.getByRole("region", {
+    name: "精确版本依赖",
+    exact: true,
+  });
+  await expect(dependencies).toContainText("输入来源 · 参考依赖");
+  await expect(dependencies).toContainText(f.first.id);
+  await expect(dependencies).toContainText(f.child.manifest.id);
+  const graphNode = page.locator(
+    `.react-flow__node[data-id="asset-version:${f.child.version.id}"]`,
+  );
+  await expect(graphNode).toContainText("候选版本");
+  await expect(graphNode.getByAltText("精确资产版本原图")).toHaveJSProperty(
+    "naturalWidth",
+    8,
+  );
+  const exactEdge = page
+    .locator(".react-flow__edge")
+    .filter({ hasText: "参考依赖" });
+  await expect(exactEdge).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("asset-canvas-desktop.png"),
+    fullPage: true,
+  });
+  await dependencies
+    .getByRole("button", { name: "上游角色 · v1", exact: true })
+    .click();
+  await expect(details).toContainText("正式选用");
+  await expect(details).toContainText(f.first.id);
+  await page.reload();
+  await expect(details).toContainText(f.first.id);
+  const changed = await page.request.patch(
+    f.root + `/assets/${f.source.id}/versions/${f.first.id}/state`,
+    {
+      headers: f.headers,
+      data: {
+        expected_revision: f.first.revision,
+        status: "STALE",
+        comment: "画布失效历史验收",
+      },
+    },
+  );
+  expect(changed.status()).toBe(200);
+  await page.goto(url);
+  await expect(details).toContainText("需更新");
+  await expect(details.getByAltText("精确资产版本原图")).toHaveJSProperty(
+    "naturalWidth",
+    8,
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: testInfo.outputPath("asset-canvas-mobile.png"),
+    fullPage: true,
+  });
+});
+
+test("DAG-06：预览失败可重试，切换版本隔离迟到图片，位置保存不改变真实边", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  const response = await page.request.post(f.root + "/episodes", {
+    headers: f.headers,
+    data: { episode_no: 1, title: "隔离预览" },
+  });
+  expect(response.status()).toBe(201);
+  const episode = await response.json();
+  const projectId = f.root.split("/").at(-1);
+  const canvasPath = `/api/v1/episodes/${episode.id}/canvas`;
+  const before = await (
+    await page.request.get(canvasPath, { headers: f.headers })
+  ).json();
+  let fail = true;
+  await page.route(`**/versions/${f.child.version.id}/image`, async (route) => {
+    if (fail) {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "UNAVAILABLE", message: "图片暂时不可读取" },
+        }),
+      });
+    } else await route.continue();
+  });
+  await page.goto(
+    `/projects/${projectId}/episodes/${episode.id}?node=asset-version:${f.child.version.id}`,
+  );
+  const details = page.getByRole("region", {
+    name: "画布资产详情",
+    exact: true,
+  });
+  await expect(details).toContainText("图片暂时不可读取");
+  fail = false;
+  await details
+    .getByRole("button", { name: "重试读取图片", exact: true })
+    .click();
+  await expect(details.getByAltText("精确资产版本原图")).toHaveJSProperty(
+    "naturalWidth",
+    8,
+  );
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(`**/versions/${f.first.id}/image`, async (route) => {
+    await gate;
+    await route
+      .fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          error: { code: "OLD", message: "旧版本迟到失败" },
+        }),
+      })
+      .catch(() => {});
+  });
+  await page
+    .getByRole("region", { name: "精确版本依赖", exact: true })
+    .getByRole("button", { name: "上游角色 · v1", exact: true })
+    .click();
+  await expect(details).toContainText(f.first.id);
+  await page
+    .getByRole("region", { name: "精确版本依赖", exact: true })
+    .getByRole("button", { name: "下游场景 · v1", exact: true })
+    .click();
+  await expect(details).toContainText(f.child.version.id);
+  release();
+  await expect(details.getByAltText("精确资产版本原图")).toHaveJSProperty(
+    "naturalWidth",
+    8,
+  );
+  await expect(details).not.toContainText("旧版本迟到失败");
+  await page.getByRole("button", { name: "关闭内容面板", exact: true }).click();
+  const node = page.locator(
+    `.react-flow__node[data-id="asset-version:${f.child.version.id}"]`,
+  );
+  const box = await node.boundingBox();
+  expect(box).toBeTruthy();
+  await page.mouse.move(box!.x + 30, box!.y + 20);
+  await page.mouse.down();
+  await page.mouse.move(box!.x + 70, box!.y + 55, { steps: 8 });
+  await page.mouse.up();
+  await page.getByRole("button", { name: "保存画布位置", exact: true }).click();
+  await expect(page.getByText("画布位置已保存", { exact: true })).toBeVisible();
+  const after = await (
+    await page.request.get(canvasPath, { headers: f.headers })
+  ).json();
+  expect(after.edges).toEqual(before.edges);
+  expect(after.nodes).toEqual(before.nodes);
+  expect(
+    after.layout.positions[`asset-version:${f.child.version.id}`],
+  ).toBeTruthy();
+});

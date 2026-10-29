@@ -1,6 +1,13 @@
 "use client";
 
-import { Sprout, FileText, Clapperboard, Film } from "lucide-react";
+import {
+  Sprout,
+  FileText,
+  Clapperboard,
+  Film,
+  Image,
+  Folder,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatusBadge } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
@@ -18,6 +25,7 @@ import {
 } from "@xyflow/react";
 import { api, json, message } from "@/lib/api/client";
 import type { Graph, GraphNode, Layout } from "@/types/api";
+import VersionImage from "@/features/assets/components/version-image";
 
 type Paper = Node<GraphNode & Record<string, unknown>, "paper">;
 const names: Record<string, string> = {
@@ -25,12 +33,19 @@ const names: Record<string, string> = {
   script: "剧本",
   storyboard: "分镜",
   shot: "镜头",
+  asset: "项目资产",
+  asset_version: "精确资产版本",
 };
 function PaperNode({ data, selected }: NodeProps<Paper>) {
   const Icon =
-    { episode: Sprout, script: FileText, storyboard: Clapperboard, shot: Film }[
-      data.kind
-    ] ?? FileText;
+    {
+      episode: Sprout,
+      script: FileText,
+      storyboard: Clapperboard,
+      shot: Film,
+      asset: Folder,
+      asset_version: Image,
+    }[data.kind] ?? FileText;
   return (
     <article
       className={cn(
@@ -50,8 +65,25 @@ function PaperNode({ data, selected }: NodeProps<Paper>) {
         {data.version_no ? ` / v${data.version_no}` : ""}
       </div>
       <strong>{data.title}</strong>
+      {data.preview_path && (
+        <VersionImage
+          key={data.preview_path}
+          path={data.preview_path}
+          compact
+        />
+      )}
       {data.description && <p>{data.description}</p>}
       <StatusBadge status={data.status} />
+      {data.stale && data.status !== "STALE" && <StatusBadge status="STALE" />}
+      {data.asset_id && data.kind !== "asset" && (
+        <small>
+          {data.current
+            ? "正式选用"
+            : ["DRAFT", "READY_FOR_REVIEW"].includes(data.status)
+              ? "候选版本"
+              : "历史／未选用"}
+        </small>
+      )}
       {data.duration_ms && <small>{data.duration_ms / 1000} 秒</small>}
       <Handle type="source" position={Position.Right} isConnectable={false} />
     </article>
@@ -64,14 +96,21 @@ function buildNodes(graph: Graph): Paper[] {
     const index = counts[data.kind] ?? 0;
     counts[data.kind] = index + 1;
     const column =
-      { episode: 0, script: 1, storyboard: 2, shot: 3 }[data.kind] ?? 0;
+      {
+        episode: 0,
+        script: 1,
+        storyboard: 2,
+        shot: 3,
+        asset: -2,
+        asset_version: -1,
+      }[data.kind] ?? 0;
     return {
       id: data.id,
       type: "paper",
       data: { ...data },
       position: graph.layout.positions[data.id] ?? {
         x: 30 + column * 290,
-        y: 45 + index * 190,
+        y: 45 + index * (data.kind === "asset_version" ? 320 : 210),
       },
     };
   });
@@ -163,11 +202,16 @@ export default function Canvas({
         className="canvas-note pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-24px)] rounded-lg border bg-card/90 px-3 py-2 text-xs text-muted-foreground"
         role="status"
       >
-        {notice || "拖动便签整理思路，连线来自真实版本依赖。"}
+        {notice || "项目资产与本集文本 · 实线标注精确依赖，整理位置后可保存。"}
       </div>
       <ReactFlow<Paper>
         nodes={nodes}
-        edges={graph.edges}
+        edges={graph.edges.map((edge) => ({
+          ...edge,
+          style: {
+            strokeDasharray: edge.relation === "dependency" ? undefined : "5 5",
+          },
+        }))}
         nodeTypes={nodeTypes}
         onNodeDoubleClick={(_, node) => {
           if (node.data.kind === "shot") onOpenShot(node.data);
@@ -179,6 +223,7 @@ export default function Canvas({
         onMoveEnd={() => setDirty(true)}
         nodesDraggable={writable}
         nodesConnectable={false}
+        onlyRenderVisibleElements
         edgesReconnectable={false}
         deleteKeyCode={null}
         defaultViewport={graph.layout.viewport}

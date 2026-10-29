@@ -205,6 +205,13 @@ export type GraphNode = {
   version_no?: number;
   duration_ms?: number;
   description?: string;
+  asset_id?: string;
+  asset_type?: string;
+  stale?: boolean;
+  current?: boolean;
+  checksum?: string;
+  dependency_manifest_id?: string | null;
+  preview_path?: string | null;
 };
 export type Layout = {
   revision: number;
@@ -213,6 +220,15 @@ export type Layout = {
 };
 export type Graph = {
   nodes: GraphNode[];
-  edges: { id: string; source: string; target: string }[];
+  edges: {
+    id: string;
+    source: string;
+    target: string;
+    relation?: string;
+    dependency_id?: string;
+    dependency_type?: string;
+    dependency_manifest_id?: string | null;
+    label?: string;
+  }[];
   layout: Layout;
 };

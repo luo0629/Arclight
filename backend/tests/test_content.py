@@ -39,11 +39,25 @@ def test_manual_versions_immutable_approved_reference_and_canvas(client, episode
     assert shots and all(shot["status"] == "APPROVED" for shot in shots)
     canvas = client.get(prefix + "/canvas").json()
     assert {row["kind"] for row in canvas["nodes"]} == {"episode", "script", "storyboard", "shot"}
-    assert {
-        "source": "script:" + second.json()["id"],
-        "target": "storyboard:" + saved_board.json()["id"],
-        "id": "script-input:" + saved_board.json()["id"],
-    } in canvas["edges"]
+    assert (
+        len([node for node in canvas["nodes"] if node.get("resource_id") == second.json()["id"]])
+        == 1
+    )
+    exact_edge = next(
+        edge for edge in canvas["edges"] if edge["id"] == "script-input:" + saved_board.json()["id"]
+    )
+    assert exact_edge["relation"] == "dependency"
+    assert exact_edge["dependency_type"] == "CONTENT_DEPENDENCY"
+    assert exact_edge["dependency_manifest_id"]
+    assert any(
+        {
+            "source": "script:" + second.json()["id"],
+            "target": "storyboard:" + saved_board.json()["id"],
+            "id": "script-input:" + saved_board.json()["id"],
+        }.items()
+        <= edge.items()
+        for edge in canvas["edges"]
+    )
     body["expected_version_no"] = 1
     body["content"]["shots"][0]["scene_no"] = 999
     assert client.post(prefix + "/storyboards", json=body).status_code == 422

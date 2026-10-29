@@ -7,7 +7,16 @@ import { Field } from "@/components/ui/field";
 import { Textarea } from "@/components/ui/textarea";
 import { useEffect, useId, useRef, useState } from "react";
 import { api, json } from "@/lib/api/client";
-import type { ContentVersion, Episode, GraphNode, Run } from "@/types/api";
+import type {
+  ContentVersion,
+  Episode,
+  Graph,
+  GraphNode,
+  Run,
+} from "@/types/api";
+import AssetDetails, {
+  ExactDependencies,
+} from "@/features/canvas/components/asset-details";
 
 import VersionEditor, {
   type Act,
@@ -23,6 +32,8 @@ import RebuildStoryboard from "@/features/dependencies/components/rebuild-storyb
 
 export default function Inspector({
   node,
+  graph,
+  onSelectNode,
   episode,
   scripts,
   boards,
@@ -40,6 +51,8 @@ export default function Inspector({
   draftId,
 }: {
   node: GraphNode | null;
+  graph: Graph;
+  onSelectNode: (node: GraphNode) => void;
   episode: Episode;
   scripts: ContentVersion[];
   boards: ContentVersion[];
@@ -258,6 +271,8 @@ export default function Inspector({
             你审核。真实生成需要配置模型，任务执行需要启动 Worker。
           </p>
         </>
+      ) : ["asset", "asset_version"].includes(node.kind) ? (
+        <AssetDetails node={node} graph={graph} onSelect={onSelectNode} />
       ) : node.kind === "shot" ? (
         <>
           <h2>{node.title}</h2>
@@ -282,7 +297,7 @@ export default function Inspector({
             version.status === "STALE" &&
             writable && (
               <RebuildStoryboard
-                key={version.id}
+                key={`rebuild:${version.id}`}
                 episodeId={episode.id}
                 versionId={version.id}
                 disabled={busy || active}
@@ -412,6 +427,9 @@ export default function Inspector({
             重试加载此版本
           </Button>
         </div>
+      )}
+      {node?.asset_id && node.kind !== "asset" && (
+        <ExactDependencies node={node} graph={graph} onSelect={onSelectNode} />
       )}
     </aside>
   );

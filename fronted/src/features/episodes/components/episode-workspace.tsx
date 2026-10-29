@@ -239,7 +239,9 @@ export default function EpisodeWorkspace({
   });
   const visibleNodes =
     data?.graph.nodes.filter(
-      (node) => node.kind === "episode" || loadedIds.has(node.id),
+      (node) =>
+        ["episode", "asset", "asset_version"].includes(node.kind) ||
+        loadedIds.has(node.id),
     ) ?? [];
   if (savedNode && !visibleNodes.some((node) => node.id === savedNode.id))
     visibleNodes.splice(1, 0, savedNode);
@@ -567,6 +569,9 @@ export default function EpisodeWorkspace({
                       </small>
                     </span>
                     <StatusBadge status={node.status} />
+                    {node.stale && node.status !== "STALE" && (
+                      <StatusBadge status="STALE" />
+                    )}
                   </Button>
                 ))}
                 {versionPagination}
@@ -609,6 +614,8 @@ export default function EpisodeWorkspace({
                 key={draftId ?? "default-inspector"}
                 draftId={draftId}
                 node={view === "create" ? null : selected}
+                graph={data.graph}
+                onSelectNode={(node) => setSelectedId(node.id)}
                 episode={episode}
                 scripts={scriptRows}
                 boards={boardRows}
