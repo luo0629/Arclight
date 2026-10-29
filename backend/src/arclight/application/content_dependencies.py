@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import read_content
+from arclight.application.audit import audit
 from arclight.application.dependencies import attach_output, capture_manifest, lock_dependency_graph
 from arclight.application.invalidation import check_impact, invalidate
 from arclight.core.errors import DomainError
@@ -187,6 +188,7 @@ def review_registry(
         if registry.stale:
             raise DomainError("STALE_DEPENDENCY", "输入已过期，请另存新版本后重新审核", 409)
         previous_id = asset.current_version_id
+        propagation_id = None
         if previous_id is None:
             model = Script if isinstance(row, Script) else Storyboard
             previous = cast(
@@ -222,7 +224,7 @@ def review_registry(
                     )
                 ]
                 if changes:
-                    invalidate(
+                    propagation, _ = invalidate(
                         db,
                         episode.project_id,
                         actor,
@@ -230,8 +232,23 @@ def review_registry(
                         changes,
                         "已批准新的精确文本版本",
                     )
+                    propagation_id = str(propagation.id)
         asset.current_version_id = row.id
         asset.revision += 1
+        audit(
+            db,
+            episode.project_id,
+            actor,
+            "asset.version_selected",
+            asset.id,
+            {
+                "previous_version_id": str(previous_id) if previous_id else None,
+                "version_id": str(row.id),
+                "revision": asset.revision,
+                "trigger": "TEXT_APPROVAL",
+                "dependency_invalidation_id": propagation_id,
+            },
+        )
     registry.status = row.status if not registry.stale else registry.status
     registry.revision += 1
     db.flush()

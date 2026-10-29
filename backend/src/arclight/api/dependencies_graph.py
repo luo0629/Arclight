@@ -6,7 +6,6 @@ from uuid import UUID
 from fastapi import APIRouter
 from pydantic import Field
 
-from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
@@ -19,7 +18,12 @@ from arclight.application.dependencies import (
 )
 from arclight.application.invalidation import impact_preview, invalidate
 from arclight.domain.dependencies import ManifestCreate
-from arclight.domain.invalidation import ChangeKind, DependencyChange, InvalidationCreate
+from arclight.domain.invalidation import (
+    BatchInvalidationCreate,
+    ChangeKind,
+    DependencyChange,
+    InvalidationCreate,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["dependencies"])
 
@@ -48,6 +52,7 @@ class BatchQuery(Input):
 class InvalidationRead(Resource):
     project_id: UUID
     created_by: str
+    event_no: int
     snapshot: dict = Field(validation_alias="snapshot_json")
 
 
@@ -112,10 +117,24 @@ def create_manifest(
     project_id: UUID, payload: ManifestCreate, db: Database, actor: Actor
 ) -> ManifestRead:
     require_project(db, project_id, actor, write=True)
-    row, created = capture_manifest(db, project_id, actor, payload)
-    if created:
-        audit(db, project_id, actor, "dependency.manifest_captured", row.id)
+    row, _ = capture_manifest(db, project_id, actor, payload)
     return ManifestRead.model_validate(row)
+
+
+@router.post("/dependencies/invalidate-batch", status_code=201)
+def invalidate_dependency_batch(
+    project_id: UUID, payload: BatchInvalidationCreate, db: Database, actor: Actor
+) -> InvalidationRead:
+    require_project(db, project_id, actor, write=True, owner=True)
+    row, _ = invalidate(
+        db,
+        project_id,
+        actor,
+        payload.creation_key,
+        [item.model_dump(mode="json", exclude={"dependency_type"}) for item in payload.changes],
+        payload.reason,
+    )
+    return InvalidationRead.model_validate(row)
 
 
 @router.get("/dependency-manifests/{manifest_id}")

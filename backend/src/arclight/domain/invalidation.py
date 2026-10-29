@@ -3,7 +3,7 @@
 from typing import Literal
 from uuid import UUID
 
-from pydantic import ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arclight.domain.dependencies import DependencyInput
 
@@ -20,6 +20,23 @@ class DependencyChange(DependencyInput):
 class InvalidationCreate(DependencyChange):
     creation_key: UUID
     reason: str = Field(min_length=1, max_length=1000)
+
+
+class BatchInvalidationCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    creation_key: UUID
+    reason: str = Field(min_length=1, max_length=1000)
+    changes: list[DependencyChange] = Field(min_length=1, max_length=100)
+
+    @model_validator(mode="after")
+    def distinct_changes(self):
+        keys = [
+            (item.source_asset_version_id, item.change_kind, tuple(sorted(item.selectors)))
+            for item in self.changes
+        ]
+        if len(keys) != len(set(keys)):
+            raise ValueError("相同版本、变更类型和范围只能出现一次")
+        return self
 
 
 def selectors_overlap(changed: list[str], consumed: list[str]) -> bool:

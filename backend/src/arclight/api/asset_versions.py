@@ -378,9 +378,10 @@ def select_version(
             payload.impact_digest,
         )
     change_selection(db, asset, payload, current_version_id=row.id)
+    propagation_id = None
     if previous is not None and previous != row.id:
         old = find_version(db, asset_id, previous)
-        invalidate(
+        propagation, _ = invalidate(
             db,
             project_id,
             actor,
@@ -395,6 +396,7 @@ def select_version(
             ],
             "正式选用已切换到新版本",
         )
+        propagation_id = str(propagation.id)
     audit(
         db,
         project_id,
@@ -405,6 +407,8 @@ def select_version(
             "previous_version_id": str(previous) if previous else None,
             "version_id": str(row.id),
             "revision": asset.revision,
+            "lock_version": asset.lock_version,
+            "dependency_invalidation_id": propagation_id,
         },
     )
     return AssetRead.model_validate(asset)

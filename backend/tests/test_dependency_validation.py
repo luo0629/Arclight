@@ -18,6 +18,7 @@ from arclight.domain.dependencies import ManifestCreate, validate_dependency_typ
 from arclight.persistence.models import (
     AssetDependency,
     AssetVersion,
+    AuditEvent,
     DependencyManifest,
     DependencyOutput,
     VisualAsset,
@@ -306,6 +307,14 @@ def test_postgres_opposing_writes_are_serialized_before_cycle_validation(client,
     with factory.begin() as db:
         assert db.scalar(select(func.count()).select_from(AssetDependency)) == 1
         assert db.scalar(select(func.count()).select_from(DependencyOutput)) == 1
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.action == "dependency.output_attached")
+            )
+            == 1
+        )
         receipt = db.scalar(select(DependencyOutput))
         assert (
             len(
@@ -350,3 +359,12 @@ def test_postgres_concurrent_manifest_replay_has_one_receipt(client, episode, se
         results = list(pool.map(write, range(2)))
     assert results[0][0] == results[1][0]
     assert sorted(item[1] for item in results) == [False, True]
+    with factory() as db:
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(AuditEvent)
+                .where(AuditEvent.action == "dependency.manifest_captured")
+            )
+            == 1
+        )

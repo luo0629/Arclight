@@ -248,6 +248,11 @@ test("DAG-04：切换精确版本丢弃迟到影响分析并恢复新版本操�
   await page
     .getByRole("button", { name: "查看资产版本 v1 · 已批准", exact: true })
     .click();
+  await expect(
+    page
+      .getByLabel("精确资产版本详情", { exact: true })
+      .getByRole("heading", { name: /^版本 v1 · 已批准 · 状态修订/ }),
+  ).toBeVisible();
   await page.getByLabel("版本状态说明", { exact: true }).fill("当前版本的说明");
   const invalidate = page.getByRole("button", {
     name: "标记版本失效",
@@ -673,4 +678,105 @@ test("DAG-06：预览失败可重试，切换版本隔离迟到图片，位置�
   expect(
     after.layout.positions[`asset-version:${f.child.version.id}`],
   ).toBeTruthy();
+});
+
+test("DAG-07：选用关联精确传播审计，重复批量回执不追加审计或改写历史", async ({
+  page,
+}) => {
+  const f = await fixture(page);
+  const sourcePath = f.root + `/assets/${f.source.id}`;
+  const prior = await (
+    await page.request.get(sourcePath, { headers: f.headers })
+  ).json();
+  await page.getByRole("button", { name: "选用此版本", exact: true }).click();
+  await page
+    .getByRole("dialog", { name: "确认变更影响", exact: true })
+    .getByRole("button", { name: "确认影响并继续", exact: true })
+    .click();
+  await expect(
+    page.getByText("已选用此精确版本", { exact: true }),
+  ).toBeVisible();
+  async function audit() {
+    const response = await page.request.get(
+      f.root + "/audit-events?limit=100",
+      { headers: f.headers },
+    );
+    expect(response.status()).toBe(200);
+    return response.json();
+  }
+  const events = await audit();
+  const propagation = events.filter(
+    (row: { action: string }) => row.action === "dependency.invalidated",
+  );
+  expect(propagation).toHaveLength(1);
+  expect(propagation[0].details.affected[0]).toMatchObject({
+    asset_version_id: f.child.version.id,
+    stale: false,
+    stale_after: true,
+    revision: 0,
+    revision_after: 1,
+    changed: true,
+  });
+  const chosen = events.find(
+    (row: { action: string; details: { version_id?: string } }) =>
+      row.action === "asset.version_selected" &&
+      row.details.version_id === f.second.id,
+  );
+  expect(chosen.details.dependency_invalidation_id).toBe(
+    propagation[0].resource_id,
+  );
+  const output = events.find(
+    (row: { action: string; resource_id: string }) =>
+      row.action === "dependency.output_attached" &&
+      row.resource_id === f.child.version.id,
+  );
+  expect(output.details.dependency_manifest_id).toBe(f.child.manifest.id);
+  expect(output.details.edges[0].source_asset_version_id).toBe(f.first.id);
+  const repeated = await page.request.post(
+    sourcePath + `/versions/${f.second.id}/select`,
+    {
+      headers: f.headers,
+      data: {
+        expected_revision: prior.revision,
+        expected_lock_version: prior.lock_version,
+      },
+    },
+  );
+  expect(repeated.status()).toBe(409);
+  expect(await audit()).toEqual(events);
+  const payload = {
+    creation_key: crypto.randomUUID(),
+    reason: "审计批量重放",
+    changes: [
+      {
+        source_asset_version_id: f.first.id,
+        expected_revision: f.first.revision,
+      },
+      {
+        source_asset_version_id: f.second.id,
+        expected_revision: f.second.revision,
+      },
+    ],
+  };
+  const first = await page.request.post(
+    f.root + "/dependencies/invalidate-batch",
+    { headers: f.headers, data: payload },
+  );
+  expect(first.status()).toBe(201);
+  const receipt = await first.json();
+  expect(receipt.snapshot.affected[0].changed).toBe(false);
+  const once = await audit();
+  const again = await page.request.post(
+    f.root + "/dependencies/invalidate-batch",
+    { headers: f.headers, data: payload },
+  );
+  expect(await again.json()).toEqual(receipt);
+  expect(await audit()).toEqual(once);
+  const manifest = await (
+    await page.request.get(
+      f.root + `/dependency-manifests/${f.child.manifest.id}`,
+      { headers: f.headers },
+    )
+  ).json();
+  expect(manifest).toEqual(f.child.manifest);
 });

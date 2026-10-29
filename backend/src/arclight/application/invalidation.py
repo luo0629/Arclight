@@ -9,6 +9,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from arclight.application.audit import audit
 from arclight.application.dependencies import (
     exact_version,
     lock_dependency_graph,
@@ -185,6 +186,9 @@ def invalidate(
     for item in affected:
         version, _ = exact_version(db, project_id, UUID(item["asset_version_id"]))
         item["changed"] = mark_stale(db, version)
+        item.update(
+            status_after=version.status, stale_after=version.stale, revision_after=version.revision
+        )
     event = DependencyInvalidation(
         project_id=project_id,
         creation_key=creation_key,
@@ -204,4 +208,16 @@ def invalidate(
     db.add(event)
     db.flush()
     db.refresh(event)
+    audit(
+        db,
+        project_id,
+        actor,
+        "dependency.invalidated",
+        event.id,
+        {
+            "creation_key": str(event.creation_key),
+            "event_no": event.event_no,
+            **event.snapshot_json,
+        },
+    )
     return event, True

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import EpisodeRead, Input, ProjectRead, RunRead
+from arclight.application.audit import audit as audit
 from arclight.application.commands import require_episode, require_project
 from arclight.application.visual_bible import append_version
 from arclight.core.errors import DomainError
@@ -60,18 +61,6 @@ class MemberInput(Input):
 
 class MemberRole(Input):
     role: Literal["editor", "viewer"]
-
-
-def audit(db, project_id: UUID, actor: str, action: str, resource_id: UUID, details=None):
-    db.add(
-        AuditEvent(
-            project_id=project_id,
-            actor_id=actor,
-            action=action,
-            resource_id=resource_id,
-            details_json=details or {},
-        )
-    )
 
 
 def require_idle(db, episode_ids):

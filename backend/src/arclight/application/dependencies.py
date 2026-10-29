@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, aliased
 
+from arclight.application.audit import audit
 from arclight.core.errors import DomainError
 from arclight.domain.dependencies import ManifestCreate, validate_dependency_type
 from arclight.persistence.models import (
@@ -147,6 +148,19 @@ def capture_manifest(
     db.add(row)
     db.flush()
     db.refresh(row)
+    audit(
+        db,
+        project_id,
+        actor,
+        "dependency.manifest_captured",
+        row.id,
+        {
+            "creation_key": str(row.creation_key),
+            "target_asset_id": str(target.id),
+            "input_version_ids": [item["source_asset_version_id"] for item in inputs],
+            "invalidation_seq": row.snapshot_json["invalidation_seq"],
+        },
+    )
     return row, True
 
 
@@ -198,18 +212,45 @@ def attach_output(
     db.flush()
     from arclight.application.invalidation import input_expired, mark_stale
 
-    if any(
-        input_expired(
+    expired = [
+        item["source_asset_version_id"]
+        for item in manifest.snapshot_json["inputs"]
+        if input_expired(
             db,
             project_id,
             item,
             target.asset_type,
             after_event_no=manifest.snapshot_json.get("invalidation_seq", 0),
         )
-        for item in manifest.snapshot_json["inputs"]
-    ):
+    ]
+    if expired:
         mark_stale(db, output)
         db.flush()
+    audit(
+        db,
+        project_id,
+        output.created_by,
+        "dependency.output_attached",
+        output.id,
+        {
+            "dependency_manifest_id": str(manifest.id),
+            "asset_id": str(output.asset_id),
+            "version_no": output.version_no,
+            "checksum": output.checksum,
+            "edges": [
+                {
+                    "id": str(edge.id),
+                    "source_asset_version_id": str(edge.source_asset_version_id),
+                    "dependency_type": edge.dependency_type,
+                }
+                for edge in rows
+            ],
+            "expired_input_version_ids": expired,
+            "stale": output.stale,
+            "status": output.status,
+            "revision": output.revision,
+        },
+    )
     return rows
 
 
