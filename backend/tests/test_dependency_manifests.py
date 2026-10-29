@@ -223,6 +223,9 @@ def test_manifest_receipt_and_new_edge_columns_are_database_immutable(client, ep
 
 def test_manifest_migration_nonempty_guard_and_offline_guard(client, episode, migrated):
     derived(client, episode["project_id"])
+    # Exercise 0020's guard from its own revision: PostgreSQL rolls the entire
+    # downgrade transaction back, while SQLite commits earlier DDL separately.
+    command.downgrade(migrated, "0020")
     with pytest.raises(RuntimeError, match="Dependency manifests exist"):
         command.downgrade(migrated, "0019")
     with client.app.state.engine.connect() as db:
