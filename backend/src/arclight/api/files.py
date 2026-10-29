@@ -3,6 +3,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter
+from pydantic import computed_field
 from sqlalchemy import select
 
 from arclight.api.dependencies import Actor, Database
@@ -25,6 +26,11 @@ class FileRead(Resource):
     rights_note: str
     rights_confirmed: bool
     created_by: str
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def stage(self) -> str:
+        return "REGISTERED" if self.asset_version_id is not None else "CANDIDATE"
 
 
 def find_file(db: Database, project_id: UUID, file_id: UUID) -> StoredFile:

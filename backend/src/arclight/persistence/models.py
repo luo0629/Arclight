@@ -386,6 +386,21 @@ class UploadIntent(Entity, Base):
     __table_args__ = (CheckConstraint("byte_size > 0", name="upload_intent_size"),)
 
 
+class UploadCompletion(Entity, Base):
+    __tablename__ = "upload_completions"
+    upload_id: Mapped[UUID] = mapped_column(ForeignKey("upload_intents.id"), unique=True)
+    file_id: Mapped[UUID] = mapped_column(ForeignKey("stored_files.id"), unique=True)
+    request_sha256: Mapped[str] = mapped_column(String(64))
+    purpose: Mapped[str] = mapped_column(String(32))
+
+
+class FileRegistration(Entity, Base):
+    __tablename__ = "file_registrations"
+    file_id: Mapped[UUID] = mapped_column(ForeignKey("stored_files.id"), index=True)
+    asset_version_id: Mapped[UUID] = mapped_column(ForeignKey("asset_versions.id"), unique=True)
+    created_by: Mapped[str] = mapped_column(String(100))
+
+
 class AssetSelectionLock(Entity, Base):
     __tablename__ = "asset_selection_locks"
     asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"), unique=True)
