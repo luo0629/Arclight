@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import read_content
 from arclight.application.dependencies import attach_output, capture_manifest, lock_dependency_graph
-from arclight.application.invalidation import invalidate
+from arclight.application.invalidation import check_impact, invalidate
 from arclight.core.errors import DomainError
 from arclight.domain.dependencies import ManifestCreate
 from arclight.persistence.models import AssetVersion, Episode, Script, Storyboard, VisualAsset
@@ -136,9 +136,50 @@ def content_changes(before: dict, after: dict, kind: str) -> list[tuple[str, lis
     return [("CONTENT", [])]
 
 
-def review_registry(db: Session, row: Script | Storyboard, actor: str) -> None:
+def approval_changes(db: Session, row: Script | Storyboard) -> list[dict]:
+    """Read the proposed approval without registering or changing historical rows."""
     episode = db.get(Episode, row.episode_id)
     assert episode is not None
+    kind = "SCRIPT" if isinstance(row, Script) else "STORYBOARD"
+    asset = db.get(VisualAsset, uuid5(episode.id, "dependency:" + kind))
+    model = Script if isinstance(row, Script) else Storyboard
+    previous = cast(
+        Script | Storyboard | None,
+        db.get(model, asset.current_version_id)
+        if asset and asset.current_version_id
+        else db.scalar(
+            select(model)
+            .where(
+                model.episode_id == row.episode_id, model.id != row.id, model.status == "APPROVED"
+            )
+            .order_by(model.version_no.desc())
+            .limit(1)
+        ),
+    )
+    if previous is None or previous.id == row.id:
+        return []
+    registry = db.get(AssetVersion, previous.id)
+    # A legacy text without a registry cannot have outgoing version edges.
+    if registry is None:
+        return []
+    return [
+        {
+            "source_asset_version_id": str(previous.id),
+            "expected_revision": registry.revision,
+            "change_kind": kind,
+            "selectors": selectors,
+        }
+        for kind, selectors in content_changes(previous.content_json, row.content_json, kind)
+    ]
+
+
+def review_registry(
+    db: Session, row: Script | Storyboard, actor: str, impact_digest: str | None = None
+) -> None:
+    episode = db.get(Episode, row.episode_id)
+    assert episode is not None
+    if row.status == "APPROVED":
+        check_impact(db, episode.project_id, approval_changes(db, row), impact_digest)
     registry = register_content(db, row, actor)
     asset = db.get(VisualAsset, registry.asset_id)
     assert asset is not None

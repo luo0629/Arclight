@@ -11,6 +11,7 @@ import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
 import { api, apiBlob, json, message } from "@/lib/api/client";
 import type { AssetVersion, VisualAsset } from "@/types/api";
+import ImpactButton from "@/features/dependencies/components/impact-button";
 import AssetProvenanceForm, {
   emptyGeneration,
   type GenerationDeclaration,
@@ -74,8 +75,8 @@ export default function AssetVersions({
         setError(message(error));
     }
   }
-  async function change(status: string) {
-    if (!selected || !editable || submitting.current) return;
+  async function change(status: string, impact_digest?: string) {
+    if (!selected || !editable || submitting.current) return false;
     const current = ++sequence.current;
     submitting.current = true;
     setBusy(true);
@@ -88,6 +89,7 @@ export default function AssetVersions({
           expected_revision: selected.revision,
           status,
           comment,
+          impact_digest,
         }),
       );
       if (live.current && current === sequence.current) {
@@ -96,17 +98,19 @@ export default function AssetVersions({
         setComment("");
         setNotice("版本状态已保存，历史图片和引用保持原样");
       }
+      return true;
     } catch (error) {
       if (live.current && current === sequence.current)
         setError(message(error));
+      return false;
     } finally {
       submitting.current = false;
       if (live.current) setBusy(false);
     }
   }
   const restoreKey = useRef<string | null>(null);
-  async function selectCurrent() {
-    if (!selected || !editable || submitting.current) return;
+  async function selectCurrent(impact_digest?: string) {
+    if (!selected || !editable || submitting.current) return false;
     submitting.current = true;
     setBusy(true);
     setError("");
@@ -116,14 +120,17 @@ export default function AssetVersions({
         json("POST", {
           expected_revision: asset.revision,
           expected_lock_version: asset.lock_version,
+          impact_digest,
         }),
       );
       if (live.current) {
         await onSaved(saved);
         setNotice("已选用此精确版本");
       }
+      return true;
     } catch (error) {
       if (live.current) setError(message(error));
+      return false;
     } finally {
       submitting.current = false;
       if (live.current) setBusy(false);
@@ -400,12 +407,17 @@ export default function AssetVersions({
               </Field>
               <div className="flex flex-wrap gap-2">
                 {selected.status === "APPROVED" && !selected.stale && (
-                  <Button
+                  <ImpactButton
                     disabled={busy || asset.current_version_id === selected.id}
-                    onClick={() => void selectCurrent()}
+                    endpoint={
+                      asset.current_version_id
+                        ? `/projects/${asset.project_id}/dependency-impact?asset_version_id=${asset.current_version_id}`
+                        : undefined
+                    }
+                    onConfirm={selectCurrent}
                   >
                     选用此版本
-                  </Button>
+                  </ImpactButton>
                 )}
                 {selected.media && (
                   <Button
@@ -432,23 +444,25 @@ export default function AssetVersions({
                     >
                       批准此版本
                     </Button>
-                    <Button
+                    <ImpactButton
                       variant="outline"
                       disabled={busy || !comment.trim()}
-                      onClick={() => void change("REJECTED")}
+                      endpoint={`/projects/${asset.project_id}/dependency-impact?asset_version_id=${selected.id}&change_kind=LIFECYCLE`}
+                      onConfirm={(digest) => change("REJECTED", digest)}
                     >
                       拒绝此版本
-                    </Button>
+                    </ImpactButton>
                   </>
                 )}
                 {owner && selected.status === "APPROVED" && (
-                  <Button
+                  <ImpactButton
                     variant="outline"
                     disabled={busy || !comment.trim()}
-                    onClick={() => void change("STALE")}
+                    endpoint={`/projects/${asset.project_id}/dependency-impact?asset_version_id=${selected.id}&change_kind=LIFECYCLE`}
+                    onConfirm={(digest) => change("STALE", digest)}
                   >
                     标记版本失效
-                  </Button>
+                  </ImpactButton>
                 )}
                 {selected.status === "ARCHIVED" ? (
                   <Button
@@ -459,13 +473,14 @@ export default function AssetVersions({
                     恢复归档前状态
                   </Button>
                 ) : (
-                  <Button
+                  <ImpactButton
                     variant="outline"
                     disabled={busy || asset.current_version_id === selected.id}
-                    onClick={() => void change("ARCHIVED")}
+                    endpoint={`/projects/${asset.project_id}/dependency-impact?asset_version_id=${selected.id}&change_kind=LIFECYCLE`}
+                    onConfirm={(digest) => change("ARCHIVED", digest)}
                   >
                     归档此版本
-                  </Button>
+                  </ImpactButton>
                 )}
               </div>
             </>

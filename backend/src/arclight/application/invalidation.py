@@ -86,6 +86,41 @@ def impacts(db: Session, project_id: UUID, changes: list[dict]) -> list[dict]:
     return sorted(found.values(), key=lambda item: (item["depth"], item["asset_version_id"]))
 
 
+def validate_changes(db: Session, project_id: UUID, changes: list[dict]) -> None:
+    for change in changes:
+        source, asset = exact_version(db, project_id, UUID(change["source_asset_version_id"]))
+        if source.revision != change["expected_revision"]:
+            raise DomainError("VERSION_CONFLICT", "来源版本状态已改变，请刷新后重试", 409)
+        if change["change_kind"] == "DIALOGUE" and asset.asset_type != "SCRIPT":
+            raise DomainError("INVALID_CHANGE_SCOPE", "对白变更只能指定剧本版本", 422)
+        if change["change_kind"] == "SEQUENCE" and asset.asset_type not in {
+            "STORYBOARD",
+            "TIMELINE",
+        }:
+            raise DomainError("INVALID_CHANGE_SCOPE", "顺序变更只能指定分镜或时间轴", 422)
+
+
+def impact_preview(db: Session, project_id: UUID, changes: list[dict]) -> dict:
+    validate_changes(db, project_id, changes)
+    affected = impacts(db, project_id, changes)
+    digest = hashlib.sha256(json.dumps(affected, sort_keys=True).encode()).hexdigest()
+    return {
+        "affected": affected,
+        "digest": digest,
+        "summary": {
+            action: sum(x["action"] == action for x in affected)
+            for action in ("REVIEW", "GENERATE", "RENDER")
+        },
+    }
+
+
+def check_impact(db: Session, project_id: UUID, changes: list[dict], expected: str | None) -> None:
+    if expected is not None:
+        lock_dependency_graph(db, project_id)
+        if impact_preview(db, project_id, changes)["digest"] != expected:
+            raise DomainError("DEPENDENCY_IMPACT_CHANGED", "下游影响已变化，请重新预览后确认", 409)
+
+
 def mark_stale(db: Session, version: AssetVersion) -> bool:
     if version.stale:
         return False
@@ -145,17 +180,7 @@ def invalidate(
         if previous.request_fingerprint != fingerprint:
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一事件标识不能用于不同变更", 409)
         return previous, False
-    for change in changes:
-        source, asset = exact_version(db, project_id, UUID(change["source_asset_version_id"]))
-        if source.revision != change["expected_revision"]:
-            raise DomainError("VERSION_CONFLICT", "来源版本状态已改变，请刷新后重试", 409)
-        if change["change_kind"] == "DIALOGUE" and asset.asset_type != "SCRIPT":
-            raise DomainError("INVALID_CHANGE_SCOPE", "对白变更只能指定剧本版本", 422)
-        if change["change_kind"] == "SEQUENCE" and asset.asset_type not in {
-            "STORYBOARD",
-            "TIMELINE",
-        }:
-            raise DomainError("INVALID_CHANGE_SCOPE", "顺序变更只能指定分镜或时间轴", 422)
+    validate_changes(db, project_id, changes)
     affected = impacts(db, project_id, changes)
     for item in affected:
         version, _ = exact_version(db, project_id, UUID(item["asset_version_id"]))

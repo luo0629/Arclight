@@ -18,6 +18,7 @@ import VersionComparison from "@/features/editor/components/version-comparison";
 import ScriptRewrite from "@/features/editor/components/script-rewrite";
 import CharacterMatching from "@/features/story/components/character-matching";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
+import ImpactButton from "@/features/dependencies/components/impact-button";
 
 export default function Inspector({
   node,
@@ -353,23 +354,28 @@ export default function Inspector({
                   <p>该版本由人工编辑创建，可在这里独立审核。</p>
                   <div className="button-row flex flex-wrap items-center gap-2">
                     {["APPROVE", "REJECT"].map((decision) => (
-                      <Button
+                      <ImpactButton
                         variant="outline"
                         size="lg"
                         key={decision}
                         disabled={busy}
-                        onClick={() =>
-                          void act(async () => {
+                        endpoint={
+                          decision === "APPROVE"
+                            ? `/episodes/${episode.id}/${node.kind === "script" ? "scripts" : "storyboards"}/${version.id}/dependency-impact`
+                            : undefined
+                        }
+                        onConfirm={(impact_digest) =>
+                          act(async () => {
                             await api(
                               `/episodes/${episode.id}/${node.kind === "script" ? "scripts" : "storyboards"}/${version.id}/review`,
-                              json("POST", { decision }),
+                              json("POST", { decision, impact_digest }),
                             );
                             await reload();
                           })
                         }
                       >
                         {decision === "APPROVE" ? "批准该版本" : "驳回该版本"}
-                      </Button>
+                      </ImpactButton>
                     ))}
                   </div>
                 </div>

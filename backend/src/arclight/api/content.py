@@ -12,13 +12,18 @@ from arclight.api.content_history import router as history_router
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import EpisodeRead, Input, ScriptRead, StoryboardRead
 from arclight.application.commands import require_episode
-from arclight.application.content_dependencies import register_content, review_registry
+from arclight.application.content_dependencies import (
+    approval_changes,
+    register_content,
+    review_registry,
+)
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
     validate_storyboard_assets,
 )
 from arclight.application.episode_copy import copy_episode
+from arclight.application.invalidation import impact_preview
 from arclight.core.errors import DomainError
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 
@@ -42,6 +47,7 @@ class StoryboardVersionInput(Input):
 class ContentReview(Input):
     decision: str = Field(pattern="^(APPROVE|REJECT)$")
     comment: str = Field(default="", max_length=2000)
+    impact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 def lock_edit(db, episode_id, actor):
@@ -175,6 +181,18 @@ def save_storyboard(
     return StoryboardRead.model_validate(version)
 
 
+@router.get("/episodes/{episode_id}/{resource_type}/{version_id}/dependency-impact")
+def content_impact(
+    episode_id: UUID, resource_type: str, version_id: UUID, db: Database, actor: Actor
+) -> dict:
+    episode = require_episode(db, episode_id, actor)
+    if resource_type not in ("scripts", "storyboards"):
+        raise DomainError("NOT_FOUND", "内容类型不存在", 404)
+    model = Script if resource_type == "scripts" else Storyboard
+    row = require_version(db, model, episode_id, version_id)
+    return impact_preview(db, episode.project_id, approval_changes(db, row))
+
+
 @router.post("/episodes/{episode_id}/{resource_type}/{version_id}/review")
 def review_content(
     episode_id: UUID,
@@ -223,7 +241,7 @@ def review_content(
     if isinstance(version, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == version.id)):
             shot.status = version.status
-    review_registry(db, version, actor)
+    review_registry(db, version, actor, payload.impact_digest)
     audit(
         db, episode.project_id, actor, f"{resource_type}.reviewed", version.id, payload.model_dump()
     )

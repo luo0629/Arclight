@@ -80,6 +80,7 @@ class ReviewCreate(Input):
     decision: Literal["APPROVE", "REJECT"]
     comment: str = Field(default="", max_length=2000)
     expected_revision: int = Field(ge=0)
+    impact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class RunRead(Resource):

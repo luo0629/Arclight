@@ -267,7 +267,7 @@ def resume_run(
             shot.status = artifact.status
     from arclight.application.content_dependencies import review_registry
 
-    review_registry(db, artifact, actor)
+    review_registry(db, artifact, actor, review.impact_digest)
     db.add(
         Review(
             run_id=run.id,

@@ -13,12 +13,13 @@ from arclight.api.schemas import Input, Resource
 from arclight.application.commands import require_project
 from arclight.application.dependencies import (
     capture_manifest,
+    exact_version,
     query_dependencies,
     require_manifest,
 )
-from arclight.application.invalidation import invalidate
+from arclight.application.invalidation import impact_preview, invalidate
 from arclight.domain.dependencies import ManifestCreate
-from arclight.domain.invalidation import InvalidationCreate
+from arclight.domain.invalidation import ChangeKind, DependencyChange, InvalidationCreate
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["dependencies"])
 
@@ -48,6 +49,46 @@ class InvalidationRead(Resource):
     project_id: UUID
     created_by: str
     snapshot: dict = Field(validation_alias="snapshot_json")
+
+
+class ImpactQuery(Input):
+    changes: list[DependencyChange] = Field(min_length=1, max_length=100)
+
+
+@router.post("/dependencies/impact")
+def preview_dependencies(
+    project_id: UUID, payload: ImpactQuery, db: Database, actor: Actor
+) -> dict:
+    require_project(db, project_id, actor)
+    return impact_preview(
+        db,
+        project_id,
+        [x.model_dump(mode="json", exclude={"dependency_type"}) for x in payload.changes],
+    )
+
+
+@router.get("/dependency-impact")
+def dependency_impact(
+    project_id: UUID,
+    asset_version_id: UUID,
+    db: Database,
+    actor: Actor,
+    change_kind: ChangeKind = "CONTENT",
+) -> dict:
+    require_project(db, project_id, actor)
+    version, _ = exact_version(db, project_id, asset_version_id)
+    return impact_preview(
+        db,
+        project_id,
+        [
+            {
+                "source_asset_version_id": str(version.id),
+                "expected_revision": version.revision,
+                "change_kind": change_kind,
+                "selectors": [],
+            }
+        ],
+    )
 
 
 @router.post("/dependencies/invalidate", status_code=201)

@@ -18,7 +18,7 @@ from arclight.application.asset_objects import object_key, read_object, write_ob
 from arclight.application.asset_provenance import capture_provenance
 from arclight.application.commands import require_project
 from arclight.application.dependencies import attach_output, require_manifest
-from arclight.application.invalidation import invalidate
+from arclight.application.invalidation import check_impact, invalidate
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
 from arclight.domain.asset_versions import MAX_IMAGE_BASE64, decode_image, next_status
@@ -60,6 +60,7 @@ class VersionState(Input):
     expected_revision: int = Field(strict=True, ge=0)
     status: Literal["READY_FOR_REVIEW", "APPROVED", "REJECTED", "STALE", "ARCHIVED", "RESTORE"]
     comment: str = Field(default="", max_length=1000)
+    impact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class VersionRead(Resource):
@@ -276,6 +277,7 @@ def create_version(
 class VersionSelection(Input):
     expected_revision: int = Field(strict=True, ge=0)
     expected_lock_version: int = Field(strict=True, ge=0)
+    impact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class VersionRestore(Input):
@@ -309,6 +311,21 @@ def select_version(
         row.checksum,
     )
     previous = asset.current_version_id
+    if previous is not None and previous != row.id:
+        old = find_version(db, asset_id, previous)
+        check_impact(
+            db,
+            project_id,
+            [
+                {
+                    "source_asset_version_id": str(old.id),
+                    "expected_revision": old.revision,
+                    "change_kind": "CONTENT",
+                    "selectors": [],
+                }
+            ],
+            payload.impact_digest,
+        )
     change_selection(db, asset, payload, current_version_id=row.id)
     if previous is not None and previous != row.id:
         old = find_version(db, asset_id, previous)
@@ -576,6 +593,20 @@ def update_version_state(
             row.checksum,
         )
     before = row.status
+    if target in {"STALE", "ARCHIVED", "REJECTED"}:
+        check_impact(
+            db,
+            project_id,
+            [
+                {
+                    "source_asset_version_id": str(row.id),
+                    "expected_revision": row.revision,
+                    "change_kind": "LIFECYCLE",
+                    "selectors": [],
+                }
+            ],
+            payload.impact_digest,
+        )
     changed = db.scalar(
         update(AssetVersion)
         .where(AssetVersion.id == row.id, AssetVersion.revision == payload.expected_revision)

@@ -15,6 +15,7 @@ import ListPagination from "@/components/shared/list-pagination";
 import { api, json } from "@/lib/api/client";
 import type { Run } from "@/types/api";
 import CharacterMatching from "@/features/story/components/character-matching";
+import ImpactButton from "@/features/dependencies/components/impact-button";
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 export default function Tasks({
@@ -36,7 +37,12 @@ export default function Tasks({
 }) {
   const [eventRun, setEventRun] = useState("");
   const [comment, setComment] = useState("");
-  async function action(run: Run, command: string, decision?: string) {
+  async function action(
+    run: Run,
+    command: string,
+    decision?: string,
+    impact_digest?: string,
+  ) {
     const payload =
       command === "resume"
         ? {
@@ -44,9 +50,10 @@ export default function Tasks({
             decision,
             comment,
             expected_revision: run.revision,
+            impact_digest,
           }
         : undefined;
-    await act(async () => {
+    return act(async () => {
       await api(`/runs/${run.id}/${command}`, json("POST", payload));
       await reload();
       setComment("");
@@ -115,15 +122,18 @@ export default function Tasks({
                     />
                   </FormLabel>
                   <div className="button-row flex flex-wrap items-center gap-2">
-                    <Button
+                    <ImpactButton
                       variant="default"
                       size="lg"
                       className=""
                       disabled={busy}
-                      onClick={() => void action(run, "resume", "APPROVE")}
+                      endpoint={`/episodes/${run.episode_id}/${run.pending_review.resource_type}s/${run.pending_review.version_id}/dependency-impact`}
+                      onConfirm={(digest) =>
+                        action(run, "resume", "APPROVE", digest)
+                      }
                     >
                       批准并继续
-                    </Button>
+                    </ImpactButton>
                     <Button
                       variant="outline"
                       size="lg"

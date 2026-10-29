@@ -94,6 +94,14 @@ test("真实 API：注册、创建项目剧集、双审核、画布保存、人�
     .filter({ hasText: "雨天里的星星" })
     .click();
   await page.getByRole("button", { name: "批准该版本", exact: true }).click();
+  const impact = page.getByRole("dialog", {
+    name: "确认变更影响",
+    exact: true,
+  });
+  await expect(impact).toContainText("重新审核 1");
+  await impact
+    .getByRole("button", { name: "确认影响并继续", exact: true })
+    .click();
   await expect(page.locator(".inspector .section-heading .status")).toHaveText(
     "已批准",
   );
