@@ -16,6 +16,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.persistence.base import JSON_TYPE, Base, Entity
+from arclight.persistence.generation import GenerationAttempt as GenerationAttempt
+from arclight.persistence.generation import GenerationJob as GenerationJob
 
 
 class Project(Entity, Base):
