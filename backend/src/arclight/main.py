@@ -28,6 +28,7 @@ from arclight.api.protection import RequestProtection
 from arclight.api.rights import router as rights_router
 from arclight.api.routes import router
 from arclight.api.script_rewrite import router as script_rewrite_router
+from arclight.api.storage_cleanup import router as storage_cleanup_router
 from arclight.api.story_analysis import router as story_analysis_router
 from arclight.api.story_bible import router as story_bible_router
 from arclight.api.story_outline import router as story_outline_router
@@ -140,6 +141,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(assets_router)
     app.include_router(files_router)
     app.include_router(rights_router)
+    app.include_router(storage_cleanup_router)
     app.include_router(file_transfers_router)
     app.include_router(upload_completion_router)
     app.include_router(dependencies_router)

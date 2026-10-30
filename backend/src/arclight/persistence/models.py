@@ -401,6 +401,42 @@ class FileRegistration(Entity, Base):
     created_by: Mapped[str] = mapped_column(String(100))
 
 
+class CleanupPlan(Entity, Base):
+    __tablename__ = "cleanup_plans"
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    namespace: Mapped[str] = mapped_column(String(32))
+    storage_identity: Mapped[str] = mapped_column(String(64))
+    scanned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    execute_after: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    next_cursor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scanned_count: Mapped[int]
+    retained_count: Mapped[int]
+    created_by: Mapped[str] = mapped_column(String(100))
+
+
+class CleanupItem(Entity, Base):
+    __tablename__ = "cleanup_items"
+    plan_id: Mapped[UUID] = mapped_column(ForeignKey("cleanup_plans.id"), index=True)
+    object_key: Mapped[str] = mapped_column(String(512))
+    byte_size: Mapped[int]
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    object_token: Mapped[str] = mapped_column(String(256))
+    reason: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(16), default="PLANNED")
+    attempt_count: Mapped[int] = mapped_column(default=0)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    __table_args__ = (
+        UniqueConstraint("plan_id", "object_key", name="uq_cleanup_plan_object"),
+        CheckConstraint("byte_size >= 0 AND attempt_count >= 0", name="cleanup_nonnegative"),
+        CheckConstraint(
+            "status IN ('PLANNED','RUNNING','DELETED','ABSENT','RETAINED','FAILED')",
+            name="cleanup_status",
+        ),
+    )
+
+
 class AssetSelectionLock(Entity, Base):
     __tablename__ = "asset_selection_locks"
     asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"), unique=True)
