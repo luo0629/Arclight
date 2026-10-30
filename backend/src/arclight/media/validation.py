@@ -46,6 +46,9 @@ def probe(data: bytes, media_type: str) -> dict:
         # No database/S3/provider credentials, project paths or user filename reach the child.
         environment = {k: os.environ[k] for k in ("SYSTEMROOT", "WINDIR") if k in os.environ}
         environment.update({"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
+        creation_flags = 0
+        if sys.platform == "win32":
+            creation_flags = subprocess.CREATE_NO_WINDOW
         with (
             tempfile.TemporaryDirectory(prefix="arclight-probe-") as folder,
             (Path(folder) / "result.json").open("w+b") as output,
@@ -58,7 +61,7 @@ def probe(data: bytes, media_type: str) -> dict:
                 cwd=folder,
                 env=environment,
                 timeout=PARSER_TIMEOUT,
-                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+                creationflags=creation_flags,
             )
             output.seek(0)
             raw = output.read(4097)
