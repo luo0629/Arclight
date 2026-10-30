@@ -21,7 +21,7 @@ export type Source = {
     origin_kind: "FILE" | "INLINE" | "TEXT";
     rights_status: "CONFIRMED" | "UNDECLARED";
     object_ref: {
-      backend: "database";
+      backend: "database" | "local" | "s3";
       key: string;
       sha256: string;
       byte_size: number;

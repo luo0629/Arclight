@@ -57,7 +57,7 @@ def test_explicit_text_preserves_bytes_rights_and_server_owned_object_reference(
     assert proof["parent_source_id"] is None and proof["version_no"] == 1
     assert proof["origin_kind"] == "TEXT" and proof["rights_status"] == "CONFIRMED"
     assert proof["object_ref"] == {
-        "backend": "database",
+        "backend": "local",
         "key": f"story-sources/{source['id']}/original",
         "sha256": hashlib.sha256(data["text"].encode()).hexdigest(),
         "byte_size": len(data["text"].encode()),

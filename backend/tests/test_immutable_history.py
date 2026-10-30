@@ -1,5 +1,6 @@
 """ASSET-11: enforce history at the SQL boundary, independently of service code."""
 
+import hashlib
 from datetime import timedelta
 from io import StringIO
 from uuid import UUID, uuid4
@@ -7,7 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import UniqueConstraint, select, text
+from sqlalchemy import MetaData, Table, UniqueConstraint, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
 from arclight.persistence.base import Base, utcnow
@@ -55,10 +56,32 @@ MUTABLE = {
 def seed_history(engine, episode):
     """Create a valid linked history using INSERTs only, including nullable identities."""
     ids = {}
+    legacy = "raw_bytes" in {c["name"] for c in inspect(engine).get_columns("story_sources")}
     with engine.begin() as db:
 
         def add(table, **values):
             row_id = uuid4()
+            if table == "story_sources":
+                if legacy:
+                    reflected = Table(table, MetaData(), autoload_with=db)
+                    values = {
+                        k: (v.hex if isinstance(v, UUID) and engine.dialect.name == "sqlite" else v)
+                        for k, v in {"id": row_id, **values}.items()
+                    }
+                    db.execute(
+                        reflected.insert().values(
+                            **values, created_at=utcnow(), updated_at=utcnow()
+                        )
+                    )
+                    ids[table] = row_id
+                    return row_id
+                values.pop("raw_bytes")
+                values.pop("text")
+                values.update(
+                    storage_backend="LOCAL",
+                    bucket=None,
+                    object_key=f"sources/{episode['project_id']}/{row_id}",
+                )
             db.execute(Base.metadata.tables[table].insert().values(id=row_id, **values))
             ids[table] = row_id
             return row_id
@@ -136,7 +159,7 @@ def seed_history(engine, episode):
                 media_type="text/plain",
                 encoding="utf-8",
                 byte_size=8,
-                sha256="a" * 64,
+                sha256=hashlib.sha256(b"original").hexdigest(),
                 raw_bytes=b"original",
                 text="original",
                 source_note="own",
@@ -394,7 +417,6 @@ def test_upgrade_preserves_legacy_history_and_downgrade_keeps_guards(
     client,
     episode,
     migrated,
-    protect_history,
 ):
     engine = client.app.state.engine
     ids = seed_history(engine, episode)
@@ -408,10 +430,8 @@ def test_upgrade_preserves_legacy_history_and_downgrade_keeps_guards(
             name: [dict(row) for row in db.execute(select(historical[name])).mappings()]
             for name in MUTABLE
         }
-    protect_history()
-    command.check(migrated)
-    # Exercise 0019's own guard after safely removing the empty later DAG schema.
-    command.downgrade(migrated, "0019")
+    # Exercise 0019 on its own schema before 0026 deliberately externalizes bytes.
+    command.upgrade(migrated, "0019")
     with pytest.raises(RuntimeError, match="Immutable version history exists"):
         command.downgrade(migrated, "0018")
     with engine.connect() as db:
@@ -424,6 +444,8 @@ def test_upgrade_preserves_legacy_history_and_downgrade_keeps_guards(
             db.execute(table.delete().where(table.c.id == ids[name]))
     command.upgrade(migrated, "head")
     command.check(migrated)
+    with pytest.raises(RuntimeError, match="Cannot downgrade object-backed story sources"):
+        command.downgrade(migrated, "0025")
 
 
 def test_offline_postgres_has_guards_and_refuses_unchecked_downgrade(migrated):

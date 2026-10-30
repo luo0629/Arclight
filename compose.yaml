@@ -103,6 +103,7 @@ services:
     command: ["/bin/sh", "-c", ".venv/bin/alembic upgrade head && .venv/bin/python -m arclight.workflows.checkpoints"]
     depends_on:
       postgres: {condition: service_healthy}
+      storage-init: {condition: service_completed_successfully}
 
   api:
     <<: *app

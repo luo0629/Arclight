@@ -17,6 +17,7 @@ from arclight.persistence.models import (
     CleanupPlan,
     Project,
     StoredFile,
+    StorySource,
     UploadIntent,
     WorkflowRun,
 )
@@ -43,6 +44,8 @@ def serialize_project(db: Session, project_id: UUID, actor: str) -> None:
 
 
 def prefix(settings: Settings, project_id: UUID, namespace: str) -> str:
+    if namespace == "SOURCE":
+        return f"sources/{project_id}/"
     if namespace == "ASSET":
         base = f"s3/{settings.s3_bucket}/" if settings.object_storage_backend == "s3" else ""
         return f"{base}{project_id}/"
@@ -75,9 +78,11 @@ def reason(
         return None
     # Every historical receipt/version is a retention root, regardless of selection,
     # approval, archive, lock, deletion or current dependency usage.
-    if db.scalar(
-        select(StoredFile.id).where(StoredFile.object_key == item.key).limit(1)
-    ) or db.scalar(select(AssetVersion.id).where(AssetVersion.object_key == item.key).limit(1)):
+    if (
+        db.scalar(select(StoredFile.id).where(StoredFile.object_key == item.key).limit(1))
+        or db.scalar(select(AssetVersion.id).where(AssetVersion.object_key == item.key).limit(1))
+        or db.scalar(select(StorySource.id).where(StorySource.object_key == item.key).limit(1))
+    ):
         return None
     if namespace == "TEMPORARY":
         upload = db.scalar(select(UploadIntent).where(UploadIntent.object_key == item.key))

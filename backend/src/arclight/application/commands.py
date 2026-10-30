@@ -13,6 +13,7 @@ from arclight.application.content_references import (
     validate_storyboard_assets,
 )
 from arclight.application.model_services import text_snapshot
+from arclight.application.source_objects import source_text
 from arclight.application.story_context import build_story_context
 from arclight.application.story_sources import (
     bind_source,
@@ -193,7 +194,7 @@ def start_run(
     if script_version_id is None:
         if source_id is not None:
             story_source = require_source(db, episode_id, source_id)
-            inputs["story"] = story_source.text
+            inputs["story"] = source_text(db, settings, story_source)
         elif outline_version_id is not None:
             fixed_source = inputs["outline_context"]["source_snapshot"].get("source_id")
             if fixed_source:
@@ -204,7 +205,7 @@ def start_run(
         if not inputs["story"] or len(inputs["story"]) > min(20000, settings.max_story_chars):
             raise DomainError("STORY_TOO_LARGE", "故事不能为空且不能超过服务长度限制", 422)
         if story_source is None:
-            story_source = capture_inline(db, episode, actor, inputs["story"])
+            story_source = capture_inline(db, episode, actor, inputs["story"], settings=settings)
         inputs["source_revision"] = provenance(db, story_source)
     snapshot = text_snapshot(db, actor)
     if rebuild_from_version_id is not None:

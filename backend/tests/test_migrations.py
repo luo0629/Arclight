@@ -38,11 +38,13 @@ def test_postgres_offline_sql_contains_circular_fk(monkeypatch, tmp_path):
     output = StringIO()
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"), output_buffer=output)
     config.attributes["database_url"] = "postgresql+psycopg://unused:unused@localhost/unused"
-    command.upgrade(config, "head", sql=True)
+    command.upgrade(config, "0025", sql=True)
     sql = output.getvalue()
     assert "ALTER TABLE visual_assets ADD CONSTRAINT" in sql
     assert "JSONB" in sql
     assert "TIMESTAMP WITH TIME ZONE" in sql
+    with pytest.raises(RuntimeError, match="online verified object copies"):
+        command.upgrade(config, "0025:0026", sql=True)
 
 
 def test_upgrade_preserves_0001_rows_and_backfills_new_columns(settings):

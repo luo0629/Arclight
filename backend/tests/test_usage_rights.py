@@ -97,7 +97,11 @@ def test_story_revisions_and_undeclared_inline_keep_separate_evidence(client, ep
     assert second.status_code == 201, second.text
     with client.app.state.session_factory.begin() as db:
         manual = capture_inline(
-            db, db.get(Episode, UUID(episode["id"])), "service-owner", "Manual story"
+            db,
+            db.get(Episode, UUID(episode["id"])),
+            "service-owner",
+            "Manual story",
+            settings=client.app.state.settings,
         )
         manual_id = str(manual.id)
     records = client.get(root + "/rights").json()
@@ -220,8 +224,9 @@ def test_legacy_missing_confirmation_is_not_inferred_from_notes(client, episode)
                 encoding="utf-8",
                 byte_size=6,
                 sha256="b" * 64,
-                raw_bytes=b"legacy",
-                text="legacy",
+                storage_backend="LOCAL",
+                bucket=None,
+                object_key=f"sources/{episode['project_id']}/{uuid4()}",
                 source_note="Legacy source",
                 rights_note="Legacy note",
                 created_by="old-importer",

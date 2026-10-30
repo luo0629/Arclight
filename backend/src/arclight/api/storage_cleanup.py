@@ -23,7 +23,7 @@ router = APIRouter(
 
 
 class ScanInput(Input):
-    namespace: Literal["TEMPORARY", "VALIDATED", "ASSET", "INTERMEDIATE"]
+    namespace: Literal["TEMPORARY", "VALIDATED", "ASSET", "INTERMEDIATE", "SOURCE"]
     limit: int = Field(default=100, strict=True, ge=1, le=100)
     previous_plan_id: UUID | None = None
 

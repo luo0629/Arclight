@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from arclight.application.source_objects import write_source_object
+from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.story_import import DecodedSource, decode_source
 from arclight.persistence.models import (
@@ -65,7 +67,7 @@ def revision_snapshot(source: StorySource, revision: StorySourceRevision | None)
         "encoding": source.encoding,
         "sha256": source.sha256,
         "object_ref": {
-            "backend": "database",
+            "backend": source.storage_backend.lower(),
             "key": revision.object_key if revision else f"story-sources/{source.id}/original",
             "sha256": source.sha256,
             "byte_size": source.byte_size,
@@ -74,7 +76,14 @@ def revision_snapshot(source: StorySource, revision: StorySourceRevision | None)
 
 
 def save_source(
-    db: Session, episode: Episode, actor: str, draft: SourceDraft, key: UUID, fingerprint: str
+    db: Session,
+    episode: Episode,
+    actor: str,
+    draft: SourceDraft,
+    key: UUID,
+    fingerprint: str,
+    *,
+    settings: Settings,
 ) -> StorySource:
     # The caller holds the existing project write gate. Replay is checked before
     # checking the parent, so a lost successful response remains retryable.
@@ -119,12 +128,11 @@ def save_source(
         encoding=draft.decoded.encoding,
         byte_size=len(draft.decoded.raw),
         sha256=draft.decoded.sha256,
-        raw_bytes=draft.decoded.raw,
-        text=draft.decoded.text,
         source_note=draft.source_note,
         rights_note=draft.rights_note,
         created_by=actor,
     )
+    write_source_object(db, settings, episode.project_id, row, draft.decoded.raw)
     db.add(row)
     db.flush()
     db.add(
@@ -136,7 +144,7 @@ def save_source(
             change_note=draft.change_note or "创建来源",
             origin_kind=draft.origin_kind,
             rights_status=draft.rights_status,
-            storage_backend="database",
+            storage_backend=row.storage_backend,
             object_key=f"story-sources/{row.id}/original",
         )
     )
@@ -170,7 +178,9 @@ def decode_inline_text(story: str, name: str) -> DecodedSource:
     return replace(decoded, text=story, encoding="utf-8")
 
 
-def capture_inline(db: Session, episode: Episode, actor: str, story: str) -> StorySource:
+def capture_inline(
+    db: Session, episode: Episode, actor: str, story: str, *, settings: Settings
+) -> StorySource:
     decoded = decode_inline_text(story, "手动故事.txt")
     return save_source(
         db,
@@ -187,6 +197,7 @@ def capture_inline(db: Session, episode: Episode, actor: str, story: str) -> Sto
         ),
         uuid4(),
         hashlib.sha256(decoded.raw).hexdigest(),
+        settings=settings,
     )
 
 

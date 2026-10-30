@@ -21,6 +21,24 @@ def historical_content_registry(request, monkeypatch):
     """
     if request.node.get_closest_marker("legacy_schema") is None:
         return
+    import legacy_story_sources
+
+    from arclight.api import rights
+    from arclight.api import story_sources as source_api
+    from arclight.application import commands, story_analysis, story_outline, story_sources
+
+    # Explicit historical-schema fixtures exercise the frozen database writer.
+    # Ordinary/current-schema tests always use real private objects and current code.
+    for module in (source_api, rights, commands, story_analysis, story_outline, story_sources):
+        if hasattr(module, "StorySource"):
+            monkeypatch.setattr(module, "StorySource", legacy_story_sources.StorySource)
+        if hasattr(module, "source_text"):
+            monkeypatch.setattr(module, "source_text", lambda db, settings, row: row.text)
+    monkeypatch.setattr(source_api, "source_original", lambda db, settings, row: row.raw_bytes)
+    monkeypatch.setattr(source_api, "save_source", legacy_story_sources.save_source)
+    monkeypatch.setattr(story_sources, "save_source", legacy_story_sources.save_source)
+    if hasattr(request.module, "StorySource"):
+        monkeypatch.setattr(request.module, "StorySource", legacy_story_sources.StorySource)
     from arclight.api import asset_versions, content
     from arclight.application import artifacts, content_dependencies
 
@@ -52,6 +70,8 @@ def historical_content_registry(request, monkeypatch):
 
 @pytest.fixture
 def settings(tmp_path):
+    objects = tmp_path / "objects"
+    objects.mkdir()
     test_url = os.getenv("ARCLIGHT_TEST_DATABASE_URL")
     if test_url:
         from sqlalchemy.engine import make_url
@@ -77,6 +97,7 @@ def settings(tmp_path):
             checkpoint_url=scoped_url.replace("postgresql+psycopg://", "postgresql://"),
             provider="mock",
             api_token="test-token",
+            asset_storage_path=objects,
         )
         with open_checkpointer(configuration) as saver:
             saver.setup()
@@ -88,6 +109,7 @@ def settings(tmp_path):
         checkpoint_url=f"sqlite:///{(tmp_path / 'checkpoints.db').as_posix()}",
         provider="mock",
         api_token="test-token",
+        asset_storage_path=objects,
     )
 
 
@@ -95,6 +117,7 @@ def settings(tmp_path):
 def migrated(settings, request):
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
+    config.attributes["storage_settings"] = settings
     # Seed legacy/corrupt snapshots BEFORE 0019 installs immutability. Tests that
     # inspect a historical schema must reflect it rather than query later columns.
     # This marker is test-only; ordinary business tests always start at head.

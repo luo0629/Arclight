@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.application.commands import emit, require_episode
 from arclight.application.model_services import run_settings, text_snapshot
+from arclight.application.source_objects import source_text
 from arclight.application.story_sources import bind_source, capture_inline, provenance
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -71,7 +72,7 @@ def start_analysis(
     source = db.get(StorySource, source_id) if source_id else None
     if source_id and (source is None or source.episode_id != episode_id):
         raise DomainError("NOT_FOUND", "故事来源不存在", 404)
-    text = source.text if source else story
+    text = source_text(db, settings, source) if source else story
     if text is None or not text.strip() or len(text) > min(20000, settings.max_story_chars):
         raise DomainError(
             "STORY_ANALYSIS_INPUT_INVALID",
@@ -79,7 +80,7 @@ def start_analysis(
             422,
         )
     if source is None:
-        source = capture_inline(db, episode, actor, text)
+        source = capture_inline(db, episode, actor, text, settings=settings)
     inputs: dict = {
         "story": text,
         "story_sha256": hashlib.sha256(text.encode()).hexdigest(),

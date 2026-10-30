@@ -1,4 +1,4 @@
-"""Immutable, episode-scoped text sources. No external storage or provider calls."""
+"""Immutable, episode-scoped sources with authorized private-object reads."""
 
 import hashlib
 import json
@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 from urllib.parse import quote
 from uuid import UUID
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 from sqlalchemy import or_, select
 
@@ -16,6 +16,7 @@ from arclight.api.rights import UsageDeclaration
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Resource
 from arclight.application.commands import require_episode
+from arclight.application.source_objects import source_original, source_text
 from arclight.application.story_sources import (
     SourceDraft,
     decode_inline_text,
@@ -23,6 +24,7 @@ from arclight.application.story_sources import (
     revision_snapshot,
     save_source,
 )
+from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.story_import import MAX_BASE64_LENGTH, decode_source
 from arclight.persistence.models import (
@@ -61,7 +63,7 @@ class SourceText(SourceImport):
 
 
 class ObjectReference(BaseModel):
-    backend: Literal["database"]
+    backend: Literal["database", "local", "s3"]
     key: str
     sha256: str
     byte_size: int
@@ -117,11 +119,11 @@ def source_read(row: StorySource, revision: StorySourceRevision | None) -> Sourc
     )
 
 
-def source_detail(db: Database, row: StorySource) -> SourceDetail:
+def source_detail(db: Database, settings: Settings, row: StorySource) -> SourceDetail:
     return SourceDetail(
         **SourceMetadata.model_validate(row).model_dump(),
         provenance=SourceProvenance.model_validate(provenance(db, row)),
-        text=row.text,
+        text=source_text(db, settings, row),
     )
 
 
@@ -153,7 +155,7 @@ def list_sources(
 
 @router.post("", status_code=201)
 def import_source(
-    episode_id: UUID, payload: SourceImport, db: Database, actor: Actor
+    episode_id: UUID, payload: SourceImport, request: Request, db: Database, actor: Actor
 ) -> SourceDetail:
     episode = require_episode(db, episode_id, actor, write=True)
     # The episode may have been cached before waiting for the project write gate.
@@ -193,13 +195,14 @@ def import_source(
         ),
         payload.import_key,
         fingerprint,
+        settings=request.app.state.settings,
     )
-    return source_detail(db, row)
+    return source_detail(db, request.app.state.settings, row)
 
 
 @router.post("/text", status_code=201)
 def save_text_source(
-    episode_id: UUID, payload: SourceText, db: Database, actor: Actor
+    episode_id: UUID, payload: SourceText, request: Request, db: Database, actor: Actor
 ) -> SourceDetail:
     episode = require_episode(db, episode_id, actor, write=True)
     db.refresh(episode)
@@ -225,8 +228,9 @@ def save_text_source(
         ),
         payload.import_key,
         fingerprint,
+        settings=request.app.state.settings,
     )
-    return source_detail(db, row)
+    return source_detail(db, request.app.state.settings, row)
 
 
 @router.get("/{source_id}/history")
@@ -313,15 +317,21 @@ def source_usages(
 
 
 @router.get("/{source_id}")
-def get_source(episode_id: UUID, source_id: UUID, db: Database, actor: Actor) -> SourceDetail:
-    return source_detail(db, require_source(db, episode_id, source_id, actor))
+def get_source(
+    episode_id: UUID, source_id: UUID, request: Request, db: Database, actor: Actor
+) -> SourceDetail:
+    return source_detail(
+        db, request.app.state.settings, require_source(db, episode_id, source_id, actor)
+    )
 
 
 @router.get("/{source_id}/original")
-def original_source(episode_id: UUID, source_id: UUID, db: Database, actor: Actor) -> Response:
+def original_source(
+    episode_id: UUID, source_id: UUID, request: Request, db: Database, actor: Actor
+) -> Response:
     row = require_source(db, episode_id, source_id, actor)
     return Response(
-        row.raw_bytes,
+        source_original(db, request.app.state.settings, row),
         media_type="application/octet-stream",
         headers={
             "Content-Disposition": "attachment; filename*=UTF-8''"

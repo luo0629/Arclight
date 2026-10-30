@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.application.commands import emit, require_episode
 from arclight.application.model_services import run_settings, text_snapshot
+from arclight.application.source_objects import source_text
 from arclight.application.story_sources import bind_source, capture_inline, provenance
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -92,7 +93,7 @@ def start_outline(
         raise DomainError("NOT_FOUND", "提炼版本不存在", 404)
     analysis_run = db.get(WorkflowRun, analysis.run_id) if analysis else None
     story = (
-        source.text
+        source_text(db, settings, source)
         if source
         else (analysis_run.input_json["story"] if analysis_run else payload.get("story"))
     )
@@ -103,7 +104,7 @@ def start_outline(
     if source is None and analysis and analysis.source_id:
         source = db.get(StorySource, analysis.source_id)
     if source is None:
-        source = capture_inline(db, episode, actor, story)
+        source = capture_inline(db, episode, actor, story, settings=settings)
     count = payload.get("target_episode_count") or brief["target_episode_count"]
     duration = payload.get("episode_duration_ms") or brief["default_episode_duration_ms"]
     snapshot = {

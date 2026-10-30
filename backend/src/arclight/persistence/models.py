@@ -7,7 +7,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Index,
-    LargeBinary,
     Numeric,
     String,
     Text,
@@ -116,7 +115,7 @@ class Episode(Entity, Base):
 
 
 class StorySource(Entity, Base):
-    """Append-only imported source; exact bytes and text are loaded only on detail reads."""
+    """Append-only source metadata; original content lives in private object storage."""
 
     __tablename__ = "story_sources"
     episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)
@@ -129,8 +128,9 @@ class StorySource(Entity, Base):
     encoding: Mapped[str] = mapped_column(String(16))
     byte_size: Mapped[int]
     sha256: Mapped[str] = mapped_column(String(64))
-    raw_bytes: Mapped[bytes] = mapped_column(LargeBinary, deferred=True)
-    text: Mapped[str] = mapped_column(Text, deferred=True)
+    storage_backend: Mapped[str] = mapped_column(String(16))
+    bucket: Mapped[str | None] = mapped_column(String(63))
+    object_key: Mapped[str] = mapped_column(String(512))
     source_note: Mapped[str] = mapped_column(String(1000))
     rights_note: Mapped[str] = mapped_column(String(1000))
     created_by: Mapped[str] = mapped_column(String(100))
@@ -140,6 +140,12 @@ class StorySource(Entity, Base):
         CheckConstraint("import_no > 0", name="source_import_positive"),
         CheckConstraint("byte_size > 0 AND byte_size <= 262144", name="source_byte_size"),
         CheckConstraint("source_type IN ('TXT', 'MARKDOWN')", name="source_type"),
+        UniqueConstraint("storage_backend", "object_key", name="uq_story_source_object"),
+        CheckConstraint(
+            "(storage_backend = 'LOCAL' AND bucket IS NULL) OR "
+            "(storage_backend = 'S3' AND bucket IS NOT NULL)",
+            name="source_object_storage",
+        ),
     )
 
 
@@ -154,7 +160,7 @@ class StorySourceRevision(Entity, Base):
     change_note: Mapped[str] = mapped_column(String(1000))
     origin_kind: Mapped[str] = mapped_column(String(16))
     rights_status: Mapped[str] = mapped_column(String(16))
-    storage_backend: Mapped[str] = mapped_column(String(16), default="database")
+    storage_backend: Mapped[str] = mapped_column(String(16))
     object_key: Mapped[str] = mapped_column(String(160), unique=True)
     __table_args__ = (
         UniqueConstraint("root_source_id", "version_no", name="uq_source_revision_root_version"),
@@ -168,7 +174,9 @@ class StorySourceRevision(Entity, Base):
         CheckConstraint(
             "rights_status IN ('CONFIRMED', 'UNDECLARED')", name="source_rights_status"
         ),
-        CheckConstraint("storage_backend = 'database'", name="source_storage_backend"),
+        CheckConstraint(
+            "storage_backend IN ('database', 'LOCAL', 'S3')", name="source_storage_backend"
+        ),
     )
 
 
