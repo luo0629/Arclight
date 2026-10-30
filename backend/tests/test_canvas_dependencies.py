@@ -1,5 +1,7 @@
 """DAG-06: authoritative project versions, exact edges and private previews."""
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 from uuid import UUID
 
 import pytest
@@ -154,3 +156,65 @@ def test_graph_limit_fails_explicitly_instead_of_truncating_exact_dependencies(
     assert response.status_code == 409 and response.json()["error"]["code"] == "CANVAS_TOO_LARGE"
     with client.app.state.session_factory() as db:
         assert len(list(db.scalars(select(AssetVersion)))) == 1
+
+
+def test_sqlite_canvas_keeps_one_snapshot_while_a_worker_commits(client, episode, monkeypatch):
+    if client.app.state.engine.dialect.name != "sqlite":
+        pytest.skip("SQLite read snapshots; PostgreSQL uses the shared project lock")
+    project_id = UUID(episode["project_id"])
+    factory = client.app.state.session_factory
+    with factory.begin() as db:
+        source, source_version = registry_version(db, project_id)
+        target, _ = registry_version(db, project_id)
+        source_id, target_id = source_version.id, target.id
+    ready, committed = Event(), Event()
+    original = canvas.query_dependencies
+    pending = []
+
+    def write():
+        with factory.begin() as db:
+            version = AssetVersion(
+                asset_id=target_id,
+                version_no=2,
+                object_key="test:concurrent-result",
+                checksum="b" * 64,
+                metadata_json={},
+                created_by="service-owner",
+            )
+            db.add(version)
+            db.flush()
+            db.add(
+                AssetDependency(
+                    source_asset_version_id=source_id,
+                    target_asset_version_id=version.id,
+                    dependency_type="REFERENCE_DEPENDENCY",
+                )
+            )
+            db.flush()
+            version_id = version.id
+            ready.set()
+        committed.set()
+        return version_id
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+
+        def during_read(db, *args, **kwargs):
+            pending.append(pool.submit(write))
+            assert ready.wait(10)
+            # A real read snapshot prevents a later commit from entering only the edge query.
+            assert not committed.wait(0.5)
+            return original(db, *args, **kwargs)
+
+        monkeypatch.setattr(canvas, "query_dependencies", during_read)
+        response = client.get(path(episode))
+        assert response.status_code == 200, response.text
+        version_id = pending[0].result(timeout=10)
+    assert str(version_id) not in str(response.json())
+    monkeypatch.setattr(canvas, "query_dependencies", original)
+    next_graph = client.get(path(episode)).json()
+    assert str(version_id) in str(next_graph)
+    identities = {node["id"] for node in next_graph["nodes"]}
+    assert all(
+        edge["source"] in identities and edge["target"] in identities
+        for edge in next_graph["edges"]
+    )

@@ -51,6 +51,12 @@ class LayoutInput(Input):
 
 def graph_data(db, episode):
     # Share the writer's project lock so versions and edges form one coherent read.
+    connection = db.connection()
+    if connection.dialect.name == "sqlite":
+        driver = connection.connection.driver_connection
+        # sqlite3 legacy transaction control does not BEGIN for SELECT, and ignores FOR SHARE.
+        if not driver.in_transaction:
+            connection.exec_driver_sql("BEGIN")
     db.execute(
         select(Project.id).where(Project.id == episode.project_id).with_for_update(read=True)
     )
