@@ -41,6 +41,7 @@ class GenerationJob(Entity, Base):
     idempotency_key: Mapped[str] = mapped_column(String(160))
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     provider_request_id: Mapped[str | None] = mapped_column(String(200))
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     expected_asset_revision: Mapped[int | None]
     expected_lock_version: Mapped[int | None]
     expected_current_version_id: Mapped[UUID | None] = mapped_column(
