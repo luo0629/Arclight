@@ -20,7 +20,7 @@ from arclight.application.generation_state import find_job, request_cancel
 from arclight.core.errors import DomainError
 from arclight.domain.generation import STATUS_LABELS, GenerationStatus
 from arclight.domain.generation_requests import GenerationCreate
-from arclight.persistence.generation import GenerationReconciliation
+from arclight.persistence.generation import GenerationDispatch, GenerationReconciliation
 from arclight.persistence.models import GenerationAttempt, GenerationJob
 from arclight.providers.media_query import MediaQueryProvider, get_media_query_provider
 
@@ -96,7 +96,7 @@ def scoped_job(
     return row
 
 
-@router.post("", status_code=201, summary="保存媒体任务与冻结输入（不调用供应商）")
+@router.post("", status_code=201, summary="冻结输入并排队媒体任务（HTTP请求内不调用供应商）")
 def capture_job(
     project_id: UUID,
     payload: GenerationCreate,
@@ -207,6 +207,43 @@ class ReconciliationRead(Resource):
     @classmethod
     def utc_timestamps(cls, value: datetime | None) -> datetime | None:
         return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+class DispatchRead(Resource):
+    job_id: UUID
+    expected_revision: int
+    request_fingerprint: str
+    status: str
+    attempt_id: UUID | None
+    provider_supports_idempotency: bool | None
+    provider_idempotency_key: str | None
+    receipt_json: dict | None
+    finished_at: datetime | None
+
+    @field_validator("created_at", "updated_at", "finished_at")
+    @classmethod
+    def utc_timestamps(cls, value: datetime | None) -> datetime | None:
+        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+@router.get("/{job_id}/dispatches")
+def list_dispatches(
+    project_id: UUID,
+    job_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[DispatchRead]:
+    scoped_job(db, project_id, job_id, actor)
+    rows = db.scalars(
+        select(GenerationDispatch)
+        .where(GenerationDispatch.job_id == job_id)
+        .order_by(GenerationDispatch.expected_revision)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [DispatchRead.model_validate(row) for row in rows]
 
 
 @router.get("/{job_id}/reconciliations")

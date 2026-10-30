@@ -12,7 +12,9 @@ from sqlalchemy.orm import Session
 
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
+from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_state import check_revision, find_job, transition
+from arclight.application.generation_targets import require_available_target
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec, MediaErrorCode
@@ -45,6 +47,15 @@ def require_writable_target(db: Session, job: GenerationJob) -> None:
             or asset.status in {"ARCHIVED", "LOCKED"}
         ):
             raise DomainError("ASSET_READ_ONLY", "目标资产不可生成", 409)
+        if job.expected_asset_revision is None or job.expected_lock_version is None:
+            raise DomainError("INVALID_GENERATION_INPUT", "媒体任务缺少冻结目标版本", 409)
+        if (asset.revision, asset.lock_version, asset.current_version_id) != (
+            job.expected_asset_revision,
+            job.expected_lock_version,
+            job.expected_current_version_id,
+        ):
+            raise DomainError("VERSION_CONFLICT", "目标资产已变化，请捕获新输入后生成", 409)
+        require_available_target(db, asset.id, exclude_job_id=job.id)
 
 
 def start_attempt(db: Session, job_id: UUID, expected_revision: int) -> GenerationAttempt:
@@ -244,4 +255,6 @@ def request_retry(db: Session, job_id: UUID, expected_revision: int, actor: str)
         raise DomainError(
             "GENERATION_NOT_RETRYABLE", "仅明确失败的调用可显式重试；未知结果须先对账", 409
         )
-    return transition(db, job.id, GenerationStatus.RETRY_WAIT, expected_revision, actor=actor)
+    row = transition(db, job.id, GenerationStatus.RETRY_WAIT, expected_revision, actor=actor)
+    enqueue_dispatch(db, row)
+    return row

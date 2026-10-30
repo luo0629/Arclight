@@ -13,6 +13,7 @@ from arclight.application.generation_attempts import (
     finish_attempt,
     set_provider_request,
 )
+from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_state import check_revision, find_job, transition
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus as Status
@@ -184,6 +185,8 @@ def reconcile(
                         job.revision,
                         actor=actor,
                     )
+                    if job.status == Status.RETRY_WAIT:
+                        enqueue_dispatch(db, job)
             elif receipt.status == "RUNNING":
                 transition(
                     db,

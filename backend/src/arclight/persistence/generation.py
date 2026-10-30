@@ -12,6 +12,7 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -66,6 +67,21 @@ class GenerationJob(Entity, Base):
             name="generation_expected_revisions",
         ),
         Index("ix_generation_jobs_status_created", "status", "created_at"),
+        Index(
+            "uq_generation_active_asset",
+            "target_asset_id",
+            unique=True,
+            sqlite_where=text(
+                "target_asset_id IS NOT NULL AND status IN "
+                "('CANCEL_REQUESTED','CREATED','MANUAL_REVIEW','RECONCILING','RESULT_UNKNOWN',"
+                "'RETRY_WAIT','RUNNING','SUBMITTED','SUBMITTING')"
+            ),
+            postgresql_where=text(
+                "target_asset_id IS NOT NULL AND status IN "
+                "('CANCEL_REQUESTED','CREATED','MANUAL_REVIEW','RECONCILING','RESULT_UNKNOWN',"
+                "'RETRY_WAIT','RUNNING','SUBMITTED','SUBMITTING')"
+            ),
+        ),
     )
 
 
@@ -123,5 +139,42 @@ class GenerationReconciliation(Entity, Base):
             "OR (disposition IN ('APPLIED', 'SUPERSEDED') "
             "AND finished_at IS NOT NULL AND receipt_json IS NOT NULL)",
             name="generation_reconciliation_completion",
+        ),
+    )
+
+
+class GenerationDispatch(Entity, Base):
+    __tablename__ = "generation_dispatches"
+    job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), index=True)
+    expected_revision: Mapped[int]
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16), default="READY")
+    attempt_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("generation_attempts.id"), index=True
+    )
+    provider_supports_idempotency: Mapped[bool | None]
+    provider_idempotency_key: Mapped[str | None] = mapped_column(String(160))
+    receipt_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("job_id", "expected_revision", name="uq_generation_dispatch_revision"),
+        CheckConstraint("expected_revision >= 0", name="generation_dispatch_revision"),
+        CheckConstraint(
+            "status IN ('READY','CLAIMED','FINISHED','SKIPPED')", name="generation_dispatch_status"
+        ),
+        CheckConstraint(
+            "(status IN ('READY','CLAIMED') AND finished_at IS NULL AND receipt_json IS NULL) "
+            "OR (status IN ('FINISHED','SKIPPED') "
+            "AND finished_at IS NOT NULL AND receipt_json IS NOT NULL)",
+            name="generation_dispatch_completion",
+        ),
+        CheckConstraint(
+            "(status IN ('READY','SKIPPED') AND attempt_id IS NULL "
+            "AND provider_supports_idempotency IS NULL AND provider_idempotency_key IS NULL) "
+            "OR (status IN ('CLAIMED','FINISHED') AND attempt_id IS NOT NULL "
+            "AND provider_supports_idempotency IS NOT NULL "
+            "AND ((provider_supports_idempotency AND provider_idempotency_key IS NOT NULL) "
+            "OR (NOT provider_supports_idempotency AND provider_idempotency_key IS NULL)))",
+            name="generation_dispatch_claim",
         ),
     )

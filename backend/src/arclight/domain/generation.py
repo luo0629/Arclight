@@ -25,6 +25,7 @@ TRANSITIONS: dict[GenerationStatus, frozenset[GenerationStatus]] = {
     GenerationStatus.SUBMITTING: frozenset(
         {
             GenerationStatus.SUBMITTED,
+            GenerationStatus.CANCELLED,
             GenerationStatus.RUNNING,
             GenerationStatus.SUCCEEDED,
             GenerationStatus.FAILED,
@@ -79,6 +80,12 @@ TRANSITIONS: dict[GenerationStatus, frozenset[GenerationStatus]] = {
     GenerationStatus.MANUAL_REVIEW: frozenset({GenerationStatus.RECONCILING}),
     GenerationStatus.SUCCEEDED: frozenset(),
     GenerationStatus.CANCELLED: frozenset(),
+}
+
+ACTIVE_STATUSES = frozenset(GenerationStatus) - {
+    GenerationStatus.SUCCEEDED,
+    GenerationStatus.FAILED,
+    GenerationStatus.CANCELLED,
 }
 
 STATUS_LABELS = dict(

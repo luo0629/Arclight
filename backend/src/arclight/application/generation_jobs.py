@@ -10,6 +10,8 @@ from sqlalchemy.orm import Session
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.dependencies import exact_version, lock_dependency_graph
+from arclight.application.generation_events import enqueue_dispatch
+from arclight.application.generation_targets import require_available_target
 from arclight.core.errors import DomainError
 from arclight.domain.dependencies import validate_dependency_type
 from arclight.domain.generation_requests import GenerationCreate
@@ -71,7 +73,19 @@ def create_job(
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
     require_project(db, project_id, actor, write=True)
+    fingerprint = request_fingerprint(payload)
+    existing = db.scalar(
+        select(GenerationJob).where(
+            GenerationJob.project_id == project_id,
+            GenerationJob.idempotency_key == key,
+        )
+    )
+    if existing is not None:
+        if existing.request_fingerprint != fingerprint:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一幂等键不能用于不同媒体请求", 409)
+        return existing
     asset = validate_target(db, project_id, payload)
+    require_available_target(db, payload.target_asset_id)
     inputs = []
     for item in payload.inputs:
         version, source = exact_version(db, project_id, item.source_asset_version_id)
@@ -92,7 +106,6 @@ def create_job(
                 "checksum": version.checksum,
             }
         )
-    fingerprint = request_fingerprint(payload)
     manifest = DependencyManifest(
         project_id=project_id,
         target_asset_id=asset.id if asset else None,
@@ -142,6 +155,7 @@ def create_job(
     )
     db.add(job)
     db.flush()
+    enqueue_dispatch(db, job)
     audit(
         db,
         project_id,
