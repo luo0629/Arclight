@@ -12,6 +12,7 @@ from sqlalchemy import func, select, update
 from arclight.api.assets import AssetRead, change_asset, find_asset
 from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
+from arclight.api.rights import UsageDeclaration
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
 from arclight.application.asset_objects import object_key, read_object, write_object
@@ -36,24 +37,14 @@ router = APIRouter(
 )
 
 
-class VersionCreate(Input):
+class VersionCreate(UsageDeclaration):
     creation_key: UUID
     expected_revision: int = Field(strict=True, ge=0)
     original_name: str = Field(min_length=1, max_length=160)
     media_type: Literal["image/png", "image/jpeg"]
     content_base64: str = Field(min_length=1, max_length=MAX_IMAGE_BASE64)
-    source_note: str = Field(min_length=1, max_length=1000)
-    rights_note: str = Field(min_length=1, max_length=1000)
-    rights_confirmed: Literal[True]
     generation: GenerationDeclaration | None = None
     dependency_manifest_id: UUID | None = None
-
-    @field_validator("rights_confirmed", mode="before")
-    @classmethod
-    def confirm_rights(cls, value: object) -> object:
-        if value is not True:
-            raise ValueError("必须明确确认图片使用权")
-        return value
 
     @field_validator("original_name")
     @classmethod

@@ -251,4 +251,6 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 
 ## 许可证
 
+项目的 `GET /api/v1/projects/{project_id}/rights` 提供故事、参考图、音频、音乐与字体的来源和使用权声明清单，支持 `category`、`rights_status` 与分页；访问沿用项目成员权限。清单保留精确来源／文件／资产版本、声明人和记录时间，不返回私有对象路径。导入／完成上传须填写来源与授权说明并显式传入 `rights_confirmed: true`；手动任务的未声明来源如实显示 `UNDECLARED`。确认记录表示提交人的使用权声明，系统不自动核验许可证或修改历史声明。
+
 本项目采用 [MIT License](LICENSE)。

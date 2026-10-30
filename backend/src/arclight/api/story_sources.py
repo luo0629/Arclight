@@ -12,8 +12,9 @@ from pydantic import BaseModel, Field, StringConstraints, field_validator
 from sqlalchemy import or_, select
 
 from arclight.api.dependencies import Actor, Database
+from arclight.api.rights import UsageDeclaration
 from arclight.api.routes import Limit, Offset
-from arclight.api.schemas import Input, Resource
+from arclight.api.schemas import Resource
 from arclight.application.commands import require_episode
 from arclight.application.story_sources import (
     SourceDraft,
@@ -38,24 +39,14 @@ from arclight.persistence.models import (
 router = APIRouter(prefix="/api/v1/episodes/{episode_id}/story-sources", tags=["story-sources"])
 
 
-class SourceImport(Input):
+class SourceImport(UsageDeclaration):
     import_key: UUID
     original_name: str = Field(min_length=1, max_length=160)
     media_type: str = Field(max_length=64)
     encoding: Literal["utf-8", "gb18030"] = "utf-8"
     content_base64: str = Field(max_length=MAX_BASE64_LENGTH + 4)
-    source_note: str = Field(min_length=1, max_length=1000)
-    rights_note: str = Field(min_length=1, max_length=1000)
-    rights_confirmed: Literal[True]
     base_source_id: UUID | None = None
     change_note: str = Field(default="", max_length=1000)
-
-    @field_validator("rights_confirmed", mode="before")
-    @classmethod
-    def confirm_rights(cls, value: object) -> object:
-        if value is not True:
-            raise ValueError("必须明确确认故事使用权")
-        return value
 
 
 class SourceText(SourceImport):

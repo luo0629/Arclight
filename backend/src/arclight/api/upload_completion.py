@@ -6,13 +6,14 @@ from typing import Literal, cast
 from uuid import UUID
 
 from fastapi import APIRouter, Request
-from pydantic import Field, field_validator
+from pydantic import Field
 from sqlalchemy import select
 
 from arclight.api.asset_versions import VersionCreate, VersionRead, create_version
 from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
 from arclight.api.files import FileRead, find_file
+from arclight.api.rights import UsageDeclaration
 from arclight.api.schemas import Input
 from arclight.application.commands import require_project
 from arclight.application.uploads import (
@@ -27,17 +28,8 @@ from arclight.persistence.models import FileRegistration, UploadCompletion
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["files"])
 
 
-class UploadComplete(Input):
-    source_note: str = Field(min_length=1, max_length=1000)
-    rights_note: str = Field(min_length=1, max_length=1000)
-    rights_confirmed: Literal[True]
-
-    @field_validator("rights_confirmed", mode="before")
-    @classmethod
-    def explicit_rights(cls, value: object) -> object:
-        if value is not True:
-            raise ValueError("必须明确确认文件使用权")
-        return value
+class UploadComplete(UsageDeclaration):
+    pass
 
 
 class FileRegister(Input):
