@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.asset_versions import MAX_IMAGE_BYTES, ImportedImage, decode_image
+from arclight.domain.file_policy import check_file_policy
+from arclight.media.validation import validate_file
 from arclight.persistence.models import StoredFile, UploadCompletion, UploadIntent
 from arclight.storage.objects import ObjectStorage
 
@@ -40,7 +42,12 @@ def file_store(settings: Settings, bucket: str) -> ObjectStorage:
 
 
 def validated_image(settings: Settings, row: StoredFile) -> ImportedImage:
-    if row.storage_backend != "S3" or row.bucket is None or row.asset_version_id is not None:
+    if (
+        row.storage_backend != "S3"
+        or row.bucket is None
+        or row.asset_version_id is not None
+        or row.media_type not in {"image/png", "image/jpeg"}
+    ):
         raise DomainError("INVALID_CANDIDATE", "请选择已验证的候选图片文件", 409)
     data = file_store(settings, row.bucket).read(row.object_key, MAX_IMAGE_BYTES, row.checksum)
     return decode_image(base64.b64encode(data).decode(), row.media_type)
@@ -61,13 +68,16 @@ def freeze_upload(
         return result
     if row.expires_at.replace(tzinfo=UTC) + COMPLETION_GRACE <= datetime.now(UTC):
         raise DomainError("UPLOAD_EXPIRED", "上传已过期，请重新上传", 409)
-    if row.purpose != "REFERENCE_IMAGE":
-        raise DomainError("UNSUPPORTED_MEDIA", "此类文件尚未接入服务端校验", 422)
+    policy = check_file_policy(
+        row.purpose, row.original_name, row.declared_media_type, row.byte_size
+    )
     store = file_store(settings, row.bucket)
-    data = store.read(row.object_key, MAX_IMAGE_BYTES, row.checksum)
+    data = store.read(row.object_key, policy.max_bytes, row.checksum)
     if len(data) != row.byte_size:
         raise DomainError("INVALID_UPLOAD", "上传大小与声明不一致", 422)
-    image = decode_image(base64.b64encode(data).decode(), row.declared_media_type)
+    image = validate_file(
+        data, row.purpose, row.original_name, row.declared_media_type, row.checksum
+    )
     file_id = uuid4()
     key = f"validated/{row.project_id}/{file_id}"
     store.put(key, image.data, image.media_type)
@@ -95,6 +105,7 @@ def freeze_upload(
     )
     db.add(receipt)
     db.flush()
+    db.refresh(receipt)
     db.add(
         UploadCompletion(
             upload_id=row.id, file_id=file_id, purpose=row.purpose, request_sha256=fingerprint

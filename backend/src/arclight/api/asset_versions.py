@@ -28,6 +28,7 @@ from arclight.application.invalidation import check_impact, invalidate
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
 from arclight.domain.asset_versions import MAX_IMAGE_BASE64, decode_image, next_status
+from arclight.domain.file_policy import check_file_policy
 from arclight.persistence.models import AssetSelectionLock, AssetVersion, VisualAsset
 
 router = APIRouter(
@@ -227,6 +228,7 @@ def create_version(
         manifest = require_manifest(db, project_id, payload.dependency_manifest_id)
         if manifest.target_asset_id != asset.id:
             raise DomainError("INVALID_DEPENDENCY_OUTPUT", "输入清单的目标资产不匹配", 409)
+    check_file_policy("REFERENCE_IMAGE", payload.original_name, payload.media_type, 1)
     image = decode_image(payload.content_base64, payload.media_type)
     provenance = capture_provenance(db, project_id, image, payload.generation)
     snapshot = AssetRead.model_validate(asset).model_dump(mode="json")

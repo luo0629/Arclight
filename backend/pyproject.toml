@@ -20,6 +20,8 @@ dependencies = [
     "pillow>=11,<13",
     "cryptography>=46,<50",
     "boto3>=1.42,<2",
+    "av>=16,<20",
+    "fonttools>=4.60,<5",
 ]
 
 [dependency-groups]

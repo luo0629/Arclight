@@ -3,13 +3,10 @@
 import base64
 import binascii
 import hashlib
-import warnings
 from dataclasses import dataclass
-from io import BytesIO
-
-from PIL import Image, UnidentifiedImageError
 
 from arclight.core.errors import DomainError
+from arclight.media.validation import probe
 
 MAX_IMAGE_BYTES = 1024 * 1024
 MAX_IMAGE_BASE64 = 4 * ((MAX_IMAGE_BYTES + 2) // 3)
@@ -33,6 +30,8 @@ class ImportedImage:
 
 
 def decode_image(encoded: str, media_type: str) -> ImportedImage:
+    if media_type not in {"image/png", "image/jpeg"}:
+        raise DomainError("INVALID_IMAGE", "仅支持静态PNG/JPEG图片", 422)
     try:
         data = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:
@@ -40,34 +39,14 @@ def decode_image(encoded: str, media_type: str) -> ImportedImage:
     if not data or len(data) > MAX_IMAGE_BYTES:
         raise DomainError("INVALID_IMAGE", "图片不能为空且不得超过1 MiB", 422)
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", Image.DecompressionBombWarning)
-            with Image.open(BytesIO(data)) as image:
-                actual = {"PNG": "image/png", "JPEG": "image/jpeg"}.get(image.format or "")
-                width, height = image.size
-                if (
-                    actual != media_type
-                    or actual is None
-                    or width * height > MAX_IMAGE_PIXELS
-                    or max(width, height) > 4096
-                    or getattr(image, "n_frames", 1) != 1
-                ):
-                    raise ValueError("Unsupported format, dimensions or animation")
-                image.verify()
-            with Image.open(BytesIO(data)) as image:
-                image.load()
-    except (
-        OSError,
-        ValueError,
-        SyntaxError,
-        UnidentifiedImageError,
-        Image.DecompressionBombError,
-        Image.DecompressionBombWarning,
-    ) as exc:
+        details = probe(data, media_type)
+    except DomainError as exc:
         raise DomainError(
             "INVALID_IMAGE", "仅支持完整、静态PNG/JPEG，最长边4096且最多400万像素", 422
         ) from exc
-    return ImportedImage(data, hashlib.sha256(data).hexdigest(), media_type, width, height)
+    return ImportedImage(
+        data, hashlib.sha256(data).hexdigest(), media_type, details["width"], details["height"]
+    )
 
 
 def next_status(current: str, target: str, archived_from: str | None) -> str:

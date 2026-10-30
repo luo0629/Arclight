@@ -5,7 +5,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Request, Response
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
@@ -13,6 +13,7 @@ from arclight.api.files import find_file
 from arclight.api.schemas import Input
 from arclight.application.commands import require_project
 from arclight.core.errors import DomainError
+from arclight.domain.file_policy import check_file_policy
 from arclight.persistence.models import UploadIntent
 from arclight.storage.transfers import MAX_TRANSFER_SECONDS, presign_download, presign_upload
 
@@ -48,6 +49,11 @@ class UploadCreate(TransferExpiry):
         if "/" in value or "\\" in value:
             raise ValueError("文件名不能包含路径")
         return value
+
+    @model_validator(mode="after")
+    def allowed_file(self) -> "UploadCreate":
+        check_file_policy(self.purpose, self.original_name, self.media_type, self.byte_size)
+        return self
 
 
 @router.post("/uploads", status_code=201)
