@@ -480,7 +480,7 @@ class DependencyManifest(Entity, Base):
 
     __tablename__ = "dependency_manifests"
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
-    target_asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"), index=True)
+    target_asset_id: Mapped[UUID | None] = mapped_column(ForeignKey("visual_assets.id"), index=True)
     creation_key: Mapped[UUID]
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     snapshot_json: Mapped[dict] = mapped_column(JSON_TYPE)

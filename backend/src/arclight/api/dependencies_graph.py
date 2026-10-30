@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["dependencies"]
 
 class ManifestRead(Resource):
     project_id: UUID
-    target_asset_id: UUID
+    target_asset_id: UUID | None
     created_by: str
     snapshot: dict = Field(validation_alias="snapshot_json")
 

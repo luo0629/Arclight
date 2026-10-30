@@ -1,9 +1,11 @@
 """Permission-scoped public media states and explicit cancellation intent."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
+from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import Field, field_validator
 from sqlalchemy import select
 
@@ -11,10 +13,13 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
 from arclight.application.commands import require_project
+from arclight.application.generation_attempts import request_retry
+from arclight.application.generation_jobs import create_job
 from arclight.application.generation_state import find_job, request_cancel
 from arclight.core.errors import DomainError
 from arclight.domain.generation import STATUS_LABELS, GenerationStatus
-from arclight.persistence.models import GenerationJob
+from arclight.domain.generation_requests import GenerationCreate
+from arclight.persistence.models import GenerationAttempt, GenerationJob
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/generation-jobs", tags=["generation"])
 
@@ -32,6 +37,11 @@ class GenerationRead(Resource):
     revision: int
     attempt_count: int
     cancel_requested_at: datetime | None
+    provider_request_id: str | None
+    expected_asset_revision: int | None
+    expected_lock_version: int | None
+    expected_current_version_id: UUID | None
+    created_by: str
     status_label: str = ""
 
     @field_validator("created_at", "updated_at", "cancel_requested_at")
@@ -44,10 +54,54 @@ class GenerationCancel(Input):
     expected_revision: int = Field(strict=True, ge=0)
 
 
+class AttemptRead(Resource):
+    job_id: UUID
+    attempt_no: int
+    input_manifest_id: UUID
+    request_fingerprint: str
+    provider: str
+    model: str
+    provider_request_id: str | None
+    status: GenerationStatus
+    input_snapshot_json: dict
+    result_json: dict | None
+    error_code: str | None
+    latency_ms: int | None
+    cost: Decimal | None
+    submitted_at: datetime
+    finished_at: datetime | None
+
+    @field_validator("created_at", "updated_at", "submitted_at", "finished_at")
+    @classmethod
+    def utc_timestamps(cls, value: datetime | None) -> datetime | None:
+        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
 def read_job(row: GenerationJob) -> GenerationRead:
     result = GenerationRead.model_validate(row)
     result.status_label = STATUS_LABELS[result.status]
     return result
+
+
+def scoped_job(
+    db: Database, project_id: UUID, job_id: UUID, actor: str, *, write: bool = False
+) -> GenerationJob:
+    require_project(db, project_id, actor, write=write)
+    row = find_job(db, job_id)
+    if row.project_id != project_id:
+        raise DomainError("NOT_FOUND", "媒体任务不存在", 404)
+    return row
+
+
+@router.post("", status_code=201, summary="保存媒体任务与冻结输入（不调用供应商）")
+def capture_job(
+    project_id: UUID,
+    payload: GenerationCreate,
+    db: Database,
+    actor: Actor,
+    idempotency_key: Annotated[str, Header(min_length=1, max_length=160, pattern=r"^[!-~]+$")],
+) -> GenerationRead:
+    return read_job(create_job(db, project_id, actor, idempotency_key, payload))
 
 
 @router.get("")
@@ -71,11 +125,56 @@ def list_jobs(
 
 @router.get("/{job_id}")
 def get_job(project_id: UUID, job_id: UUID, db: Database, actor: Actor) -> GenerationRead:
-    require_project(db, project_id, actor)
-    row = find_job(db, job_id)
-    if row.project_id != project_id:
-        raise DomainError("NOT_FOUND", "媒体任务不存在", 404)
-    return read_job(row)
+    return read_job(scoped_job(db, project_id, job_id, actor))
+
+
+@router.get("/{job_id}/attempts")
+def list_attempts(
+    project_id: UUID,
+    job_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[AttemptRead]:
+    scoped_job(db, project_id, job_id, actor)
+    rows = db.scalars(
+        select(GenerationAttempt)
+        .where(
+            GenerationAttempt.job_id == job_id,
+        )
+        .order_by(GenerationAttempt.attempt_no)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [AttemptRead.model_validate(row) for row in rows]
+
+
+@router.get("/{job_id}/attempts/{attempt_id}")
+def get_attempt(
+    project_id: UUID,
+    job_id: UUID,
+    attempt_id: UUID,
+    db: Database,
+    actor: Actor,
+) -> AttemptRead:
+    scoped_job(db, project_id, job_id, actor)
+    row = db.get(GenerationAttempt, attempt_id)
+    if row is None or row.job_id != job_id:
+        raise DomainError("NOT_FOUND", "媒体尝试不存在", 404)
+    return AttemptRead.model_validate(row)
+
+
+@router.post("/{job_id}/retry")
+def retry_job(
+    project_id: UUID,
+    job_id: UUID,
+    payload: GenerationCancel,
+    db: Database,
+    actor: Actor,
+) -> GenerationRead:
+    scoped_job(db, project_id, job_id, actor, write=True)
+    return read_job(request_retry(db, job_id, payload.expected_revision, actor))
 
 
 @router.post("/{job_id}/cancel")
@@ -86,8 +185,5 @@ def cancel_job(
     db: Database,
     actor: Actor,
 ) -> GenerationRead:
-    require_project(db, project_id, actor, write=True)
-    row = find_job(db, job_id)
-    if row.project_id != project_id:
-        raise DomainError("NOT_FOUND", "媒体任务不存在", 404)
+    scoped_job(db, project_id, job_id, actor, write=True)
     return read_job(request_cancel(db, job_id, payload.expected_revision, actor))
