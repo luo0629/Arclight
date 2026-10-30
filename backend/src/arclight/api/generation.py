@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import Field, field_validator
 from sqlalchemy import select
 
@@ -15,11 +15,14 @@ from arclight.api.schemas import Input, Resource
 from arclight.application.commands import require_project
 from arclight.application.generation_attempts import request_retry
 from arclight.application.generation_jobs import create_job
+from arclight.application.generation_reconciliation import ManualResolution, reconcile
 from arclight.application.generation_state import find_job, request_cancel
 from arclight.core.errors import DomainError
 from arclight.domain.generation import STATUS_LABELS, GenerationStatus
 from arclight.domain.generation_requests import GenerationCreate
+from arclight.persistence.generation import GenerationReconciliation
 from arclight.persistence.models import GenerationAttempt, GenerationJob
+from arclight.providers.media_query import MediaQueryProvider, get_media_query_provider
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/generation-jobs", tags=["generation"])
 
@@ -187,3 +190,89 @@ def cancel_job(
 ) -> GenerationRead:
     scoped_job(db, project_id, job_id, actor, write=True)
     return read_job(request_cancel(db, job_id, payload.expected_revision, actor))
+
+
+class ReconciliationRead(Resource):
+    job_id: UUID
+    attempt_id: UUID
+    claimed_revision: int
+    source: str
+    actor: str
+    evidence_reference: str | None
+    receipt_json: dict | None
+    disposition: str
+    finished_at: datetime | None
+
+    @field_validator("created_at", "updated_at", "finished_at")
+    @classmethod
+    def utc_timestamps(cls, value: datetime | None) -> datetime | None:
+        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+@router.get("/{job_id}/reconciliations")
+def list_reconciliations(
+    project_id: UUID,
+    job_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[ReconciliationRead]:
+    scoped_job(db, project_id, job_id, actor)
+    rows = db.scalars(
+        select(GenerationReconciliation)
+        .where(GenerationReconciliation.job_id == job_id)
+        .order_by(GenerationReconciliation.claimed_revision)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [ReconciliationRead.model_validate(row) for row in rows]
+
+
+@router.post("/{job_id}/reconcile")
+def reconcile_job(
+    project_id: UUID,
+    job_id: UUID,
+    payload: GenerationCancel,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    provider: Annotated[MediaQueryProvider, Depends(get_media_query_provider)],
+) -> GenerationRead:
+    scoped_job(db, project_id, job_id, actor, write=True)
+    db.commit()  # End dependency/auth transaction before any provider query.
+    return read_job(
+        reconcile(
+            request.app.state.session_factory,
+            project_id,
+            job_id,
+            payload.expected_revision,
+            actor,
+            provider,
+        )
+    )
+
+
+@router.post("/{job_id}/resolve")
+def resolve_job(
+    project_id: UUID,
+    job_id: UUID,
+    payload: ManualResolution,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    provider: Annotated[MediaQueryProvider, Depends(get_media_query_provider)],
+) -> GenerationRead:
+    scoped_job(db, project_id, job_id, actor, write=True)
+    db.commit()
+    return read_job(
+        reconcile(
+            request.app.state.session_factory,
+            project_id,
+            job_id,
+            payload.expected_revision,
+            actor,
+            provider,
+            manual=payload,
+        )
+    )

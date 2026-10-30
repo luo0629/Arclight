@@ -97,3 +97,31 @@ class GenerationAttempt(Entity, Base):
         CheckConstraint("cost IS NULL OR cost >= 0", name="generation_cost"),
         Index("ix_generation_attempts_status_created", "status", "created_at"),
     )
+
+
+class GenerationReconciliation(Entity, Base):
+    __tablename__ = "generation_reconciliations"
+    job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), index=True)
+    attempt_id: Mapped[UUID] = mapped_column(ForeignKey("generation_attempts.id"), index=True)
+    claimed_revision: Mapped[int]
+    source: Mapped[str] = mapped_column(String(16))
+    actor: Mapped[str] = mapped_column(String(100))
+    evidence_reference: Mapped[str | None] = mapped_column(String(200))
+    receipt_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    disposition: Mapped[str] = mapped_column(String(16), default="PENDING")
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint(
+            "job_id", "claimed_revision", name="uq_generation_reconciliation_revision"
+        ),
+        CheckConstraint("claimed_revision >= 0", name="generation_reconciliation_revision"),
+        CheckConstraint(
+            "source IN ('PROVIDER', 'MANUAL')", name="generation_reconciliation_source"
+        ),
+        CheckConstraint(
+            "(disposition = 'PENDING' AND finished_at IS NULL AND receipt_json IS NULL) "
+            "OR (disposition IN ('APPLIED', 'SUPERSEDED') "
+            "AND finished_at IS NOT NULL AND receipt_json IS NOT NULL)",
+            name="generation_reconciliation_completion",
+        ),
+    )
