@@ -142,8 +142,8 @@ def admit(db: Session, job: GenerationJob, live: ExecutionPolicy, kind: str = "S
     """Call with the project/job locked; the singleton serializes count + reservation."""
     gate = db.get(GenerationSchedulerGate, "global", with_for_update=True)
     assert gate is not None
-    stamp = leases.clock(db)
     schedule = schedule_for(db, job, live)
+    stamp = leases.clock(db)
     if kind != "SUBMIT":
         # Read-only/control calls abandoned by a dead worker cannot occupy slots forever.
         # The process-local semaphore still bounds physically stuck adapter threads.

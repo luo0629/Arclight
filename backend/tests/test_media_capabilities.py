@@ -3,6 +3,8 @@
 import hashlib
 import json
 from copy import deepcopy
+from datetime import timedelta
+from itertools import count
 from uuid import UUID
 
 import pytest
@@ -20,6 +22,7 @@ from test_generation_reconciliation import QueryFake, query
 from test_generation_scheduling import configure, fresh
 
 from arclight.application import generation_jobs
+from arclight.application import generation_leases as leases
 from arclight.application.generation_attempts import finish_attempt, start_attempt
 from arclight.application.generation_delivery import consume_dispatch
 from arclight.application.generation_recovery import recover_job
@@ -435,7 +438,9 @@ def test_idempotency_and_execution_mode_declarations_are_enforced(client, episod
     assert deliver(client, job, provider) == "RESULT_UNKNOWN" and len(provider.requests) == 1
 
 
-def test_legacy_job_is_validated_without_rewriting_old_capability_metadata(client, episode):
+def test_legacy_job_is_validated_without_rewriting_old_capability_metadata(
+    client, episode, monkeypatch
+):
     from arclight.application.generation_events import enqueue_dispatch
 
     current = capture_ok(client, episode["project_id"])
@@ -470,6 +475,11 @@ def test_legacy_job_is_validated_without_rewriting_old_capability_metadata(clien
         db.flush()
         event = enqueue_dispatch(db, job)
         identity, event_id, manifest_id = job.id, event.id, frozen.id
+    with client.app.state.session_factory() as db:
+        stamp = leases.clock(db)
+    ticks = count()
+    # PostgreSQL advances between reads; SQLite's second precision can hide this ordering bug.
+    monkeypatch.setattr(leases, "clock", lambda _: stamp + timedelta(microseconds=next(ticks)))
     assert (
         consume_dispatch(client.app.state.session_factory, identity, event_id, Provider())
         == "SUCCEEDED"
