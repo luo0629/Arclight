@@ -1,4 +1,8 @@
 import os
+import socket
+import threading
+import time
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from uuid import uuid4
 
@@ -10,6 +14,54 @@ from sqlalchemy import create_engine, inspect, text
 
 from arclight.core.config import Settings
 from arclight.main import create_app
+
+
+@contextmanager
+def serve_asgi(app):
+    """Exercise the production streaming ASGI app over a real loopback connection."""
+    import uvicorn
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        address = f"http://127.0.0.1:{listener.getsockname()[1]}"
+        server = uvicorn.Server(uvicorn.Config(app, access_log=False, log_level="critical"))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 10
+            while not server.started and thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert server.started, "Isolated ASGI service failed to start"
+            yield address
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            assert not thread.is_alive(), "Isolated ASGI service failed to stop"
+
+
+@pytest.fixture
+def gateway_server(client):
+    import httpx
+
+    from arclight.file_gateway import GatewaySettings, create_gateway
+
+    with ExitStack() as stack:
+
+        def start(settings):
+            app = create_gateway(
+                GatewaySettings(
+                    environment="test",
+                    file_gateway_api_url="http://test-api",
+                    s3_endpoint_url=settings.s3_endpoint_url,
+                    file_gateway_secret=settings.file_gateway_secret,
+                ),
+                authorization_transport=httpx.ASGITransport(app=client.app),
+            )
+            address = stack.enter_context(serve_asgi(app))
+            settings.file_transfer_base_url = address + "/file-transfers"
+            return address
+
+        yield start
 
 
 @pytest.fixture(autouse=True)

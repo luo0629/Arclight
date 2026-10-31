@@ -439,10 +439,13 @@ def test_local_junction_escape_is_never_followed(client, gc_setup, tmp_path):
 
 
 @pytest.mark.parametrize("valid", [False, True])
-def test_real_upload_cleanup_keeps_candidate_and_completion_receipt(client, gc_setup, valid):
+def test_real_upload_cleanup_keeps_candidate_and_completion_receipt(
+    client, gc_setup, valid, gateway_server
+):
     settings, store, root, clock = gc_setup
     if store.client is None:
         pytest.skip("Actual S3 upload lifecycle")
+    gateway_server(settings)
     data = None if valid else b"x" * upload_payload()["byte_size"]
     payload = upload_payload()
     if data is not None:
@@ -457,7 +460,7 @@ def test_real_upload_cleanup_keeps_candidate_and_completion_receipt(client, gc_s
     assert len(planned["items"]) == 1
     clock[0] += timedelta(hours=2)
     assert run_item(client, root, planned).json()["status"] == "DELETED"
-    assert snapshot(store, ticket["fields"]["key"]) is None
+    assert snapshot(store, f"temporary/{root.split('/')[-1]}/{ticket['upload_id']}") is None
     if valid:
         assert client.post(completion, json=DECLARATION).json() == response.json()
         clock[0] += timedelta(days=8)

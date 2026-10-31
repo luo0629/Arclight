@@ -74,7 +74,9 @@ def test_temporary_validated_and_registered_exact_stages(client, transfer_setup)
     with client.app.state.session_factory() as db:
         rows = list(db.scalars(select(StoredFile)))
         assert len({r.object_key for r in rows}) == 2
-        assert all(r.object_key != upload["fields"]["key"] for r in rows)
+        assert all(
+            r.object_key != f"temporary/{root.split('/')[-1]}/{upload['upload_id']}" for r in rows
+        )
         link = db.scalar(select(FileRegistration))
         assert str(link.file_id) == candidate["id"]
         assert str(link.asset_version_id) == registered.json()["id"]
@@ -135,7 +137,9 @@ def test_completion_failure_rolls_back_receipt_and_frozen_object(
     assert complete(client, root, upload).status_code == 503
     assert client.get(root + "/files").json() == []
     contents = ObjectStorage(settings).client.list_objects_v2(Bucket=settings.s3_bucket)["Contents"]
-    assert [c["Key"] for c in contents] == [upload["fields"]["key"]]
+    assert [c["Key"] for c in contents] == [
+        f"temporary/{root.split('/')[-1]}/{upload['upload_id']}"
+    ]
 
 
 def test_completion_receipts_immutable_and_downgrade_guarded(client, transfer_setup, migrated):

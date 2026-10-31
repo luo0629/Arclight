@@ -1,6 +1,5 @@
 """Project authorization precedes every short-lived storage capability."""
 
-from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import UUID, uuid4
 
@@ -12,10 +11,11 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.files import find_file
 from arclight.api.schemas import Input
 from arclight.application.commands import require_project
+from arclight.application.file_transfer_grants import issue_ticket
 from arclight.core.errors import DomainError
 from arclight.domain.file_policy import check_file_policy
 from arclight.persistence.models import UploadIntent
-from arclight.storage.transfers import MAX_TRANSFER_SECONDS, presign_download, presign_upload
+from arclight.storage.transfers import MAX_TRANSFER_SECONDS
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["files"])
 
@@ -65,29 +65,35 @@ def create_upload(
     db: Database,
     actor: Actor,
 ) -> dict:
-    require_project(db, project_id, actor, write=True)
+    project = require_project(db, project_id, actor, write=True)
     settings = request.app.state.settings
+    if settings.object_storage_backend != "s3":
+        raise DomainError("PRESIGNED_UNAVAILABLE", "文件直传需要启用私有 S3 存储", 503)
     upload_id = uuid4()
     key = f"temporary/{project_id}/{upload_id}"
-    signed = presign_upload(
-        settings, key, payload.media_type, payload.byte_size, payload.checksum, payload.expires_in
+    row = UploadIntent(
+        id=upload_id,
+        project_id=project_id,
+        bucket=settings.s3_bucket,
+        object_key=key,
+        purpose=payload.purpose,
+        original_name=payload.original_name,
+        declared_media_type=payload.media_type,
+        byte_size=payload.byte_size,
+        checksum=payload.checksum,
+        created_by=actor,
     )
-    expires_at = datetime.now(UTC) + timedelta(seconds=payload.expires_in)
-    db.add(
-        UploadIntent(
-            id=upload_id,
-            project_id=project_id,
-            bucket=settings.s3_bucket,
-            object_key=key,
-            purpose=payload.purpose,
-            original_name=payload.original_name,
-            declared_media_type=payload.media_type,
-            byte_size=payload.byte_size,
-            checksum=payload.checksum,
-            expires_at=expires_at,
-            created_by=actor,
-        )
+    url, expires_at = issue_ticket(
+        db,
+        settings,
+        project,
+        row,
+        actor,
+        request.headers.get("Authorization", "").partition(" ")[2],
+        payload.expires_in,
     )
+    row.expires_at = expires_at
+    db.add(row)
     db.flush()
     audit(
         db,
@@ -101,8 +107,9 @@ def create_upload(
     return {
         "upload_id": upload_id,
         "method": "POST",
-        "url": signed["url"],
-        "fields": signed["fields"],
+        "url": url,
+        "headers": {"Content-Type": payload.media_type},
+        "body": "raw",
         "expires_at": expires_at,
     }
 
@@ -117,15 +124,17 @@ def create_download(
     db: Database,
     actor: Actor,
 ) -> dict:
-    require_project(db, project_id, actor)
+    project = require_project(db, project_id, actor)
     row = find_file(db, project_id, file_id)
     if row.storage_backend != "S3" or row.bucket is None:
         raise DomainError("PRESIGNED_UNAVAILABLE", "此历史本机文件请使用鉴权原图接口读取", 409)
-    url = presign_download(
+    url, expires_at = issue_ticket(
+        db,
         request.app.state.settings,
-        row.bucket,
-        row.object_key,
-        row.original_name,
+        project,
+        row,
+        actor,
+        request.headers.get("Authorization", "").partition(" ")[2],
         payload.expires_in,
     )
     audit(
@@ -141,7 +150,7 @@ def create_download(
         "file_id": row.id,
         "method": "GET",
         "url": url,
-        "expires_at": datetime.now(UTC) + timedelta(seconds=payload.expires_in),
+        "expires_at": expires_at,
         "checksum": row.checksum,
         "byte_size": row.byte_size,
     }

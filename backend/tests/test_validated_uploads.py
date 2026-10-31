@@ -58,7 +58,7 @@ def test_validated_media_keeps_exact_private_bytes(
     assert upload_to_s3(upload, data=b"x" * len(data)).status_code == 204
     with client.app.state.session_factory() as db:
         row = db.get(StoredFile, UUID(receipt["id"]))
-        assert row.object_key != upload["fields"]["key"]
+        assert row.object_key != f"temporary/{root.split('/')[-1]}/{upload['upload_id']}"
         assert ObjectStorage(settings).read(row.object_key, len(data), row.checksum) == data
     assert (
         client.post(

@@ -23,7 +23,7 @@ def signing_store(settings: Settings, bucket: str) -> ObjectStorage:
             update={
                 "object_storage_backend": "s3",
                 "s3_bucket": bucket,
-                "s3_endpoint_url": settings.s3_public_endpoint_url or settings.s3_endpoint_url,
+                "s3_endpoint_url": settings.s3_endpoint_url,
             }
         )
     )
