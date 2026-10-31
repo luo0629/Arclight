@@ -20,6 +20,7 @@ jobs:
           POSTGRES_DB: arclight_test
         ports: ["5432:5432"]
         options: >-
+          --shm-size=512m
           --health-cmd "pg_isready -U arclight -d arclight_test"
           --health-interval 5s
           --health-timeout 5s
