@@ -128,6 +128,23 @@ def patch_project(
                 db, project_id, actor, "visual_bible.saved", row.id, {"version_no": row.version_no}
             )
     for key, value in changes.items():
+        if key == "budget_limit" and value != project.budget_limit:
+            from arclight.application.generation_budget import policy_for
+
+            policy = policy_for(db, project_id, lock=True)
+            policy.revision += 1
+            audit(
+                db,
+                project_id,
+                actor,
+                "budget.limit_updated",
+                project_id,
+                {
+                    "previous_limit": str(project.budget_limit),
+                    "project_limit": str(value),
+                    "revision": policy.revision,
+                },
+            )
         setattr(project, key, value)
     audit(db, project_id, actor, "project.updated", project_id, {"fields": list(changes)})
     db.flush()

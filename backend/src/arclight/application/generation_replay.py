@@ -75,6 +75,7 @@ def replay_job(
     snapshot = manifest.snapshot_json
     request = GenerationCreate.model_validate(
         {
+            "batch_id": snapshot["context"].get("budget_batch_id"),
             "target_type": source.target_type,
             "target_asset_id": source.target_asset_id,
             "episode_id": source.episode_id,

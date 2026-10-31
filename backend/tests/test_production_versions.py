@@ -266,7 +266,8 @@ def test_database_guards_preserve_version_definitions_and_bindings(client, episo
 
 def test_version_history_blocks_destructive_downgrade(client, episode, migrated):
     capture_ok(client, episode["project_id"])
-    with pytest.raises(RuntimeError, match="version history"):
+    # GEN-13's later migration now preserves the captured quote before reaching 0035.
+    with pytest.raises(RuntimeError, match="history"):
         command.downgrade(migrated, "0034")
     command.check(migrated)
 

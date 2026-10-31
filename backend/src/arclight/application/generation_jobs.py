@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.dependencies import exact_version, lock_dependency_graph
+from arclight.application.generation_budget import enforce_budget, quote_job
 from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_scheduling import schedule_for
 from arclight.application.generation_targets import require_available_target
@@ -30,6 +31,8 @@ from arclight.providers.media_capabilities import reference_count, resolve_capab
 
 def request_fingerprint(payload: GenerationCreate) -> str:
     values = payload.model_dump(mode="json")
+    if values["batch_id"] is None:
+        del values["batch_id"]
     # Preserve idempotent replays of requests captured before capability options existed.
     for field, default in (("batch_size", 1), ("require_query", False), ("require_cancel", False)):
         if values["spec"][field] == default:
@@ -96,6 +99,8 @@ def create_job(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一幂等键不能用于不同媒体请求", 409)
         return existing
     asset = validate_target(db, project_id, payload)
+    budget_quote = quote_job(db, project_id, payload)
+    enforce_budget(db, project_id, payload, budget_quote.maximum_cost)
     require_available_target(db, payload.target_asset_id)
     inputs = []
     for item in payload.inputs:
@@ -146,6 +151,8 @@ def create_job(
                 "generation": payload.spec.model_dump(mode="json"),
                 "origin": "generation_request",
                 "provider_capabilities": capabilities.model_dump(mode="json"),
+                "budget_quote": budget_quote.model_dump(mode="json"),
+                "budget_batch_id": str(payload.batch_id) if payload.batch_id else None,
             },
         },
     )
@@ -169,6 +176,18 @@ def create_job(
     )
     db.add(job)
     db.flush()
+    from arclight.persistence.generation_budget import GenerationBudgetQuote
+
+    db.add(
+        GenerationBudgetQuote(
+            job_id=job.id,
+            batch_id=payload.batch_id,
+            maximum_cost=budget_quote.maximum_cost,
+            currency=budget_quote.currency,
+            pricing_version=budget_quote.pricing_version,
+            candidate_count=payload.spec.batch_size,
+        )
+    )
     from arclight.application.production_versions import capture_media
 
     capture_media(db, project_id, job.id, manifest.id, payload.task_type, payload.spec, inputs)

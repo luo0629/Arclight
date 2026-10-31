@@ -2,7 +2,10 @@ from alembic import context
 from sqlalchemy import JSON, create_engine, pool
 
 from arclight.core.config import get_settings
-from arclight.persistence import models  # noqa: F401
+from arclight.persistence import (
+    generation_budget,  # noqa: F401
+    models,  # noqa: F401
+)
 from arclight.persistence.base import Base
 
 config = context.config

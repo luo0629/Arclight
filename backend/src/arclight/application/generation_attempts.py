@@ -117,6 +117,9 @@ def start_attempt(
             MediaCapabilities.model_validate(captured), spec, row.task_type, references
         )
     validate_capabilities(live, spec, row.task_type, references)
+    from arclight.application.generation_budget import check_execution
+
+    check_execution(db, row, spec)
     attempt = GenerationAttempt(
         job_id=row.id,
         attempt_no=row.attempt_count + 1,

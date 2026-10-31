@@ -260,6 +260,16 @@ test("STORY-03：活动任务、归档和只读权限门禁", async ({ page }) =
   });
   expect(runResult.status()).toBe(202);
   const run = await runResult.json();
+  // SQLite cannot serialize cancellation against the Mock worker's in-flight write.
+  await expect
+    .poll(async () => {
+      const result = await page.request.get(`/api/v1/runs/${run.run_id}`, {
+        headers,
+      });
+      expect(result.status()).toBe(200);
+      return (await result.json()).status;
+    })
+    .toBe("WAITING_REVIEW");
   const dialog = await openCopy(page);
   await dialog.getByRole("button", { name: "确认复制", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("请先结束或取消");

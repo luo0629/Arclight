@@ -142,7 +142,8 @@ def consume_dispatch(
                 Status.RETRY_WAIT,
             }:
                 transition(db, job.id, Status.FAILED, job.revision)
-                scheduling.diagnose(db, job, "NOT_RETRYABLE", "INPUT_INVALID")
+                category = "BUDGET_EXCEEDED" if exc.code.startswith("BUDGET_") else "INPUT_INVALID"
+                scheduling.diagnose(db, job, "NOT_RETRYABLE", category)
             return job.status
         event.status = "CLAIMED"
         event.attempt_id = attempt.id
