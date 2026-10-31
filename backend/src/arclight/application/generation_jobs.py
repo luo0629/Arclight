@@ -17,6 +17,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.dependencies import validate_dependency_type
 from arclight.domain.generation_requests import GenerationCreate
 from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
+from arclight.domain.media_capabilities import validate_capabilities
 from arclight.persistence.models import (
     DependencyInvalidation,
     DependencyManifest,
@@ -24,12 +25,18 @@ from arclight.persistence.models import (
     GenerationJob,
     VisualAsset,
 )
+from arclight.providers.media_capabilities import reference_count, resolve_capabilities
 
 
 def request_fingerprint(payload: GenerationCreate) -> str:
+    values = payload.model_dump(mode="json")
+    # Preserve idempotent replays of requests captured before capability options existed.
+    for field, default in (("batch_size", 1), ("require_query", False), ("require_cancel", False)):
+        if values["spec"][field] == default:
+            del values["spec"][field]
     return hashlib.sha256(
         json.dumps(
-            payload.model_dump(mode="json"),
+            values,
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=False,
@@ -110,6 +117,8 @@ def create_job(
                 "checksum": version.checksum,
             }
         )
+    capabilities = resolve_capabilities(payload.spec.provider, payload.spec.model)
+    validate_capabilities(capabilities, payload.spec, payload.task_type, reference_count(inputs))
     manifest = DependencyManifest(
         project_id=project_id,
         target_asset_id=asset.id if asset else None,
@@ -136,6 +145,7 @@ def create_job(
             "context": {
                 "generation": payload.spec.model_dump(mode="json"),
                 "origin": "generation_request",
+                "provider_capabilities": capabilities.model_dump(mode="json"),
             },
         },
     )

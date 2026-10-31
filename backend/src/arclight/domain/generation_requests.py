@@ -71,12 +71,58 @@ class GenerationSpec(MediaInput):
     context: dict[str, JsonValue] = Field(default_factory=dict)
     seed: int | None = Field(default=None, strict=True, ge=0, le=9223372036854775807)
     variation: str | None = Field(default=None, min_length=1, max_length=100)
+    batch_size: int = Field(default=1, strict=True, ge=1, le=64)
+    require_query: bool = Field(default=False, strict=True)
+    require_cancel: bool = Field(default=False, strict=True)
 
     @model_validator(mode="after")
     def bounded_business_snapshot(self):
         safe_metadata(self.model_dump(mode="json"))
         if "seed" in self.parameters or "variation" in self.parameters:
             raise ValueError("随机探索请使用显式seed与variation字段")
+        controlled = {
+            "batchsize",
+            "batch",
+            "n",
+            "numimages",
+            "numoutputs",
+            "seed",
+            "variation",
+            "width",
+            "height",
+            "size",
+            "dimensions",
+            "aspectratio",
+            "requirequery",
+            "requirecancel",
+            "referenceimages",
+            "referenceimage",
+            "references",
+            "referenceasseturis",
+            "imageurls",
+            "images",
+            "image",
+            "durationseconds",
+        }
+        pending: list[JsonValue] = [self.parameters]
+        while pending:
+            value = pending.pop()
+            if isinstance(value, dict):
+                if any(re.sub(r"[^a-z0-9]", "", key.lower()) in controlled for key in value):
+                    raise ValueError("Use explicit capability fields and exact input versions")
+                pending.extend(value.values())
+            elif isinstance(value, list):
+                pending.extend(value)
+        if set(self.output_spec) - {
+            "width",
+            "height",
+            "format",
+            "duration_seconds",
+            "fps",
+            "sample_rate",
+            "channels",
+        }:
+            raise ValueError("Output specifications contain unsupported capability fields")
         if any(
             not value.strip()
             for value in (

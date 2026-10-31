@@ -7,6 +7,8 @@ from typing import Literal, Protocol
 from pydantic import Field, model_validator
 
 from arclight.domain.generation_requests import GenerationResult, MediaErrorCode, MediaInput
+from arclight.domain.media_capabilities import MediaCapabilities
+from arclight.providers.media_capabilities import MOCK_CAPABILITIES
 
 
 @dataclass(frozen=True)
@@ -59,10 +61,14 @@ class ProviderQueryError(Exception):
 
 
 class MediaQueryProvider(Protocol):
+    capabilities: MediaCapabilities
+
     def query(self, lookup: ProviderLookup) -> QueryReceipt: ...
 
 
 class MockMediaQueryProvider:
+    capabilities = MOCK_CAPABILITIES
+
     def query(self, lookup: ProviderLookup) -> QueryReceipt:
         # Mock generation has no external durable query service.
         return QueryReceipt(status="UNSUPPORTED")

@@ -22,6 +22,7 @@ from arclight.persistence.generation import (
     GenerationReconciliation,
 )
 from arclight.persistence.models import ProjectMember
+from arclight.providers.media_capabilities import MOCK_CAPABILITIES
 from arclight.providers.media_query import (
     ProviderQueryError,
     QueryReceipt,
@@ -30,6 +31,10 @@ from arclight.providers.media_query import (
 
 
 class QueryFake:
+    capabilities = MOCK_CAPABILITIES.model_copy(
+        update={"supports_query": True, "execution_mode": "BOTH"}
+    )
+
     def __init__(self, receipt=None, action=None):
         self.receipt = receipt or QueryReceipt(status="UNKNOWN")
         self.action = action

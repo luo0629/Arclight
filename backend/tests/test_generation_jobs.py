@@ -93,7 +93,13 @@ def test_generic_jobs_freeze_complete_inputs_without_placeholder_assets(client, 
     with client.app.state.session_factory() as db:
         manifest = db.get(DependencyManifest, UUID(row["input_manifest_id"]))
         spec = manifest.snapshot_json["context"]["generation"]
-        assert spec == body["spec"] | {"schema_version": 1, "provider": "mock"}
+        assert spec == body["spec"] | {
+            "schema_version": 1,
+            "provider": "mock",
+            "batch_size": 1,
+            "require_query": False,
+            "require_cancel": False,
+        }
         assert manifest.target_asset_id == (UUID(target["id"]) if target else None)
         assert manifest.snapshot_json["target"]["expected_asset"] == body.get("expected_asset")
         assert db.scalar(select(func.count()).select_from(GenerationAttempt)) == 0

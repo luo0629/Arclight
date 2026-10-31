@@ -110,6 +110,15 @@ def reconcile(
         )
         if attempt is None or attempt.finished_at is not None:
             raise DomainError("ATTEMPT_CONFLICT", "缺少未完成的当前尝试", 409)
+        requested_batch = attempt.input_snapshot_json["context"]["generation"].get("batch_size", 1)
+        if (
+            manual is not None
+            and manual.receipt.result is not None
+            and len(manual.receipt.result.output_handles) != requested_batch
+        ):
+            raise DomainError(
+                "INVALID_ATTEMPT_OUTCOME", "Manual result does not match requested batch", 422
+            )
         schedule = scheduling.schedule_for(db, job)
         if lease_token is not None and leases.clock(db) >= leases.utc(schedule.deadline_at):
             if job.status != Status.RECONCILING:
@@ -126,10 +135,15 @@ def reconcile(
             timeout = min(
                 timeout, (leases.utc(schedule.deadline_at) - leases.clock(db)).total_seconds()
             )
+        query_supported = (
+            provider.capabilities.provider == attempt.provider
+            and provider.capabilities.supports_query
+        )
         if manual is None and attempt.provider_request_id:
-            if not scheduling.admit(db, job, execution_policy, "QUERY"):
-                return job
-            query_call_id = scheduling.reserve(db, job, attempt.id, "QUERY").id
+            if query_supported:
+                if not scheduling.admit(db, job, execution_policy, "QUERY"):
+                    return job
+                query_call_id = scheduling.reserve(db, job, attempt.id, "QUERY").id
             cancelled_before = db.scalar(
                 select(scheduling.GenerationCall.id).where(
                     scheduling.GenerationCall.attempt_id == attempt.id,
@@ -139,6 +153,8 @@ def reconcile(
             if (
                 job.cancel_requested_at is not None
                 and cancel_provider is not None
+                and cancel_provider.capabilities.provider == attempt.provider
+                and cancel_provider.capabilities.supports_cancel
                 and cancelled_before is None
                 and scheduling.admit(db, job, execution_policy, "CANCEL")
             ):
@@ -188,13 +204,15 @@ def reconcile(
         receipt = QueryReceipt(status="CANCELLED")
     elif manual is not None:
         receipt = manual.receipt
-    elif lookup is None:
+    elif lookup is None or not query_supported:
         receipt = QueryReceipt(status="UNSUPPORTED")
     else:
         try:
             receipt = QueryReceipt.model_validate(
                 bounded_call(lambda: provider.query(lookup), io_deadline - monotonic())
             )
+            if receipt.result is not None and len(receipt.result.output_handles) != requested_batch:
+                receipt = QueryReceipt(status="INVALID_RESPONSE")
         except (TimeoutError, ConnectionError, ProviderQueryError):
             receipt = QueryReceipt(status="QUERY_FAILED")
         except ValidationError:

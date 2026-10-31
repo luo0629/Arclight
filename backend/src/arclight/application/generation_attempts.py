@@ -18,6 +18,7 @@ from arclight.application.generation_targets import require_available_target
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec, MediaErrorCode
+from arclight.domain.media_capabilities import MediaCapabilities, validate_capabilities
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import (
     DependencyManifest,
@@ -27,6 +28,7 @@ from arclight.persistence.models import (
     Project,
     VisualAsset,
 )
+from arclight.providers.media_capabilities import reference_count, resolve_capabilities
 
 
 def require_writable_target(db: Session, job: GenerationJob) -> None:
@@ -58,7 +60,13 @@ def require_writable_target(db: Session, job: GenerationJob) -> None:
         require_available_target(db, asset.id, exclude_job_id=job.id)
 
 
-def start_attempt(db: Session, job_id: UUID, expected_revision: int) -> GenerationAttempt:
+def start_attempt(
+    db: Session,
+    job_id: UUID,
+    expected_revision: int,
+    *,
+    capabilities: MediaCapabilities | None = None,
+) -> GenerationAttempt:
     row = find_job(db, job_id, lock=True)
     check_revision(row, expected_revision)
     require_writable_target(db, row)
@@ -98,6 +106,14 @@ def start_attempt(db: Session, job_id: UUID, expected_revision: int) -> Generati
         matches = False
     if not matches:
         raise DomainError("INVALID_GENERATION_INPUT", "媒体任务缺少匹配的冻结输入", 409)
+    live = capabilities or resolve_capabilities(row.provider, row.model)
+    references = reference_count(snapshot["inputs"])
+    captured = snapshot["context"].get("provider_capabilities")
+    if captured is not None:
+        validate_capabilities(
+            MediaCapabilities.model_validate(captured), spec, row.task_type, references
+        )
+    validate_capabilities(live, spec, row.task_type, references)
     attempt = GenerationAttempt(
         job_id=row.id,
         attempt_no=row.attempt_count + 1,
@@ -209,6 +225,11 @@ def finish_attempt(
     attempt = current_attempt(db, job, attempt_id)
     if attempt.finished_at is not None:
         raise DomainError("ATTEMPT_FINISHED", "历史尝试不能覆盖", 409)
+    captured_spec = attempt.input_snapshot_json.get("context", {}).get("generation", {})
+    if result is not None and len(result.output_handles) != captured_spec.get("batch_size", 1):
+        raise DomainError(
+            "INVALID_ATTEMPT_OUTCOME", "Result does not match requested batch size", 422
+        )
     set_provider_request(job, attempt, request_id)
     transition(db, job.id, status, job.revision)
     attempt.status = status

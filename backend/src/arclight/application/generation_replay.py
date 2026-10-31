@@ -85,6 +85,7 @@ def replay_job(
                 {
                     "source_asset_version_id": item["source_asset_version_id"],
                     "dependency_type": item["dependency_type"],
+                    "selectors": item.get("selectors", []),
                 }
                 for item in snapshot["inputs"]
             ],

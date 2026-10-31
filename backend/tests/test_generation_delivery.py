@@ -35,6 +35,7 @@ from arclight.persistence.models import (
     GenerationJob,
     ProjectMember,
 )
+from arclight.providers.media_capabilities import MOCK_CAPABILITIES
 from arclight.providers.media_query import QueryReceipt
 from arclight.providers.media_submission import SubmissionReceipt, SubmissionUncertain
 
@@ -44,6 +45,14 @@ class Provider:
 
     def __init__(self, *, supports=True, receipt=None, action=None):
         self.supports_idempotency = supports
+        self.capabilities = MOCK_CAPABILITIES.model_copy(
+            update={
+                "supports_idempotency": supports,
+                "supports_query": True,
+                "supports_cancel": True,
+                "execution_mode": "BOTH",
+            }
+        )
         self.receipt = receipt or SubmissionReceipt(
             status="SUCCEEDED", result=GenerationResult(output_handles=["fake/image/1"])
         )

@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import Field, field_validator
 from sqlalchemy import select
 
@@ -22,6 +22,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.generation import STATUS_LABELS, GenerationStatus
 from arclight.domain.generation_requests import GenerationCreate
 from arclight.domain.generation_scheduling import ERROR_CATEGORIES
+from arclight.domain.media_capabilities import MediaCapabilities
 from arclight.persistence.generation import (
     GenerationDispatch,
     GenerationLease,
@@ -34,6 +35,7 @@ from arclight.persistence.generation_scheduling import (
     GenerationSchedule,
 )
 from arclight.persistence.models import GenerationAttempt, GenerationJob
+from arclight.providers.media_capabilities import resolve_capabilities
 from arclight.providers.media_query import MediaQueryProvider, get_media_query_provider
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/generation-jobs", tags=["generation"])
@@ -153,6 +155,18 @@ def list_jobs(
         .offset(offset)
     )
     return [read_job(row) for row in rows]
+
+
+@router.get("/providers/{provider}/capabilities")
+def get_capabilities(
+    project_id: UUID,
+    provider: str,
+    db: Database,
+    actor: Actor,
+    model: Annotated[str, Query(min_length=1, max_length=160)] = "mock-image-v1",
+) -> MediaCapabilities:
+    require_project(db, project_id, actor)
+    return resolve_capabilities(provider, model)
 
 
 @router.get("/{job_id}")

@@ -275,6 +275,8 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 
 任务的 `schedule`、`calls`、`dead-letter` 和 `replays` 只读子接口沿用项目权限；死信保留安全错误分类和边界。Owner 可对已诊断的明确失败使用 `POST .../generation-jobs/{job_id}/replay`，提交 `expected_revision`、`reason` 和新 `Idempotency-Key`，另建关联原任务／死信的新任务并复验原精确输入和目标 CAS。未知执行不得直接重放。迁移 `0034` 保护调度策略、调用事实、死信及重放关联，有历史时拒绝降级。目前仅有 Mock 媒体 Provider，真实服务、预算预留及结算由后续任务接入。
 
+`GET .../generation-jobs/providers/{provider}/capabilities?model=...` 按项目权限返回已安装 Provider 的版本化能力：参考图数、seed／上限、尺寸／像素／倍数／固定尺寸和画幅、批量上限、查询、取消、幂等及同步／异步方式。创建任务冻结该声明，调用前同时复验冻结声明与当前适配器；旧任务只校验当前能力，不补写历史。`spec.batch_size` 默认1，`spec.require_query`／`spec.require_cancel` 默认false；明确要求不支持能力时拒绝创建。尺寸放在 `output_spec.width`／`height`，参考图只能来自精确输入版本，不能通过参数别名绕过校验。批量成功必须返回对应数量的结果；数量不符按未知／人工处理，不盲目重发。Mock 只模拟规范化结果（最多8项），明确不支持持久查询及取消，不代表真实图片质量或外部服务验收。
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。

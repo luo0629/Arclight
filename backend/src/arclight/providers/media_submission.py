@@ -8,6 +8,8 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from arclight.domain.generation_requests import GenerationResult, MediaErrorCode, MediaInput
+from arclight.domain.media_capabilities import MediaCapabilities
+from arclight.providers.media_capabilities import MOCK_CAPABILITIES
 
 
 @dataclass(frozen=True)
@@ -57,6 +59,7 @@ class SubmissionUncertain(Exception):
 class MediaSubmissionProvider(Protocol):
     name: str
     supports_idempotency: bool
+    capabilities: MediaCapabilities
 
     def submit(self, request: MediaSubmission) -> SubmissionReceipt: ...
 
@@ -64,13 +67,21 @@ class MediaSubmissionProvider(Protocol):
 class MockMediaSubmissionProvider:
     name = "mock"
     supports_idempotency = True
+    capabilities = MOCK_CAPABILITIES
 
     def submit(self, request: MediaSubmission) -> SubmissionReceipt:
         # A normalized Mock receipt, not a registered/approved file or current version.
         return SubmissionReceipt(
             status="SUCCEEDED",
             request_id=f"mock:{request.attempt_id}",
-            result=GenerationResult(output_handles=[f"mock/image/{request.attempt_id}"]),
+            result=GenerationResult(
+                output_handles=[
+                    f"mock/image/{request.attempt_id}/{index}"
+                    for index in range(
+                        request.snapshot["context"]["generation"].get("batch_size", 1)
+                    )
+                ]
+            ),
         )
 
 

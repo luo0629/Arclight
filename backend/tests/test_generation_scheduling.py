@@ -36,6 +36,7 @@ from arclight.persistence.generation_scheduling import (
 )
 from arclight.persistence.models import ProjectMember
 from arclight.providers.media_cancel import CancellationReceipt
+from arclight.providers.media_capabilities import MOCK_CAPABILITIES
 from arclight.providers.media_io import bounded_call
 from arclight.providers.media_query import QueryReceipt
 from arclight.providers.media_submission import SubmissionReceipt
@@ -357,6 +358,7 @@ def test_best_effort_cancel_needs_authoritative_confirmation(
     expire(client.app.state.session_factory, job)
 
     class Canceller:
+        capabilities = MOCK_CAPABILITIES.model_copy(update={"supports_cancel": True})
         calls = 0
 
         def cancel(self, lookup):
@@ -642,6 +644,8 @@ def test_cancel_can_lose_to_authoritative_success(client, episode):
     expire(client.app.state.session_factory, job)
 
     class Canceller:
+        capabilities = MOCK_CAPABILITIES.model_copy(update={"supports_cancel": True})
+
         def cancel(self, _):
             return CancellationReceipt(status="REQUESTED")
 

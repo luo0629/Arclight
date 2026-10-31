@@ -126,7 +126,13 @@ def consume_dispatch(
         try:
             if provider.name != job.provider:
                 raise DomainError("GENERATION_PROVIDER_MISMATCH", "供应商不匹配冻结输入", 409)
-            attempt = start_attempt(db, job.id, event.expected_revision)
+            if provider.capabilities.supports_idempotency != provider.supports_idempotency:
+                raise DomainError(
+                    "PROVIDER_CAPABILITY_CONFLICT", "Adapter idempotency declaration conflicts", 409
+                )
+            attempt = start_attempt(
+                db, job.id, event.expected_revision, capabilities=provider.capabilities
+            )
         except DomainError as exc:
             event.status = "SKIPPED"
             event.finished_at = utcnow()
@@ -170,6 +176,15 @@ def consume_dispatch(
         try:
             raw = bounded_call(lambda: provider.submit(request), timeout)
             receipt = SubmissionReceipt.model_validate(raw.model_dump(mode="json"))
+            if receipt.result is not None and len(
+                receipt.result.output_handles
+            ) != request.snapshot["context"]["generation"].get("batch_size", 1):
+                raise SubmissionUncertain("Provider returned an inconsistent batch")
+            if (
+                receipt.status in {"SUBMITTED", "RUNNING"}
+                and provider.capabilities.execution_mode == "SYNC"
+            ):
+                raise SubmissionUncertain("Synchronous adapter returned an asynchronous execution")
         except (TimeoutError, ConnectionError, SubmissionUncertain, ValidationError):
             receipt = SubmissionReceipt(status="RESULT_UNKNOWN", error_code="RESULT_UNKNOWN")
 
