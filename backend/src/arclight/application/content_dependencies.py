@@ -96,6 +96,10 @@ def register_content(db: Session, row: Script | Storyboard, actor: str) -> Asset
     db.flush()
     if manifest:
         attach_output(db, episode.project_id, manifest.id, registry)
+    if row.run_id is not None:
+        from arclight.application.production_versions import bind_output
+
+        bind_output(db, episode.project_id, "WORKFLOW", row.run_id, kind, row.id)
     return registry
 
 

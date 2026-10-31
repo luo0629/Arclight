@@ -106,6 +106,9 @@ def start_attempt(
         matches = False
     if not matches:
         raise DomainError("INVALID_GENERATION_INPUT", "媒体任务缺少匹配的冻结输入", 409)
+    from arclight.application.production_versions import bind_output, check_media
+
+    check_media(db, row.project_id, row.id, manifest.id)
     live = capabilities or resolve_capabilities(row.provider, row.model)
     references = reference_count(snapshot["inputs"])
     captured = snapshot["context"].get("provider_capabilities")
@@ -129,6 +132,7 @@ def start_attempt(
     row.provider_request_id = None
     db.add(attempt)
     db.flush()
+    bind_output(db, row.project_id, "GENERATION", row.id, "ATTEMPT", attempt.id)
     audit(
         db,
         row.project_id,
@@ -239,6 +243,10 @@ def finish_attempt(
     attempt.cost = cost
     attempt.finished_at = utcnow()
     db.flush()
+    if result is not None:
+        from arclight.application.production_versions import bind_output
+
+        bind_output(db, job.project_id, "ATTEMPT", attempt.id, "RESULT", attempt.id)
     release_generation(db, job)
     audit(
         db,

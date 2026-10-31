@@ -169,6 +169,9 @@ def create_job(
     )
     db.add(job)
     db.flush()
+    from arclight.application.production_versions import capture_media
+
+    capture_media(db, project_id, job.id, manifest.id, payload.task_type, payload.spec, inputs)
     schedule_for(db, job, execution_policy)
     enqueue_dispatch(db, job)
     audit(

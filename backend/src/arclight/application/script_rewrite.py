@@ -101,6 +101,9 @@ def start_rewrite(
     )
     db.add(run)
     db.flush()
+    from arclight.application.production_versions import capture_text
+
+    capture_text(db, episode.project_id, run, settings)
     db.add(
         AuditEvent(
             project_id=episode.project_id,

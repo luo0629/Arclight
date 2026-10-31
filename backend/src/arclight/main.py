@@ -23,6 +23,7 @@ from arclight.api.file_transfers import router as file_transfers_router
 from arclight.api.files import router as files_router
 from arclight.api.generation import router as generation_router
 from arclight.api.model_services import router as model_services_router
+from arclight.api.production_versions import router as production_versions_router
 from arclight.api.project_deletion import router as project_deletion_router
 from arclight.api.project_overview import router as project_overview_router
 from arclight.api.protection import RequestProtection
@@ -144,6 +145,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(assets_router)
     app.include_router(files_router)
     app.include_router(generation_router)
+    app.include_router(production_versions_router)
     app.include_router(rights_router)
     app.include_router(storage_cleanup_router)
     app.include_router(render_previews_router)

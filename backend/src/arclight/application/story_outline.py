@@ -146,6 +146,9 @@ def start_outline(
     )
     db.add(run)
     db.flush()
+    from arclight.application.production_versions import capture_text
+
+    capture_text(db, episode.project_id, run, settings)
     bind_source(db, run, source.id)
     db.add(
         AuditEvent(
@@ -198,6 +201,9 @@ def generate_outline(
         )
         db.add(row)
         db.flush()
+        from arclight.application.production_versions import bind_output
+
+        bind_output(db, project_id, "WORKFLOW", run.id, "OUTLINE", row.id)
         return str(row.id), row.version_no
 
 

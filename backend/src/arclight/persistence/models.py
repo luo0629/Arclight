@@ -20,6 +20,8 @@ from arclight.persistence.generation import GenerationAttempt as GenerationAttem
 from arclight.persistence.generation import GenerationJob as GenerationJob
 from arclight.persistence.generation_scheduling import GenerationSchedule as GenerationSchedule
 from arclight.persistence.rendering import RenderExecution as RenderExecution
+from arclight.persistence.versions import ProductionVersion as ProductionVersion
+from arclight.persistence.versions import VersionBinding as VersionBinding
 
 
 class Project(Entity, Base):

@@ -104,6 +104,9 @@ def start_analysis(
     )
     db.add(run)
     db.flush()
+    from arclight.application.production_versions import capture_text
+
+    capture_text(db, episode.project_id, run, settings)
     bind_source(db, run, source.id)
     db.add(
         AuditEvent(
@@ -152,4 +155,9 @@ def extract(factory: sessionmaker, settings: Settings, run: WorkflowRun) -> tupl
         )
         db.add(row)
         db.flush()
+        from arclight.application.production_versions import bind_output
+
+        bind_output(
+            db, db.get(Episode, run.episode_id).project_id, "WORKFLOW", run.id, "ANALYSIS", row.id
+        )
         return str(row.id), version

@@ -8,13 +8,14 @@ from sqlalchemy.orm import sessionmaker
 from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
 from arclight.application.model_services import run_settings
+from arclight.application.production_versions import text_settings
 from arclight.application.script_rewrite import generate_rewrite
 from arclight.application.story_analysis import ANALYSIS_VERSION, extract
 from arclight.application.story_outline import OUTLINE_VERSION, generate_outline
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
-from arclight.persistence.models import WorkflowRun
+from arclight.persistence.models import Episode, WorkflowRun
 from arclight.providers.text import build_provider
 from arclight.workflows.checkpoints import open_checkpointer
 from arclight.workflows.production import DIRECTOR_WORKFLOW_VERSION, WORKFLOW_VERSION, build_graph
@@ -33,6 +34,9 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
         if run is None or run.status != RunStatus.QUEUED or run.revision != revision:
             return
         try:
+            episode = db.get(Episode, run.episode_id)
+            assert episode is not None
+            settings = text_settings(db, episode.project_id, run, settings)
             if run.workflow_type in {"story_analysis", "story_outline"}:
                 expected_version = (
                     ANALYSIS_VERSION if run.workflow_type == "story_analysis" else OUTLINE_VERSION
@@ -98,7 +102,7 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                 snapshot = graph.get_state(config)
                 value: dict | Command | None = None
                 if not snapshot.values:
-                    inputs = {k: v for k, v in run.input_json.items() if k != "_text_service"}
+                    inputs = {k: v for k, v in run.input_json.items() if not k.startswith("_")}
                     value = {"run_id": str(run.id), **inputs}
                 elif snapshot.interrupts and run.resume_json:
                     pending = snapshot.interrupts[0].value
@@ -134,6 +138,7 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                 if isinstance(exc, DomainError)
                 and exc.code
                 in {
+                    "PRODUCTION_VERSION_INCOMPATIBLE",
                     "SCRIPT_DURATION_REQUIRED",
                     "SCRIPT_DURATION_OUT_OF_RANGE",
                     "STORYBOARD_DURATION_OUT_OF_RANGE",

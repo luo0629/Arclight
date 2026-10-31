@@ -102,6 +102,31 @@ def historical_content_registry(request, monkeypatch):
 
         return seeded
 
+    from arclight.application import production_versions
+
+    def current_versions(function):
+        def wrapped(db, *args, **kwargs):
+            if inspect(db.get_bind()).has_table("production_versions"):
+                return function(db, *args, **kwargs)
+            return None
+
+        return wrapped
+
+    for name in ("capture_text", "capture_media", "bind_output"):
+        monkeypatch.setattr(
+            production_versions, name, current_versions(getattr(production_versions, name))
+        )
+    from arclight.application import runtime
+
+    original_settings = runtime.text_settings
+
+    def legacy_settings(db, project_id, run, settings):
+        if inspect(db.get_bind()).has_table("production_versions"):
+            return original_settings(db, project_id, run, settings)
+        return settings
+
+    monkeypatch.setattr(runtime, "text_settings", legacy_settings)
+
     original_record = asset_versions.record_asset_file
 
     def record_on_current_schema(db, *args, **kwargs):
