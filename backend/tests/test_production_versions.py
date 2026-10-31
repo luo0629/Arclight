@@ -12,6 +12,7 @@ from test_collaboration import register
 from test_generation_delivery import Provider, deliver
 from test_generation_jobs import capture_ok
 
+from arclight.api.production_versions import VersionRead
 from arclight.application import production_versions as versions
 from arclight.application.production_versions import bind, capture_text, text_settings
 from arclight.core.errors import DomainError
@@ -90,6 +91,24 @@ def test_text_run_and_both_artifacts_bind_actual_templates_schemas_and_parameter
     assert state["status"] == "WAITING_REVIEW", state
     assert bindings(client, episode, state["pending_review"]["version_id"], "STORYBOARD")
     assert bindings(client, episode, run_id)[0]["snapshot_json"] == initial
+
+
+@pytest.mark.parametrize("timezone", ["Asia/Shanghai", "America/New_York"])
+def test_postgres_session_timezone_does_not_change_version_receipt(client, episode, timezone):
+    body = {
+        "family": "TEXT",
+        "kind": "AGENT",
+        "name": "timezone-fixture",
+        "version": "1",
+        "definition": {"source": "contract-fixture"},
+    }
+    entry = client.post(url(episode), json=body).json()
+    with client.app.state.session_factory.begin() as db:
+        if db.get_bind().dialect.name != "postgresql":
+            pytest.skip("Requires PostgreSQL timestamp with timezone semantics")
+        db.execute(text("SELECT set_config('TimeZone', :zone, true)"), {"zone": timezone})
+        row = db.get(ProductionVersion, UUID(entry["id"]))
+        assert VersionRead.model_validate(row).model_dump(mode="json") == entry
 
 
 @pytest.mark.parametrize(

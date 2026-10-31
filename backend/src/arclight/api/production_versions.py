@@ -26,7 +26,7 @@ class VersionResource(Resource):
     @field_validator("created_at", "updated_at")
     @classmethod
     def utc_timestamps(cls, value: datetime) -> datetime:
-        return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 class VersionRead(VersionResource):
