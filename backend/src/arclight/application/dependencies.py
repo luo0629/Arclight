@@ -170,9 +170,22 @@ def attach_output(
     lock_dependency_graph(db, project_id)
     manifest = require_manifest(db, project_id, manifest_id)
     output, target = exact_version(db, project_id, output.id)
-    if manifest.target_asset_id != output.asset_id or output.metadata_json.get(
-        "dependency_manifest_id"
-    ) != str(manifest.id):
+    matches_target = manifest.target_asset_id == output.asset_id
+    if manifest.target_asset_id is None and output.metadata_json.get("generation_job_id"):
+        from uuid import uuid5
+
+        from arclight.persistence.models import GenerationJob
+
+        job = db.get(GenerationJob, UUID(output.metadata_json["generation_job_id"]))
+        matches_target = bool(
+            job is not None
+            and job.project_id == project_id
+            and job.input_manifest_id == manifest.id
+            and job.target_asset_id is None
+            and job.target_type == target.asset_type
+            and output.asset_id == uuid5(job.id, "candidate-asset")
+        )
+    if not matches_target or output.metadata_json.get("dependency_manifest_id") != str(manifest.id):
         raise DomainError("INVALID_DEPENDENCY_OUTPUT", "产物必须在创建时固定其原始输入清单", 409)
     receipt = db.scalar(
         select(DependencyOutput).where(DependencyOutput.asset_version_id == output.id)

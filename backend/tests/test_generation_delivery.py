@@ -343,6 +343,10 @@ def test_outbox_republishes_until_claim_and_worker_duplicate_is_safe(
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     job = capture_ok(client, episode["project_id"])
     messages = []
+    imports = []
+    monkeypatch.setattr(
+        tasks.import_generation_candidates, "apply_async", lambda *, args: imports.append(args)
+    )
     monkeypatch.setattr(
         tasks.execute_generation, "apply_async", lambda *, args: messages.append(args)
     )
@@ -356,6 +360,7 @@ def test_outbox_republishes_until_claim_and_worker_duplicate_is_safe(
     assert tasks.execute_generation(*messages[1]) == "SUCCEEDED"
     tasks.dispatch_outbox()
     assert len(messages) == 2 and len(provider.requests) == 1
+    assert imports == [[str(provider.requests[0].attempt_id)]]
 
 
 def test_broker_failure_leaves_durable_ready_event(client, episode):

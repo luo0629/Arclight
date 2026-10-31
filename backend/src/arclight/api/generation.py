@@ -41,6 +41,12 @@ from arclight.providers.media_query import MediaQueryProvider, get_media_query_p
 router = APIRouter(prefix="/api/v1/projects/{project_id}/generation-jobs", tags=["generation"])
 
 
+def utc_timestamp(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
 class GenerationRead(Resource):
     project_id: UUID
     episode_id: UUID | None
@@ -64,7 +70,7 @@ class GenerationRead(Resource):
     @field_validator("created_at", "updated_at", "cancel_requested_at")
     @classmethod
     def utc_timestamps(cls, value: datetime | None) -> datetime | None:
-        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+        return utc_timestamp(value)
 
 
 class GenerationCancel(Input):
@@ -98,7 +104,7 @@ class AttemptRead(Resource):
     @field_validator("created_at", "updated_at", "submitted_at", "finished_at")
     @classmethod
     def utc_timestamps(cls, value: datetime | None) -> datetime | None:
-        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+        return utc_timestamp(value)
 
 
 def read_job(row: GenerationJob) -> GenerationRead:
@@ -249,7 +255,7 @@ class ReconciliationRead(Resource):
     @field_validator("created_at", "updated_at", "finished_at")
     @classmethod
     def utc_timestamps(cls, value: datetime | None) -> datetime | None:
-        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+        return utc_timestamp(value)
 
 
 class DispatchRead(Resource):
@@ -266,7 +272,7 @@ class DispatchRead(Resource):
     @field_validator("created_at", "updated_at", "finished_at")
     @classmethod
     def utc_timestamps(cls, value: datetime | None) -> datetime | None:
-        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+        return utc_timestamp(value)
 
 
 class ExecutionRead(Resource):
@@ -280,7 +286,7 @@ class ExecutionRead(Resource):
     @field_validator("created_at", "updated_at", "heartbeat_at", "expires_at", "released_at")
     @classmethod
     def utc_timestamps(cls, value: datetime | None) -> datetime | None:
-        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+        return utc_timestamp(value)
 
 
 @router.get("/{job_id}/execution")
@@ -390,8 +396,8 @@ class SchedulingRead(Resource):
     @field_validator("*", mode="after")
     @classmethod
     def utc_values(cls, value):
-        if isinstance(value, datetime) and value.tzinfo is None:
-            return value.replace(tzinfo=UTC)
+        if isinstance(value, datetime):
+            return utc_timestamp(value)
         return value
 
 

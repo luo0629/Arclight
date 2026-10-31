@@ -2,6 +2,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from arclight.application.generation_candidates import import_attempt, pending_attempts
 from arclight.application.generation_delivery import consume_dispatch
 from arclight.application.generation_events import publish_dispatches
 from arclight.application.generation_leases import LeasePolicy
@@ -14,6 +15,7 @@ from arclight.persistence.base import utcnow
 from arclight.persistence.models import OutboxEvent, RenderExecution, WorkflowRun
 from arclight.persistence.session import build_engine, session_factory
 from arclight.providers.media_cancel import get_media_cancel_provider
+from arclight.providers.media_outputs import get_media_output_provider
 from arclight.providers.media_query import get_media_query_provider
 from arclight.providers.media_submission import get_media_submission_provider
 from arclight.workers.celery_app import celery_app
@@ -83,6 +85,18 @@ def publish_generation(job_id: UUID, event_id: UUID) -> None:
     execute_generation.apply_async(args=[str(job_id), str(event_id)])
 
 
+@celery_app.task(name="arclight.import_generation_candidates")
+def import_generation_candidates(attempt_id: str) -> int:
+    settings = get_settings()
+    engine = build_engine(settings)
+    try:
+        return import_attempt(
+            session_factory(engine), settings, UUID(attempt_id), get_media_output_provider()
+        )
+    finally:
+        engine.dispose()
+
+
 @celery_app.task(name="arclight.dispatch_outbox")
 def dispatch_outbox() -> None:
     settings = get_settings()
@@ -107,6 +121,8 @@ def dispatch_outbox() -> None:
                 event.published_at = utcnow()
                 event.attempt_count += 1
         publish_dispatches(session_factory(engine), publish_generation)
+        for attempt_id in pending_attempts(session_factory(engine)):
+            import_generation_candidates.apply_async(args=[str(attempt_id)])
         for job_id in recovery_candidates(session_factory(engine), media_lease_policy(settings)):
             recover_generation.apply_async(args=[str(job_id)])
         with session_factory(engine)() as db:

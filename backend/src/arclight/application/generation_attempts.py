@@ -245,8 +245,16 @@ def finish_attempt(
     db.flush()
     if result is not None:
         from arclight.application.production_versions import bind_output
+        from arclight.persistence.generation_candidates import GenerationImageImport
 
         bind_output(db, job.project_id, "ATTEMPT", attempt.id, "RESULT", attempt.id)
+        if job.task_type == "IMAGE":
+            db.add(
+                GenerationImageImport(
+                    attempt_id=attempt.id, output_count=len(result.output_handles)
+                )
+            )
+            db.flush()
     release_generation(db, job)
     audit(
         db,

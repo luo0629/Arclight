@@ -25,6 +25,7 @@ from arclight.application.dependency_rebuild import (
     rebuild_manifest,
 )
 from arclight.application.files import record_asset_file
+from arclight.application.generation_candidates import require_candidate_review
 from arclight.application.invalidation import check_impact, invalidate
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
@@ -77,6 +78,7 @@ class VersionRead(Resource):
     restoration_note: str | None = None
     provenance: dict | None = None
     dependency_manifest_id: UUID | None = None
+    required_review: str | None = None
 
 
 def read_version(row: AssetVersion) -> VersionRead:
@@ -102,6 +104,7 @@ def read_version(row: AssetVersion) -> VersionRead:
         restoration_note=row.metadata_json.get("restoration_note"),
         provenance=row.metadata_json.get("provenance") if local else None,
         dependency_manifest_id=row.metadata_json.get("dependency_manifest_id"),
+        required_review=row.metadata_json.get("required_review"),
     )
 
 
@@ -350,6 +353,7 @@ def select_version(
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
+    require_candidate_review(row)
     if row.status != "APPROVED" or row.stale:
         raise DomainError("ASSET_NOT_USABLE", "只能选用已批准且有效的精确版本", 409)
     read_object(
@@ -450,6 +454,7 @@ def change_lock(
         raise DomainError("ASSET_SELECTION_CONFLICT", "只能锁定或解锁当前选用的精确版本", 409)
     before = asset.status
     if locked:
+        require_candidate_review(version)
         if (
             before == "LOCKED"
             or record is not None
@@ -603,6 +608,7 @@ def restore_version_as_new(
             "media": dict(source.metadata_json["media"]),
             "restored_from_version_id": str(source.id),
             "restoration_note": payload.comment,
+            "required_review": source.metadata_json.get("required_review"),
             "provenance": source.metadata_json.get("provenance"),
             "dependency_manifest_id": str(payload.dependency_manifest_id)
             if payload.dependency_manifest_id
@@ -665,6 +671,7 @@ def update_version_state(
     if payload.status in {"REJECTED", "STALE"} and not payload.comment:
         raise DomainError("REVIEW_COMMENT_REQUIRED", "拒绝或标记失效必须说明原因", 422)
     if target in {"READY_FOR_REVIEW", "APPROVED"}:
+        require_candidate_review(row)
         if row.creation_key is None or row.metadata_json.get("storage_backend") not in {
             "LOCAL",
             "S3",
