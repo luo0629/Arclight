@@ -76,10 +76,16 @@ def main():
         factory.kw["bind"].dispose()
         if test_s3:
             store = ObjectStorage(settings)
-            paginator = store.client.get_paginator("list_objects_v2")
-            for batch in paginator.paginate(Bucket=settings.s3_bucket):
-                for item in batch.get("Contents", []):
-                    store.delete(item["Key"])
+            assert settings.environment == "test" and settings.s3_bucket.startswith(
+                "arclight-test-e2e-"
+            )
+            for batch in store.client.get_paginator("list_object_versions").paginate(
+                Bucket=settings.s3_bucket
+            ):
+                for item in batch.get("Versions", []) + batch.get("DeleteMarkers", []):
+                    store.client.delete_object(
+                        Bucket=settings.s3_bucket, Key=item["Key"], VersionId=item["VersionId"]
+                    )
             store.client.delete_bucket(Bucket=settings.s3_bucket)
 
 

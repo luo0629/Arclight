@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+from storage_helpers import clear_test_bucket
 
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -31,10 +32,7 @@ def storage(request, tmp_path):
     store = ObjectStorage(settings)
     yield store
     if store.client is not None:
-        contents = store.client.list_objects_v2(Bucket=settings.s3_bucket).get("Contents", [])
-        for entry in contents:
-            store.delete(entry["Key"])
-        store.client.delete_bucket(Bucket=settings.s3_bucket)
+        clear_test_bucket(store)
 
 
 def test_private_roundtrip_immutable_and_integrity(storage):
@@ -72,6 +70,7 @@ def test_s3_rejects_unsafe_configuration(url):
     with pytest.raises(ValidationError):
         Settings(
             _env_file=None,
+            environment="test",
             object_storage_backend="s3",
             s3_endpoint_url=url,
             s3_access_key="test",

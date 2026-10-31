@@ -16,12 +16,19 @@ from arclight.persistence.models import (
     CleanupItem,
     CleanupPlan,
     Project,
+    RenderExecution,
     StoredFile,
     StorySource,
     UploadIntent,
     WorkflowRun,
 )
-from arclight.storage.cleanup import Snapshot, delete_snapshot, identity, list_page
+from arclight.storage.cleanup import (
+    Snapshot,
+    delete_snapshot,
+    identity,
+    list_page,
+    recover_local_snapshot,
+)
 from arclight.storage.objects import ObjectStorage
 
 DAY = timedelta(days=1)
@@ -94,6 +101,17 @@ def reason(
             return None
     if namespace == "INTERMEDIATE":
         run_id = UUID(item.key.split("/")[-2])
+        render = db.get(RenderExecution, run_id)
+        if render is not None:
+            if (
+                render.project_id != project_id
+                or render.storage_identity != identity(ObjectStorage(settings))
+                or render.status not in TERMINAL
+                or render.finished_at is None
+                or now < max(utc(render.finished_at), modified) + DAY
+            ):
+                return None
+            return "FINISHED_INTERMEDIATE"
         run = db.get(WorkflowRun, run_id)
         if run is not None:
             from arclight.persistence.models import Episode
@@ -187,6 +205,7 @@ def execute(
     item.status = "RUNNING"
     db.flush()  # Claim stays in this transaction; crash rolls back and retry rechecks.
     try:
+        recover_local_snapshot(store, expected)
         if reason(db, settings, plan.project_id, plan.namespace, expected, now) is None:
             item.status = "RETAINED"
         else:

@@ -121,7 +121,9 @@ class ObjectStorage:
         try:
             if self.client is not None:
                 result = self.client.head_object(Bucket=self.settings.s3_bucket, Key=key)
-                return ObjectInfo(result["ContentLength"], result["ContentType"])
+                return ObjectInfo(
+                    result["ContentLength"], result["ContentType"], result.get("VersionId")
+                )
             return ObjectInfo(self.path(key).stat().st_size, "application/octet-stream")
         except (OSError, BotoCoreError, ClientError):
             raise DomainError("OBJECT_UNAVAILABLE", "文件不存在或暂不可读", 409) from None
@@ -153,6 +155,11 @@ def initialize(settings: Settings) -> None:
             if settings.s3_region != "us-east-1":
                 options["CreateBucketConfiguration"] = {"LocationConstraint": settings.s3_region}
             store.client.create_bucket(Bucket=settings.s3_bucket, **options)
+        # Each physical cleanup target must have an immutable identity, including
+        # when an administrator replaces the current object outside application locks.
+        store.client.put_bucket_versioning(
+            Bucket=settings.s3_bucket, VersioningConfiguration={"Status": "Enabled"}
+        )
     store.check()
 
 

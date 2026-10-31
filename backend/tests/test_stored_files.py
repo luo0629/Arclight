@@ -6,6 +6,7 @@ import pytest
 from alembic import command
 from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
+from storage_helpers import clear_test_bucket
 from test_asset_versions import draft, image_bytes
 
 from arclight.persistence.models import StoredFile
@@ -37,9 +38,7 @@ def files_setup(request, client, episode, tmp_path):
     yield settings, row, url, f"/api/v1/projects/{project_id}/files"
     if settings.object_storage_backend == "s3":
         store = ObjectStorage(settings)
-        for entry in store.client.list_objects_v2(Bucket=settings.s3_bucket).get("Contents", []):
-            store.delete(entry["Key"])
-        store.client.delete_bucket(Bucket=settings.s3_bucket)
+        clear_test_bucket(store)
 
 
 def test_file_receipt_exact_bytes_version_and_idempotency(client, files_setup):

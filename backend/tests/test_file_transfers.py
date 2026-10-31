@@ -9,6 +9,7 @@ import httpx
 import pytest
 from alembic import command
 from sqlalchemy import select
+from storage_helpers import clear_test_bucket
 from test_asset_versions import draft, image_bytes
 from test_collaboration import create_project, register
 
@@ -34,10 +35,7 @@ def transfer_setup(client, episode, gateway_server):
     root = f"/api/v1/projects/{episode['project_id']}"
     yield settings, root
     store = ObjectStorage(settings)
-    for page in store.client.get_paginator("list_objects_v2").paginate(Bucket=settings.s3_bucket):
-        for entry in page.get("Contents", []):
-            store.delete(entry["Key"])
-    store.client.delete_bucket(Bucket=settings.s3_bucket)
+    clear_test_bucket(store)
 
 
 def upload_payload(**values):

@@ -37,7 +37,12 @@ if context.is_offline_mode():
         context.run_migrations()
 else:
     engine = create_engine(url, poolclass=pool.NullPool)
-    with engine.connect() as connection:
+    with engine.begin() as connection:
+        # Own the complete command's transaction before Alembic configures its
+        # per-revision scopes. SQLite's legacy driver needs an explicit BEGIN
+        # for transactional DDL, including rollback after a later history guard.
+        if engine.dialect.name == "sqlite":
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
         context.configure(
             connection=connection,
             render_as_batch=engine.dialect.name == "sqlite",

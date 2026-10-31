@@ -144,12 +144,10 @@ def test_downgrade_refuses_to_discard_manual_content(client, episode, migrated, 
 
     with pytest.raises(RuntimeError, match="无法无损降级"):
         command.downgrade(migrated, "0001")
-    # PostgreSQL 会回滚整段 DDL；SQLite 保留此前已完成的降级步骤。
-    expected_revision = revision_before if engine.dialect.name == "postgresql" else "0002"
+    # Both backends roll back the complete command, including earlier DDL steps.
     with engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == expected_revision
-    if engine.dialect.name == "postgresql":
-        assert set(inspect(engine).get_table_names()) == tables_before
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == revision_before
+    assert set(inspect(engine).get_table_names()) == tables_before
     # Restore head before reading through the current application model.
     command.upgrade(migrated, "0018")
     assert (

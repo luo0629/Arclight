@@ -18,6 +18,7 @@ from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.persistence.base import JSON_TYPE, Base, Entity
 from arclight.persistence.generation import GenerationAttempt as GenerationAttempt
 from arclight.persistence.generation import GenerationJob as GenerationJob
+from arclight.persistence.rendering import RenderExecution as RenderExecution
 
 
 class Project(Entity, Base):

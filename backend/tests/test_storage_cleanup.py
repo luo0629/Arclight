@@ -8,6 +8,7 @@ import pytest
 from alembic import command
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from storage_helpers import clear_test_bucket
 from test_collaboration import create_project, register
 from test_file_transfers import upload_payload, upload_to_s3
 from test_upload_completion import DECLARATION
@@ -45,20 +46,7 @@ def gc_setup(request, client, episode, tmp_path, monkeypatch):
     yield settings, ObjectStorage(settings), root, clock
     if request.param == "s3":
         store = ObjectStorage(settings)
-        if store.client.get_bucket_versioning(Bucket=settings.s3_bucket).get("Status"):
-            for page in store.client.get_paginator("list_object_versions").paginate(
-                Bucket=settings.s3_bucket
-            ):
-                for row in page.get("Versions", []) + page.get("DeleteMarkers", []):
-                    store.client.delete_object(
-                        Bucket=settings.s3_bucket, Key=row["Key"], VersionId=row["VersionId"]
-                    )
-        for page in store.client.get_paginator("list_objects_v2").paginate(
-            Bucket=settings.s3_bucket
-        ):
-            for row in page.get("Contents", []):
-                store.delete(row["Key"])
-        store.client.delete_bucket(Bucket=settings.s3_bucket)
+        clear_test_bucket(store)
 
 
 def make_key(settings, project_id, namespace="VALIDATED"):
@@ -220,11 +208,15 @@ def test_failure_diagnostic_retry_absence_and_changed_object(client, gc_setup, m
     store.delete(key)
     store.put(key, b"changed bytes", "image/png")
     changed = run_item(client, root, planned).json()
-    assert changed["status"] == "FAILED" and changed["error_code"] == "CLEANUP_OBJECT_CHANGED"
+    if store.client is not None:
+        assert changed["status"] == "DELETED" and changed["error_code"] is None
+    else:
+        assert changed["status"] == "FAILED" and changed["error_code"] == "CLEANUP_OBJECT_CHANGED"
     assert snapshot(store, key) is not None
     store.delete(key)
     result = run_item(client, root, planned).json()
-    assert result["status"] == "ABSENT" and result["attempt_count"] == 3
+    assert result["status"] == ("DELETED" if store.client else "ABSENT")
+    assert result["attempt_count"] == (2 if store.client else 3)
 
 
 def test_namespace_boundary_bounded_pages_plan_expiry_and_storage_change(
@@ -342,11 +334,11 @@ def test_s3_replacement_before_deletion_is_retained(client, gc_setup, monkeypatc
 
     monkeypatch.setattr(cleanup, "delete_snapshot", replace_before_deletion)
     result = run_item(client, root, planned).json()
-    assert result["status"] == "FAILED" and result["error_code"] == "CLEANUP_OBJECT_CHANGED"
+    assert result["status"] == "DELETED" and result["error_code"] is None
     assert store.read(key, 1024) == b"new concurrent bytes"
 
 
-def test_versioned_bucket_is_refused_before_scan_and_at_delete(client, gc_setup):
+def test_suspended_versioning_is_refused_before_scan_and_at_delete(client, gc_setup):
     settings, store, root, clock = gc_setup
     if store.client is None:
         pytest.skip("S3 versioning capability check")
@@ -356,13 +348,13 @@ def test_versioned_bucket_is_refused_before_scan_and_at_delete(client, gc_setup)
     planned = plan(client, root)
     clock[0] += timedelta(hours=2)
     store.client.put_bucket_versioning(
-        Bucket=settings.s3_bucket, VersioningConfiguration={"Status": "Enabled"}
+        Bucket=settings.s3_bucket, VersioningConfiguration={"Status": "Suspended"}
     )
     assert (
         client.post(root + "/storage-cleanups", json={"namespace": "VALIDATED"}).status_code == 409
     )
     result = run_item(client, root, planned).json()
-    assert result["status"] == "FAILED" and result["error_code"] == "CLEANUP_VERSIONED_BUCKET"
+    assert result["status"] == "FAILED" and result["error_code"] == "CLEANUP_VERSIONING_REQUIRED"
     assert snapshot(store, key) is not None
 
 
@@ -480,3 +472,149 @@ def test_local_scan_is_bounded_and_never_deletes_during_scan(client, gc_setup):
     response = client.post(root + "/storage-cleanups", json={"namespace": "VALIDATED"})
     assert response.status_code == 409 and response.json()["error"]["code"] == "CLEANUP_SCAN_LIMIT"
     assert len(list(folder.iterdir())) == 2001
+
+
+@pytest.mark.parametrize("replacement", [b"old", b"new version must survive"])
+def test_s3_replacement_after_final_head_never_deletes_new_version(
+    client, gc_setup, monkeypatch, replacement
+):
+    from arclight.storage import cleanup as adapter
+
+    settings, store, root, clock = gc_setup
+    if store.client is None:
+        pytest.skip("Physical S3 version race")
+    key = make_key(settings, root.split("/")[-1])
+    store.put(key, b"old", "image/png")
+    captured_version = store.stat(key).version_id
+    assert captured_version and captured_version != "null"
+    clock[0] += timedelta(days=8)
+    planned = plan(client, root)
+    clock[0] += timedelta(hours=2)
+    actual_snapshot = adapter.snapshot
+
+    def replace_after_last_head(current_store, current_key, version_id=None):
+        result = actual_snapshot(current_store, current_key, version_id)
+        if version_id:
+            assert version_id == captured_version
+            store.client.put_object(Bucket=settings.s3_bucket, Key=key, Body=replacement)
+        return result
+
+    monkeypatch.setattr(adapter, "snapshot", replace_after_last_head)
+    result = run_item(client, root, planned).json()
+    assert result["status"] == "DELETED"
+    assert store.read(key, 1024) == replacement
+    assert actual_snapshot(store, key, captured_version) is None
+    assert store.stat(key).version_id != captured_version
+
+
+def test_legacy_null_version_is_preserved_with_diagnostic(client, gc_setup):
+    settings, store, root, clock = gc_setup
+    if store.client is None:
+        pytest.skip("Legacy S3 null version")
+    store.client.put_bucket_versioning(
+        Bucket=settings.s3_bucket, VersioningConfiguration={"Status": "Suspended"}
+    )
+    key = make_key(settings, root.split("/")[-1])
+    store.client.put_object(Bucket=settings.s3_bucket, Key=key, Body=b"legacy")
+    initialize(settings)
+    clock[0] += timedelta(days=8)
+    planned = plan(client, root)
+    clock[0] += timedelta(hours=2)
+    result = run_item(client, root, planned).json()
+    assert result["status"] == "FAILED" and result["error_code"] == "CLEANUP_UNVERSIONED_OBJECT"
+    assert store.read(key, 1024) == b"legacy"
+
+
+def test_hidden_orphan_versions_are_reclaimed_and_referenced_versions_retained(client, gc_setup):
+    settings, store, root, clock = gc_setup
+    if store.client is None:
+        pytest.skip("Versioned S3 history")
+    orphan, retained = [make_key(settings, root.split("/")[-1]) for _ in range(2)]
+    for key in (orphan, retained):
+        store.put(key, b"first", "image/png")
+        store.client.put_object(Bucket=settings.s3_bucket, Key=key, Body=b"second")
+        store.delete(key)
+        assert snapshot(store, key) is None
+    receipt(client, root.split("/")[-1], retained)
+    clock[0] += timedelta(days=8)
+    for _ in range(2):
+        planned = plan(client, root)
+        assert len(planned["items"]) == 1
+        clock[0] += timedelta(hours=2)
+        assert run_item(client, root, planned).json()["status"] == "DELETED"
+    assert plan(client, root)["items"] == []
+    versions = store.client.list_object_versions(Bucket=settings.s3_bucket).get("Versions", [])
+    assert len(versions) == 2 and all(v["Key"] == retained for v in versions)
+
+
+def test_local_replacement_in_final_rename_is_restored(client, gc_setup, monkeypatch):
+    from arclight.storage import cleanup as adapter
+
+    settings, store, root, clock = gc_setup
+    if store.client is not None:
+        pytest.skip("Local rename identity race")
+    key = make_key(settings, root.split("/")[-1])
+    store.put(key, b"old", "image/png")
+    clock[0] += timedelta(days=8)
+    planned = plan(client, root)
+    clock[0] += timedelta(hours=2)
+    rename = adapter.os.rename
+
+    def replace_before_rename(source, target):
+        source.write_bytes(b"concurrent replacement")
+        return rename(source, target)
+
+    monkeypatch.setattr(adapter.os, "rename", replace_before_rename)
+    result = run_item(client, root, planned).json()
+    assert result["status"] == "FAILED" and result["error_code"] == "CLEANUP_OBJECT_CHANGED"
+    assert store.read(key, 1024) == b"concurrent replacement"
+
+
+def test_local_new_write_after_capture_survives_cleanup(client, gc_setup, monkeypatch):
+    from arclight.storage import cleanup as adapter
+
+    settings, store, root, clock = gc_setup
+    if store.client is not None:
+        pytest.skip("Local capture race")
+    key = make_key(settings, root.split("/")[-1])
+    store.put(key, b"old", "image/png")
+    clock[0] += timedelta(days=8)
+    planned = plan(client, root)
+    clock[0] += timedelta(hours=2)
+    rename = adapter.os.rename
+
+    def write_after_capture(source, target):
+        rename(source, target)
+        store.put(key, b"new write", "image/png")
+
+    monkeypatch.setattr(adapter.os, "rename", write_after_capture)
+    assert run_item(client, root, planned).json()["status"] == "DELETED"
+    assert store.read(key, 1024) == b"new write"
+
+
+def test_interrupted_local_capture_recovers_before_late_reference_check(
+    client, gc_setup, monkeypatch
+):
+    from arclight.storage import cleanup as adapter
+
+    settings, store, root, clock = gc_setup
+    if store.client is not None:
+        pytest.skip("Local interrupted capture")
+    key = make_key(settings, root.split("/")[-1])
+    store.put(key, b"original bytes", "image/png")
+    clock[0] += timedelta(days=8)
+    planned = plan(client, root)
+    clock[0] += timedelta(hours=2)
+    actual = adapter.snapshot
+
+    def interrupted(current_store, current_key, version_id=None):
+        if current_key.startswith("cleanup-quarantine/") and store.path(current_key).exists():
+            raise DomainError("STORAGE_UNAVAILABLE", "simulated interruption", 503)
+        return actual(current_store, current_key, version_id)
+
+    monkeypatch.setattr(adapter, "snapshot", interrupted)
+    assert run_item(client, root, planned).json()["status"] == "FAILED"
+    receipt(client, root.split("/")[-1], key)
+    monkeypatch.setattr(adapter, "snapshot", actual)
+    assert run_item(client, root, planned).json()["status"] == "RETAINED"
+    assert store.read(key, 1024) == b"original bytes"
