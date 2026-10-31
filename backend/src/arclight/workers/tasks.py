@@ -4,13 +4,16 @@ from sqlalchemy import select
 
 from arclight.application.generation_delivery import consume_dispatch
 from arclight.application.generation_events import publish_dispatches
+from arclight.application.generation_leases import LeasePolicy
+from arclight.application.generation_recovery import recover_job, recovery_candidates
 from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
-from arclight.core.config import get_settings
+from arclight.core.config import Settings, get_settings
 from arclight.domain.enums import RunStatus
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import OutboxEvent, RenderExecution, WorkflowRun
 from arclight.persistence.session import build_engine, session_factory
+from arclight.providers.media_query import get_media_query_provider
 from arclight.providers.media_submission import get_media_submission_provider
 from arclight.workers.celery_app import celery_app
 
@@ -27,10 +30,36 @@ def execute_workflow(run_id: str, revision: int) -> None:
 
 @celery_app.task(name="arclight.execute_generation")
 def execute_generation(job_id: str, event_id: str) -> str:
-    engine = build_engine(get_settings())
+    settings = get_settings()
+    engine = build_engine(settings)
     try:
         return consume_dispatch(
-            session_factory(engine), UUID(job_id), UUID(event_id), get_media_submission_provider()
+            session_factory(engine),
+            UUID(job_id),
+            UUID(event_id),
+            get_media_submission_provider(),
+            policy=media_lease_policy(settings),
+        )
+    finally:
+        engine.dispose()
+
+
+def media_lease_policy(settings: Settings) -> LeasePolicy:
+    return LeasePolicy(
+        settings.media_lease_seconds, settings.media_heartbeat_seconds, settings.media_poll_seconds
+    )
+
+
+@celery_app.task(name="arclight.recover_generation")
+def recover_generation(job_id: str) -> str:
+    settings = get_settings()
+    engine = build_engine(settings)
+    try:
+        return recover_job(
+            session_factory(engine),
+            UUID(job_id),
+            get_media_query_provider(),
+            policy=media_lease_policy(settings),
         )
     finally:
         engine.dispose()
@@ -52,7 +81,8 @@ def publish_generation(job_id: UUID, event_id: UUID) -> None:
 
 @celery_app.task(name="arclight.dispatch_outbox")
 def dispatch_outbox() -> None:
-    engine = build_engine(get_settings())
+    settings = get_settings()
+    engine = build_engine(settings)
     try:
         with session_factory(engine).begin() as db:
             # QUEUED 是业务事实；即使 Broker 丢失已发布消息，也会周期性重新投递。
@@ -73,6 +103,8 @@ def dispatch_outbox() -> None:
                 event.published_at = utcnow()
                 event.attempt_count += 1
         publish_dispatches(session_factory(engine), publish_generation)
+        for job_id in recovery_candidates(session_factory(engine), media_lease_policy(settings)):
+            recover_generation.apply_async(args=[str(job_id)])
         with session_factory(engine)() as db:
             previews = list(
                 db.scalars(

@@ -20,7 +20,11 @@ from arclight.application.generation_state import find_job, request_cancel
 from arclight.core.errors import DomainError
 from arclight.domain.generation import STATUS_LABELS, GenerationStatus
 from arclight.domain.generation_requests import GenerationCreate
-from arclight.persistence.generation import GenerationDispatch, GenerationReconciliation
+from arclight.persistence.generation import (
+    GenerationDispatch,
+    GenerationLease,
+    GenerationReconciliation,
+)
 from arclight.persistence.models import GenerationAttempt, GenerationJob
 from arclight.providers.media_query import MediaQueryProvider, get_media_query_provider
 
@@ -224,6 +228,32 @@ class DispatchRead(Resource):
     @classmethod
     def utc_timestamps(cls, value: datetime | None) -> datetime | None:
         return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+class ExecutionRead(Resource):
+    job_id: UUID
+    attempt_id: UUID
+    epoch: int
+    heartbeat_at: datetime
+    expires_at: datetime
+    released_at: datetime | None
+
+    @field_validator("created_at", "updated_at", "heartbeat_at", "expires_at", "released_at")
+    @classmethod
+    def utc_timestamps(cls, value: datetime | None) -> datetime | None:
+        return value.replace(tzinfo=UTC) if value is not None and value.tzinfo is None else value
+
+
+@router.get("/{job_id}/execution")
+def get_execution(
+    project_id: UUID,
+    job_id: UUID,
+    db: Database,
+    actor: Actor,
+) -> ExecutionRead | None:
+    scoped_job(db, project_id, job_id, actor)
+    row = db.scalar(select(GenerationLease).where(GenerationLease.job_id == job_id))
+    return ExecutionRead.model_validate(row) if row is not None else None
 
 
 @router.get("/{job_id}/dispatches")

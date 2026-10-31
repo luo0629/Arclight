@@ -6,6 +6,7 @@ from pydantic import Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from arclight.application import generation_leases as leases
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.generation_attempts import (
@@ -65,14 +66,21 @@ def reconcile(
     provider: MediaQueryProvider,
     *,
     manual: ManualResolution | None = None,
+    lease_token: UUID | None = None,
+    lease_policy: leases.LeasePolicy = leases.DEFAULT_POLICY,
 ) -> GenerationJob:
     # The auth dependency's read transaction must already have ended in the HTTP caller.
     with factory.begin() as db:
-        require_project(db, project_id, actor, write=True, owner=manual is not None)
+        if lease_token is None:
+            require_project(db, project_id, actor, write=True, owner=manual is not None)
         job = find_job(db, job_id, lock=True)
         if job.project_id != project_id:
             raise DomainError("NOT_FOUND", "媒体任务不存在", 404)
         check_revision(job, expected_revision)
+        if lease_token is not None and not leases.owns(
+            db, leases.lease_for(db, job.id), lease_token
+        ):
+            raise DomainError("GENERATION_LEASE_LOST", "媒体执行权已失效", 409)
         if job.status not in {Status.RESULT_UNKNOWN, Status.RECONCILING, Status.MANUAL_REVIEW}:
             raise DomainError(
                 "GENERATION_NOT_RECONCILABLE", "仅未知结果或人工处理中的任务可以对账", 409
@@ -154,6 +162,9 @@ def reconcile(
             and attempt.finished_at is None
             and attempt.attempt_no == job.attempt_count
         )
+        lease = leases.lease_for(db, job.id) if lease_token is not None else None
+        if lease_token is not None:
+            applicable = applicable and leases.owns(db, lease, lease_token)
         fact.receipt_json = receipt.model_dump(mode="json")
         fact.disposition = "APPLIED" if applicable else "SUPERSEDED"
         fact.finished_at = utcnow()
@@ -212,5 +223,7 @@ def reconcile(
                 "outcome": receipt.status,
             },
         )
+        if lease is not None and lease_token is not None and leases.owns(db, lease, lease_token):
+            leases.release(db, lease, lease_policy)
         db.flush()
         return job

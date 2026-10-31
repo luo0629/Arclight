@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     service_encryption_key: SecretStr = SecretStr("")
     model_service_allowed_hosts: list[str] = Field(default_factory=lambda: ["api.openai.com"])
     text_duration_tolerance_percent: int = Field(default=10, ge=0, le=100)
+    media_lease_seconds: int = Field(default=60, ge=10, le=600)
+    media_heartbeat_seconds: int = Field(default=10, ge=1, le=120)
+    media_poll_seconds: int = Field(default=30, ge=1, le=600)
     max_story_chars: int = 20000
     jwt_secret: SecretStr = SecretStr("arclight-local-jwt-secret-change-before-deploying")
     access_token_minutes: int = Field(default=15, ge=1, le=60)
@@ -41,6 +44,12 @@ class Settings(BaseSettings):
     file_transfer_base_url: str = "/file-transfers"
     auth_requests_per_minute: int = Field(default=30, ge=1, le=10000)
     auth_allowed_origins: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_media_lease(self) -> "Settings":
+        if self.media_heartbeat_seconds * 2 >= self.media_lease_seconds:
+            raise ValueError("媒体心跳间隔必须短于执行租约的一半")
+        return self
 
     @model_validator(mode="after")
     def validate_storage(self) -> "Settings":

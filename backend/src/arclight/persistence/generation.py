@@ -178,3 +178,19 @@ class GenerationDispatch(Entity, Base):
             name="generation_dispatch_claim",
         ),
     )
+
+
+class GenerationLease(Entity, Base):
+    __tablename__ = "generation_leases"
+    job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), unique=True)
+    attempt_id: Mapped[UUID] = mapped_column(ForeignKey("generation_attempts.id"))
+    token: Mapped[UUID]
+    epoch: Mapped[int]
+    owner: Mapped[str] = mapped_column(String(100))
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint("epoch > 0", name="generation_lease_epoch"),
+        CheckConstraint("expires_at > heartbeat_at", name="generation_lease_expiry"),
+    )

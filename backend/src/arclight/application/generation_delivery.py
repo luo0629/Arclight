@@ -1,4 +1,4 @@
-"""Durable media outbox and duplicate-safe receipt registration, without leased recovery."""
+"""Durable media outbox and fenced, duplicate-safe receipt registration."""
 
 from copy import deepcopy
 from uuid import UUID
@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from arclight.application import generation_leases as leases
+from arclight.application.audit import audit
 from arclight.application.generation_attempts import (
     current_attempt,
     finish_attempt,
@@ -91,7 +93,12 @@ def register_receipt(
 
 
 def consume_dispatch(
-    factory: sessionmaker[Session], job_id: UUID, event_id: UUID, provider: MediaSubmissionProvider
+    factory: sessionmaker[Session],
+    job_id: UUID,
+    event_id: UUID,
+    provider: MediaSubmissionProvider,
+    *,
+    policy: leases.LeasePolicy = leases.DEFAULT_POLICY,
 ) -> str:
     with factory.begin() as db:
         job = find_job(db, job_id, lock=True)
@@ -119,6 +126,10 @@ def consume_dispatch(
         event.provider_idempotency_key = (
             f"generation:{job.id}:{attempt.attempt_no}" if provider.supports_idempotency else None
         )
+        lease = leases.claim(db, job, attempt.id, policy)
+        if lease is None:
+            raise DomainError("GENERATION_LEASE_BUSY", "媒体执行权尚未释放", 409)
+        token = lease.token
         request = MediaSubmission(
             job.id,
             attempt.id,
@@ -129,19 +140,37 @@ def consume_dispatch(
         db.flush()
 
     # No connection or business lock is held during the generation call.
-    try:
-        raw = provider.submit(request)
-        receipt = SubmissionReceipt.model_validate(raw.model_dump(mode="json"))
-    except (TimeoutError, ConnectionError, SubmissionUncertain, ValidationError):
-        receipt = SubmissionReceipt(status="RESULT_UNKNOWN", error_code="RESULT_UNKNOWN")
+    with leases.keep_alive(factory, job_id, token, policy):
+        try:
+            raw = provider.submit(request)
+            receipt = SubmissionReceipt.model_validate(raw.model_dump(mode="json"))
+        except (TimeoutError, ConnectionError, SubmissionUncertain, ValidationError):
+            receipt = SubmissionReceipt(status="RESULT_UNKNOWN", error_code="RESULT_UNKNOWN")
 
     with factory.begin() as db:
         job = find_job(db, job_id, lock=True)
         event = db.get(GenerationDispatch, event_id, populate_existing=True, with_for_update=True)
         assert event is not None and event.attempt_id is not None
+        lease = leases.lease_for(db, job.id)
+        if not leases.owns(db, lease, token) or event.status != "CLAIMED":
+            audit(
+                db,
+                job.project_id,
+                "media-worker",
+                "generation.execution_superseded",
+                job.id,
+                {
+                    "event_id": str(event.id),
+                    "token": str(token),
+                    "receipt": receipt.model_dump(mode="json"),
+                },
+            )
+            return job.status
+        assert lease is not None
         register_receipt(db, job.id, event.attempt_id, receipt)
         event.status = "FINISHED"
         event.receipt_json = receipt.model_dump(mode="json")
         event.finished_at = utcnow()
+        leases.release(db, lease, policy)
         db.flush()
         return job.status

@@ -94,6 +94,8 @@ SQLite 与 PostgreSQL 通过数据库触发器保护历史剧本、分镜、镜�
 
 后台任务支持幂等请求、重复消息去重、排队／待审核运行取消，以及失败后的显式重试。外部模型调用不承诺 exactly-once，重试可能产生额外调用费用。
 
+媒体 Worker 使用数据库执行租约和独立心跳，提交与只读查询期间不持有业务行锁。进程重启后，beat 会扫描过期执行与待查询的异步任务，沿原 attempt 对账；缺少明确证据时进入人工处理，不盲目重发。过期执行者的迟到回执不能覆盖当前状态，原回执与审计保留。`ARCLIGHT_MEDIA_LEASE_SECONDS`、`ARCLIGHT_MEDIA_HEARTBEAT_SECONDS` 和 `ARCLIGHT_MEDIA_POLL_SECONDS` 配置租约、心跳与查询间隔，心跳必须短于租约的一半。
+
 ### 在无模型密钥的环境中演示
 
 默认 Mock Provider 可以演示完整的文本审核流程。仓库也提供 OpenAI-compatible 文本适配器，使用结构化输出协议接入模型服务；真实供应商仍需配置和联调。
