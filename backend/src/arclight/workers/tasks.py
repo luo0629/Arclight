@@ -13,6 +13,7 @@ from arclight.domain.enums import RunStatus
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import OutboxEvent, RenderExecution, WorkflowRun
 from arclight.persistence.session import build_engine, session_factory
+from arclight.providers.media_cancel import get_media_cancel_provider
 from arclight.providers.media_query import get_media_query_provider
 from arclight.providers.media_submission import get_media_submission_provider
 from arclight.workers.celery_app import celery_app
@@ -39,6 +40,7 @@ def execute_generation(job_id: str, event_id: str) -> str:
             UUID(event_id),
             get_media_submission_provider(),
             policy=media_lease_policy(settings),
+            execution_policy=settings.media_execution_policy,
         )
     finally:
         engine.dispose()
@@ -60,6 +62,8 @@ def recover_generation(job_id: str) -> str:
             UUID(job_id),
             get_media_query_provider(),
             policy=media_lease_policy(settings),
+            execution_policy=settings.media_execution_policy,
+            cancel_provider=get_media_cancel_provider(),
         )
     finally:
         engine.dispose()

@@ -10,6 +10,7 @@ from arclight.application import generation_leases as leases
 from arclight.application.generation_reconciliation import mark_result_unknown, reconcile
 from arclight.application.generation_state import find_job
 from arclight.core.errors import DomainError
+from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.persistence.base import utcnow
 from arclight.persistence.generation import (
     GenerationAttempt,
@@ -17,6 +18,7 @@ from arclight.persistence.generation import (
     GenerationJob,
     GenerationLease,
 )
+from arclight.providers.media_cancel import MediaCancelProvider
 from arclight.providers.media_query import MediaQueryProvider
 from arclight.providers.media_submission import SubmissionReceipt
 
@@ -36,6 +38,8 @@ def recover_job(
     provider: MediaQueryProvider,
     *,
     policy: leases.LeasePolicy = leases.DEFAULT_POLICY,
+    execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+    cancel_provider: MediaCancelProvider | None = None,
 ) -> str:
     with factory.begin() as db:
         job = find_job(db, job_id, lock=True)
@@ -88,6 +92,8 @@ def recover_job(
                 provider,
                 lease_token=token,
                 lease_policy=policy,
+                execution_policy=execution_policy,
+                cancel_provider=cancel_provider,
             )
         return row.status
     except DomainError as exc:

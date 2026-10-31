@@ -21,7 +21,9 @@ class GenerationStatus(StrEnum):
 
 
 TRANSITIONS: dict[GenerationStatus, frozenset[GenerationStatus]] = {
-    GenerationStatus.CREATED: frozenset({GenerationStatus.SUBMITTING, GenerationStatus.CANCELLED}),
+    GenerationStatus.CREATED: frozenset(
+        {GenerationStatus.SUBMITTING, GenerationStatus.CANCELLED, GenerationStatus.FAILED}
+    ),
     GenerationStatus.SUBMITTING: frozenset(
         {
             GenerationStatus.SUBMITTED,
@@ -54,7 +56,7 @@ TRANSITIONS: dict[GenerationStatus, frozenset[GenerationStatus]] = {
     ),
     GenerationStatus.FAILED: frozenset({GenerationStatus.RETRY_WAIT, GenerationStatus.CANCELLED}),
     GenerationStatus.RETRY_WAIT: frozenset(
-        {GenerationStatus.SUBMITTING, GenerationStatus.CANCELLED}
+        {GenerationStatus.SUBMITTING, GenerationStatus.CANCELLED, GenerationStatus.FAILED}
     ),
     GenerationStatus.CANCEL_REQUESTED: frozenset(
         {

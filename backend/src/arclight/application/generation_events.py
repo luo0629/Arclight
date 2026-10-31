@@ -3,10 +3,12 @@
 from collections.abc import Callable
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from arclight.application.generation_leases import clock
 from arclight.persistence.generation import GenerationDispatch, GenerationJob
+from arclight.persistence.generation_scheduling import GenerationSchedule
 
 
 def enqueue_dispatch(db: Session, job: GenerationJob) -> GenerationDispatch:
@@ -27,7 +29,17 @@ def publish_dispatches(
         pending = list(
             db.execute(
                 select(GenerationDispatch.job_id, GenerationDispatch.id)
-                .where(GenerationDispatch.status == "READY")
+                .outerjoin(
+                    GenerationSchedule, GenerationSchedule.job_id == GenerationDispatch.job_id
+                )
+                .where(
+                    GenerationDispatch.status == "READY",
+                    or_(
+                        GenerationSchedule.id.is_(None),
+                        GenerationSchedule.next_attempt_at <= clock(db),
+                        GenerationSchedule.deadline_at <= clock(db),
+                    ),
+                )
                 .order_by(GenerationDispatch.created_at, GenerationDispatch.id)
                 .limit(100)
             )

@@ -1,5 +1,6 @@
 """Durable query facts with short transactions on either side of provider I/O."""
 
+from time import monotonic
 from uuid import UUID
 
 from pydantic import Field, ValidationError
@@ -7,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application import generation_leases as leases
+from arclight.application import generation_scheduling as scheduling
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.generation_attempts import (
@@ -14,17 +16,19 @@ from arclight.application.generation_attempts import (
     finish_attempt,
     set_provider_request,
 )
-from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_state import check_revision, find_job, transition
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus as Status
 from arclight.domain.generation_requests import MediaErrorCode, MediaInput
+from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.persistence.base import utcnow
 from arclight.persistence.generation import (
     GenerationAttempt,
     GenerationJob,
     GenerationReconciliation,
 )
+from arclight.providers.media_cancel import CancellationReceipt, MediaCancelProvider
+from arclight.providers.media_io import bounded_call
 from arclight.providers.media_query import (
     MediaQueryProvider,
     ProviderLookup,
@@ -68,6 +72,8 @@ def reconcile(
     manual: ManualResolution | None = None,
     lease_token: UUID | None = None,
     lease_policy: leases.LeasePolicy = leases.DEFAULT_POLICY,
+    execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+    cancel_provider: MediaCancelProvider | None = None,
 ) -> GenerationJob:
     # The auth dependency's read transaction must already have ended in the HTTP caller.
     with factory.begin() as db:
@@ -104,6 +110,39 @@ def reconcile(
         )
         if attempt is None or attempt.finished_at is not None:
             raise DomainError("ATTEMPT_CONFLICT", "缺少未完成的当前尝试", 409)
+        schedule = scheduling.schedule_for(db, job)
+        if lease_token is not None and leases.clock(db) >= leases.utc(schedule.deadline_at):
+            if job.status != Status.RECONCILING:
+                transition(db, job.id, Status.RECONCILING, job.revision, actor=actor)
+            transition(db, job.id, Status.MANUAL_REVIEW, job.revision, actor=actor)
+            scheduling.diagnose(db, job, "TIME_LIMIT", "RESULT_UNKNOWN")
+            held = leases.lease_for(db, job.id)
+            if held is not None:
+                leases.release(db, held, lease_policy)
+            return job
+        query_call_id = cancel_call_id = None
+        timeout = scheduling.policy_for(db, job).call_timeout_seconds
+        if lease_token is not None:
+            timeout = min(
+                timeout, (leases.utc(schedule.deadline_at) - leases.clock(db)).total_seconds()
+            )
+        if manual is None and attempt.provider_request_id:
+            if not scheduling.admit(db, job, execution_policy, "QUERY"):
+                return job
+            query_call_id = scheduling.reserve(db, job, attempt.id, "QUERY").id
+            cancelled_before = db.scalar(
+                select(scheduling.GenerationCall.id).where(
+                    scheduling.GenerationCall.attempt_id == attempt.id,
+                    scheduling.GenerationCall.kind == "CANCEL",
+                )
+            )
+            if (
+                job.cancel_requested_at is not None
+                and cancel_provider is not None
+                and cancelled_before is None
+                and scheduling.admit(db, job, execution_policy, "CANCEL")
+            ):
+                cancel_call_id = scheduling.reserve(db, job, attempt.id, "CANCEL").id
         if job.status == Status.RECONCILING:
             # A crashed or superseded read-only query may be replaced, never resubmitted.
             job.revision += 1
@@ -136,13 +175,26 @@ def reconcile(
         )
 
     # No Session/connection or business row lock spans this read-only external call.
-    if manual is not None:
+    io_deadline = monotonic() + timeout
+    cancellation = None
+    if cancel_call_id is not None and cancel_provider is not None and lookup is not None:
+        try:
+            cancellation = CancellationReceipt.model_validate(
+                bounded_call(lambda: cancel_provider.cancel(lookup), io_deadline - monotonic())
+            )
+        except (TimeoutError, ConnectionError, ValidationError):
+            cancellation = CancellationReceipt(status="RESULT_UNKNOWN")
+    if cancellation is not None and cancellation.status == "CONFIRMED":
+        receipt = QueryReceipt(status="CANCELLED")
+    elif manual is not None:
         receipt = manual.receipt
     elif lookup is None:
         receipt = QueryReceipt(status="UNSUPPORTED")
     else:
         try:
-            receipt = QueryReceipt.model_validate(provider.query(lookup))
+            receipt = QueryReceipt.model_validate(
+                bounded_call(lambda: provider.query(lookup), io_deadline - monotonic())
+            )
         except (TimeoutError, ConnectionError, ProviderQueryError):
             receipt = QueryReceipt(status="QUERY_FAILED")
         except ValidationError:
@@ -156,6 +208,14 @@ def reconcile(
         assert fact is not None
         attempt = db.get(GenerationAttempt, fact.attempt_id)
         assert attempt is not None
+        for call_id, outcome in (
+            (query_call_id, receipt.status),
+            (cancel_call_id, cancellation.status if cancellation else None),
+        ):
+            if call_id is not None:
+                call = db.get(scheduling.GenerationCall, call_id)
+                assert call is not None
+                scheduling.complete_call(db, call, outcome or "RESULT_UNKNOWN")
         applicable = (
             job.status == Status.RECONCILING
             and job.revision == fact.claimed_revision
@@ -176,7 +236,11 @@ def reconcile(
                 error: MediaErrorCode | None = (
                     None
                     if target == Status.SUCCEEDED
-                    else ("CANCELLED" if target == Status.CANCELLED else "PROVIDER_FAILED")
+                    else (
+                        "CANCELLED"
+                        if target == Status.CANCELLED
+                        else (receipt.error_code or "PROVIDER_FAILED")
+                    )
                 )
                 finish_attempt(
                     db,
@@ -189,15 +253,14 @@ def reconcile(
                     cost=receipt.cost,
                 )
                 if receipt.status == "NOT_ACCEPTED":
-                    transition(
-                        db,
-                        job.id,
-                        Status.CANCELLED if job.cancel_requested_at else Status.RETRY_WAIT,
-                        job.revision,
-                        actor=actor,
-                    )
-                    if job.status == Status.RETRY_WAIT:
-                        enqueue_dispatch(db, job)
+                    if job.cancel_requested_at:
+                        transition(db, job.id, Status.CANCELLED, job.revision, actor=actor)
+                    else:
+                        scheduling.retry_after_failure(
+                            db, job, "PROVIDER_FAILED", not_accepted=True, actor=actor
+                        )
+                elif target == Status.FAILED:
+                    scheduling.retry_after_failure(db, job, error or "PROVIDER_FAILED")
             elif receipt.status == "RUNNING":
                 transition(
                     db,
@@ -207,9 +270,15 @@ def reconcile(
                     actor=actor,
                 )
                 attempt.status = Status.RUNNING
+                if leases.clock(db) >= leases.utc(scheduling.schedule_for(db, job).deadline_at):
+                    mark_result_unknown(db, job.id, attempt.id)
+                    transition(db, job.id, Status.RECONCILING, job.revision, actor=actor)
+                    transition(db, job.id, Status.MANUAL_REVIEW, job.revision, actor=actor)
+                    scheduling.diagnose(db, job, "TIME_LIMIT", "RESULT_UNKNOWN")
             else:
                 transition(db, job.id, Status.MANUAL_REVIEW, job.revision, actor=actor)
                 attempt.status = Status.RESULT_UNKNOWN
+                scheduling.diagnose(db, job, "RESULT_UNKNOWN", "RESULT_UNKNOWN")
             db.flush()
         audit(
             db,

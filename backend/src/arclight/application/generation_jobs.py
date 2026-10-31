@@ -11,10 +11,12 @@ from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.dependencies import exact_version, lock_dependency_graph
 from arclight.application.generation_events import enqueue_dispatch
+from arclight.application.generation_scheduling import schedule_for
 from arclight.application.generation_targets import require_available_target
 from arclight.core.errors import DomainError
 from arclight.domain.dependencies import validate_dependency_type
 from arclight.domain.generation_requests import GenerationCreate
+from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.persistence.models import (
     DependencyInvalidation,
     DependencyManifest,
@@ -69,6 +71,8 @@ def create_job(
     actor: str,
     key: str,
     payload: GenerationCreate,
+    *,
+    execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
@@ -155,6 +159,7 @@ def create_job(
     )
     db.add(job)
     db.flush()
+    schedule_for(db, job, execution_policy)
     enqueue_dispatch(db, job)
     audit(
         db,

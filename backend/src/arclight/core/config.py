@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from arclight.domain.generation_scheduling import ExecutionPolicy
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="ARCLIGHT_", env_file=".env", extra="ignore")
@@ -26,6 +28,7 @@ class Settings(BaseSettings):
     media_lease_seconds: int = Field(default=60, ge=10, le=600)
     media_heartbeat_seconds: int = Field(default=10, ge=1, le=120)
     media_poll_seconds: int = Field(default=30, ge=1, le=600)
+    media_execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     max_story_chars: int = 20000
     jwt_secret: SecretStr = SecretStr("arclight-local-jwt-secret-change-before-deploying")
     access_token_minutes: int = Field(default=15, ge=1, le=60)

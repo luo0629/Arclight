@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
-from arclight.application.generation_events import enqueue_dispatch
+from arclight.application.generation_scheduling import release_generation, retry_after_failure
 from arclight.application.generation_state import check_revision, find_job, transition
 from arclight.application.generation_targets import require_available_target
 from arclight.core.errors import DomainError
@@ -218,6 +218,7 @@ def finish_attempt(
     attempt.cost = cost
     attempt.finished_at = utcnow()
     db.flush()
+    release_generation(db, job)
     audit(
         db,
         job.project_id,
@@ -255,6 +256,7 @@ def request_retry(db: Session, job_id: UUID, expected_revision: int, actor: str)
         raise DomainError(
             "GENERATION_NOT_RETRYABLE", "仅明确失败的调用可显式重试；未知结果须先对账", 409
         )
-    row = transition(db, job.id, GenerationStatus.RETRY_WAIT, expected_revision, actor=actor)
-    enqueue_dispatch(db, row)
-    return row
+    retry_after_failure(
+        db, job, latest.error_code or "PROVIDER_FAILED", automatic=False, actor=actor
+    )
+    return job

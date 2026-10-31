@@ -1,6 +1,7 @@
 """GEN-05 contract: replay, delivery, provider capability, asset mutex and selection CAS."""
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 from threading import Barrier, Lock
 from uuid import UUID
 
@@ -20,10 +21,12 @@ from arclight.application.generation_attempts import request_retry
 from arclight.application.generation_delivery import consume_dispatch, register_receipt
 from arclight.application.generation_events import publish_dispatches
 from arclight.application.generation_jobs import create_job
+from arclight.application.generation_leases import clock
 from arclight.application.generation_state import request_cancel
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationCreate, GenerationResult
 from arclight.persistence.generation import GenerationDispatch
+from arclight.persistence.generation_scheduling import GenerationSchedule
 from arclight.persistence.models import (
     AssetVersion,
     AuditEvent,
@@ -72,6 +75,14 @@ def deliver(client, job, provider=None, event=None):
         event or event_for(client, job),
         provider or Provider(),
     )
+
+
+def retry_due(client, job):
+    with client.app.state.session_factory.begin() as db:
+        schedule = db.scalar(
+            select(GenerationSchedule).where(GenerationSchedule.job_id == UUID(job["id"]))
+        )
+        schedule.next_attempt_at = clock(db) - timedelta(seconds=1)
 
 
 def counts(client):
@@ -166,6 +177,8 @@ def test_receipt_conflict_and_old_attempt_replay_do_not_overwrite_retry(client, 
     with factory.begin() as db:
         row = db.get(GenerationJob, UUID(job["id"]))
         request_retry(db, row.id, row.revision, row.created_by)
+    assert deliver(client, job, provider) == "RETRY_WAIT"
+    retry_due(client, job)
     assert deliver(client, job, provider) == "FAILED"
     assert len(provider.requests) == 2
     assert provider.requests[0].idempotency_key != provider.requests[1].idempotency_key
@@ -245,12 +258,14 @@ def test_frozen_target_cas_prevents_submission_before_external_call(client, epis
         with client.app.state.session_factory.begin() as db:
             db.execute(text("UPDATE visual_assets SET lock_version = lock_version + 1"))
     provider = Provider()
-    assert deliver(client, job, provider) == "CREATED"
+    assert deliver(client, job, provider) == "FAILED"
     assert provider.requests == []
     with client.app.state.session_factory() as db:
         row = db.get(GenerationDispatch, event_for(client, job))
         assert row.status == "SKIPPED" and row.receipt_json["error_code"] == "VERSION_CONFLICT"
         assert db.scalar(select(func.count()).select_from(GenerationAttempt)) == 0
+    diagnostic = client.get(base(episode["project_id"]) + f"/{job['id']}/dead-letter").json()
+    assert diagnostic["reason"] == "NOT_RETRYABLE" and diagnostic["category"] == "INPUT"
 
 
 def test_result_registration_never_selects_asset_or_bypasses_selection_cas(client, episode):
@@ -507,6 +522,8 @@ def test_authoritative_not_accepted_enqueues_new_attempt_without_reusing_provide
     response = query(client, job, QueryFake(QueryReceipt(status="NOT_ACCEPTED")))
     assert response.status_code == 200 and response.json()["status"] == "RETRY_WAIT"
     fresh = Provider()
+    assert deliver(client, job, fresh) == "RETRY_WAIT" and not fresh.requests
+    retry_due(client, job)
     assert deliver(client, job, fresh) == "SUCCEEDED"
     assert len(old.requests) == len(fresh.requests) == 1
     assert old.requests[0].idempotency_key != fresh.requests[0].idempotency_key

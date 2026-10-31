@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application import generation_leases as leases
+from arclight.application import generation_scheduling as scheduling
 from arclight.application.audit import audit
 from arclight.application.generation_attempts import (
     current_attempt,
@@ -20,8 +21,10 @@ from arclight.application.generation_reconciliation import mark_result_unknown
 from arclight.application.generation_state import find_job, transition
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus as Status
+from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.persistence.base import utcnow
 from arclight.persistence.generation import GenerationAttempt, GenerationDispatch
+from arclight.providers.media_io import bounded_call
 from arclight.providers.media_submission import (
     MediaSubmission,
     MediaSubmissionProvider,
@@ -99,6 +102,7 @@ def consume_dispatch(
     provider: MediaSubmissionProvider,
     *,
     policy: leases.LeasePolicy = leases.DEFAULT_POLICY,
+    execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
 ) -> str:
     with factory.begin() as db:
         job = find_job(db, job_id, lock=True)
@@ -111,6 +115,14 @@ def consume_dispatch(
             raise DomainError("GENERATION_MESSAGE_CONFLICT", "媒体事件与任务不匹配", 409)
         if event.status != "READY":
             return job.status
+        if job.status in {Status.CREATED, Status.RETRY_WAIT} and not scheduling.admit(
+            db, job, execution_policy
+        ):
+            if job.status == Status.FAILED:
+                event.status = "SKIPPED"
+                event.finished_at = utcnow()
+                event.receipt_json = {"error_code": "TIME_OR_ATTEMPT_LIMIT"}
+            return job.status
         try:
             if provider.name != job.provider:
                 raise DomainError("GENERATION_PROVIDER_MISMATCH", "供应商不匹配冻结输入", 409)
@@ -119,6 +131,12 @@ def consume_dispatch(
             event.status = "SKIPPED"
             event.finished_at = utcnow()
             event.receipt_json = {"error_code": exc.code}
+            if job.revision == event.expected_revision and job.status in {
+                Status.CREATED,
+                Status.RETRY_WAIT,
+            }:
+                transition(db, job.id, Status.FAILED, job.revision)
+                scheduling.diagnose(db, job, "NOT_RETRYABLE", "INPUT_INVALID")
             return job.status
         event.status = "CLAIMED"
         event.attempt_id = attempt.id
@@ -130,6 +148,14 @@ def consume_dispatch(
         if lease is None:
             raise DomainError("GENERATION_LEASE_BUSY", "媒体执行权尚未释放", 409)
         token = lease.token
+        call = scheduling.reserve(db, job, attempt.id, "SUBMIT")
+        call_id = call.id
+        frozen_policy = scheduling.policy_for(db, job)
+        schedule = scheduling.schedule_for(db, job)
+        timeout = min(
+            frozen_policy.call_timeout_seconds,
+            (leases.utc(schedule.deadline_at) - leases.clock(db)).total_seconds(),
+        )
         request = MediaSubmission(
             job.id,
             attempt.id,
@@ -142,7 +168,7 @@ def consume_dispatch(
     # No connection or business lock is held during the generation call.
     with leases.keep_alive(factory, job_id, token, policy):
         try:
-            raw = provider.submit(request)
+            raw = bounded_call(lambda: provider.submit(request), timeout)
             receipt = SubmissionReceipt.model_validate(raw.model_dump(mode="json"))
         except (TimeoutError, ConnectionError, SubmissionUncertain, ValidationError):
             receipt = SubmissionReceipt(status="RESULT_UNKNOWN", error_code="RESULT_UNKNOWN")
@@ -168,6 +194,11 @@ def consume_dispatch(
             return job.status
         assert lease is not None
         register_receipt(db, job.id, event.attempt_id, receipt)
+        completed_call = db.get(scheduling.GenerationCall, call_id)
+        assert completed_call is not None
+        scheduling.complete_call(db, completed_call, receipt.status)
+        if job.status == Status.FAILED:
+            scheduling.retry_after_failure(db, job, receipt.error_code or "PROVIDER_FAILED")
         event.status = "FINISHED"
         event.receipt_json = receipt.model_dump(mode="json")
         event.finished_at = utcnow()

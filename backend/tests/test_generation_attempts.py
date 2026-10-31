@@ -38,7 +38,7 @@ def start(client, job):
         return start_attempt(db, UUID(job["id"]), job["revision"])
 
 
-def fail(client, job, attempt):
+def fail(client, job, attempt, error="PROVIDER_REJECTED"):
     with client.app.state.session_factory.begin() as db:
         finish_attempt(
             db,
@@ -46,7 +46,7 @@ def fail(client, job, attempt):
             attempt.id,
             Status.FAILED,
             request_id=f"mock:{attempt.id}",
-            error_code="PROVIDER_REJECTED",
+            error_code=error,
             latency_ms=120,
             cost=Decimal("0.003201"),
         )
@@ -57,16 +57,17 @@ def test_retry_appends_new_attempt_and_reuses_original_input_not_live_config(cli
     body = payload()
     job = capture_ok(client, project_id, body)
     one = start(client, job)
-    fail(client, job, one)
+    fail(client, job, one, error="PROVIDER_FAILED")
     url = base(project_id) + "/" + job["id"]
     first = client.get(url + f"/attempts/{one.id}").json()
-    assert first["error_code"] == "PROVIDER_REJECTED" and first["cost"] == "0.003201"
+    assert first["error_code"] == "PROVIDER_FAILED" and first["cost"] == "0.003201"
     assert first["provider_request_id"] == f"mock:{one.id}"
     assert first["submitted_at"].endswith("Z") and first["finished_at"].endswith("Z")
     failed = client.get(url).json()
     assert client.post(url + "/retry", json={"expected_revision": 0}).status_code == 409
     retry = client.post(url + "/retry", json={"expected_revision": failed["revision"]})
     assert retry.status_code == 200, retry.text
+    assert retry.json()["status"] == "RETRY_WAIT"
     body["spec"]["prompt"] = "当前配置已修改"
     body["spec"]["seed"] = 99
     two = start(client, retry.json())

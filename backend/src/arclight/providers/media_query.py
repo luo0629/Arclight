@@ -6,7 +6,7 @@ from typing import Literal, Protocol
 
 from pydantic import Field, model_validator
 
-from arclight.domain.generation_requests import GenerationResult, MediaInput
+from arclight.domain.generation_requests import GenerationResult, MediaErrorCode, MediaInput
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,7 @@ class QueryReceipt(MediaInput):
         "INVALID_RESPONSE",
     ]
     result: GenerationResult | None = None
+    error_code: MediaErrorCode | None = None
     latency_ms: int | None = Field(default=None, strict=True, ge=0, le=2147483647)
     cost: Decimal | None = Field(default=None, ge=0, lt=Decimal("1000000000000"), decimal_places=6)
 
@@ -37,6 +38,10 @@ class QueryReceipt(MediaInput):
     def definite_result(self):
         if (self.status == "SUCCEEDED") != (self.result is not None):
             raise ValueError("Only confirmed success can contain a normalized result")
+        if self.error_code is not None and (
+            self.status != "FAILED" or self.error_code in {"RESULT_UNKNOWN", "CANCELLED"}
+        ):
+            raise ValueError("Only definite failure can contain a definite failure code")
         if self.status in {
             "UNKNOWN",
             "NOT_FOUND",

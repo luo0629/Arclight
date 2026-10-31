@@ -16,14 +16,22 @@ from arclight.application.commands import require_project
 from arclight.application.generation_attempts import request_retry
 from arclight.application.generation_jobs import create_job
 from arclight.application.generation_reconciliation import ManualResolution, reconcile
+from arclight.application.generation_replay import ReplayRequest, replay_job
 from arclight.application.generation_state import find_job, request_cancel
 from arclight.core.errors import DomainError
 from arclight.domain.generation import STATUS_LABELS, GenerationStatus
 from arclight.domain.generation_requests import GenerationCreate
+from arclight.domain.generation_scheduling import ERROR_CATEGORIES
 from arclight.persistence.generation import (
     GenerationDispatch,
     GenerationLease,
     GenerationReconciliation,
+)
+from arclight.persistence.generation_scheduling import (
+    GenerationCall,
+    GenerationDeadLetter,
+    GenerationReplay,
+    GenerationSchedule,
 )
 from arclight.persistence.models import GenerationAttempt, GenerationJob
 from arclight.providers.media_query import MediaQueryProvider, get_media_query_provider
@@ -77,6 +85,13 @@ class AttemptRead(Resource):
     cost: Decimal | None
     submitted_at: datetime
     finished_at: datetime | None
+    error_category: str | None = None
+
+    @classmethod
+    def from_attempt(cls, row: GenerationAttempt) -> "AttemptRead":
+        result = cls.model_validate(row)
+        result.error_category = ERROR_CATEGORIES.get(row.error_code or "")
+        return result
 
     @field_validator("created_at", "updated_at", "submitted_at", "finished_at")
     @classmethod
@@ -104,11 +119,21 @@ def scoped_job(
 def capture_job(
     project_id: UUID,
     payload: GenerationCreate,
+    request: Request,
     db: Database,
     actor: Actor,
     idempotency_key: Annotated[str, Header(min_length=1, max_length=160, pattern=r"^[!-~]+$")],
 ) -> GenerationRead:
-    return read_job(create_job(db, project_id, actor, idempotency_key, payload))
+    return read_job(
+        create_job(
+            db,
+            project_id,
+            actor,
+            idempotency_key,
+            payload,
+            execution_policy=request.app.state.settings.media_execution_policy,
+        )
+    )
 
 
 @router.get("")
@@ -154,7 +179,7 @@ def list_attempts(
         .limit(limit)
         .offset(offset)
     )
-    return [AttemptRead.model_validate(row) for row in rows]
+    return [AttemptRead.from_attempt(row) for row in rows]
 
 
 @router.get("/{job_id}/attempts/{attempt_id}")
@@ -169,7 +194,7 @@ def get_attempt(
     row = db.get(GenerationAttempt, attempt_id)
     if row is None or row.job_id != job_id:
         raise DomainError("NOT_FOUND", "媒体尝试不存在", 404)
-    return AttemptRead.model_validate(row)
+    return AttemptRead.from_attempt(row)
 
 
 @router.post("/{job_id}/retry")
@@ -316,6 +341,7 @@ def reconcile_job(
             payload.expected_revision,
             actor,
             provider,
+            execution_policy=request.app.state.settings.media_execution_policy,
         )
     )
 
@@ -341,5 +367,133 @@ def resolve_job(
             actor,
             provider,
             manual=payload,
+            execution_policy=request.app.state.settings.media_execution_policy,
+        )
+    )
+
+
+class SchedulingRead(Resource):
+    @field_validator("*", mode="after")
+    @classmethod
+    def utc_values(cls, value):
+        if isinstance(value, datetime) and value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+
+
+class ScheduleRead(SchedulingRead):
+    job_id: UUID
+    policy_json: dict
+    deadline_at: datetime
+    next_attempt_at: datetime
+    blocked_code: str | None
+
+
+class DeadLetterRead(SchedulingRead):
+    job_id: UUID
+    attempt_id: UUID | None
+    reason: str
+    error_code: str | None
+    category: str
+    diagnostic_json: dict
+
+
+class ReplayRead(SchedulingRead):
+    project_id: UUID
+    source_job_id: UUID
+    dead_letter_id: UUID
+    new_job_id: UUID
+    actor: str
+    reason: str
+
+
+class CallRead(SchedulingRead):
+    job_id: UUID
+    attempt_id: UUID
+    kind: str
+    started_at: datetime
+    completed_at: datetime | None
+    released_at: datetime | None
+    outcome: str | None
+
+
+@router.get("/{job_id}/schedule")
+def get_schedule(project_id: UUID, job_id: UUID, db: Database, actor: Actor) -> ScheduleRead | None:
+    scoped_job(db, project_id, job_id, actor)
+    row = db.scalar(select(GenerationSchedule).where(GenerationSchedule.job_id == job_id))
+    return ScheduleRead.model_validate(row) if row else None
+
+
+@router.get("/{job_id}/dead-letter")
+def get_dead_letter(
+    project_id: UUID, job_id: UUID, db: Database, actor: Actor
+) -> DeadLetterRead | None:
+    scoped_job(db, project_id, job_id, actor)
+    row = db.scalar(select(GenerationDeadLetter).where(GenerationDeadLetter.job_id == job_id))
+    return DeadLetterRead.model_validate(row) if row else None
+
+
+@router.get("/{job_id}/calls")
+def list_calls(
+    project_id: UUID,
+    job_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[CallRead]:
+    scoped_job(db, project_id, job_id, actor)
+    rows = db.scalars(
+        select(GenerationCall)
+        .where(GenerationCall.job_id == job_id)
+        .order_by(GenerationCall.started_at, GenerationCall.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [CallRead.model_validate(row) for row in rows]
+
+
+@router.get("/{job_id}/replays")
+def list_replays(
+    project_id: UUID,
+    job_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[ReplayRead]:
+    scoped_job(db, project_id, job_id, actor)
+    rows = db.scalars(
+        select(GenerationReplay)
+        .where(
+            GenerationReplay.project_id == project_id,
+            (GenerationReplay.source_job_id == job_id) | (GenerationReplay.new_job_id == job_id),
+        )
+        .order_by(GenerationReplay.created_at, GenerationReplay.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [ReplayRead.model_validate(row) for row in rows]
+
+
+@router.post("/{job_id}/replay", status_code=201)
+def replay_generation(
+    project_id: UUID,
+    job_id: UUID,
+    payload: ReplayRequest,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    idempotency_key: Annotated[str, Header(min_length=1, max_length=160, pattern=r"^[!-~]+$")],
+) -> GenerationRead:
+    return read_job(
+        replay_job(
+            db,
+            project_id,
+            job_id,
+            actor,
+            idempotency_key,
+            payload,
+            request.app.state.settings.media_execution_policy,
         )
     )
