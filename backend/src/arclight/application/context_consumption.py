@@ -3,14 +3,20 @@
 from copy import deepcopy
 from uuid import UUID, uuid5
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.application.context_evidence import evidence_rounds
-from arclight.application.context_sources import invalid, verify_images
+from arclight.application.context_evidence import bounded_trace, evidence_rounds
+from arclight.application.context_sources import (
+    asset_sources,
+    invalid,
+    validate_sources,
+    verify_images,
+)
 from arclight.application.dependencies import lock_dependency_graph
 from arclight.core.config import Settings
 from arclight.domain.versions import digest
-from arclight.persistence.models import DependencyManifest, WorkflowRun
+from arclight.persistence.models import AssetVersion, DependencyManifest, Script, WorkflowRun
 
 
 def consumption(db: Session, root: DependencyManifest) -> dict | None:
@@ -32,6 +38,12 @@ def consumption(db: Session, root: DependencyManifest) -> dict | None:
     refs = value["evidence_manifest_ids"]
     if refs != [str(item.id) for item in rounds[: len(refs)]] or len(refs) > len(rounds):
         invalid()
+    resolved = value.get("resolved_input")
+    if resolved:
+        script = db.get(Script, UUID(resolved["script_version_id"]))
+        if script is None or digest(script.content_json) != resolved["sha256"]:
+            invalid()
+        validate_sources(db, root.project_id, resolved["sources"])
     return {"consumption_manifest_id": str(row.id), **deepcopy(value)}
 
 
@@ -51,6 +63,36 @@ def consume_context(
     assert root is not None
     receipt = consumption(db, root)
     if receipt is None:
+        resolved = None
+        if stage == "storyboard":
+            identity = run.input_json.get("script_version_id")
+            script = (
+                db.get(Script, UUID(identity))
+                if identity
+                else db.scalar(select(Script).where(Script.run_id == run.id))
+            )
+            if script is None or script.episode_id != run.episode_id or script.status != "APPROVED":
+                invalid()
+            assert script is not None
+            version = db.get(AssetVersion, script.id)
+            if version is None:
+                invalid()
+            assert version is not None
+            resolved = {
+                "script_version_id": str(script.id),
+                "sha256": digest(script.content_json),
+                "sources": asset_sources(
+                    db,
+                    project_id,
+                    [
+                        {
+                            "asset_version_id": str(version.id),
+                            "asset_id": str(version.asset_id),
+                            "checksum": version.checksum,
+                        }
+                    ],
+                ),
+            }
         value = {
             "schema_version": 1,
             "target": deepcopy(root.snapshot_json["target"]),
@@ -59,6 +101,7 @@ def consume_context(
                 "origin": "context_consumption",
                 "run_id": str(run.id),
                 "stage": stage,
+                "resolved_input": resolved,
                 **deepcopy(context["trace_ref"]),
             },
         }
@@ -76,6 +119,7 @@ def consume_context(
         db.flush()
         receipt = consumption(db, root)
         assert receipt is not None
+        bounded_trace(root, evidence_rounds(db, root), receipt)
     refs = receipt["evidence_manifest_ids"]
     context["retrieval_evidence"] = context["retrieval_evidence"][: len(refs)]
     context["trace_ref"]["evidence_manifest_ids"] = refs

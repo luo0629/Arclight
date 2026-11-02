@@ -74,7 +74,9 @@ def evidence_rounds(db: Session, root: DependencyManifest) -> list[DependencyMan
     return result
 
 
-def bounded_trace(root: DependencyManifest, rounds: list[DependencyManifest]) -> dict:
+def bounded_trace(
+    root: DependencyManifest, rounds: list[DependencyManifest], receipt: dict | None = None
+) -> dict:
     initial = root.snapshot_json["context"]
     context = initial["task_context"]
     result = {
@@ -87,12 +89,15 @@ def bounded_trace(root: DependencyManifest, rounds: list[DependencyManifest]) ->
         "evidence": [
             {"manifest_id": str(row.id), **deepcopy(row.snapshot_json["context"])} for row in rounds
         ],
+        "consumption": deepcopy(receipt),
     }
     limits = ContextLimits.model_validate(context["limits"])
     check_size(result, limits)
     all_sources = [*(initial.get("trace") or {}).get("sources", [])]
     for row in rounds:
         all_sources.extend(row.snapshot_json["context"]["sources"])
+    if receipt and receipt.get("resolved_input"):
+        all_sources.extend(receipt["resolved_input"]["sources"])
     for kind, field, maximum in (
         ("ASSET_VERSION", "asset_version_id", limits.max_assets),
         ("STORY_ENTRY", "id", limits.max_story_entries),
@@ -112,11 +117,9 @@ def read_trace(
         if through_round > len(rounds):
             raise DomainError("CONTEXT_REFERENCE_INVALID", "指定检索轮次不存在", 409)
         rounds = rounds[:through_round]
-    result = bounded_trace(root, rounds)
     from arclight.application.context_consumption import consumption
 
-    result["consumption"] = consumption(db, root)
-    return result
+    return bounded_trace(root, rounds, consumption(db, root))
 
 
 def append_evidence(
@@ -232,7 +235,9 @@ def append_evidence(
         request_fingerprint=digest(value),
         snapshot_json=value,
     )
-    bounded_trace(root, [*rounds, row])
+    from arclight.application.context_consumption import consumption
+
+    bounded_trace(root, [*rounds, row], consumption(db, root))
     db.add(row)
     db.flush()
     audit(

@@ -202,11 +202,17 @@ def test_actual_provider_and_checkpoint_pin_each_stage_and_retry(
     assert calls[1][1]["trace_ref"]["evidence_manifest_ids"] == [first["manifest_id"]]
     assert len(calls[1][1]["retrieval_evidence"]) == 1
     director = evidence(client, run_id, "storyboard", story_entry_ids=[item["id"]]).json()
+    approved_script_id = state["pending_review"]["version_id"]
     assert review(client, state).status_code == 202
     state = advance(client, settings, run_id)
     assert state["status"] == "WAITING_REVIEW", state
     assert calls[-1][0] == "storyboard"
     assert calls[-1][1]["trace_ref"]["evidence_manifest_ids"] == [director["manifest_id"]]
+    director_receipt = trace(client, run_id, "storyboard")["consumption"]
+    resolved = director_receipt["resolved_input"]
+    assert resolved["script_version_id"] == approved_script_id
+    assert resolved["sources"][0]["asset_version_id"] == approved_script_id
+    assert resolved["sha256"]
     with open_checkpointer(settings) as saver:
         records = list(saver.list({"configurable": {"thread_id": run_id}}))
     encoded = json.dumps(records, default=str)
