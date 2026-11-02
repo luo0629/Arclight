@@ -49,15 +49,31 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install uv==0.9.7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: 0.9.7
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+          save-cache: ${{ matrix.database == 'sqlite' }}
       - run: uv sync --frozen
       - run: uv run ruff check .
+        if: matrix.database == 'sqlite'
       - run: uv run ruff format --check .
+        if: matrix.database == 'sqlite'
       - run: uv run mypy
+        if: matrix.database == 'sqlite'
+      - uses: docker/setup-buildx-action@v4
       - name: Build isolated S3 test service
-        working-directory: .
+        uses: docker/build-push-action@v7
+        with:
+          context: infra/minio
+          tags: arclight-minio:test
+          load: true
+          cache-from: type=gha,scope=arclight-minio
+          # Matrix jobs share restore cache; only one writes to avoid concurrent exports.
+          cache-to: ${{ matrix.database == 'sqlite' && 'type=gha,scope=arclight-minio,mode=max,ignore-error=true' || '' }}
+      - name: Start isolated S3 test service
         run: |
-          docker build -t arclight-minio:test infra/minio
           docker run -d --name arclight-test-minio -p 127.0.0.1:19000:9000 -e MINIO_ROOT_USER=arclight-test -e MINIO_ROOT_PASSWORD=arclight-test-secret arclight-minio:test
           for attempt in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:19000/minio/health/ready; then exit 0; fi
@@ -66,12 +82,13 @@ jobs:
           docker logs arclight-test-minio
           exit 1
       - name: Database tests (${{ matrix.database }})
-        run: uv run pytest -q
+        run: uv run pytest -q -n auto --maxprocesses=4 --dist=loadfile
         env:
           ARCLIGHT_TEST_S3_ENDPOINT: http://127.0.0.1:19000
           ARCLIGHT_TEST_DATABASE_URL: ${{ matrix.database_url }}
           ARCLIGHT_TEST_REDIS_URL: redis://127.0.0.1:16379/15
       - run: docker compose config --quiet
+        if: matrix.database == 'sqlite'
         working-directory: .
 
   web:
@@ -84,13 +101,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: 0.9.7
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+          save-cache: false
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
           cache: npm
           cache-dependency-path: fronted/package-lock.json
-      - run: python -m pip install uv==0.9.7
-      - run: uv sync --frozen --directory backend
+      - run: uv sync --frozen --no-dev --directory backend
       - run: npm ci
         working-directory: fronted
       - run: npm run build
