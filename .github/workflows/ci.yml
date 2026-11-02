@@ -12,6 +12,14 @@ jobs:
       run:
         working-directory: backend
     services:
+      redis:
+        image: redis:7-alpine
+        ports: ["16379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
       postgres:
         image: postgres:17-alpine
         env:
@@ -52,11 +60,13 @@ jobs:
         run: uv run pytest -q
         env:
           ARCLIGHT_TEST_S3_ENDPOINT: http://127.0.0.1:19000
+          ARCLIGHT_TEST_REDIS_URL: redis://127.0.0.1:16379/15
       - name: PostgreSQL tests
         run: uv run pytest -q
         env:
           ARCLIGHT_TEST_S3_ENDPOINT: http://127.0.0.1:19000
           ARCLIGHT_TEST_DATABASE_URL: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
+          ARCLIGHT_TEST_REDIS_URL: redis://127.0.0.1:16379/15
       - run: docker compose config --quiet
         working-directory: .
 

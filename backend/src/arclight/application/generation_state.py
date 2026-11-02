@@ -62,6 +62,17 @@ def transition(
         from arclight.application.generation_accounting import release_unsubmitted
 
         release_unsubmitted(db, row)
+        from sqlalchemy import select
+
+        from arclight.application.generation_queues import revoke
+        from arclight.persistence.generation import GenerationDispatch
+
+        for event_id in db.scalars(
+            select(GenerationDispatch.id).where(
+                GenerationDispatch.job_id == row.id, GenerationDispatch.status == "READY"
+            )
+        ):
+            revoke(db, event_id, str(target))
     audit(
         db,
         row.project_id,

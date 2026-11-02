@@ -59,14 +59,15 @@ def enforce_budget(
     maximum_cost: Decimal,
     *,
     exclude_pending_job: UUID | None = None,
+    lock: bool = True,
 ) -> None:
-    project = db.execute(
-        select(Project)
-        .where(Project.id == project_id)
-        .with_for_update()
-        .execution_options(populate_existing=True)
-    ).scalar_one()
-    policy = policy_for(db, project_id, lock=True)
+    statement = (
+        select(Project).where(Project.id == project_id).execution_options(populate_existing=True)
+    )
+    if lock:
+        statement = statement.with_for_update()
+    project = db.execute(statement).scalar_one()
+    policy = policy_for(db, project_id, lock=lock)
     requested_candidates = payload.spec.batch_size
     if payload.task_type == "IMAGE" and payload.target_asset_id is not None:
         from arclight.persistence.models import AssetVersion
@@ -118,7 +119,7 @@ def enforce_budget(
         if used + held + maximum_cost > policy.task_limit:
             raise DomainError("BUDGET_TASK_EXCEEDED", "重试将超过单任务累计预算", 409)
     if payload.batch_id is not None:
-        batch = db.get(GenerationBudgetBatch, payload.batch_id, with_for_update=True)
+        batch = db.get(GenerationBudgetBatch, payload.batch_id, with_for_update=lock)
         assert batch is not None
         used, pending = costs(
             db, project_id, batch_id=batch.id, exclude_pending_job=exclude_pending_job
@@ -134,7 +135,10 @@ def enforce_budget(
         raise DomainError("BUDGET_BATCH_EXCEEDED", "候选批量预算超过上限", 409)
 
 
-def check_execution(db: Session, job: GenerationJob, spec: GenerationSpec) -> None:
+def check_execution(
+    db: Session, job: GenerationJob, spec: GenerationSpec, *, lock: bool = True
+) -> None:
+    """Shared budget rules; lock=False is advisory scheduler reading, never reservation."""
     captured = db.scalar(
         select(GenerationBudgetQuote).where(GenerationBudgetQuote.job_id == job.id)
     )
@@ -162,8 +166,11 @@ def check_execution(db: Session, job: GenerationJob, spec: GenerationSpec) -> No
             "spec": spec,
         }
     )
-    enforce_budget(db, job.project_id, payload, live.maximum_cost, exclude_pending_job=job.id)
-    reserve_next(db, job, live.maximum_cost)
+    enforce_budget(
+        db, job.project_id, payload, live.maximum_cost, exclude_pending_job=job.id, lock=lock
+    )
+    if lock:
+        reserve_next(db, job, live.maximum_cost)
 
 
 def usage(db: Session, project_id: UUID) -> dict:

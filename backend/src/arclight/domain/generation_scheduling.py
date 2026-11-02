@@ -18,6 +18,14 @@ class ExecutionPolicy(BaseModel):
     paused_providers: frozenset[str] = frozenset()
     global_per_minute: PositiveLimit = 60
     user_per_minute: PositiveLimit = 20
+    interactive_weight: int = Field(default=3, strict=True, ge=1, le=20)
+    batch_weight: int = Field(default=1, strict=True, ge=1, le=20)
+    interactive_concurrency_reserve: int = Field(default=1, strict=True, ge=0, le=100)
+    interactive_rate_reserve: int = Field(default=1, strict=True, ge=0, le=100)
+    recovery_rate_reserve: int = Field(default=1, strict=True, ge=0, le=100)
+    permit_seconds: float = Field(default=30, gt=0, le=300)
+    publish_cooldown_seconds: float = Field(default=5, gt=0, le=60)
+    dispatch_window: int = Field(default=64, strict=True, ge=1, le=1000)
     call_timeout_seconds: float = Field(default=60, gt=0, le=3600)
     max_elapsed_seconds: float = Field(default=900, gt=0, le=86400)
     max_attempts: int = Field(default=3, strict=True, ge=1, le=20)
@@ -34,6 +42,8 @@ class ExecutionPolicy(BaseModel):
             raise ValueError("Automatic retry errors must be inside the retry allowlist")
         if len(self.provider_limits) > 100 or len(self.project_limits) > 10000:
             raise ValueError("Too many scoped concurrency overrides")
+        if self.publish_cooldown_seconds >= self.permit_seconds:
+            raise ValueError("Publication cooldown must be shorter than the dispatch permit")
         return self
 
     def backoff(self, attempt_count: int) -> float:

@@ -147,6 +147,7 @@ class ExpectedAsset(MediaInput):
 class GenerationCreate(MediaInput):
     episode_id: UUID | None = None
     batch_id: UUID | None = None
+    scheduling_mode: Literal["INTERACTIVE", "BATCH"] = "INTERACTIVE"
     target_type: TargetType
     target_asset_id: UUID | None = None
     expected_asset: ExpectedAsset | None = None

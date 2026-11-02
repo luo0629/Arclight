@@ -149,11 +149,41 @@ services:
 
   worker:
     <<: *app
-    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2"]
-    depends_on:
+    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2", "--queues=workflow", "--hostname=workflow@%h"]
+    cpus: 1.0
+    mem_limit: 1g
+    depends_on: &worker-depends
       migrate: {condition: service_completed_successfully}
       storage-init: {condition: service_completed_successfully}
       redis: {condition: service_healthy}
+
+  worker-interactive:
+    <<: *app
+    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2", "--queues=generation.interactive", "--hostname=interactive@%h"]
+    cpus: 1.0
+    mem_limit: 1g
+    depends_on: *worker-depends
+
+  worker-batch:
+    <<: *app
+    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2", "--queues=generation.batch", "--hostname=batch@%h"]
+    cpus: 1.0
+    mem_limit: 1g
+    depends_on: *worker-depends
+
+  worker-scheduler:
+    <<: *app
+    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=1", "--queues=scheduler.control", "--hostname=scheduler@%h"]
+    cpus: 0.5
+    mem_limit: 512m
+    depends_on: *worker-depends
+
+  worker-recovery:
+    <<: *app
+    command: ["/app/.venv/bin/celery", "-A", "arclight.workers.celery_app:celery_app", "worker", "--loglevel=info", "--concurrency=2", "--queues=generation.recovery", "--hostname=recovery@%h"]
+    cpus: 0.5
+    mem_limit: 512m
+    depends_on: *worker-depends
 
   beat:
     <<: *app

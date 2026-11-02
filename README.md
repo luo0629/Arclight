@@ -273,7 +273,19 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 
 服务明确失败后仅对白名单错误重试；默认自动重试 `PROVIDER_UNAVAILABLE`，`PROVIDER_FAILED` 需显式重试。所有重试均遵守次数、截止时间和退避。超时保留未知结果及并发占用，先按 GEN-04 对账；明确未接收才可受限重试。取消是尽力请求，只有明确终态才能释放并发占用，成功结果可能在取消请求后返回。适配器等待使用有界线程容量，超时不表示外部执行或线程已经停止。
 
-任务的 `schedule`、`calls`、`dead-letter` 和 `replays` 只读子接口沿用项目权限；死信保留安全错误分类和边界。Owner 可对已诊断的明确失败使用 `POST .../generation-jobs/{job_id}/replay`，提交 `expected_revision`、`reason` 和新 `Idempotency-Key`，另建关联原任务／死信的新任务并复验原精确输入和目标 CAS。未知执行不得直接重放。迁移 `0034` 保护调度策略、调用事实、死信及重放关联，有历史时拒绝降级。目前仅有 Mock 媒体 Provider，真实服务、预算预留及结算由后续任务接入。
+任务的 `schedule`、`calls`、`dead-letter` 和 `replays` 只读子接口沿用项目权限；死信保留安全错误分类和边界。Owner 可对已诊断的明确失败使用 `POST .../generation-jobs/{job_id}/replay`，提交 `expected_revision`、`reason` 和新 `Idempotency-Key`，另建关联原任务／死信的新任务并复验原精确输入和目标 CAS。未知执行不得直接重放。迁移 `0034` 保护调度策略、调用事实、死信及重放关联，有历史时拒绝降级。目前仅有 Mock 媒体 Provider；预算沿用已有项目／剧集／任务／批次限额、不可变预留及结算账本，真实付费服务另行接入。
+
+生成请求可声明 `scheduling_mode: "BATCH"`；缺省为交互任务。服务端将预算批次或多候选请求强制归为批量，显式重试及死信重放继承原分类；客户端不能设置数字优先级。分类与幂等指纹一起冻结，旧请求的指纹仍可重放。默认按交互 3、批量 1 的成功许可份额轮转，同类按项目轮转、项目内按就绪时间 FIFO。`interactive_weight`／`batch_weight` 可调整权重，公平游标持久化；权重不承诺完成时长比例。
+
+Compose 使用独立资源的 `worker-interactive`、`worker-batch`、`worker-scheduler`、`worker-recovery`，分别只消费 `generation.interactive`、`generation.batch`、`scheduler.control`、`generation.recovery`。原 `worker` 只消费 `workflow`。本机启动也必须使用五个独立 Worker 进程，分别传入 `--queues=<队列>` 和唯一 `--hostname=<角色>@%h`；Windows 使用 `--pool=solo`。只启动旧的默认 Worker 无法消费媒体及调度队列。
+
+供应商／项目并发大于 1 时，默认保留 1 个交互槽位，批量不能借用；这会降低纯批量时的利用率。单并发退化为不抢占的加权顺序。全局／用户速率同样在总额度内各保留交互和恢复份额；极小额度不能同时保证各类即时可用。对应配置为 `interactive_concurrency_reserve`、`interactive_rate_reserve`、`recovery_rate_reserve`。尚未消费的有效许可与实际调用共用上述限额，异步／未知调用不会因为 Celery 函数返回而释放。
+
+派发器先在数据库发放短期许可，再发布含 job、事件、许可 ID 和 epoch 的消息。默认许可 30 秒、发布冷却 5 秒、每轮最多 64 条（`permit_seconds`、`publish_cooldown_seconds`、`dispatch_window`）；冷却必须短于许可。Worker 复验许可、权限、精确输入、预算及实时配额，事务内转换为实际调用。Broker 丢消息或发布失败后按同一许可重投；未消费许可过期后递增 epoch，迟到旧消息不能创建 attempt。已消费许可不因到期而释放实际占用或未知费用；恢复队列沿原 attempt 查询。没有许可的旧消息不能直接提交供应商。
+
+项目积压读取为 `GET .../generation-jobs/queue`：按类别区分就绪、退避、待消费许可、执行、未知结果、终态和死信，包含阻塞原因、最老等待及等待分位数、调度心跳。`/{job_id}/queue`、`/{job_id}/permits` 和 `/{job_id}/permits/{permit_id}/events` 提供分类与调度历史，均沿用项目权限与分页。这里的数量是业务任务数；Broker 消息可能重复。运维可用 `docker compose exec redis redis-cli LLEN generation.interactive`（及其他队列名）检查待消费消息，用 `docker compose exec worker-scheduler /app/.venv/bin/celery -A arclight.workers.celery_app:celery_app inspect active_queues` 检查实际 Worker 路由；许可历史可核对过期及重复发布。
+
+升级 `0039` 前必须停止旧 beat／派发器和旧生成消费者，等待或核对在途调用，再迁移并启动新 Worker 组；禁止新旧许可协议混跑。历史输入与 attempt 不改写，来源不明任务保守归批量并保留迁移原因。有分类历史时降级被保护性拒绝；回滚需要恢复协调后的数据库／代码版本，不能直接重启旧消费者。Redis 的 7200 秒 visibility timeout 只处理消息可见性，不代替执行租约或对账。
 
 `GET .../generation-jobs/providers/{provider}/capabilities?model=...` 按项目权限返回已安装 Provider 的版本化能力：参考图数、seed／上限、尺寸／像素／倍数／固定尺寸和画幅、批量上限、查询、取消、幂等及同步／异步方式。创建任务冻结该声明，调用前同时复验冻结声明与当前适配器；旧任务只校验当前能力，不补写历史。`spec.batch_size` 默认1，`spec.require_query`／`spec.require_cancel` 默认false；明确要求不支持能力时拒绝创建。尺寸放在 `output_spec.width`／`height`，参考图只能来自精确输入版本，不能通过参数别名绕过校验。批量成功必须返回对应数量的结果；数量不符按未知／人工处理，不盲目重发。Mock 只模拟规范化结果（最多8项），明确不支持持久查询及取消，不代表真实图片质量或外部服务验收。
 

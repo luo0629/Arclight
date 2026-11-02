@@ -3,7 +3,7 @@
 from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.application import generation_leases as leases
@@ -22,7 +22,6 @@ from arclight.persistence.generation_scheduling import (
     GenerationCall,
     GenerationDeadLetter,
     GenerationSchedule,
-    GenerationSchedulerGate,
 )
 
 
@@ -153,11 +152,39 @@ def retry_after_failure(
     return True
 
 
-def admit(db: Session, job: GenerationJob, live: ExecutionPolicy, kind: str = "SUBMIT") -> bool:
+def admit(
+    db: Session,
+    job: GenerationJob,
+    live: ExecutionPolicy,
+    kind: str = "SUBMIT",
+    *,
+    permit_id: UUID | None = None,
+    permit_epoch: int | None = None,
+    event_id: UUID | None = None,
+) -> bool:
     """Call with the project/job locked; the singleton serializes count + reservation."""
-    gate = db.get(GenerationSchedulerGate, "global", with_for_update=True)
-    assert gate is not None
+    from arclight.application.generation_queues import capacity_block, lock_gate, valid_permit
+    from arclight.persistence.generation_queues import GenerationLane
+
     schedule = schedule_for(db, job, live)
+    lock_gate(db)
+    identity = db.scalar(select(GenerationLane).where(GenerationLane.job_id == job.id))
+    if permit_id is not None:
+        permit = (
+            valid_permit(db, event_id, permit_id, permit_epoch)
+            if event_id is not None and permit_epoch is not None
+            else None
+        )
+        if (
+            permit is None
+            or permit.job_id != job.id
+            or permit.project_id != job.project_id
+            or permit.provider != job.provider
+            or permit.actor != job.created_by
+            or identity is None
+            or permit.lane != identity.lane
+        ):
+            return False
     stamp = leases.clock(db)
     if kind != "SUBMIT":
         # Read-only/control calls abandoned by a dead worker cannot occupy slots forever.
@@ -176,40 +203,14 @@ def admit(db: Session, job: GenerationJob, live: ExecutionPolicy, kind: str = "S
             return False
         if leases.utc(schedule.next_attempt_at) > stamp:
             return False
-    block = None
-    if kind == "SUBMIT" and job.provider in live.paused_providers:
-        block = "PROVIDER_PAUSED"
-    active = (
-        select(func.count())
-        .select_from(GenerationCall)
-        .where(
-            GenerationCall.released_at.is_(None),
-            GenerationCall.kind == kind,
-        )
+    block = capacity_block(
+        db,
+        job,
+        live,
+        kind,
+        lane=identity.lane if identity else "BATCH",
+        exclude_permit=permit_id,
     )
-    provider_limit = (
-        live.provider_limits.get(job.provider, live.provider_concurrency) if kind == "SUBMIT" else 4
-    )
-    project_limit = live.project_limits.get(str(job.project_id), live.project_concurrency)
-    if (db.scalar(active.where(GenerationCall.provider == job.provider)) or 0) >= provider_limit:
-        block = "PROVIDER_CONCURRENCY"
-    elif (
-        kind == "SUBMIT"
-        and (db.scalar(active.where(GenerationCall.project_id == job.project_id)) or 0)
-        >= project_limit
-    ):
-        block = "PROJECT_CONCURRENCY"
-    recent = (
-        select(func.count())
-        .select_from(GenerationCall)
-        .where(GenerationCall.started_at > stamp - timedelta(seconds=60))
-    )
-    if (db.scalar(recent) or 0) >= live.global_per_minute:
-        block = "GLOBAL_RATE"
-    elif (
-        db.scalar(recent.where(GenerationCall.actor == job.created_by)) or 0
-    ) >= live.user_per_minute:
-        block = "USER_RATE"
     if block:
         if kind == "SUBMIT":
             schedule.blocked_code = block

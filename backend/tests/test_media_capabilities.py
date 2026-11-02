@@ -281,6 +281,8 @@ def test_default_options_preserve_historical_fingerprint_and_idempotent_replay(
     expected = GenerationCreate.model_validate(body).model_dump(mode="json")
     # GEN-13 adds an optional batch association; historical requests had no field.
     del expected["batch_id"]
+    # GEN-16's default classification was also absent from the historical request.
+    del expected["scheduling_mode"]
     for field in ("batch_size", "require_query", "require_cancel"):
         del expected["spec"][field]
     old_hash = hashlib.sha256(

@@ -17,6 +17,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationCreate, MediaInput, safe_metadata
 from arclight.domain.generation_scheduling import ExecutionPolicy
 from arclight.persistence.generation import GenerationJob
+from arclight.persistence.generation_queues import GenerationLane
 from arclight.persistence.generation_scheduling import GenerationDeadLetter, GenerationReplay
 from arclight.persistence.models import DependencyManifest
 
@@ -73,9 +74,11 @@ def replay_job(
     manifest = db.get(DependencyManifest, source.input_manifest_id)
     assert manifest is not None
     snapshot = manifest.snapshot_json
+    lane = db.scalar(select(GenerationLane.lane).where(GenerationLane.job_id == source.id))
     request = GenerationCreate.model_validate(
         {
             "batch_id": snapshot["context"].get("budget_batch_id"),
+            "scheduling_mode": lane or "BATCH",
             "target_type": source.target_type,
             "target_asset_id": source.target_asset_id,
             "episode_id": source.episode_id,

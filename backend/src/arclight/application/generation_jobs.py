@@ -33,6 +33,8 @@ def request_fingerprint(payload: GenerationCreate) -> str:
     values = payload.model_dump(mode="json")
     if values["batch_id"] is None:
         del values["batch_id"]
+    if values["scheduling_mode"] == "INTERACTIVE":
+        del values["scheduling_mode"]
     # Preserve idempotent replays of requests captured before capability options existed.
     for field, default in (("batch_size", 1), ("require_query", False), ("require_cancel", False)):
         if values["spec"][field] == default:
@@ -196,6 +198,9 @@ def create_job(
 
     capture_media(db, project_id, job.id, manifest.id, payload.task_type, payload.spec, inputs)
     schedule_for(db, job, execution_policy)
+    from arclight.application.generation_queues import classify
+
+    classify(db, job, payload)
     enqueue_dispatch(db, job)
     audit(
         db,

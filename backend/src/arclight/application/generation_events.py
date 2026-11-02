@@ -1,14 +1,10 @@
 """Media outbox persistence and repeat publication until a consumer claims an event."""
 
-from collections.abc import Callable
-from uuid import UUID
-
-from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.generation_leases import clock
+from arclight.application.generation_queues import Publish, publish_ready
+from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.persistence.generation import GenerationDispatch, GenerationJob
-from arclight.persistence.generation_scheduling import GenerationSchedule
 
 
 def enqueue_dispatch(db: Session, job: GenerationJob) -> GenerationDispatch:
@@ -19,32 +15,15 @@ def enqueue_dispatch(db: Session, job: GenerationJob) -> GenerationDispatch:
     )
     db.add(row)
     db.flush()
+    from arclight.application.generation_queues import prepare_permit
+
+    prepare_permit(db, job, row)
     return row
 
 
 def publish_dispatches(
-    factory: sessionmaker[Session], publish: Callable[[UUID, UUID], None]
+    factory: sessionmaker[Session],
+    publish: Publish,
+    live: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
 ) -> int:
-    with factory() as db:
-        pending = list(
-            db.execute(
-                select(GenerationDispatch.job_id, GenerationDispatch.id)
-                .outerjoin(
-                    GenerationSchedule, GenerationSchedule.job_id == GenerationDispatch.job_id
-                )
-                .where(
-                    GenerationDispatch.status == "READY",
-                    or_(
-                        GenerationSchedule.id.is_(None),
-                        GenerationSchedule.next_attempt_at <= clock(db),
-                        GenerationSchedule.deadline_at <= clock(db),
-                    ),
-                )
-                .order_by(GenerationDispatch.created_at, GenerationDispatch.id)
-                .limit(100)
-            )
-        )
-    # READY remains eligible after broker loss; provider I/O never runs in this transaction.
-    for job_id, event_id in pending:
-        publish(job_id, event_id)
-    return len(pending)
+    return publish_ready(factory, publish, live)

@@ -6,6 +6,7 @@ from arclight.application.generation_candidates import import_attempt, pending_a
 from arclight.application.generation_delivery import consume_dispatch
 from arclight.application.generation_events import publish_dispatches
 from arclight.application.generation_leases import LeasePolicy
+from arclight.application.generation_queues import QUEUES, claim_recovery_scan
 from arclight.application.generation_recovery import recover_job, recovery_candidates
 from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
@@ -32,7 +33,9 @@ def execute_workflow(run_id: str, revision: int) -> None:
 
 
 @celery_app.task(name="arclight.execute_generation")
-def execute_generation(job_id: str, event_id: str) -> str:
+def execute_generation(
+    job_id: str, event_id: str, permit_id: str | None = None, permit_epoch: int | None = None
+) -> str:
     settings = get_settings()
     engine = build_engine(settings)
     try:
@@ -43,6 +46,9 @@ def execute_generation(job_id: str, event_id: str) -> str:
             get_media_submission_provider(),
             policy=media_lease_policy(settings),
             execution_policy=settings.media_execution_policy,
+            permit_id=UUID(permit_id) if permit_id is not None else None,
+            permit_epoch=permit_epoch,
+            require_permit=True,
         )
     finally:
         engine.dispose()
@@ -81,8 +87,12 @@ def execute_render_preview(run_id: str) -> str:
         engine.dispose()
 
 
-def publish_generation(job_id: UUID, event_id: UUID) -> None:
-    execute_generation.apply_async(args=[str(job_id), str(event_id)])
+def publish_generation(
+    job_id: UUID, event_id: UUID, permit_id: UUID, epoch: int, lane: str
+) -> None:
+    execute_generation.apply_async(
+        args=[str(job_id), str(event_id), str(permit_id), epoch], queue=QUEUES[lane]
+    )
 
 
 @celery_app.task(name="arclight.import_generation_candidates")
@@ -120,11 +130,16 @@ def dispatch_outbox() -> None:
                 execute_workflow.apply_async(args=[str(event.run_id), event.revision])
                 event.published_at = utcnow()
                 event.attempt_count += 1
-        publish_dispatches(session_factory(engine), publish_generation)
+        publish_dispatches(
+            session_factory(engine), publish_generation, settings.media_execution_policy
+        )
         for attempt_id in pending_attempts(session_factory(engine)):
             import_generation_candidates.apply_async(args=[str(attempt_id)])
-        for job_id in recovery_candidates(session_factory(engine), media_lease_policy(settings)):
-            recover_generation.apply_async(args=[str(job_id)])
+        if claim_recovery_scan(session_factory(engine)):
+            for job_id in recovery_candidates(
+                session_factory(engine), media_lease_policy(settings)
+            ):
+                recover_generation.apply_async(args=[str(job_id)])
         with session_factory(engine)() as db:
             previews = list(
                 db.scalars(

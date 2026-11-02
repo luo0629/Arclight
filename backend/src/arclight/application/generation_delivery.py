@@ -8,8 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application import generation_leases as leases
+from arclight.application import generation_queues as queues
 from arclight.application import generation_scheduling as scheduling
 from arclight.application.audit import audit
+from arclight.application.commands import require_project
 from arclight.application.generation_attempts import (
     current_attempt,
     finish_attempt,
@@ -103,6 +105,9 @@ def consume_dispatch(
     *,
     policy: leases.LeasePolicy = leases.DEFAULT_POLICY,
     execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+    permit_id: UUID | None = None,
+    permit_epoch: int | None = None,
+    require_permit: bool = False,
 ) -> str:
     with factory.begin() as db:
         job = find_job(db, job_id, lock=True)
@@ -115,15 +120,31 @@ def consume_dispatch(
             raise DomainError("GENERATION_MESSAGE_CONFLICT", "媒体事件与任务不匹配", 409)
         if event.status != "READY":
             return job.status
-        if job.status in {Status.CREATED, Status.RETRY_WAIT} and not scheduling.admit(
-            db, job, execution_policy
-        ):
-            if job.status == Status.FAILED:
-                event.status = "SKIPPED"
-                event.finished_at = utcnow()
-                event.receipt_json = {"error_code": "TIME_OR_ATTEMPT_LIMIT"}
+        if require_permit and (permit_id is None or permit_epoch is None):
+            # Old broker messages are only wakeups; the periodic scheduler issues authority.
             return job.status
         try:
+            require_project(db, job.project_id, job.created_by, write=True)
+            if job.created_by != "service-owner":
+                from arclight.persistence.models import User
+
+                user = db.get(User, UUID(job.created_by), populate_existing=True)
+                if user is None or user.disabled:
+                    raise DomainError("FORBIDDEN", "任务创建者已不可执行", 403)
+            if job.status in {Status.CREATED, Status.RETRY_WAIT} and not scheduling.admit(
+                db,
+                job,
+                execution_policy,
+                permit_id=permit_id,
+                permit_epoch=permit_epoch,
+                event_id=event.id,
+            ):
+                if job.status == Status.FAILED:
+                    event.status = "SKIPPED"
+                    event.finished_at = utcnow()
+                    event.receipt_json = {"error_code": "TIME_OR_ATTEMPT_LIMIT"}
+                    queues.revoke(db, event.id, "TIME_OR_ATTEMPT_LIMIT")
+                return job.status
             if provider.name != job.provider:
                 raise DomainError("GENERATION_PROVIDER_MISMATCH", "供应商不匹配冻结输入", 409)
             if provider.capabilities.supports_idempotency != provider.supports_idempotency:
@@ -137,6 +158,7 @@ def consume_dispatch(
             event.status = "SKIPPED"
             event.finished_at = utcnow()
             event.receipt_json = {"error_code": exc.code}
+            queues.revoke(db, event.id, exc.code)
             if job.revision == event.expected_revision and job.status in {
                 Status.CREATED,
                 Status.RETRY_WAIT,
@@ -156,6 +178,11 @@ def consume_dispatch(
             raise DomainError("GENERATION_LEASE_BUSY", "媒体执行权尚未释放", 409)
         token = lease.token
         call = scheduling.reserve(db, job, attempt.id, "SUBMIT")
+        if permit_id is not None:
+            permit = db.get(queues.GenerationPermit, permit_id)
+            assert permit is not None
+            permit.state = "CONSUMED"
+            queues.record(db, permit, "CONSUMED")
         call_id = call.id
         frozen_policy = scheduling.policy_for(db, job)
         schedule = scheduling.schedule_for(db, job)

@@ -26,6 +26,7 @@ from arclight.application.generation_state import request_cancel
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationCreate, GenerationResult
 from arclight.persistence.generation import GenerationDispatch
+from arclight.persistence.generation_queues import GenerationPermit
 from arclight.persistence.generation_scheduling import GenerationSchedule
 from arclight.persistence.models import (
     AssetVersion,
@@ -343,17 +344,30 @@ def test_outbox_republishes_until_claim_and_worker_duplicate_is_safe(
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     job = capture_ok(client, episode["project_id"])
     messages = []
+    queues = []
     imports = []
     monkeypatch.setattr(
         tasks.import_generation_candidates, "apply_async", lambda *, args: imports.append(args)
     )
     monkeypatch.setattr(
-        tasks.execute_generation, "apply_async", lambda *, args: messages.append(args)
+        tasks.execute_generation,
+        "apply_async",
+        lambda *, args, queue: (messages.append(args), queues.append(queue)),
     )
     tasks.dispatch_outbox()
     tasks.dispatch_outbox()
+    assert len(messages) == 1
+    from arclight.application import generation_leases
+
+    original_clock = generation_leases.clock
+    monkeypatch.setattr(
+        generation_leases, "clock", lambda db: original_clock(db) + timedelta(seconds=6)
+    )
+    tasks.dispatch_outbox()
     assert len(messages) == 2 and messages[0] == messages[1]
-    assert messages[0] == [job["id"], str(event_for(client, job))]
+    assert messages[0][:2] == [job["id"], str(event_for(client, job))]
+    assert len(messages[0]) == 4 and messages[0][3] == 1
+    assert queues == ["generation.interactive"] * 2
     provider = Provider()
     monkeypatch.setattr(tasks, "get_media_submission_provider", lambda: provider)
     assert tasks.execute_generation(*messages[0]) == "SUCCEEDED"
@@ -363,7 +377,7 @@ def test_outbox_republishes_until_claim_and_worker_duplicate_is_safe(
     assert imports == [[str(provider.requests[0].attempt_id)]]
 
 
-def test_broker_failure_leaves_durable_ready_event(client, episode):
+def test_broker_failure_leaves_durable_ready_event(client, episode, monkeypatch):
     job = capture_ok(client, episode["project_id"])
 
     def fail(*_):
@@ -373,7 +387,20 @@ def test_broker_failure_leaves_durable_ready_event(client, episode):
         publish_dispatches(client.app.state.session_factory, fail)
     received = []
     publish_dispatches(client.app.state.session_factory, lambda *args: received.append(args))
-    assert received == [(UUID(job["id"]), event_for(client, job))]
+    assert received == []
+    from arclight.application import generation_leases
+
+    original_clock = generation_leases.clock
+    monkeypatch.setattr(
+        generation_leases, "clock", lambda db: original_clock(db) + timedelta(seconds=6)
+    )
+    publish_dispatches(client.app.state.session_factory, lambda *args: received.append(args))
+    with client.app.state.session_factory() as db:
+        permit = db.scalar(
+            select(GenerationPermit).where(GenerationPermit.job_id == UUID(job["id"]))
+        )
+        assert received == [(UUID(job["id"]), event_for(client, job), permit.id, 1, "INTERACTIVE")]
+        assert permit.publish_count == 2
 
 
 @pytest.mark.parametrize("role", ["editor", "viewer", "outsider"])

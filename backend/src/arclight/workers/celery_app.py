@@ -12,6 +12,12 @@ celery_app.conf.update(
     task_reject_on_worker_lost=True,
     worker_prefetch_multiplier=1,
     task_default_queue="workflow",
+    task_routes={
+        "arclight.execute_generation": {"queue": "generation.interactive"},
+        "arclight.dispatch_outbox": {"queue": "scheduler.control"},
+        "arclight.recover_generation": {"queue": "generation.recovery"},
+    },
+    broker_transport_options={"visibility_timeout": 7200},
     broker_connection_retry_on_startup=True,
     beat_schedule={"dispatch-outbox": {"task": "arclight.dispatch_outbox", "schedule": 3.0}},
 )

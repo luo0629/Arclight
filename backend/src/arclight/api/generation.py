@@ -28,6 +28,11 @@ from arclight.persistence.generation import (
     GenerationLease,
     GenerationReconciliation,
 )
+from arclight.persistence.generation_queues import (
+    GenerationLane,
+    GenerationPermit,
+    GenerationPermitEvent,
+)
 from arclight.persistence.generation_scheduling import (
     GenerationCall,
     GenerationDeadLetter,
@@ -173,6 +178,107 @@ def get_capabilities(
 ) -> MediaCapabilities:
     require_project(db, project_id, actor)
     return resolve_capabilities(provider, model)
+
+
+@router.get("/queue")
+def get_queue(project_id: UUID, db: Database, actor: Actor) -> dict:
+    require_project(db, project_id, actor)
+    from arclight.application.generation_queue_reads import queue_overview
+
+    return queue_overview(db, project_id)
+
+
+class QueueResource(Resource):
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def queue_timestamps(cls, value: datetime) -> datetime | None:
+        return utc_timestamp(value)
+
+
+class LaneRead(QueueResource):
+    job_id: UUID
+    lane: str
+    origin: str
+    policy_version: int
+    actor: str
+
+
+class PermitRead(QueueResource):
+    dispatch_id: UUID
+    job_id: UUID
+    lane: str
+    state: str
+    epoch: int
+    issued_at: datetime | None
+    expires_at: datetime | None
+    publish_after: datetime | None
+    publish_count: int
+    reason: str | None
+
+    @field_validator("issued_at", "expires_at", "publish_after")
+    @classmethod
+    def permit_timestamps(cls, value: datetime | None) -> datetime | None:
+        return utc_timestamp(value)
+
+
+class PermitEventRead(QueueResource):
+    permit_id: UUID
+    sequence: int
+    epoch: int
+    action: str
+    reason: str | None
+
+
+@router.get("/{job_id}/queue")
+def get_job_queue(project_id: UUID, job_id: UUID, db: Database, actor: Actor) -> LaneRead:
+    scoped_job(db, project_id, job_id, actor)
+    return LaneRead.model_validate(
+        db.scalar(select(GenerationLane).where(GenerationLane.job_id == job_id))
+    )
+
+
+@router.get("/{job_id}/permits")
+def list_permits(
+    project_id: UUID,
+    job_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[PermitRead]:
+    scoped_job(db, project_id, job_id, actor)
+    rows = db.scalars(
+        select(GenerationPermit)
+        .where(GenerationPermit.job_id == job_id)
+        .order_by(GenerationPermit.created_at, GenerationPermit.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [PermitRead.model_validate(row) for row in rows]
+
+
+@router.get("/{job_id}/permits/{permit_id}/events")
+def list_permit_events(
+    project_id: UUID,
+    job_id: UUID,
+    permit_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[PermitEventRead]:
+    scoped_job(db, project_id, job_id, actor)
+    permit = db.get(GenerationPermit, permit_id)
+    if permit is None or permit.job_id != job_id:
+        raise DomainError("NOT_FOUND", "调度许可不存在", 404)
+    rows = db.scalars(
+        select(GenerationPermitEvent)
+        .where(GenerationPermitEvent.permit_id == permit_id)
+        .order_by(GenerationPermitEvent.sequence)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [PermitEventRead.model_validate(row) for row in rows]
 
 
 @router.get("/{job_id}")
