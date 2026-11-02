@@ -1,13 +1,30 @@
 """Apply one bounded frozen context per operation without changing provider signatures."""
 
+from collections.abc import Callable
 from dataclasses import dataclass
+
+from pydantic import BaseModel
 
 from arclight.agents.contracts import ScriptContent, StoryboardContent
 from arclight.agents.script_rewrite import RewriteResult
 from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.agents.story_outline import StoryOutlineContent
+from arclight.core.errors import DomainError
 from arclight.domain.context import check_call
+from arclight.domain.generation_requests import safe_metadata
 from arclight.providers.text import OpenAICompatibleTextProvider, TextProvider
+
+
+def provider_call[T](call: Callable[[], T]) -> T:
+    # LangGraph persists exception strings in pending writes. Scrub transport
+    # failures before they cross that boundary, rather than only in API logging.
+    try:
+        result = call()
+        if isinstance(result, BaseModel):
+            safe_metadata(result.model_dump(mode="json"))
+        return result
+    except Exception:
+        raise DomainError("TEXT_PROVIDER_FAILED", "文本模型调用失败", 502) from None
 
 
 @dataclass
@@ -20,14 +37,15 @@ class ContextTextProvider:
 
     def analyze(self, story: str) -> StoryAnalysisContent:
         self.check("analyze", {"story": story})
-        return self.provider.analyze(story)
+        return provider_call(lambda: self.provider.analyze(story))
 
     def outline(self, source: dict) -> StoryOutlineContent:
-        return self.provider.outline(self.check("outline", source))
+        checked = self.check("outline", source)
+        return provider_call(lambda: self.provider.outline(checked))
 
     def rewrite(self, context: dict) -> RewriteResult:
         self.check("rewrite", context)
-        return self.provider.rewrite(context)
+        return provider_call(lambda: self.provider.rewrite(context))
 
     def script(
         self,
@@ -60,14 +78,14 @@ class ContextTextProvider:
                 arguments[name] = value
         if "outline_context" in arguments:
             arguments["outline_context"] = checked_input["outline_context"]
-        return self.provider.script(story, style, duration_ms, **arguments)
+        return provider_call(lambda: self.provider.script(story, style, duration_ms, **arguments))
 
     def storyboard(self, script: ScriptContent, duration_ms: int) -> StoryboardContent:
         self.check(
             "storyboard",
             {"script": script.model_dump(mode="json"), "target_duration_ms": duration_ms},
         )
-        return self.provider.storyboard(script, duration_ms)
+        return provider_call(lambda: self.provider.storyboard(script, duration_ms))
 
 
 def bind_contexts(provider: TextProvider, contexts: dict[str, dict]) -> TextProvider:

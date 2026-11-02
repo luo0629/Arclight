@@ -25,6 +25,7 @@ class ProductionState(TypedDict, total=False):
     storyboard: dict
     storyboard_version_id: str
     storyboard_approved: bool
+    context_refs: dict
 
 
 class Artifacts:
@@ -38,8 +39,17 @@ class Artifacts:
 
 
 def build_graph(
-    provider: TextProvider, artifacts: Artifacts, checkpointer, *, director_only: bool = False
+    provider: TextProvider,
+    artifacts: Artifacts,
+    checkpointer,
+    *,
+    director_only: bool = False,
+    contexts: dict[str, dict] | None = None,
 ):
+    def references(state: ProductionState, stage: str) -> dict:
+        ref = (contexts or {}).get(stage, {}).get("trace_ref")
+        return {"context_refs": {**state.get("context_refs", {}), stage: ref}} if ref else {}
+
     def write_script(state: ProductionState) -> dict:
         def generate() -> dict:
             args = (state["story"], state["style_guide"], state["target_duration_ms"])
@@ -54,7 +64,7 @@ def build_graph(
             return provider.script(*args, **kwargs).model_dump()
 
         version_id, content = artifacts.script(generate)
-        return {"script": content, "script_version_id": version_id}
+        return {"script": content, "script_version_id": version_id, **references(state, "script")}
 
     def review_script(state: ProductionState) -> dict:
         # interrupt 恢复时节点会重新执行；中断之前不执行有副作用的操作。
@@ -68,7 +78,11 @@ def build_graph(
             return StoryboardContent.model_validate(content).validate_against(script).model_dump()
 
         version_id, content = artifacts.storyboard(state["script_version_id"], generate)
-        return {"storyboard": content, "storyboard_version_id": version_id}
+        return {
+            "storyboard": content,
+            "storyboard_version_id": version_id,
+            **references(state, "storyboard"),
+        }
 
     def review_storyboard(state: ProductionState) -> dict:
         decision = interrupt(

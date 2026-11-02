@@ -300,6 +300,14 @@ Compose 使用独立资源的 `worker-interactive`、`worker-batch`、`worker-sc
 
 五个现有文本入口在启动事务中冻结 `context/1` 上下文，复用不可变 DependencyManifest，由 GEN-11 的 VersionBinding 保存逐阶段引用；`GET /api/v1/runs/{run_id}/contexts` 读取这些快照。运行中修改风格、资产、预算或限额不会改写旧输入，重试沿用原清单。编剧→导演串联任务在启动时明确声明本运行后续批准的精确剧本输出，不预造尚不存在的版本。旧运行未保存上下文时返回 `legacy_without_context: true`，不会补读当前事实。专业 Agent 与媒体实际入口由各自任务接入；本功能不代表这些生产器已实现。
 
+启动追溯 `context-trace/1` 另存安全的公开启动输入及摘要、组装版本、故事来源修订、设定修订、视觉规范和精确资产的原始依赖清单摘要。私有对象路径、供应商凭证和图片二进制不会进入这份记录。`GET /api/v1/runs/{run_id}/contexts/{stage}/trace` 返回启动清单、检索轮次和实际消费回执；`through_round=0` 读取启动视图，指定已有轮次可重现该证据前缀。
+
+Owner／Editor 可向 `POST /api/v1/runs/{run_id}/contexts/{stage}/evidence` 提交 `creation_key`（UUID）、`expected_round`（从 0 开始）以及非空的 `asset_version_ids`、`story_entry_ids` 或 `source_ids`。服务端按任务合同鉴权并解析实际内容，顺序追加新清单，关联启动清单和上一轮，不接受客户端自报的证据正文。相同键、相同请求返回原回执（200），新建返回 201；键复用冲突或轮次竞争返回 409。每阶段最多 32 轮，累计独立资产／设定仍受启动时的限额约束，故事来源最多 16 个，累计 JSON 超限拒绝。运行中调高配置不会扩大已有清单的预算。
+
+每个现有文本阶段在首次调用前固定实际消费的证据前缀；图工作流先独立保存不可变消费回执，重试沿用它。单次提炼／大纲在项目锁内将回执与产物一并提交。编剧审核通过后，导演阶段单独选择当时已追加的证据；checkpoint 保存逐阶段引用。后续证据可以继续追加，旧消费回执保持原值。旧版仅有 CTX-01 快照的记录显示 `trace_available: false`，不能补造启动追溯；更早的无上下文记录保持原兼容行为。
+
+图片证据仅保存文件 ID、精确资产版本、checksum、大小和媒体类型。通过 `GET /api/v1/runs/{run_id}/contexts/{stage}/images/{file_id}` 读取实际图片，必须是该阶段清单已包含的图片且当前账号具有项目读取权限；每次校验对象完整性，缺失／损坏拒绝。接口返回 `private, no-store`，不暴露对象存储地址或临时签名。接入实际多图模型协议及专业 Agent 工具循环仍由各自任务负责。
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。

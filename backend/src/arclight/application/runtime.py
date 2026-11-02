@@ -7,7 +7,9 @@ from sqlalchemy.orm import sessionmaker
 
 from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
+from arclight.application.context_consumption import consume_context
 from arclight.application.context_snapshots import read_contexts
+from arclight.application.context_sources import public_startup
 from arclight.application.model_services import run_settings
 from arclight.application.production_versions import text_settings
 from arclight.application.script_rewrite import generate_rewrite
@@ -95,6 +97,7 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                             run_settings(settings, run.input_json.get("_text_service")),
                             contexts,
                         ),
+                        contexts=contexts,
                     )
                 else:
                     graph = build_graph(
@@ -107,12 +110,47 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                         artifacts,
                         saver,
                         director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
+                        contexts=contexts,
                     )
                 config = {"configurable": {"thread_id": str(run.id)}}
                 snapshot = graph.get_state(config)
+                stage = None
+                if not snapshot.values:
+                    stage = (
+                        "rewrite"
+                        if run.workflow_version == REWRITE_VERSION
+                        else (
+                            "storyboard"
+                            if run.workflow_version == DIRECTOR_WORKFLOW_VERSION
+                            else "script"
+                        )
+                    )
+                elif "director" in snapshot.next or (
+                    run.resume_json
+                    and run.resume_json.get("resource_type") == "script"
+                    and run.resume_json.get("decision") == "APPROVE"
+                    and run.workflow_version != REWRITE_VERSION
+                ):
+                    stage = "storyboard"
+                elif "screenwriter" in snapshot.next:
+                    stage = "script"
+                elif "rewrite" in snapshot.next:
+                    stage = "rewrite"
+                if stage and contexts:
+                    with factory.begin() as trace_db:
+                        selected = consume_context(
+                            trace_db, episode.project_id, run, stage, settings
+                        )
+                    contexts[stage] = selected[stage]
                 value: dict | Command | None = None
                 if not snapshot.values:
-                    inputs = {k: v for k, v in run.input_json.items() if not k.startswith("_")}
+                    inputs = public_startup(run.input_json)
+                    if contexts:
+                        inputs["context_refs"] = {
+                            name: context["trace_ref"]
+                            for name, context in contexts.items()
+                            if stage == name and "trace_ref" in context
+                        }
                     value = {"run_id": str(run.id), **inputs}
                 elif snapshot.interrupts and run.resume_json:
                     pending = snapshot.interrupts[0].value
@@ -152,6 +190,7 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                     "CONTEXT_SNAPSHOT_INVALID",
                     "CONTEXT_TOO_LARGE",
                     "CONTEXT_INPUT_UNSAFE",
+                    "CONTEXT_REFERENCE_INVALID",
                     "SCRIPT_DURATION_REQUIRED",
                     "SCRIPT_DURATION_OUT_OF_RANGE",
                     "STORYBOARD_DURATION_OUT_OF_RANGE",

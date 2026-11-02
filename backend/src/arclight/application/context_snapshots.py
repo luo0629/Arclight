@@ -7,6 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.application.context_builder import build_context
+from arclight.application.context_sources import (
+    capture_sources,
+    public_startup,
+    validate_sources,
+    verify_images,
+)
 from arclight.application.dependencies import lock_dependency_graph
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -17,6 +23,7 @@ from arclight.domain.context import (
     check_call,
     check_size,
 )
+from arclight.domain.context_trace import TRACE_VERSION
 from arclight.domain.versions import digest
 from arclight.persistence.models import (
     DependencyManifest,
@@ -108,7 +115,7 @@ def capture_contexts(
                 DependencyManifest.creation_key == identity,
             )
         )
-        snapshot = {
+        snapshot: dict = {
             "schema_version": 1,
             "target": {
                 "asset_id": None,
@@ -127,6 +134,19 @@ def capture_contexts(
             ],
             "context": {"origin": "context_builder", "run_id": str(run.id), "task_context": value},
         }
+        public = public_startup(run.input_json)
+        trace: dict = {
+            "trace_version": TRACE_VERSION,
+            "builder_version": BUILDER_VERSION,
+            "startup_input": public,
+            "startup_sha256": digest(public),
+            "sources": capture_sources(db, project_id, run.input_json, value),
+        }
+        verify_images(db, settings, project_id, trace["sources"])
+        check_size(
+            {"task_context": value, "trace": trace}, ContextLimits.model_validate(value["limits"])
+        )
+        snapshot["context"]["trace"] = trace
         if row is None:
             row = DependencyManifest(
                 project_id=project_id,
@@ -172,6 +192,8 @@ def read_contexts(db: Session, project_id: UUID, run: WorkflowRun) -> dict[str, 
             or row.project_id != project_id
             or row.creation_key != uuid5(run.id, "task-context:" + task)
             or digest(row.snapshot_json) != row.request_fingerprint
+            or row.snapshot_json.get("context", {}).get("origin") != "context_builder"
+            or row.snapshot_json.get("context", {}).get("run_id") != str(run.id)
         ):
             raise DomainError("CONTEXT_SNAPSHOT_INVALID", "启动上下文引用缺失或不匹配", 409)
         value = row.snapshot_json["context"]["task_context"]
@@ -183,5 +205,28 @@ def read_contexts(db: Session, project_id: UUID, run: WorkflowRun) -> dict[str, 
         ):
             raise DomainError("CONTEXT_SNAPSHOT_INVALID", "启动上下文范围不匹配", 409)
         check_size(value, ContextLimits.model_validate(value["limits"]))
+        trace = row.snapshot_json["context"].get("trace")
+        if trace is not None:
+            if (
+                trace["trace_version"] != TRACE_VERSION
+                or trace["builder_version"] != value["builder_version"]
+                or trace["startup_sha256"] != digest(trace["startup_input"])
+                or trace["startup_input"] != public_startup(run.input_json)
+            ):
+                raise DomainError("CONTEXT_SNAPSHOT_INVALID", "启动追溯输入不匹配", 409)
+            validate_sources(db, project_id, trace["sources"])
         values[task] = deepcopy(value)
+        if trace is not None:
+            from arclight.application.context_evidence import evidence_rounds
+
+            rounds = evidence_rounds(db, row)
+            values[task]["trace_ref"] = {
+                "startup_manifest_id": str(row.id),
+                "evidence_manifest_ids": [str(item.id) for item in rounds],
+            }
+            values[task]["retrieval_evidence"] = [
+                {"manifest_id": str(item.id), **deepcopy(item.snapshot_json["context"])}
+                for item in rounds
+            ]
+            check_size(values[task], ContextLimits.model_validate(value["limits"]))
     return values

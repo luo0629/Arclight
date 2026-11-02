@@ -268,7 +268,17 @@ def test_startup_and_retry_keep_old_context_after_domain_and_policy_updates(
     assert advance(client, settings, run_id)["status"] == "WAITING_REVIEW"
     assert contexts(client, run_id) == old
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(func.count()).select_from(DependencyManifest)) == 2
+        manifests = db.scalars(select(DependencyManifest)).all()
+        assert (
+            sum(row.snapshot_json["context"]["origin"] == "context_builder" for row in manifests)
+            == 2
+        )
+        assert (
+            sum(
+                row.snapshot_json["context"]["origin"] == "context_consumption" for row in manifests
+            )
+            == 1
+        )
 
 
 def test_real_text_adapter_consumes_frozen_context_and_refuses_oversized_call(

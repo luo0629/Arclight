@@ -183,12 +183,12 @@ def generate_outline(
         if existing:
             return str(existing.id), existing.version_no
         source = run.input_json["source_snapshot"]
-        from arclight.application.context_snapshots import read_contexts
+        from arclight.application.context_consumption import consume_context
         from arclight.providers.context import bind_contexts
 
         provider = bind_contexts(
             build_provider(run_settings(settings, run.input_json.get("_text_service"))),
-            read_contexts(db, project_id, run),
+            consume_context(db, project_id, run, "outline", settings),
         )
         content = StoryOutlineContent.model_validate(provider.outline(source))
         if (

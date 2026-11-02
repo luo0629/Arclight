@@ -132,14 +132,14 @@ def extract(factory: sessionmaker, settings: Settings, run: WorkflowRun) -> tupl
         if existing:
             return str(existing.id), existing.version_no
         inputs = run.input_json
-        from arclight.application.context_snapshots import read_contexts
+        from arclight.application.context_consumption import consume_context
         from arclight.providers.context import bind_contexts
 
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
         provider = bind_contexts(
             build_provider(run_settings(settings, inputs.get("_text_service"))),
-            read_contexts(db, episode.project_id, run),
+            consume_context(db, episode.project_id, run, "analyze", settings),
         )
         content = StoryAnalysisContent.model_validate(provider.analyze(inputs["story"]))
         version = (

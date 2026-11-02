@@ -17,12 +17,21 @@ class RewriteState(TypedDict, total=False):
     target_duration_ms: int
     script_version_id: str
     script_approved: bool
+    context_refs: dict
 
 
-def build_rewrite_graph(artifacts: Artifacts, checkpointer, generate: Callable[[dict], dict]):
+def build_rewrite_graph(
+    artifacts: Artifacts,
+    checkpointer,
+    generate: Callable[[dict], dict],
+    *,
+    contexts: dict[str, dict] | None = None,
+):
     def rewrite(state: RewriteState) -> dict:
         identity, _ = artifacts.script(lambda: generate(state["rewrite_input"]))
-        return {"script_version_id": identity}
+        ref = (contexts or {}).get("rewrite", {}).get("trace_ref")
+        refs = {"context_refs": {"rewrite": ref}} if ref else {}
+        return {"script_version_id": identity, **refs}
 
     def review(state: RewriteState) -> dict:
         decision = interrupt({"resource_type": "script", "version_id": state["script_version_id"]})
