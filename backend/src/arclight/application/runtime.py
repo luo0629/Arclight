@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 
 from arclight.application.artifacts import ArtifactStore
 from arclight.application.commands import emit
+from arclight.application.context_snapshots import read_contexts
 from arclight.application.model_services import run_settings
 from arclight.application.production_versions import text_settings
 from arclight.application.script_rewrite import generate_rewrite
@@ -16,6 +17,7 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
 from arclight.persistence.models import Episode, WorkflowRun
+from arclight.providers.context import bind_contexts
 from arclight.providers.text import build_provider
 from arclight.workflows.checkpoints import open_checkpointer
 from arclight.workflows.production import DIRECTOR_WORKFLOW_VERSION, WORKFLOW_VERSION, build_graph
@@ -37,6 +39,7 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
             episode = db.get(Episode, run.episode_id)
             assert episode is not None
             settings = text_settings(db, episode.project_id, run, settings)
+            contexts = read_contexts(db, episode.project_id, run)
             if run.workflow_type in {"story_analysis", "story_outline"}:
                 expected_version = (
                     ANALYSIS_VERSION if run.workflow_type == "story_analysis" else OUTLINE_VERSION
@@ -88,12 +91,19 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                         artifacts,
                         saver,
                         lambda inputs: generate_rewrite(
-                            inputs, run_settings(settings, run.input_json.get("_text_service"))
+                            inputs,
+                            run_settings(settings, run.input_json.get("_text_service")),
+                            contexts,
                         ),
                     )
                 else:
                     graph = build_graph(
-                        build_provider(run_settings(settings, run.input_json.get("_text_service"))),
+                        bind_contexts(
+                            build_provider(
+                                run_settings(settings, run.input_json.get("_text_service"))
+                            ),
+                            contexts,
+                        ),
                         artifacts,
                         saver,
                         director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
@@ -139,6 +149,9 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                 and exc.code
                 in {
                     "PRODUCTION_VERSION_INCOMPATIBLE",
+                    "CONTEXT_SNAPSHOT_INVALID",
+                    "CONTEXT_TOO_LARGE",
+                    "CONTEXT_INPUT_UNSAFE",
                     "SCRIPT_DURATION_REQUIRED",
                     "SCRIPT_DURATION_OUT_OF_RANGE",
                     "STORYBOARD_DURATION_OUT_OF_RANGE",

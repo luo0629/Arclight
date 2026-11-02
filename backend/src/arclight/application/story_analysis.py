@@ -106,7 +106,7 @@ def start_analysis(
     db.flush()
     from arclight.application.production_versions import capture_text
 
-    capture_text(db, episode.project_id, run, settings)
+    capture_text(db, episode.project_id, run, settings, actor=actor)
     bind_source(db, run, source.id)
     db.add(
         AuditEvent(
@@ -132,7 +132,15 @@ def extract(factory: sessionmaker, settings: Settings, run: WorkflowRun) -> tupl
         if existing:
             return str(existing.id), existing.version_no
         inputs = run.input_json
-        provider = build_provider(run_settings(settings, inputs.get("_text_service")))
+        from arclight.application.context_snapshots import read_contexts
+        from arclight.providers.context import bind_contexts
+
+        episode = db.get(Episode, run.episode_id)
+        assert episode is not None
+        provider = bind_contexts(
+            build_provider(run_settings(settings, inputs.get("_text_service"))),
+            read_contexts(db, episode.project_id, run),
+        )
         content = StoryAnalysisContent.model_validate(provider.analyze(inputs["story"]))
         version = (
             db.scalar(

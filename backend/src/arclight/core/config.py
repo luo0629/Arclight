@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from arclight.domain.context import ContextLimits
 from arclight.domain.generation_scheduling import ExecutionPolicy
 
 
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     service_encryption_key: SecretStr = SecretStr("")
     model_service_allowed_hosts: list[str] = Field(default_factory=lambda: ["api.openai.com"])
     text_duration_tolerance_percent: int = Field(default=10, ge=0, le=100)
+    context_limits: ContextLimits = Field(default_factory=ContextLimits)
     media_lease_seconds: int = Field(default=60, ge=10, le=600)
     media_heartbeat_seconds: int = Field(default=10, ge=1, le=120)
     media_poll_seconds: int = Field(default=30, ge=1, le=600)

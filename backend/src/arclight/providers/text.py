@@ -16,6 +16,7 @@ from arclight.agents.story_analysis import KeyEvent, StoryAnalysisContent
 from arclight.agents.story_outline import OutlineEpisode, StoryOutlineContent
 from arclight.application.content_duration import duration_bounds
 from arclight.core.config import Settings
+from arclight.domain.context import check_call
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
@@ -147,10 +148,20 @@ class MockTextProvider:
 
 
 class OpenAICompatibleTextProvider:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, contexts: dict[str, dict] | None = None):
         self.settings = settings
+        self.contexts = contexts or {}
 
     def _generate(self, contract: type[T], instruction: str, data: dict) -> T:
+        stage = {
+            ScriptContent: "script",
+            StoryboardContent: "storyboard",
+            RewriteResult: "rewrite",
+            StoryAnalysisContent: "analyze",
+            StoryOutlineContent: "outline",
+        }[contract]
+        if stage in self.contexts:
+            data = check_call(self.contexts[stage], data)
         # 输入作为独立数据发送；不允许模型输出执行命令或写入数据库。
         with httpx.Client(timeout=self.settings.llm_timeout_seconds) as client:
             response = client.post(

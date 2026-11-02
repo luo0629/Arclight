@@ -148,7 +148,12 @@ def input_summary(inputs: dict) -> dict:
     return {"sha256": digest(value), "references": sorted(references, key=digest)}
 
 
-def capture_text(db: Session, project_id: UUID, run: WorkflowRun, settings: Settings) -> None:
+def capture_text(
+    db: Session, project_id: UUID, run: WorkflowRun, settings: Settings, *, actor: str | None = None
+) -> None:
+    from arclight.application.context_snapshots import capture_contexts
+
+    contexts = capture_contexts(db, project_id, run, settings, actor)
     service = run.input_json.get("_text_service")
     model = {
         "provider": "openai_compatible" if service else settings.provider,
@@ -181,6 +186,7 @@ def capture_text(db: Session, project_id: UUID, run: WorkflowRun, settings: Sett
             "parameters": parameters,
             "parameter_sha256": digest(parameters),
             "inputs": input_summary(run.input_json),
+            "context_manifest_ids": contexts,
         },
     )
 

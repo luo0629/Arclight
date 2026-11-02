@@ -103,7 +103,7 @@ def start_rewrite(
     db.flush()
     from arclight.application.production_versions import capture_text
 
-    capture_text(db, episode.project_id, run, settings)
+    capture_text(db, episode.project_id, run, settings, actor=actor)
     db.add(
         AuditEvent(
             project_id=episode.project_id,
@@ -121,7 +121,9 @@ def start_rewrite(
     return run
 
 
-def generate_rewrite(inputs: dict, settings: Settings) -> dict:
-    provider = build_provider(settings)
+def generate_rewrite(inputs: dict, settings: Settings, contexts: dict | None = None) -> dict:
+    from arclight.providers.context import bind_contexts
+
+    provider = bind_contexts(build_provider(settings), contexts or {})
     patch = RewriteResult.model_validate(provider.rewrite(inputs["context"]))
     return merge_rewrite(inputs, patch).model_dump(mode="json")

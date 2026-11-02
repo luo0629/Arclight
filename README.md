@@ -289,6 +289,17 @@ Compose 使用独立资源的 `worker-interactive`、`worker-batch`、`worker-sc
 
 `GET .../generation-jobs/providers/{provider}/capabilities?model=...` 按项目权限返回已安装 Provider 的版本化能力：参考图数、seed／上限、尺寸／像素／倍数／固定尺寸和画幅、批量上限、查询、取消、幂等及同步／异步方式。创建任务冻结该声明，调用前同时复验冻结声明与当前适配器；旧任务只校验当前能力，不补写历史。`spec.batch_size` 默认1，`spec.require_query`／`spec.require_cancel` 默认false；明确要求不支持能力时拒绝创建。尺寸放在 `output_spec.width`／`height`，参考图只能来自精确输入版本，不能通过参数别名绕过校验。批量成功必须返回对应数量的结果；数量不符按未知／人工处理，不盲目重发。Mock 只模拟规范化结果（最多8项），明确不支持持久查询及取消，不代表真实图片质量或外部服务验收。
 
+## 有限任务上下文
+
+`GET /api/v1/projects/{project_id}/context-policy` 返回任务范围和服务端上限；
+`POST /api/v1/projects/{project_id}/contexts/preview` 接收 `task`、`episode_id` 以及合同允许的精确输入，返回只读预览，不创建任务。任务类型包括 `analyze`、`outline`、`script`、`storyboard`、`rewrite`、`art`、`image`、`review`、`producer`。项目成员可读取，跨项目引用拒绝；实际启动仍需 Owner／Editor 权限。
+
+导演／美术任务必须给出 `script_version_id`，改写还需 `rewrite_target`；图片任务需 `shot_id`，审查任务另需 `candidate_version_id` 指定精确待审图片。局部任务仅加载同一精确分镜中的当前／相邻镜头及相关场景，常规参考必须已批准且有效，待审候选可为未批准版本。`asset_version_ids`、`story_entry_ids` 可显式选择相关输入；禁止传入不属于任务合同的范围。
+
+`ARCLIGHT_CONTEXT_LIMITS` 为 JSON：默认 UTF-8 JSON 总量 262144 bytes、64 个资产版本、100 条故事设定、前后各 1 个邻镜、5 条相关历史；硬上限分别为 524288、64、100、2、10。预览请求中的 `limits` 只能调低服务端上限。必需规范、锁定字段及预算完整保留，超限原子拒绝；不截断这些约束。真正调用 Provider 前再次检查上下文与实际任务输入的合计大小。
+
+五个现有文本入口在启动事务中冻结 `context/1` 上下文，复用不可变 DependencyManifest，由 GEN-11 的 VersionBinding 保存逐阶段引用；`GET /api/v1/runs/{run_id}/contexts` 读取这些快照。运行中修改风格、资产、预算或限额不会改写旧输入，重试沿用原清单。编剧→导演串联任务在启动时明确声明本运行后续批准的精确剧本输出，不预造尚不存在的版本。旧运行未保存上下文时返回 `legacy_without_context: true`，不会补读当前事实。专业 Agent 与媒体实际入口由各自任务接入；本功能不代表这些生产器已实现。
+
 ## 许可证
 
 本项目采用 [MIT License](LICENSE)。

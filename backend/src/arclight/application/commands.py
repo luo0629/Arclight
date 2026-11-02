@@ -227,7 +227,7 @@ def start_run(
     db.flush()
     from arclight.application.production_versions import capture_text
 
-    capture_text(db, episode.project_id, run, settings)
+    capture_text(db, episode.project_id, run, settings, actor=actor)
     if story_source is not None:
         bind_source(db, run, story_source.id)
     db.add(

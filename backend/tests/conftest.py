@@ -106,6 +106,10 @@ def historical_content_registry(request, monkeypatch):
 
     def current_versions(function):
         def wrapped(db, *args, **kwargs):
+            if function.__name__ == "capture_text" and not inspect(db.get_bind()).has_table(
+                "generation_budget_policies"
+            ):
+                return None
             if inspect(db.get_bind()).has_table("production_versions"):
                 return function(db, *args, **kwargs)
             return None
@@ -116,7 +120,17 @@ def historical_content_registry(request, monkeypatch):
         monkeypatch.setattr(
             production_versions, name, current_versions(getattr(production_versions, name))
         )
-    from arclight.application import runtime
+    from arclight.application import context_snapshots, runtime
+
+    original_contexts = context_snapshots.read_contexts
+
+    def legacy_contexts(db, *args, **kwargs):
+        if inspect(db.get_bind()).has_table("version_bindings"):
+            return original_contexts(db, *args, **kwargs)
+        return {}
+
+    monkeypatch.setattr(context_snapshots, "read_contexts", legacy_contexts)
+    monkeypatch.setattr(runtime, "read_contexts", legacy_contexts)
 
     original_settings = runtime.text_settings
 
