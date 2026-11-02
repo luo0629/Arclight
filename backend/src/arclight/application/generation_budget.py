@@ -1,4 +1,4 @@
-"""Admission-time budget governance; reservations and settlement belong to GEN-14."""
+"""Scoped budget admission against the immutable reservation and settlement ledger."""
 
 from decimal import Decimal
 from uuid import UUID
@@ -6,10 +6,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from arclight.application.generation_accounting import costs, reserve_next
 from arclight.core.errors import DomainError
 from arclight.domain.generation_budget import CostQuote
 from arclight.domain.generation_requests import GenerationCreate, GenerationSpec
-from arclight.persistence.generation import GenerationAttempt, GenerationJob
+from arclight.persistence.generation import GenerationJob
 from arclight.persistence.generation_budget import (
     GenerationBudgetBatch,
     GenerationBudgetPolicy,
@@ -49,50 +50,6 @@ def quote_job(db: Session, project_id: UUID, payload: GenerationCreate) -> CostQ
             "BUDGET_QUOTE_UNAVAILABLE", "收费 Provider 未提供可信报价，已拒绝创建任务", 422
         )
     return CostQuote.model_validate(result.model_dump(mode="json"))
-
-
-def costs(
-    db: Session,
-    project_id: UUID,
-    *,
-    episode_id: UUID | None = None,
-    batch_id: UUID | None = None,
-    exclude_pending_job: UUID | None = None,
-) -> tuple[Decimal, Decimal]:
-    """Keep missing billable costs conservative, including terminal receipts without a bill.
-
-    This is a projection over immutable inputs/attempts, not a charge or settlement.
-    GEN-14 replaces that projection with an atomic accounting ledger.
-    """
-    stmt = (
-        select(GenerationJob, GenerationBudgetQuote)
-        .outerjoin(GenerationBudgetQuote, GenerationBudgetQuote.job_id == GenerationJob.id)
-        .where(GenerationJob.project_id == project_id)
-    )
-    if episode_id is not None:
-        stmt = stmt.where(GenerationJob.episode_id == episode_id)
-    if batch_id is not None:
-        stmt = stmt.where(GenerationBudgetQuote.batch_id == batch_id)
-    jobs = list(db.execute(stmt))
-    attempts: dict[UUID, list[GenerationAttempt]] = {}
-    for attempt in db.scalars(
-        select(GenerationAttempt).join(GenerationJob).where(GenerationJob.project_id == project_id)
-    ):
-        attempts.setdefault(attempt.job_id, []).append(attempt)
-    actual = Decimal("0")
-    pending = Decimal("0")
-    for job, captured in jobs:
-        maximum = captured.maximum_cost if captured else Decimal("0")
-        history = attempts.get(job.id, [])
-        for attempt in history:
-            if attempt.cost is not None:
-                actual += attempt.cost
-            else:
-                pending += maximum
-        # A newly created job or an explicit retry has one additional pending call.
-        if job.id != exclude_pending_job and job.status in {"CREATED", "RETRY_WAIT"}:
-            pending += maximum
-    return actual, pending
 
 
 def enforce_budget(
@@ -155,16 +112,10 @@ def enforce_budget(
     if policy.task_limit is not None and maximum_cost > policy.task_limit:
         raise DomainError("BUDGET_TASK_EXCEEDED", "单任务预算超过上限", 409)
     if exclude_pending_job is not None and policy.task_limit is not None:
-        previous = sum(
-            (
-                attempt.cost if attempt.cost is not None else maximum_cost
-                for attempt in db.scalars(
-                    select(GenerationAttempt).where(GenerationAttempt.job_id == exclude_pending_job)
-                )
-            ),
-            Decimal("0"),
+        used, held = costs(
+            db, project_id, job_id=exclude_pending_job, exclude_pending_job=exclude_pending_job
         )
-        if previous + maximum_cost > policy.task_limit:
+        if used + held + maximum_cost > policy.task_limit:
             raise DomainError("BUDGET_TASK_EXCEEDED", "重试将超过单任务累计预算", 409)
     if payload.batch_id is not None:
         batch = db.get(GenerationBudgetBatch, payload.batch_id, with_for_update=True)
@@ -212,6 +163,7 @@ def check_execution(db: Session, job: GenerationJob, spec: GenerationSpec) -> No
         }
     )
     enforce_budget(db, job.project_id, payload, live.maximum_cost, exclude_pending_job=job.id)
+    reserve_next(db, job, live.maximum_cost)
 
 
 def usage(db: Session, project_id: UUID) -> dict:

@@ -200,6 +200,7 @@ def finish_attempt(
     error_code: MediaErrorCode | None = None,
     latency_ms: int | None = None,
     cost: Decimal | None = None,
+    not_accepted: bool = False,
 ) -> GenerationAttempt:
     if status not in {
         GenerationStatus.SUCCEEDED,
@@ -246,6 +247,9 @@ def finish_attempt(
     attempt.cost = cost
     attempt.finished_at = utcnow()
     db.flush()
+    from arclight.application.generation_accounting import settle_attempt
+
+    settle_attempt(db, job, attempt, not_accepted=not_accepted)
     if result is not None:
         from arclight.application.production_versions import bind_output
         from arclight.persistence.generation_candidates import GenerationImageImport

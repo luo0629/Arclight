@@ -20,8 +20,14 @@ from arclight.domain.generation_budget import (
     BudgetBatchInput,
     BudgetDecisionInput,
     BudgetPolicyInput,
+    BudgetSettlementInput,
 )
 from arclight.domain.generation_requests import GenerationCreate
+from arclight.persistence.generation import GenerationAttempt
+from arclight.persistence.generation_accounting import (
+    GenerationBudgetReservation,
+    GenerationBudgetSettlement,
+)
 from arclight.persistence.generation_budget import (
     GenerationBudgetAdjustment,
     GenerationBudgetBatch,
@@ -363,3 +369,76 @@ def captured_quote(project_id: UUID, job_id: UUID, db: Database, actor: Actor) -
         },
         "batch_id": quote.batch_id,
     }
+
+
+def ledger_read(
+    row: GenerationBudgetReservation, settlement: GenerationBudgetSettlement | None
+) -> dict:
+    return {
+        "id": row.id,
+        "job_id": row.job_id,
+        "attempt_no": row.attempt_no,
+        "sequence": row.sequence,
+        "reserved": format(row.amount, ".6f"),
+        "currency": row.currency,
+        "status": "SETTLED" if settlement is not None else "HELD",
+        "cost": format(settlement.cost, ".6f") if settlement is not None else None,
+        "released": format(row.amount - settlement.cost, ".6f") if settlement is not None else None,
+        "source": settlement.source if settlement is not None else row.source,
+        "evidence_reference": settlement.evidence_reference if settlement is not None else None,
+    }
+
+
+@router.get("/ledger")
+def read_ledger(
+    project_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+) -> list[dict]:
+    require_project(db, project_id, actor)
+    rows = db.execute(
+        select(GenerationBudgetReservation, GenerationBudgetSettlement)
+        .join(GenerationJob, GenerationJob.id == GenerationBudgetReservation.job_id)
+        .outerjoin(
+            GenerationBudgetSettlement,
+            GenerationBudgetSettlement.reservation_id == GenerationBudgetReservation.id,
+        )
+        .where(GenerationJob.project_id == project_id)
+        .order_by(GenerationBudgetReservation.created_at.desc(), GenerationBudgetReservation.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    return [ledger_read(row, settlement) for row, settlement in rows]
+
+
+@router.post("/reservations/{reservation_id}/settlement")
+def confirm_billing(
+    project_id: UUID,
+    reservation_id: UUID,
+    payload: BudgetSettlementInput,
+    db: Database,
+    actor: Actor,
+) -> dict:
+    require_project(db, project_id, actor, write=True, owner=True)
+    row = db.get(GenerationBudgetReservation, reservation_id)
+    job = db.get(GenerationJob, row.job_id) if row is not None else None
+    if row is None or job is None or job.project_id != project_id:
+        raise DomainError("NOT_FOUND", "预算预留不存在", 404)
+    attempt = db.scalar(
+        select(GenerationAttempt).where(
+            GenerationAttempt.job_id == job.id,
+            GenerationAttempt.attempt_no == row.attempt_no,
+        )
+    )
+    if attempt is None or attempt.finished_at is None:
+        raise DomainError(
+            "BUDGET_EXECUTION_UNRESOLVED", "请先对账确认调用结果，再核验最终账单", 409
+        )
+    from arclight.application.generation_accounting import settle
+
+    settlement = settle(
+        db, job, row, payload.cost, "MANUAL", actor=actor, evidence=payload.evidence_reference
+    )
+    return ledger_read(row, settlement)

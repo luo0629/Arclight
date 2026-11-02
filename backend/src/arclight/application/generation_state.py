@@ -55,6 +55,13 @@ def transition(
     row.status = target
     row.revision += 1
     db.flush()
+    if previous in {GenerationStatus.CREATED, GenerationStatus.RETRY_WAIT} and target in {
+        GenerationStatus.CANCELLED,
+        GenerationStatus.FAILED,
+    }:
+        from arclight.application.generation_accounting import release_unsubmitted
+
+        release_unsubmitted(db, row)
     audit(
         db,
         row.project_id,

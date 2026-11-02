@@ -188,6 +188,10 @@ def create_job(
             candidate_count=payload.spec.batch_size,
         )
     )
+    from arclight.application.generation_accounting import reserve_next
+
+    db.flush()
+    reserve_next(db, job, budget_quote.maximum_cost)
     from arclight.application.production_versions import capture_media
 
     capture_media(db, project_id, job.id, manifest.id, payload.task_type, payload.spec, inputs)

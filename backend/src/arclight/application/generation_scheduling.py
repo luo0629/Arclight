@@ -10,6 +10,7 @@ from arclight.application import generation_leases as leases
 from arclight.application.audit import audit
 from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_state import transition
+from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus as Status
 from arclight.domain.generation_scheduling import (
     DEFAULT_EXECUTION_POLICY,
@@ -127,6 +128,20 @@ def retry_after_failure(
         diagnose(db, job, "NOT_RETRYABLE", error)
         return False
     if automatic and not not_accepted and error not in policy.automatic_retry_errors:
+        return False
+    from arclight.application.generation_budget import check_execution
+    from arclight.domain.generation_requests import GenerationSpec
+    from arclight.persistence.models import DependencyManifest
+
+    manifest = db.get(DependencyManifest, job.input_manifest_id)
+    assert manifest is not None
+    spec = GenerationSpec.model_validate(manifest.snapshot_json["context"]["generation"])
+    try:
+        check_execution(db, job, spec)
+    except DomainError:
+        if not automatic:
+            raise
+        diagnose(db, job, "NOT_RETRYABLE", "BUDGET_EXCEEDED")
         return False
     schedule = schedule_for(db, job)
     schedule.next_attempt_at = leases.clock(db) + timedelta(

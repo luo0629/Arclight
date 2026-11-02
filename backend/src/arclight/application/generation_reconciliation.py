@@ -269,6 +269,7 @@ def reconcile(
                     error_code=error,
                     latency_ms=receipt.latency_ms,
                     cost=receipt.cost,
+                    not_accepted=receipt.status == "NOT_ACCEPTED",
                 )
                 if receipt.status == "NOT_ACCEPTED":
                     if job.cancel_requested_at:

@@ -3,6 +3,7 @@ from sqlalchemy import JSON, create_engine, pool
 
 from arclight.core.config import get_settings
 from arclight.persistence import (
+    generation_accounting,  # noqa: F401
     generation_budget,  # noqa: F401
     models,  # noqa: F401
 )

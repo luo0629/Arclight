@@ -58,3 +58,16 @@ class BudgetDecisionInput(MediaInput):
             raise ValueError("A budget decision requires a reason")
         safe_metadata(self.reason)
         return self
+
+
+class BudgetSettlementInput(MediaInput):
+    cost: Annotated[Decimal, Field(ge=0, lt=Decimal("1000000000000"), decimal_places=6)]
+    confirmed: bool = Field(strict=True)
+    evidence_reference: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_.:/-]+$")
+
+    @model_validator(mode="after")
+    def confirmed_evidence(self):
+        if not self.confirmed or "://" in self.evidence_reference:
+            raise ValueError("Final billing requires confirmed private evidence, not a URL")
+        safe_metadata(self.evidence_reference)
+        return self

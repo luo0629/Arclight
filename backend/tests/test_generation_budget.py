@@ -465,10 +465,8 @@ def test_retry_checks_cumulative_task_cost_before_next_attempt(client, episode, 
             cost=Decimal("1"),
         )
         row = db.get(GenerationJob, job_id)
-        request_retry(db, job_id, row.revision, "service-owner")
-    with client.app.state.session_factory.begin() as db:
-        row = db.get(GenerationJob, job_id)
         with pytest.raises(DomainError) as exc:
-            start_attempt(db, job_id, row.revision)
+            request_retry(db, job_id, row.revision, "service-owner")
         assert exc.value.code == "BUDGET_TASK_EXCEEDED"
         assert db.scalar(select(func.count()).select_from(GenerationAttempt)) == 1
+        assert row.status == "FAILED"
