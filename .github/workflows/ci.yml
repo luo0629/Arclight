@@ -4,9 +4,12 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 jobs:
   check:
-    name: check (${{ matrix.database }})
+    name: check (${{ matrix.database }}, ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -15,8 +18,28 @@ jobs:
         include:
           - database: sqlite
             database_url: ""
+            shard: 1
+            shards: 2
+          - database: sqlite
+            database_url: ""
+            shard: 2
+            shards: 2
           - database: postgres
             database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
+            shard: 1
+            shards: 4
+          - database: postgres
+            database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
+            shard: 2
+            shards: 4
+          - database: postgres
+            database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
+            shard: 3
+            shards: 4
+          - database: postgres
+            database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
+            shard: 4
+            shards: 4
     defaults:
       run:
         working-directory: backend
@@ -54,14 +77,14 @@ jobs:
           version: 0.9.7
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
-          save-cache: ${{ matrix.database == 'sqlite' }}
+          save-cache: ${{ matrix.database == 'sqlite' && matrix.shard == 1 }}
       - run: uv sync --frozen
       - run: uv run ruff check .
-        if: matrix.database == 'sqlite'
+        if: matrix.database == 'sqlite' && matrix.shard == 1
       - run: uv run ruff format --check .
-        if: matrix.database == 'sqlite'
+        if: matrix.database == 'sqlite' && matrix.shard == 1
       - run: uv run mypy
-        if: matrix.database == 'sqlite'
+        if: matrix.database == 'sqlite' && matrix.shard == 1
       - uses: docker/setup-buildx-action@v4
       - name: Build isolated S3 test service
         uses: docker/build-push-action@v7
@@ -71,7 +94,7 @@ jobs:
           load: true
           cache-from: type=gha,scope=arclight-minio
           # Matrix jobs share restore cache; only one writes to avoid concurrent exports.
-          cache-to: ${{ matrix.database == 'sqlite' && 'type=gha,scope=arclight-minio,mode=max,ignore-error=true' || '' }}
+          cache-to: ${{ matrix.database == 'sqlite' && matrix.shard == 1 && 'type=gha,scope=arclight-minio,mode=max,ignore-error=true' || '' }}
       - name: Start isolated S3 test service
         run: |
           docker run -d --name arclight-test-minio -p 127.0.0.1:19000:9000 -e MINIO_ROOT_USER=arclight-test -e MINIO_ROOT_PASSWORD=arclight-test-secret arclight-minio:test
@@ -81,19 +104,44 @@ jobs:
           done
           docker logs arclight-test-minio
           exit 1
-      - name: Database tests (${{ matrix.database }})
-        run: uv run pytest -q -n auto --maxprocesses=4 --dist=loadfile
+      - name: Database tests (${{ matrix.database }}, ${{ matrix.shard }}/${{ matrix.shards }})
+        run: |
+          # Partition whole files; the Redis broker tests must stay on one worker.
+          mapfile -d '' -t test_files < <(find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print0 | LC_ALL=C sort -z)
+          shard_files=()
+          for ((index = SHARD - 1; index < ${#test_files[@]}; index += SHARDS)); do
+            shard_files+=("${test_files[index]}")
+          done
+          if ((${#shard_files[@]} == 0)); then
+            echo "::error::No test files selected for shard ${SHARD}/${SHARDS}"
+            exit 1
+          fi
+          printf 'Selected %s test files for shard %s/%s\n' "${#shard_files[@]}" "$SHARD" "$SHARDS"
+          uv run pytest -q -n auto --maxprocesses=4 --dist=loadfile --durations=20 --junitxml=test-results/pytest.xml "${shard_files[@]}"
         env:
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ matrix.shards }}
           ARCLIGHT_TEST_S3_ENDPOINT: http://127.0.0.1:19000
           ARCLIGHT_TEST_DATABASE_URL: ${{ matrix.database_url }}
           ARCLIGHT_TEST_REDIS_URL: redis://127.0.0.1:16379/15
       - run: docker compose config --quiet
-        if: matrix.database == 'sqlite'
+        if: matrix.database == 'sqlite' && matrix.shard == 1
         working-directory: .
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: backend-verification-${{ matrix.database }}-${{ matrix.shard }}
+          path: backend/test-results/
+          retention-days: 7
 
   web:
+    name: web (${{ matrix.shard }}/2)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -119,13 +167,27 @@ jobs:
         working-directory: fronted
       - run: npx playwright install --with-deps chromium
         working-directory: fronted
-      - run: npm run test:e2e
+      - run: npm run test:e2e -- --shard="$SHARD/2"
         working-directory: fronted
         env:
+          SHARD: ${{ matrix.shard }}
           ARCLIGHT_E2E_PRODUCTION: "1"
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: browser-verification
+          name: browser-verification-${{ matrix.shard }}
           path: fronted/test-results/
           retention-days: 7
+
+  ci:
+    name: Arclight CI passed
+    if: ${{ always() }}
+    needs: [check, web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every database and browser shard
+        env:
+          BACKEND_RESULT: ${{ needs.check.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+        run: test "$BACKEND_RESULT" = success && test "$WEB_RESULT" = success
