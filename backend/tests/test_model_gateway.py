@@ -578,7 +578,6 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
     )
     settings.model_gateway_policy = GatewayPolicy()
     captured = []
-    real_client = httpx.Client
 
     def handler(req):
         body = json.loads(req.content)
@@ -594,8 +593,8 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
         )
 
     monkeypatch.setattr(
-        "arclight.providers.text.httpx.Client",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(handler),
     )
     execute_run(client.app.state.session_factory, settings, identity, 0)
     assert client.get(f"/api/v1/runs/{identity}").json()["status"] == "WAITING_REVIEW"

@@ -366,7 +366,6 @@ def test_provider_receives_fixed_plan_as_data(settings, monkeypatch):
     }
     expected = MockTextProvider().outline(source)
     received = []
-    real_client = httpx.Client
 
     def handler(request):
         received.append(json.loads(request.content))
@@ -375,9 +374,8 @@ def test_provider_receives_fixed_plan_as_data(settings, monkeypatch):
         )
 
     monkeypatch.setattr(
-        httpx,
-        "Client",
-        lambda **kwargs: real_client(transport=httpx.MockTransport(handler), **kwargs),
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(handler),
     )
     assert OpenAICompatibleTextProvider(settings).outline(source) == expected
     request = received[0]

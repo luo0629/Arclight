@@ -577,6 +577,32 @@ class ModelService(Entity, Base):
     mode: Mapped[str] = mapped_column(String(16), default="server")
     base_url: Mapped[str] = mapped_column(String(500), default="")
     model: Mapped[str] = mapped_column(String(160), default="")
+    supplier: Mapped[str] = mapped_column(String(40), default="custom")
+    supplier_name: Mapped[str] = mapped_column(String(100), default="")
+    response_format: Mapped[str] = mapped_column(String(20), default="json_schema")
+    credential_id: Mapped[UUID | None] = mapped_column(ForeignKey("service_credentials.id"))
     encrypted_key: Mapped[str | None] = mapped_column(String(8192), nullable=True)
     revision: Mapped[int] = mapped_column(default=1)
     __table_args__ = (UniqueConstraint("user_id", "kind"),)
+
+
+class ServiceCredential(Entity, Base):
+    __tablename__ = "service_credentials"
+    encrypted_key: Mapped[str] = mapped_column(String(8192))
+    key_id: Mapped[str] = mapped_column(String(16))
+    legacy_digest: Mapped[str | None] = mapped_column(String(64), unique=True)
+    revision: Mapped[int] = mapped_column(default=1)
+
+
+class ServiceKeyState(Base):
+    __tablename__ = "service_key_state"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    active_key_id: Mapped[str] = mapped_column(String(16), default="")
+
+
+class ServiceAudit(Entity, Base):
+    __tablename__ = "service_audit"
+    user_id: Mapped[UUID | None] = mapped_column(ForeignKey("users.id"), index=True)
+    actor: Mapped[str] = mapped_column(String(100))
+    action: Mapped[str] = mapped_column(String(40))
+    details_json: Mapped[dict] = mapped_column(JSON_TYPE)

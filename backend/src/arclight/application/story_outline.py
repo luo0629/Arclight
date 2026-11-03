@@ -187,7 +187,7 @@ def generate_outline(
         from arclight.providers.context import bind_contexts
 
         provider = bind_contexts(
-            build_provider(run_settings(settings, run.input_json.get("_text_service"))),
+            build_provider(run_settings(settings, run.input_json.get("_text_service"), db)),
             consume_context(db, project_id, run, "outline", settings),
         )
     content = StoryOutlineContent.model_validate(provider.outline(source))

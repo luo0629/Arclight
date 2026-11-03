@@ -442,7 +442,6 @@ def test_stale_asset_blocks_manual_approval_and_director_start(client, episode, 
 def test_http_provider_uses_v2_schema_and_keeps_input_in_data(settings, monkeypatch):
     requests = []
     script = ScriptContent.model_validate(legacy_script())
-    original_client = httpx.Client
 
     def respond(request):
         payload = json.loads(request.content)
@@ -452,9 +451,8 @@ def test_http_provider_uses_v2_schema_and_keeps_input_in_data(settings, monkeypa
         )
 
     monkeypatch.setattr(
-        httpx,
-        "Client",
-        lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs),
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(respond),
     )
     result = OpenAICompatibleTextProvider(settings).script("只作为素材", {})
     assert result == script

@@ -249,7 +249,16 @@ def invoke[T](
                 exc.code
                 if isinstance(exc, GatewayFailure)
                 and exc.code
-                in {"PROVIDER_FAILED", "PROVIDER_UNAVAILABLE", "INPUT_INVALID", "INVALID_RESPONSE"}
+                in {
+                    "PROVIDER_FAILED",
+                    "PROVIDER_UNAVAILABLE",
+                    "INPUT_INVALID",
+                    "INVALID_RESPONSE",
+                    "INVALID_SERVICE_URL",
+                    "SERVICE_DNS_UNAVAILABLE",
+                    "SERVICE_ADDRESS_BLOCKED",
+                    "SERVICE_REDIRECT_BLOCKED",
+                }
                 else "RESULT_UNKNOWN"
             )
             with factory.begin() as db:

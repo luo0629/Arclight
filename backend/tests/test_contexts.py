@@ -296,10 +296,9 @@ def test_real_text_adapter_consumes_frozen_context_and_refuses_oversized_call(
             200, json={"choices": [{"message": {"content": result.model_dump_json()}}]}
         )
 
-    original = httpx.Client
     monkeypatch.setattr(
-        "arclight.providers.text.httpx.Client",
-        lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs),
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(handler),
     )
     provider = OpenAICompatibleTextProvider(settings, {"script": value})
     provider.script(

@@ -234,6 +234,77 @@ test("新版：服务配置真实持久化、切区保留、密钥不回显、�
   expect(outsideCalls).toBe(0);
 });
 
+test("新版：官方供应商只填密钥、自定义地址与目标变更保护", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await setup(page);
+  await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const supplier = dialog.getByRole("combobox", {
+    name: "模型供应商",
+    exact: true,
+  });
+  const endpoint = dialog.getByLabel("服务地址", { exact: true });
+  const key = dialog.getByLabel("API Key", { exact: true });
+  await supplier.click();
+  await page.getByRole("option", { name: "DeepSeek", exact: true }).click();
+  await expect(endpoint).toHaveValue("https://api.deepseek.com");
+  await expect(endpoint).toHaveAttribute("readonly", "");
+  await expect(dialog.getByLabel("模型名称", { exact: true })).not.toHaveValue(
+    "",
+  );
+  await expect(
+    dialog.getByRole("combobox", { name: "文字任务服务", exact: true }),
+  ).toContainText("启用我的兼容服务");
+  await key.fill("official-browser-test-key");
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+  await expect(
+    dialog.getByRole("status").filter({ hasText: "已保存到当前账号" }),
+  ).toContainText("已保存到当前账号");
+  await expect(key).toHaveValue("");
+  await page.reload();
+  await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
+  await expect(supplier).toContainText("DeepSeek");
+  await expect(endpoint).toHaveValue("https://api.deepseek.com");
+  await key.fill("draft-that-must-be-cleared");
+  await supplier.click();
+  await page.getByRole("option", { name: "自定义供应商", exact: true }).click();
+  await expect(key).toHaveValue("");
+  await endpoint.fill("https://independent-supplier.example/v1");
+  await dialog
+    .getByLabel("供应商名称（选填）", { exact: true })
+    .fill("我的供应商");
+  await dialog.getByLabel("模型名称", { exact: true }).fill("my-text-model");
+  await dialog
+    .getByRole("combobox", { name: "结构化输出格式", exact: true })
+    .click();
+  await page.getByRole("option", { name: "JSON 对象", exact: true }).click();
+  await expect(
+    dialog.getByText("供应商或地址已更改，请重新填写 API Key", { exact: true }),
+  ).toBeVisible();
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("启用文字服务需要");
+  await key.fill("custom-browser-test-key");
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+  await expect(
+    dialog.getByRole("status").filter({ hasText: "已保存到当前账号" }),
+  ).toContainText("已保存到当前账号");
+  await page.reload();
+  await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
+  await expect(supplier).toContainText("自定义供应商");
+  await expect(endpoint).toHaveValue("https://independent-supplier.example/v1");
+  await expect(
+    dialog.getByLabel("供应商名称（选填）", { exact: true }),
+  ).toHaveValue("我的供应商");
+  await expect(
+    dialog.getByRole("combobox", { name: "结构化输出格式", exact: true }),
+  ).toContainText("JSON 对象");
+  await expect(key).toHaveValue("");
+  expect(
+    await page.evaluate(() => JSON.stringify([localStorage, sessionStorage])),
+  ).not.toContain("browser-test-key");
+  await noOverflow(page);
+});
+
 test("新版：配置保存失败保留输入，读取失败可重试，手机390px无横向溢出", async ({
   page,
 }) => {

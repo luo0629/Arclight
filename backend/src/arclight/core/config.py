@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from arclight.domain.context import ContextLimits
@@ -12,7 +12,9 @@ from arclight.domain.model_gateway import GatewayPolicy
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="ARCLIGHT_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="ARCLIGHT_", env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
     environment: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+psycopg://arclight:arclight@localhost:5432/arclight"
@@ -24,8 +26,13 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4.1-mini"
     llm_timeout_seconds: float = 60
+    llm_dns_timeout_seconds: float = Field(default=5, gt=0, le=30)
+    llm_supplier: str = "custom"
+    llm_response_format: Literal["json_schema", "json_object"] = "json_schema"
     service_encryption_key: SecretStr = SecretStr("")
-    model_service_allowed_hosts: list[str] = Field(default_factory=lambda: ["api.openai.com"])
+    service_encryption_key_file: Path | None = None
+    service_encryption_previous_keys: list[SecretStr] = Field(default_factory=list)
+    service_encryption_previous_keys_file: Path | None = None
     text_duration_tolerance_percent: int = Field(default=10, ge=0, le=100)
     context_limits: ContextLimits = Field(default_factory=ContextLimits)
     media_lease_seconds: int = Field(default=60, ge=10, le=600)
@@ -51,6 +58,13 @@ class Settings(BaseSettings):
     file_transfer_base_url: str = "/file-transfers"
     auth_requests_per_minute: int = Field(default=30, ge=1, le=10000)
     auth_allowed_origins: list[str] = Field(default_factory=list)
+
+    @field_validator(
+        "service_encryption_key_file", "service_encryption_previous_keys_file", mode="before"
+    )
+    @classmethod
+    def empty_secret_path(cls, value):
+        return None if value == "" else value
 
     @model_validator(mode="after")
     def validate_media_lease(self) -> "Settings":
@@ -99,6 +113,13 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_secrets(self) -> "Settings":
         if self.environment == "production":
+            from arclight.core.errors import DomainError
+            from arclight.core.service_keys import keyring
+
+            try:
+                keyring(self)
+            except DomainError as exc:
+                raise ValueError(exc.message) from None
             gateway_secret = self.file_gateway_secret.get_secret_value()
             if (
                 len(gateway_secret) < 32

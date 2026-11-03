@@ -583,10 +583,9 @@ def test_text_adapter_sends_exact_evidence_as_data_without_storage_locators(
             200, json={"choices": [{"message": {"content": result.model_dump_json()}}]}
         )
 
-    original = httpx.Client
     monkeypatch.setattr(
-        "arclight.providers.text.httpx.Client",
-        lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs),
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(handler),
     )
     OpenAICompatibleTextProvider(settings, {"script": value}).script("story", {}, 30000)
     sent = json.loads(calls[0]["messages"][1]["content"])

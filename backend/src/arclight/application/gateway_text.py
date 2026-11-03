@@ -104,18 +104,24 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
         )
         actor = execution_actor(db, run)
         route = GatewayRoute(
-            provider="mock" if mock else settings.provider,
+            provider="mock"
+            if mock
+            else (
+                settings.llm_supplier if settings.llm_supplier != "custom" else settings.provider
+            ),
             model="mock-text" if mock else settings.llm_model,
             config_version=digest(
                 {
                     "provider": settings.provider,
                     "model": settings.llm_model,
                     "base_url": settings.llm_base_url,
+                    "supplier": settings.llm_supplier,
+                    "response_format": settings.llm_response_format,
                 }
             ),
             credential_source="NONE" if mock else source,
             capabilities=GatewayCapabilities(
-                version="text-json-schema:1",
+                version=f"text-{settings.llm_response_format}:1",
                 tasks=frozenset({"script", "storyboard", "analyze", "outline", "rewrite"}),
                 parameters=frozenset({"max_tokens"}),
             ),
@@ -147,9 +153,18 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
     def safe_call():
         try:
             return call()
-        except Exception:
+        except Exception as exc:
             if mock:
                 raise GatewayFailure("PROVIDER_FAILED", not_accepted=True) from None
+            if isinstance(exc, DomainError) and exc.code in {
+                "INVALID_SERVICE_URL",
+                "SERVICE_DNS_UNAVAILABLE",
+                "SERVICE_ADDRESS_BLOCKED",
+                "SERVICE_REDIRECT_BLOCKED",
+            }:
+                raise GatewayFailure(
+                    exc.code, not_accepted=exc.code != "SERVICE_REDIRECT_BLOCKED"
+                ) from None
             raise
 
     try:

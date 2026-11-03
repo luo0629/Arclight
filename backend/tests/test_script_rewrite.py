@@ -391,7 +391,6 @@ def test_provider_json_schema_and_credentials_stay_out_of_public_state(
 ):
     base = source(client, episode)
     seen = []
-    original = httpx.Client
 
     def respond(request):
         data = json.loads(request.content)
@@ -403,7 +402,8 @@ def test_provider_json_schema_and_credentials_stay_out_of_public_state(
         )
 
     monkeypatch.setattr(
-        httpx, "Client", lambda **kwargs: original(transport=httpx.MockTransport(respond), **kwargs)
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(respond),
     )
     settings_copy = settings.model_copy(update={"provider": "openai_compatible"})
     with client.app.state.session_factory() as db:

@@ -104,7 +104,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                         saver,
                         lambda inputs: generate_rewrite(
                             inputs,
-                            run_settings(settings, run.input_json.get("_text_service")),
+                            run_settings(settings, run.input_json.get("_text_service"), db),
                             contexts,
                         ),
                         contexts=contexts,
@@ -113,7 +113,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     graph = build_graph(
                         bind_contexts(
                             build_provider(
-                                run_settings(settings, run.input_json.get("_text_service"))
+                                run_settings(settings, run.input_json.get("_text_service"), db)
                             ),
                             contexts,
                         ),
@@ -200,7 +200,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 exc.code
                 if isinstance(exc, DomainError)
                 and (
-                    exc.code.startswith(("GATEWAY_", "BUDGET_"))
+                    exc.code.startswith(("GATEWAY_", "BUDGET_", "SERVICE_", "KEY_STORAGE_"))
                     or exc.code
                     in {
                         "PRODUCTION_VERSION_INCOMPATIBLE",

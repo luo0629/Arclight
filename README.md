@@ -243,12 +243,15 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 
 ## 账号模型服务配置
 
-顶栏“模型服务配置”可分别保存文字、图片、视频和语音的地址与模型预设。文字服务默认继承服务器配置，只有用户显式启用自定义文字服务后，新任务才使用该配置。图片、视频、语音当前仅保存预设，不支持生成；真实收费 Provider 联调仍待授权验收。
+顶栏“模型服务配置”的文字服务可直接选择 OpenAI、DeepSeek、智谱，自动填入官方地址、默认模型和输出格式，再填写自己的 API Key 即可保存。也可选择“自定义供应商”，填写名称、公网 HTTPS Base URL、模型及 JSON Schema／JSON 对象输出格式，无需管理员域名白名单。模型 ID 可按账号实际权限修改；预设不代表已完成真实付费联调。
 
-- 部署新版前按既有流程备份并执行 `alembic upgrade head`（新增迁移 `0003`）；开发代理需保持 `/api/v1` 同源。
-- 保存 API Key 前须配置独立 `ARCLIGHT_SERVICE_ENCRYPTION_KEY`：以 `cryptography.fernet.Fernet.generate_key()` 生成，API 与 Worker 使用相同值。密钥不与密文同库存储，不写入 Git，必须安全备份；直接更换会使已保存服务和未结束任务的配置快照无法解密。未配置时仍可保存无密钥预设。
-- `ARCLIGHT_MODEL_SERVICE_ALLOWED_HOSTS` 是管理员信任的精确公网 HTTPS 域名 JSON 列表，默认仅 `api.openai.com`。不要加入不受信任或解析到内网的域名；禁止 IP、HTTP、URL 凭证、查询参数、非443端口。HTTP 客户端不跟随重定向；执行任务时再次检查允许列表，管理员撤销域名后，未结束任务可能被阻止。
-- 配置按账号隔离、revision 防止陈旧覆盖。读取接口只有 `has_key`，不返回密钥或密文；浏览器不持久化 API Key。工作流启动时捕获加密配置快照，后续修改不会改变等待审核及重试任务；凭证不进入提示词、checkpoint、公开任务详情或审计事件。
+文字服务默认继承服务器配置，选用账号服务后仅影响新任务。图片、视频、语音当前仅保存预设，不支持生成。
+
+- 部署新版前先备份数据库和独立保管的主密钥，再按既有流程执行 `alembic upgrade head`。迁移 `0041` 增加供应商、独立凭证及审计表，保留旧密文和不可变任务输入；有凭证或审计历史时拒绝有损降级。开发代理需保持 `/api/v1` 同源。
+- API、初始化进程和全部 Worker 使用相同的 Fernet 主密钥。开发可设置 `ARCLIGHT_SERVICE_ENCRYPTION_KEY`；生产建议使用 `ARCLIGHT_SERVICE_ENCRYPTION_KEY_FILE` 指向容器内只读 Secret 文件，两者二选一。文件只含 `Fernet.generate_key()` 生成的主密钥，挂载由部署环境提供；路径变量不会自动创建或挂载 Secret。生产模式缺失或无效时拒绝启动，开发未配置时仍可保存无密钥预设。
+- 轮换前将数据库与密钥版本分别安全备份，并暂停凭证写入或先部署兼容读密钥。将新密钥设为主密钥，旧密钥通过 `ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS`（JSON 数组）或对应 `_FILE` 注入。在 `backend/` 执行 `uv run python -m arclight.workers.service_keys check`，再执行 `uv run python -m arclight.workers.service_keys rotate --apply --actor <运维身份>`；完成后重启全部进程，以移除旧密钥的配置再次运行 `check`，通过后才撤下旧密钥。轮换原子重加密独立凭证，不改写旧任务输入；旧主密钥进程禁止继续写入。历史备份仍须保留其对应密钥。
+- 自定义地址允许任意合规公网域名，要求 HTTPS／443，禁止 IP 字面量、内网地址、URL 凭证及查询参数。执行时校验全部 DNS 结果并固定连接 IP，保留原域名的 Host／TLS 校验，拒绝重定向及环境代理。部署网络还须阻断内网、云元数据及私网 NAT／代理路由，应用校验不能替代出站防火墙。
+- 配置按账号隔离，revision 防止陈旧覆盖。读取接口只返回密钥是否存在及安全诊断，不返回密钥或密文；浏览器不持久化 API Key。更换供应商或地址须重新填 Key 或清除旧凭证。工作流冻结连接配置和凭证引用，后续修改不改变等待审核及重试任务；凭证不进入提示词、checkpoint、公开任务详情或审计事件。个人配置审计可从 `/api/v1/me/model-services/audit` 分页读取。
 - 保存不测试连接、不产生模型费用。启用自定义文字服务后，主动创建的任务将发送故事素材并可能收费，请先确认数据与预算。
 
 ## 文件来源与安全回收

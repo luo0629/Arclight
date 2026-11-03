@@ -168,6 +168,10 @@ def capture_text(
         "provider": "openai_compatible" if service else settings.provider,
         "model": service["model"] if service else settings.llm_model,
         "base_url": service["base_url"] if service else settings.llm_base_url,
+        "supplier": service.get("supplier", "custom") if service else settings.llm_supplier,
+        "response_format": service.get("response_format", "json_schema")
+        if service
+        else settings.llm_response_format,
     }
     parameters = {
         "max_tokens": TEXT_MAX_TOKENS,
@@ -246,6 +250,8 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
             "provider": model["provider"],
             "llm_model": model["model"],
             "llm_base_url": model["base_url"],
+            "llm_supplier": model.get("supplier", "custom"),
+            "llm_response_format": model.get("response_format", "json_schema"),
             "llm_timeout_seconds": parameters["timeout_seconds"],
             "text_duration_tolerance_percent": parameters["duration_tolerance_percent"],
             "model_gateway_policy": GatewayPolicy.model_validate(parameters["gateway_policy"])

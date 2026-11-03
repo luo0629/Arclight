@@ -138,7 +138,7 @@ def extract(factory: sessionmaker, settings: Settings, run: WorkflowRun) -> tupl
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
         provider = bind_contexts(
-            build_provider(run_settings(settings, inputs.get("_text_service"))),
+            build_provider(run_settings(settings, inputs.get("_text_service"), db)),
             consume_context(db, episode.project_id, run, "analyze", settings),
         )
     # The frozen consumption receipt commits before durable gateway admission.

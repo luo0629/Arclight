@@ -19,6 +19,7 @@ from arclight.core.config import Settings
 from arclight.domain.context import check_call
 from arclight.domain.model_gateway import GatewayUsage
 from arclight.domain.project_settings import ProjectStorySettings
+from arclight.providers.network import PublicHTTPTransport
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
 T = TypeVar("T", bound=BaseModel)
@@ -165,24 +166,41 @@ class OpenAICompatibleTextProvider:
         if stage in self.contexts:
             data = check_call(self.contexts[stage], data)
         # 输入作为独立数据发送；不允许模型输出执行命令或写入数据库。
-        with httpx.Client(timeout=self.settings.llm_timeout_seconds) as client:
+        schema = contract.model_json_schema()
+        response_format = (
+            {"type": "json_schema", "json_schema": {"name": contract.__name__, "schema": schema}}
+            if self.settings.llm_response_format == "json_schema"
+            else {"type": "json_object"}
+        )
+        if self.settings.llm_response_format == "json_object":
+            instruction += "\n只输出符合以下 JSON Schema 的 JSON 对象：\n" + json.dumps(
+                schema, ensure_ascii=False
+            )
+        token_parameter = (
+            "max_completion_tokens" if self.settings.llm_supplier == "openai" else "max_tokens"
+        )
+        with httpx.Client(
+            timeout=self.settings.llm_timeout_seconds,
+            transport=PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),
+            trust_env=False,
+            follow_redirects=False,
+        ) as client:
             response = client.post(
                 f"{self.settings.llm_base_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {self.settings.llm_api_key.get_secret_value()}"},
                 json={
                     "model": self.settings.llm_model,
-                    "max_tokens": TEXT_MAX_TOKENS,
+                    token_parameter: TEXT_MAX_TOKENS,
+                    **(
+                        {"thinking": {"type": "disabled"}}
+                        if self.settings.llm_supplier == "deepseek"
+                        else {}
+                    ),
                     "messages": [
                         {"role": "system", "content": instruction},
                         {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
                     ],
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {
-                            "name": contract.__name__,
-                            "schema": contract.model_json_schema(),
-                        },
-                    },
+                    "response_format": response_format,
                 },
             )
             response.raise_for_status()

@@ -263,9 +263,9 @@ def test_real_adapter_sends_bounded_brief_as_data(settings, monkeypatch):
             },
         )
 
-    original = httpx.Client
     monkeypatch.setattr(
-        httpx, "Client", lambda **kwargs: original(transport=httpx.MockTransport(handler), **kwargs)
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(handler),
     )
     OpenAICompatibleTextProvider(settings).script(
         "用户故事", {"description": "水彩"}, 30000, story_settings=BRIEF

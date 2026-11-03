@@ -378,11 +378,9 @@ def test_provider_receives_target_range_as_data(settings, monkeypatch):
             },
         )
 
-    original_client = httpx.Client
     monkeypatch.setattr(
-        httpx,
-        "Client",
-        lambda **kwargs: original_client(transport=httpx.MockTransport(handler), **kwargs),
+        "arclight.providers.text.PublicHTTPTransport",
+        lambda *args, **kwargs: httpx.MockTransport(handler),
     )
     provider = OpenAICompatibleTextProvider(settings)
     generated = provider.script("故事", {}, 30001)

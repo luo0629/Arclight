@@ -27,13 +27,28 @@ type Profile = {
   model: string;
   has_key: boolean;
   revision: number;
+  supplier: string;
+  supplier_name: string;
+  response_format: "json_schema" | "json_object";
+  key_status?: string;
 };
-type Draft = Profile & { api_key: string; clear_key: boolean; dirty: boolean };
+type Draft = Profile & {
+  api_key: string;
+  clear_key: boolean;
+  dirty: boolean;
+  saved_supplier: string;
+  saved_base_url: string;
+};
+type Supplier = Pick<Profile, "base_url" | "model" | "response_format"> & {
+  id: string;
+  name: string;
+};
 type Configuration = {
   services: Profile[];
   can_store_keys: boolean;
   text_runtime: string;
-  allowed_hosts: string[];
+  suppliers: Supplier[];
+  key_storage: { code: string; message: string };
 };
 const services = [
   {
@@ -68,9 +83,20 @@ const empty = (kind: Kind): Draft => ({
   model: "",
   has_key: false,
   revision: 0,
+  supplier: "custom",
+  supplier_name: "",
+  response_format: "json_schema",
   api_key: "",
   clear_key: false,
   dirty: false,
+  saved_supplier: "custom",
+  saved_base_url: "",
+});
+const toDraft = (profile: Profile): Draft => ({
+  ...empty(profile.kind),
+  ...profile,
+  saved_supplier: profile.supplier,
+  saved_base_url: profile.base_url,
 });
 export default function ServiceSettings({
   onDismiss,
@@ -103,7 +129,7 @@ export default function ServiceSettings({
           speech: empty("speech"),
         };
         for (const profile of result.services)
-          next[profile.kind] = { ...empty(profile.kind), ...profile };
+          next[profile.kind] = toDraft(profile);
         setDrafts(next);
         setConfig(result);
       })
@@ -115,6 +141,10 @@ export default function ServiceSettings({
     };
   }, [attempt]);
   const draft = drafts[kind];
+  const destinationChanged =
+    draft.has_key &&
+    (draft.supplier !== draft.saved_supplier ||
+      draft.base_url !== draft.saved_base_url);
   function change(patch: Partial<Draft>) {
     setDrafts((current) => ({
       ...current,
@@ -122,6 +152,23 @@ export default function ServiceSettings({
     }));
     setSaved("");
     setError("");
+  }
+  function selectSupplier(supplier: string) {
+    const preset = config?.suppliers.find((row) => row.id === supplier);
+    change({
+      mode: "custom",
+      supplier,
+      supplier_name: preset?.name ?? "",
+      ...(preset
+        ? {
+            base_url: preset.base_url,
+            model: preset.model,
+            response_format: preset.response_format,
+          }
+        : {}),
+      api_key: "",
+      clear_key: draft.has_key,
+    });
   }
   function dismiss() {
     if (Object.values(drafts).some((row) => row.dirty)) setConfirmClose(true);
@@ -139,6 +186,9 @@ export default function ServiceSettings({
           mode: draft.mode,
           base_url: draft.base_url,
           model: draft.model,
+          supplier: draft.supplier,
+          supplier_name: draft.supplier_name,
+          response_format: draft.response_format,
           api_key: draft.api_key || null,
           clear_key: draft.clear_key,
           expected_revision: draft.revision,
@@ -146,7 +196,7 @@ export default function ServiceSettings({
       );
       setDrafts((current) => ({
         ...current,
-        [kind]: { ...empty(kind), ...profile },
+        [kind]: toDraft(profile),
       }));
       setSaved(
         "已保存到当前账号。" +
@@ -270,6 +320,38 @@ export default function ServiceSettings({
                 />
               </FormLabel>
             )}
+            {kind === "text" && (
+              <FormLabel>
+                模型供应商
+                <ChoiceSelect
+                  aria-label="模型供应商"
+                  value={draft.supplier}
+                  disabled={busy}
+                  onValueChange={selectSupplier}
+                  options={[
+                    ...config.suppliers.map((row) => ({
+                      value: row.id,
+                      label: row.name,
+                    })),
+                    { value: "custom", label: "自定义供应商" },
+                  ]}
+                />
+              </FormLabel>
+            )}
+            {draft.supplier === "custom" && (
+              <FormLabel>
+                供应商名称（选填）
+                <Input
+                  maxLength={100}
+                  placeholder="例如：我的模型服务"
+                  value={draft.supplier_name}
+                  disabled={busy}
+                  onChange={(event) =>
+                    change({ supplier_name: event.target.value })
+                  }
+                />
+              </FormLabel>
+            )}
             <div className="grid min-w-0 gap-5 sm:grid-cols-2">
               <FormLabel>
                 服务地址
@@ -279,7 +361,14 @@ export default function ServiceSettings({
                   maxLength={500}
                   value={draft.base_url}
                   disabled={busy}
-                  onChange={(event) => change({ base_url: event.target.value })}
+                  readOnly={draft.supplier !== "custom"}
+                  onChange={(event) =>
+                    change({
+                      base_url: event.target.value,
+                      api_key: "",
+                      clear_key: draft.has_key,
+                    })
+                  }
                 />
               </FormLabel>
               <FormLabel>
@@ -295,6 +384,25 @@ export default function ServiceSettings({
                 />
               </FormLabel>
             </div>
+            {kind === "text" && draft.supplier === "custom" && (
+              <FormLabel>
+                结构化输出格式
+                <ChoiceSelect
+                  aria-label="结构化输出格式"
+                  value={draft.response_format}
+                  disabled={busy}
+                  onValueChange={(value) =>
+                    change({
+                      response_format: value as Profile["response_format"],
+                    })
+                  }
+                  options={[
+                    { value: "json_schema", label: "JSON Schema" },
+                    { value: "json_object", label: "JSON 对象" },
+                  ]}
+                />
+              </FormLabel>
+            )}
             <FormLabel>
               API Key
               <Input
@@ -304,7 +412,7 @@ export default function ServiceSettings({
                 value={draft.api_key}
                 disabled={busy || !config.can_store_keys}
                 placeholder={
-                  draft.has_key && !draft.clear_key
+                  draft.has_key && !draft.clear_key && !destinationChanged
                     ? "已保存密钥；留空保持不变"
                     : "输入密钥（不会回显）"
                 }
@@ -315,13 +423,15 @@ export default function ServiceSettings({
             </FormLabel>
             <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
               <span>
-                {draft.clear_key
-                  ? "保存后将清除密钥"
-                  : draft.has_key
-                    ? "密钥已加密保存"
-                    : "尚未保存密钥"}
+                {destinationChanged
+                  ? "供应商或地址已更改，请重新填写 API Key"
+                  : draft.clear_key
+                    ? "保存后将清除密钥"
+                    : draft.has_key
+                      ? "密钥已加密保存"
+                      : "尚未保存密钥"}
               </span>
-              {draft.has_key && (
+              {draft.has_key && !destinationChanged && (
                 <Button
                   type="button"
                   variant="ghost"
@@ -337,17 +447,28 @@ export default function ServiceSettings({
             </div>
             {!config.can_store_keys && (
               <Notice tone="info">
-                服务器未启用密钥加密存储。可先保存地址与模型；请管理员设置
-                ARCLIGHT_SERVICE_ENCRYPTION_KEY 后再填写密钥。
+                {config.key_storage.message}
+                。可先保存地址与模型，请联系管理员恢复密钥存储后再填写密钥。
               </Notice>
             )}
             {kind === "text" && draft.mode === "custom" && (
               <Notice tone="info">
                 启用后，新文字任务会把故事素材发送到此服务，并可能产生费用。支持
-                Chat Completions / JSON Schema；允许的域名：
-                {config.allowed_hosts.join("、") || "暂未配置"}。
+                Chat Completions /{" "}
+                {draft.response_format === "json_schema"
+                  ? "JSON Schema"
+                  : "JSON 对象"}
+                ；自定义地址支持公网 HTTPS 服务，无需申请域名白名单。
               </Notice>
             )}
+            {draft.has_key &&
+              draft.key_status &&
+              !["READY", "MISSING"].includes(draft.key_status) && (
+                <Notice tone="error">
+                  已存凭证暂时不可读取，请联系管理员检查主密钥，或重新填写 API
+                  Key 后保存。
+                </Notice>
+              )}
             {error && (
               <Notice tone="error" role="alert">
                 {error}
