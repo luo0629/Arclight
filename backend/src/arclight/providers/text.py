@@ -16,6 +16,7 @@ from arclight.agents.story_analysis import KeyEvent, StoryAnalysisContent
 from arclight.agents.story_outline import OutlineEpisode, StoryOutlineContent
 from arclight.application.content_duration import duration_bounds
 from arclight.core.config import Settings
+from arclight.core.errors import DomainError
 from arclight.domain.context import check_call
 from arclight.domain.model_gateway import GatewayUsage
 from arclight.domain.project_settings import ProjectStorySettings
@@ -23,6 +24,71 @@ from arclight.providers.network import PublicHTTPTransport
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
 T = TypeVar("T", bound=BaseModel)
+
+
+def raise_for_text_error(response: httpx.Response) -> None:
+    """Expose only recognized rejection reasons, never upstream response text."""
+    if 400 <= response.status_code < 500:
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        error = body.get("error", body)
+        error = error if isinstance(error, dict) else {}
+        codes = {
+            str(value).strip().casefold()
+            for value in (error.get("code"), error.get("type"), body.get("code"))
+            if isinstance(value, (str, int))
+        }
+        description = str(error.get("message", "")).casefold()
+        if codes & {
+            "organization_spend_limit_exceeded",
+            "project_spend_limit_exceeded",
+            "organization_usage_limit_exceeded",
+            "usage_limit_exceeded",
+        }:
+            raise DomainError(
+                "SERVICE_QUOTA_EXCEEDED",
+                "模型服务额度已达上限，请前往对应服务商检查额度后重试",
+                429,
+            )
+        if (
+            response.status_code == 402
+            or codes
+            & {
+                "insufficient_quota",
+                "insufficient_balance",
+                "insufficient_user_quota",
+                "insufficient_credit",
+                "insufficient_credits",
+                "balance_insufficient",
+                "account_balance_insufficient",
+                "billing_hard_limit_reached",
+                "credit_balance_exhausted",
+                "arrearage",
+                "isv.out_of_service",
+            }
+            or any(
+                phrase in description
+                for phrase in (
+                    "余额不足",
+                    "insufficient balance",
+                    "insufficient credit",
+                    "credit balance is too low",
+                )
+            )
+        ):
+            raise DomainError(
+                "SERVICE_BALANCE_INSUFFICIENT", "余额不足，请前往对应服务商充值后重试", 402
+            )
+        if response.status_code == 401:
+            raise DomainError(
+                "SERVICE_AUTHENTICATION_FAILED", "API Key 无效，请检查模型服务配置", 502
+            )
+        if response.status_code == 429:
+            raise DomainError("SERVICE_RATE_LIMITED", "模型服务请求过于频繁，请稍后重试", 429)
+    response.raise_for_status()
 
 
 class TextProvider(Protocol):
@@ -203,7 +269,7 @@ class OpenAICompatibleTextProvider:
                     "response_format": response_format,
                 },
             )
-            response.raise_for_status()
+            raise_for_text_error(response)
             body = response.json()
             usage = body.get("usage") or {}
             self.last_usage = GatewayUsage(

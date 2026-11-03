@@ -10,6 +10,7 @@ import {
   Settings2,
   X,
   Check,
+  Info,
 } from "lucide-react";
 import Dialog from "@/components/shared/app-dialog";
 import ServiceProviders, {
@@ -20,6 +21,15 @@ import ServiceProviders, {
 import { api, json, message } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { FormLabel, Notice, LoadingState } from "@/components/ui-kit";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ChoiceSelect } from "@/components/choice-select";
@@ -40,13 +50,7 @@ type Profile = {
 type Draft = Profile & { api_key: string; clear_key: boolean; dirty: boolean };
 type Configuration = {
   services: Profile[];
-  suppliers: {
-    id: string;
-    name: string;
-    base_url: string;
-    model: string;
-    response_format: ResponseFormat;
-  }[];
+  suppliers: ServicePreset[];
   can_store_keys: boolean;
   text_runtime: string;
   key_storage: { code: string; message: string };
@@ -92,6 +96,8 @@ export default function ServiceSettings({
   const [saved, setSaved] = useState("");
   const [confirmClose, setConfirmClose] = useState(false);
   const confirmation = useRef<HTMLDivElement>(null);
+  const modelInput = useRef<HTMLInputElement>(null);
+  const [modelError, setModelError] = useState("");
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (confirmClose) {
@@ -119,18 +125,8 @@ export default function ServiceSettings({
     };
   }, [attempt]);
   const draft = drafts[kind];
-  const presets: ServicePreset[] =
-    kind === "text"
-      ? (config?.suppliers.map((supplier) => ({
-          ...supplier,
-          kind: "text" as const,
-          group: ["deepseek", "zhipu"].includes(supplier.id)
-            ? ("domestic" as const)
-            : ("international" as const),
-          description: supplier.model,
-          models: [supplier.model],
-        })) ?? [])
-      : [];
+  const presets =
+    config?.suppliers.filter((supplier) => supplier.kind === kind) ?? [];
   const preset = presets.find((row) => row.id === draft.supplier);
   const stored = config?.services.find((row) => row.kind === kind);
   const hasStoredKey =
@@ -145,6 +141,7 @@ export default function ServiceSettings({
     }));
     setSaved("");
     setError("");
+    setModelError("");
     setConfirmClose(false);
   }
   function selectProvider(id: string) {
@@ -163,7 +160,7 @@ export default function ServiceSettings({
       supplier_name: next?.name ?? previous?.supplier_name ?? "",
       mode: kind === "text" ? "custom" : "server",
       base_url: next?.base_url ?? previous?.base_url ?? "",
-      model: previous?.model || next?.models[0] || "",
+      model: previous?.model ?? "",
       response_format:
         next?.response_format ?? previous?.response_format ?? "json_schema",
       api_key: "",
@@ -177,6 +174,11 @@ export default function ServiceSettings({
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (busy || !draft.dirty) return;
+    if ((preset || draft.mode === "custom") && !draft.model.trim()) {
+      setModelError("请填写供应商提供的模型 ID。");
+      modelInput.current?.focus();
+      return;
+    }
     setBusy(true);
     setError("");
     setSaved("");
@@ -229,7 +231,7 @@ export default function ServiceSettings({
       labelledBy="service-settings-title"
       busy={busy}
       onDismiss={dismiss}
-      className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
+      className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl"
     >
       <header className="flex shrink-0 items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
         <div className="flex items-start gap-3">
@@ -239,7 +241,7 @@ export default function ServiceSettings({
               模型与服务
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              选择服务商，填入密钥。配置仅属于你的账号。
+              选择服务商，填写模型名称与密钥。配置仅属于你的账号。
             </p>
           </div>
         </div>
@@ -271,7 +273,7 @@ export default function ServiceSettings({
         </div>
       ) : (
         <div className="flex min-h-0 flex-col overflow-y-auto md:flex-row">
-          <aside className="shrink-0 border-b bg-muted/50 p-3 md:w-44 md:border-r md:border-b-0 md:p-4">
+          <aside className="shrink-0 border-b bg-muted/40 p-3 md:w-52 md:border-r md:border-b-0 md:p-4">
             <ToggleGroup
               type="single"
               value={kind}
@@ -279,6 +281,7 @@ export default function ServiceSettings({
                 if (!value) return;
                 setKind(value as Kind);
                 setError("");
+                setModelError("");
                 setSaved("");
                 setConfirmClose(false);
               }}
@@ -291,16 +294,30 @@ export default function ServiceSettings({
                   key={service.kind}
                   value={service.kind}
                   aria-label={service.label}
-                  className="h-10 w-full justify-start gap-2 rounded-lg px-3 text-sm data-[state=on]:bg-accent/60"
+                  className="h-11 w-full justify-start gap-2 rounded-md border border-border bg-background px-3 text-sm data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
                 >
-                  <service.icon className="size-4 shrink-0" />
+                  <service.icon
+                    className="size-4 shrink-0"
+                    aria-hidden="true"
+                  />
                   {service.label}
                   {drafts[service.kind].dirty ? (
                     <span
-                      className="ml-auto size-1.5 rounded-full bg-primary"
+                      className="size-1.5 shrink-0 rounded-full bg-current"
                       aria-label="未保存"
                     />
                   ) : null}
+                  <Badge
+                    variant="secondary"
+                    className="ml-auto tabular-nums"
+                    aria-label={`${config.suppliers.filter((row) => row.kind === service.kind).length} 个预设`}
+                  >
+                    {
+                      config.suppliers.filter(
+                        (row) => row.kind === service.kind,
+                      ).length
+                    }
+                  </Badge>
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -310,12 +327,16 @@ export default function ServiceSettings({
               创作任务使用发起者的配置。
             </p>
           </aside>
-          <div className="min-w-0 flex-1 space-y-6 p-4 sm:p-6 md:max-h-[calc(90dvh-87px)] md:overflow-y-auto">
-            <div className="rounded-lg border bg-sky/50 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-              {kind === "text"
-                ? "选择预设将自动填入服务地址与推荐模型，只需填写对应密钥即可保存使用。"
-                : "填写服务地址与模型。仅保存预设 · 尚未接入生成，不会调用供应商。"}
-            </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 md:max-h-[calc(90dvh-87px)] md:overflow-y-auto">
+            <Alert role="note">
+              <Info aria-hidden="true" />
+              <AlertDescription>
+                选择预设自动填写服务地址，模型名称与 API Key
+                由你填写；其他服务选择「自定义」。
+                {kind !== "text" &&
+                  "仅保存预设 · 尚未接入生成，不会调用供应商。"}
+              </AlertDescription>
+            </Alert>
             <ServiceProviders
               kind={kind}
               presets={presets}
@@ -333,7 +354,9 @@ export default function ServiceSettings({
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold">
-                  {preset?.name ?? "自定义服务"}配置
+                  {kind === "text" && draft.mode === "server"
+                    ? "服务器默认服务"
+                    : (preset?.name ?? "自定义服务") + "配置"}
                 </h3>
                 <span className="text-xs text-muted-foreground">
                   {kind !== "text"
@@ -417,7 +440,7 @@ export default function ServiceSettings({
                   </Button>
                 )}
               </div>
-              <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+              <FieldGroup className="grid min-w-0 gap-4 sm:grid-cols-2">
                 <FormLabel>
                   服务地址
                   <Input
@@ -442,39 +465,40 @@ export default function ServiceSettings({
                       : "填写服务的 API 基础地址，使用公网 HTTPS。"}
                   </span>
                 </FormLabel>
-                <FormLabel>
-                  模型名称
+                <Field data-invalid={!!modelError} data-disabled={busy}>
+                  <FieldLabel htmlFor="service-model">
+                    模型名称
+                    {(preset || draft.mode === "custom") && (
+                      <span className="text-xs font-normal text-muted-foreground">
+                        （必填）
+                      </span>
+                    )}
+                  </FieldLabel>
                   <Input
+                    id="service-model"
+                    ref={modelInput}
                     aria-label="模型名称"
+                    aria-required={!!preset || draft.mode === "custom"}
+                    aria-invalid={!!modelError}
+                    aria-describedby={
+                      modelError ? "service-model-error" : "service-model-hint"
+                    }
                     placeholder="供应商提供的模型 ID"
                     maxLength={160}
                     value={draft.model}
                     disabled={busy}
                     onChange={(event) => change({ model: event.target.value })}
                   />
-                  <span className="text-xs font-normal text-muted-foreground">
-                    可按账号权限修改为其他模型 ID。
-                  </span>
-                </FormLabel>
-              </div>
-              {preset && preset.models.length > 1 && (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  推荐模型
-                  {preset.models.map((model) => (
-                    <Button
-                      key={model}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 max-w-full text-xs"
-                      disabled={busy}
-                      onClick={() => change({ model })}
-                    >
-                      <span className="truncate">{model}</span>
-                    </Button>
-                  ))}
-                </div>
-              )}
+                  <FieldDescription id="service-model-hint">
+                    请手动填写当前服务商支持的模型 ID。
+                  </FieldDescription>
+                  {modelError && (
+                    <FieldError id="service-model-error">
+                      {modelError}
+                    </FieldError>
+                  )}
+                </Field>
+              </FieldGroup>
               {kind === "text" && !preset && (
                 <FormLabel>
                   结构化输出格式

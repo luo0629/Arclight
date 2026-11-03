@@ -141,9 +141,9 @@ def save_service(
     settings = request.app.state.settings
     if kind != "text" and payload.mode == "custom":
         raise DomainError("SERVICE_NOT_READY", "此服务生成链路尚未开放，只能保存预设", 422)
-    preset = supplier_by_id(payload.supplier)
-    if payload.supplier != "custom" and (preset is None or kind != "text"):
-        raise DomainError("INVALID_SUPPLIER", "请选择可用的文字供应商或自定义供应商", 422)
+    preset = supplier_by_id(payload.supplier, kind)
+    if payload.supplier != "custom" and preset is None:
+        raise DomainError("INVALID_SUPPLIER", "请选择此服务类型的预设或自定义供应商", 422)
     base = payload.base_url.strip() or (preset.base_url if preset else "")
     if base:
         base = validate_endpoint(base)
@@ -155,7 +155,9 @@ def save_service(
     if preset and (base != preset.base_url or response_format != preset.response_format):
         raise DomainError("SUPPLIER_MISMATCH", "预设地址或输出格式已变化，请切换自定义供应商", 422)
     name = preset.name if preset else payload.supplier_name.strip()
-    model = payload.model.strip() or (preset.model if preset else "")
+    model = payload.model.strip()
+    if (preset or payload.mode == "custom") and not model:
+        raise DomainError("SERVICE_MODEL_REQUIRED", "请填写模型名称，使用供应商提供的模型 ID", 422)
     has_new_key = bool(payload.api_key and payload.api_key.get_secret_value())
     if payload.clear_key and has_new_key:
         raise DomainError("INVALID_KEY_CHANGE", "清除和替换密钥不能同时进行", 422)

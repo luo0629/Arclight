@@ -258,6 +258,10 @@ def invoke[T](
                     "SERVICE_DNS_UNAVAILABLE",
                     "SERVICE_ADDRESS_BLOCKED",
                     "SERVICE_REDIRECT_BLOCKED",
+                    "SERVICE_BALANCE_INSUFFICIENT",
+                    "SERVICE_AUTHENTICATION_FAILED",
+                    "SERVICE_RATE_LIMITED",
+                    "SERVICE_QUOTA_EXCEEDED",
                 }
                 else "RESULT_UNKNOWN"
             )
@@ -291,6 +295,22 @@ def invoke[T](
                         ) from None
                     current_route, current_call = candidate, candidate_call
                 continue
+            if safe_failure and error in {
+                "SERVICE_BALANCE_INSUFFICIENT",
+                "SERVICE_AUTHENTICATION_FAILED",
+                "SERVICE_RATE_LIMITED",
+                "SERVICE_QUOTA_EXCEEDED",
+            }:
+                message, status_code = {
+                    "SERVICE_BALANCE_INSUFFICIENT": ("余额不足，请前往对应服务商充值后重试", 402),
+                    "SERVICE_AUTHENTICATION_FAILED": ("API Key 无效，请检查模型服务配置", 502),
+                    "SERVICE_RATE_LIMITED": ("模型服务请求过于频繁，请稍后重试", 429),
+                    "SERVICE_QUOTA_EXCEEDED": (
+                        "模型服务额度已达上限，请前往对应服务商检查额度后重试",
+                        429,
+                    ),
+                }[error]
+                raise DomainError(error, message, status_code) from None
             code = "GATEWAY_NOT_ACCEPTED" if safe_failure else "GATEWAY_RECONCILIATION_REQUIRED"
             raise DomainError(code, "模型调用失败，已保存安全诊断", 502) from None
         with factory.begin() as db:

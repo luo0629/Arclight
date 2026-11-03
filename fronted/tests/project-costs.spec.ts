@@ -71,6 +71,60 @@ async function media(
   return response.json();
 }
 
+test("未报价文字调用显示费用未统计", async ({ page }) => {
+  const env = await setup(page);
+  const amounts = {
+    entry_count: 1,
+    confirmed_count: 0,
+    estimated_count: 0,
+    unpriced_count: 1,
+    actual_cost: null,
+    estimated_cost: null,
+    projected_cost: null,
+    pending_estimate: "0.000000",
+    cost_is_estimate: true,
+  };
+  await page.route(`**${env.url}?*`, (route) =>
+    route.fulfill({
+      json: {
+        summary: amounts,
+        groups: [{ key: env.project.id, label: env.project.name, ...amounts }],
+        total_groups: 1,
+        generated_at: new Date().toISOString(),
+      },
+    }),
+  );
+  await page.route(`**${env.url}/entries?*`, (route) =>
+    route.fulfill({
+      json: {
+        total: 1,
+        items: [
+          {
+            id: crypto.randomUUID(),
+            task_id: crypto.randomUUID(),
+            source: "TEXT",
+            task_type: "script",
+            provider: "custom",
+            model: "personal-model",
+            attempt_no: 1,
+            call_id: crypto.randomUUID(),
+            ...amounts,
+          },
+        ],
+      },
+    }),
+  );
+  await open(page);
+  await expect(
+    surface(page).locator("dl").first().getByText("未统计", { exact: true }),
+  ).toHaveCount(2);
+  await expect(surface(page)).toContainText("1 条费用未统计");
+  await surface(page).getByRole("button", { name: "查看该组明细" }).click();
+  const details = page.getByLabel("费用明细", { exact: true });
+  await expect(details.getByText("费用未统计", { exact: true })).toBeVisible();
+  await expect(details).toContainText("报价：未统计 · 实际：未统计");
+});
+
 test("shows empty coverage, actual and estimated costs, four dimensions and exact trace references", async ({
   page,
 }, info) => {
@@ -194,7 +248,7 @@ test("task pagination keeps project totals and dimensions switch without stale r
   ).toBeVisible();
   await expect(
     surface(page).getByText(
-      "11 条待核账，0 条缺少可信报价。预留代表预算占用，最终费用以账单为准。",
+      "11 条待核账，0 条费用未统计。最终费用以服务商账单为准。",
       { exact: true },
     ),
   ).toBeVisible();
@@ -206,7 +260,7 @@ test("task pagination keeps project totals and dimensions switch without stale r
   ).toBeVisible();
   await expect(
     surface(page).getByText(
-      "11 条待核账，0 条缺少可信报价。预留代表预算占用，最终费用以账单为准。",
+      "11 条待核账，0 条费用未统计。最终费用以服务商账单为准。",
       { exact: true },
     ),
   ).toBeVisible();

@@ -172,7 +172,10 @@ def cost_facts(project_id: UUID):
             Call.created_at,
             Call.maximum_cost,
             final_receipts.c.actual_cost,
-            case((final_receipts.c.actual_cost.is_(None), Call.maximum_cost), else_=zero),
+            case(
+                (final_receipts.c.actual_cost.is_(None), func.coalesce(Call.maximum_cost, zero)),
+                else_=zero,
+            ),
         )
         .outerjoin(final_receipts, final_receipts.c.call_id == Call.id)
         .outerjoin(WorkflowRun, WorkflowRun.id == Call.workflow_id)

@@ -9,6 +9,7 @@ import { BookOpenText, Sparkles } from "lucide-react";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Notice, PagePanel, StatusBadge } from "@/components/ui-kit";
 import { api, json, message } from "@/lib/api/client";
+import { workflowErrorMessage } from "@/lib/workflow-errors";
 import type { Run } from "@/types/api";
 import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
@@ -309,12 +310,12 @@ export default function StoryAnalysis({
           <div className="mt-4 flex flex-wrap items-center gap-2">
             <span>最近提炼任务</span>
             <StatusBadge status={run.status} />
-            {run.error_code && (
-              <span className="break-all text-sm">
-                {run.error_code}；可到任务与审核主动重试。
-              </span>
-            )}
           </div>
+        )}
+        {run?.error_code && (
+          <Notice tone="error" role="alert" className="mt-3">
+            {workflowErrorMessage(run.error_code)} 可到任务与审核主动重试。
+          </Notice>
         )}
       </PagePanel>
       <PagePanel

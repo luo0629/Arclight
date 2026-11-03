@@ -86,7 +86,8 @@ def test_key_storage_disabled_and_media_not_activated(client, settings):
     )
 
 
-def test_endpoints_without_domain_allowlist_or_network(client, settings, monkeypatch):
+@pytest.mark.parametrize("kind", ["text", "image", "video", "speech"])
+def test_endpoints_without_domain_allowlist_or_network(client, settings, monkeypatch, kind):
     import socket
 
     resolve = socket.getaddrinfo
@@ -113,15 +114,19 @@ def test_endpoints_without_domain_allowlist_or_network(client, settings, monkeyp
         "https://host.test:broken/v1",
         "https://host.test/v1?key=secret",
     ]:
-        response = client.put("/api/v1/me/model-services/text", json=profile(base_url=url))
+        response = client.put(f"/api/v1/me/model-services/{kind}", json=profile(base_url=url))
         assert response.status_code == 422, (url, response.text)
         assert "secret" not in response.text
     saved = client.put(
-        "/api/v1/me/model-services/text",
-        json=profile(mode="custom", base_url="https://unapproved.example/v1", api_key="secret"),
+        f"/api/v1/me/model-services/{kind}",
+        json=profile(
+            mode="custom" if kind == "text" else "server",
+            base_url=f"https://my-{kind}-upstream.example/v1",
+            api_key="secret",
+        ),
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["base_url"] == "https://unapproved.example/v1"
+    assert saved.json()["base_url"] == f"https://my-{kind}-upstream.example/v1"
 
 
 def test_active_text_is_snapshotted_and_used_without_real_calls(client, settings, monkeypatch):
@@ -190,24 +195,33 @@ def test_service_config_requires_personal_session(client):
     assert client.get("/api/v1/me/model-services").status_code == 401
 
 
-@pytest.mark.parametrize("preset", SUPPLIERS, ids=lambda preset: preset.id)
-def test_official_supplier_only_needs_selection_and_key(client, settings, preset):
+@pytest.mark.parametrize("preset", SUPPLIERS, ids=lambda preset: f"{preset.kind}-{preset.id}")
+def test_preset_requires_user_model_and_saves_kind_specific_defaults(client, settings, preset):
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     account(client)
     catalog = client.get("/api/v1/me/model-services").json()
     assert preset.model_dump() in catalog["suppliers"]
+    assert all("model" not in supplier for supplier in catalog["suppliers"])
+    endpoint = f"/api/v1/me/model-services/{preset.kind}"
+    payload = {
+        "supplier": preset.id,
+        "mode": "custom" if preset.kind == "text" else "server",
+        "api_key": "test-key",
+        "expected_revision": 0,
+    }
+    for missing_model in ({}, {"model": ""}, {"model": " \t "}):
+        rejected = client.put(endpoint, json={**payload, **missing_model})
+        assert rejected.status_code == 422, rejected.text
+        assert rejected.json()["error"]["code"] == "SERVICE_MODEL_REQUIRED"
+        assert client.get("/api/v1/me/model-services").json()["services"] == []
+    model = f"my-{preset.kind}-{preset.id}-model"
     saved = client.put(
-        "/api/v1/me/model-services/text",
-        json={
-            "supplier": preset.id,
-            "mode": "custom",
-            "api_key": "test-key",
-            "expected_revision": 0,
-        },
+        endpoint,
+        json={**payload, "model": f"  {model}  "},
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["base_url"] == preset.base_url
-    assert saved.json()["model"] == preset.model
+    assert saved.json()["model"] == model
     assert saved.json()["response_format"] == preset.response_format
     assert saved.json()["supplier_name"] == preset.name
     assert client.get("/api/v1/me/model-services").json()["services"][0]["key_status"] == "READY"
@@ -220,11 +234,51 @@ def test_official_supplier_only_needs_selection_and_key(client, settings, preset
         },
     ):
         rejected = client.put(
-            "/api/v1/me/model-services/text",
+            endpoint,
             json={"supplier": preset.id, "expected_revision": 1, **change},
         )
         assert rejected.status_code == 422
         assert rejected.json()["error"]["code"] == "SUPPLIER_MISMATCH"
+
+
+@pytest.mark.parametrize("kind", ["text", "image", "video", "speech"])
+def test_custom_configuration_is_independent_for_each_kind(client, settings, kind):
+    settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
+    account(client)
+    saved = client.put(
+        f"/api/v1/me/model-services/{kind}",
+        json=profile(
+            mode="custom" if kind == "text" else "server",
+            supplier="custom",
+            supplier_name="我的服务",
+            base_url=f"https://{kind}.example/v1",
+            model=f"my-{kind}-model",
+            api_key=f"private-{kind}-key",
+        ),
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["supplier"] == "custom"
+    assert saved.json()["base_url"] == f"https://{kind}.example/v1"
+    assert saved.json()["model"] == f"my-{kind}-model"
+    assert saved.json()["has_key"] is True
+    own = client.get("/api/v1/me/model-services")
+    assert [row["kind"] for row in own.json()["services"]] == [kind]
+    assert f"private-{kind}-key" not in own.text
+    account(client)
+    assert client.get("/api/v1/me/model-services").json()["services"] == []
+
+
+@pytest.mark.parametrize(
+    ("kind", "supplier"), [("text", "volcengine"), ("speech", "deepseek"), ("image", "xai")]
+)
+def test_preset_cannot_be_used_for_a_different_kind(client, kind, supplier):
+    account(client)
+    rejected = client.put(
+        f"/api/v1/me/model-services/{kind}",
+        json=profile(supplier=supplier),
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "INVALID_SUPPLIER"
 
 
 def test_destination_change_requires_new_key_and_audit_is_private(client, settings):

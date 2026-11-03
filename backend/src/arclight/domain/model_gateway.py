@@ -25,6 +25,8 @@ class GatewayPolicy(GatewayValue):
     cooldown_seconds: int = Field(default=60, ge=1, le=3600)
     max_attempts: int = Field(default=1, ge=1, le=3)
     timeout_seconds: float = Field(default=60, gt=0, le=600)
+    # Retained to read older environment settings and frozen task snapshots.
+    # Text calls now use the upstream account balance without a mandatory quote.
     text_maximum_cost: Decimal | None = Field(default=None, ge=0, le=10000, decimal_places=6)
     pricing_version: str = Field(default="unconfigured", min_length=1, max_length=100)
 

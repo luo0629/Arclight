@@ -125,8 +125,8 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
                 tasks=frozenset({"script", "storyboard", "analyze", "outline", "rewrite"}),
                 parameters=frozenset({"max_tokens"}),
             ),
-            maximum_cost=Decimal("0") if mock else policy.text_maximum_cost,
-            pricing_version="mock-free:1" if mock else policy.pricing_version,
+            maximum_cost=Decimal("0") if mock else None,
+            pricing_version="mock-free:1" if mock else "unpriced:1",
         )
         request = GatewayRequest(
             project_id=episode.project_id,
@@ -145,11 +145,6 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
             return GatewayUsage(actual_cost=Decimal("0"))
         return getattr(provider, "last_usage", GatewayUsage())
 
-    # The account's endpoint/key snapshot is resolved before reaching this layer.
-    # No fallback route is authorized by the existing UI.
-    if not mock and route.maximum_cost is None:
-        raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "文字模型尚未配置可信调用报价", 409)
-
     def safe_call():
         try:
             return call()
@@ -161,6 +156,10 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
                 "SERVICE_DNS_UNAVAILABLE",
                 "SERVICE_ADDRESS_BLOCKED",
                 "SERVICE_REDIRECT_BLOCKED",
+                "SERVICE_BALANCE_INSUFFICIENT",
+                "SERVICE_AUTHENTICATION_FAILED",
+                "SERVICE_RATE_LIMITED",
+                "SERVICE_QUOTA_EXCEEDED",
             }:
                 raise GatewayFailure(
                     exc.code, not_accepted=exc.code != "SERVICE_REDIRECT_BLOCKED"

@@ -21,6 +21,70 @@ def test_migration_round_trip(settings, migrated):
     engine.dispose()
 
 
+def test_nullable_gateway_price_migration_preserves_history_and_immutable_guards(
+    client, episode, migrated
+):
+    from decimal import Decimal
+
+    from sqlalchemy import text
+    from sqlalchemy.exc import DBAPIError
+    from test_model_gateway import api, request, route
+
+    from arclight.application.model_gateway import invoke
+    from arclight.domain.model_gateway import GatewayPolicy, GatewayUsage
+
+    selected = route(maximum_cost=Decimal("0"))
+    invoke(
+        client.app.state.session_factory,
+        request(episode, selected, task="script"),
+        selected,
+        lambda: "ok",
+        policy=GatewayPolicy(),
+        usage=lambda _: GatewayUsage(actual_cost=Decimal("0")),
+    )
+    before = client.get(api(episode) + "/calls").json()
+    # This also exercises upgrading a 0041 database with existing call/receipt
+    # rows, rather than just migrating an empty database.
+    command.downgrade(migrated, "0041")
+    command.upgrade(migrated, "head")
+    assert client.get(api(episode) + "/calls").json() == before
+    engine = client.app.state.engine
+    assert next(
+        column
+        for column in inspect(engine).get_columns("model_gateway_calls")
+        if column["name"] == "maximum_cost"
+    )["nullable"]
+    for table in ("model_gateway_calls", "model_gateway_receipts"):
+        for statement in (f"UPDATE {table} SET actor='changed'", f"DELETE FROM {table}"):
+            with pytest.raises(DBAPIError, match="IMMUTABLE_HISTORY"), engine.begin() as db:
+                db.execute(text(statement))
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as db:
+            assert db.execute(text("PRAGMA foreign_key_check")).all() == []
+
+
+def test_unpriced_call_history_prevents_lossy_downgrade(client, episode, migrated):
+    from sqlalchemy import text
+    from test_model_gateway import api, request, route
+
+    from arclight.application.model_gateway import invoke
+    from arclight.domain.model_gateway import GatewayPolicy
+
+    selected = route(maximum_cost=None)
+    invoke(
+        client.app.state.session_factory,
+        request(episode, selected, task="script"),
+        selected,
+        lambda: "ok",
+        policy=GatewayPolicy(),
+    )
+    with pytest.raises(RuntimeError, match="Unpriced model gateway history exists"):
+        command.downgrade(migrated, "0041")
+    assert client.get(api(episode) + "/calls").json()[0]["maximum_cost"] is None
+    with client.app.state.engine.connect() as db:
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0042"
+
+
 def test_production_rejects_insecure_settings():
     from arclight.core.config import Settings
 

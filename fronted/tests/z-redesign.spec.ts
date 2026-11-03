@@ -234,7 +234,9 @@ test("新版：服务配置真实持久化、切区保留、密钥不回显、�
   expect(outsideCalls).toBe(0);
 });
 
-test("新版：官方供应商只填密钥、自定义地址与目标变更保护", async ({ page }) => {
+test("新版：官方供应商手填模型与密钥、自定义地址与目标变更保护", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await setup(page);
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
@@ -248,9 +250,10 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
   await supplier.click();
   await expect(endpoint).toHaveValue("https://api.deepseek.com");
   await expect(endpoint).toHaveAttribute("readonly", "");
-  await expect(dialog.getByLabel("模型名称", { exact: true })).not.toHaveValue(
-    "",
-  );
+  await expect(dialog.getByLabel("模型名称", { exact: true })).toHaveValue("");
+  await dialog
+    .getByLabel("模型名称", { exact: true })
+    .fill("my-deepseek-model");
   await expect(
     dialog.getByText("用于新文字任务", { exact: true }),
   ).toBeVisible();

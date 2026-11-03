@@ -527,28 +527,32 @@ def test_downgrade_refuses_to_discard_usage_history(client, episode, migrated):
     assert len(client.get(api(episode) + "/calls").json()) == 1
 
 
-def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
-    client, settings, monkeypatch, caplog
+@pytest.mark.parametrize("legacy_quote", [False, True])
+def test_real_text_transport_uses_frozen_connection_without_quote_or_budget_setup(
+    client, settings, monkeypatch, caplog, legacy_quote
 ):
     import json
 
     import httpx
     from cryptography.fernet import Fernet
     from pydantic import SecretStr
-    from test_generation_budget import set_policy
     from test_model_services import account, profile
 
     from arclight.providers.text import MockTextProvider
 
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
-    settings.model_gateway_policy = GatewayPolicy(
-        text_maximum_cost=Decimal("2"), pricing_version="reviewed:1"
+    settings.model_gateway_policy = (
+        GatewayPolicy(text_maximum_cost=Decimal("2"), pricing_version="reviewed:1")
+        if legacy_quote
+        else GatewayPolicy()
     )
     account(client)
     secret = "gateway-frozen-test-key"
+    custom_base_url = "https://my-independent-upstream.example/v1"
     assert (
         client.put(
-            "/api/v1/me/model-services/text", json=profile(mode="custom", api_key=secret)
+            "/api/v1/me/model-services/text",
+            json=profile(mode="custom", base_url=custom_base_url, api_key=secret),
         ).status_code
         == 200
     )
@@ -556,7 +560,7 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
     episode = client.post(
         f"/api/v1/projects/{project['id']}/episodes", json={"episode_no": 1, "title": "test"}
     ).json()
-    set_policy(client, project["id"], "10")
+    assert Decimal(project["budget_limit"]) == 0
     started = client.post(
         f"/api/v1/episodes/{episode['id']}/script-runs",
         json={"story": "quiet forest"},
@@ -572,6 +576,7 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
                 mode="custom",
                 api_key="changed-test-key",
                 model="changed-model",
+                base_url="https://changed-upstream.example/v1",
             ),
         ).status_code
         == 200
@@ -598,15 +603,16 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
     )
     execute_run(client.app.state.session_factory, settings, identity, 0)
     assert client.get(f"/api/v1/runs/{identity}").json()["status"] == "WAITING_REVIEW"
-    assert captured == [("https://api.openai.com/v1/chat/completions", "text-model")]
+    assert captured == [(custom_base_url + "/chat/completions", "text-model")]
     rows = client.get(api(episode) + "/calls").json()
     assert len(rows) == 1 and rows[0]["route"]["credential_source"] == "ACCOUNT_SNAPSHOT"
-    assert (
-        rows[0]["route"]["pricing_version"] == "reviewed:1"
-        and Decimal(rows[0]["maximum_cost"]) == 2
-    )
+    assert rows[0]["route"]["pricing_version"] == "unpriced:1" and rows[0]["maximum_cost"] is None
     assert rows[0]["usage"]["input_tokens"] == 17 and rows[0]["usage"]["output_tokens"] == 23
     assert rows[0]["usage"]["actual_cost"] is None and rows[0]["cost_is_estimate"]
+    costs = client.get(f"/api/v1/projects/{project['id']}/costs").json()
+    assert costs["summary"]["unpriced_count"] == 1
+    assert costs["summary"]["actual_cost"] is None
+    assert costs["summary"]["projected_cost"] is None
     public = str(rows) + client.get(f"/api/v1/runs/{identity}").text + caplog.text
     assert secret not in public and "changed-test-key" not in public
     assert "encrypted_key" not in str(rows) and "base_url" not in str(rows)

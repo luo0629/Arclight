@@ -49,6 +49,49 @@ async function generate(
   await expect(page.getByRole("button", { name: /^提炼 v1/ })).toBeVisible();
 }
 
+test("余额不足在提炼、大纲和任务中直接提示，并区分密钥错误与限流", async ({
+  page,
+}) => {
+  const { path, episode } = await setup(page);
+  const failed = [
+    ["story_analysis", "SERVICE_BALANCE_INSUFFICIENT"],
+    ["story_outline", "SERVICE_BALANCE_INSUFFICIENT"],
+    ["script", "SERVICE_AUTHENTICATION_FAILED"],
+    ["storyboard", "SERVICE_RATE_LIMITED"],
+  ].map(([workflow_type, error_code]) => ({
+    id: crypto.randomUUID(),
+    episode_id: episode.id,
+    workflow_type,
+    status: "FAILED",
+    revision: 1,
+    pending_review: null,
+    error_code,
+    created_at: new Date().toISOString(),
+  }));
+  await page.route(`**${path}/runs?*`, (route) =>
+    route.fulfill({ json: failed }),
+  );
+  await page.reload();
+  await openAnalysis(page);
+  await expect(
+    page.getByRole("alert").filter({ hasText: "余额不足" }),
+  ).toContainText("余额不足，请前往对应服务商充值后重试。");
+  await page.getByRole("button", { name: "查看任务与审核" }).click();
+  await expect(
+    page.getByText("余额不足，请前往对应服务商充值后重试。", { exact: true }),
+  ).toHaveCount(2);
+  await expect(
+    page.getByText("API Key 无效，请检查模型服务配置。", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("模型服务请求过于频繁，请稍后重试。", { exact: true }),
+  ).toBeVisible();
+  await page.getByRole("radio", { name: "分集大纲", exact: true }).click();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "余额不足" }),
+  ).toContainText("余额不足，请前往对应服务商充值后重试。");
+});
+
 test("manual extraction survives refresh and does not generate scripts or boards", async ({
   page,
 }) => {

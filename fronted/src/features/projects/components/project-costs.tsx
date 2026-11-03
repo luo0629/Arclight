@@ -63,7 +63,7 @@ const dimensions: [Dimension, string][] = [
   ["model", "模型"],
 ];
 const money = (value: string | null) =>
-  value === null ? "未知" : `${value} USD`;
+  value === null ? "未统计" : `${value} USD`;
 
 export function CostSummary({ value }: { value: CostTotals }) {
   if (!value.entry_count)
@@ -97,7 +97,7 @@ export function CostSummary({ value }: { value: CostTotals }) {
       {value.cost_is_estimate && (
         <p className="text-xs leading-relaxed text-muted-foreground">
           {value.estimated_count} 条待核账，{value.unpriced_count}{" "}
-          条缺少可信报价。预留代表预算占用，最终费用以账单为准。
+          条费用未统计。最终费用以服务商账单为准。
         </p>
       )}
     </div>
@@ -222,7 +222,11 @@ function CostDetails({
                 <Badge
                   variant={entry.cost_is_estimate ? "outline" : "secondary"}
                 >
-                  {entry.cost_is_estimate ? "估算 · 待核账" : "费用已确认"}
+                  {entry.actual_cost === null && entry.estimated_cost === null
+                    ? "费用未统计"
+                    : entry.cost_is_estimate
+                      ? "估算 · 待核账"
+                      : "费用已确认"}
                 </Badge>
               </div>
               <p>

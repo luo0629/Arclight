@@ -246,7 +246,11 @@ def test_real_tls_validates_original_hostname_with_pinned_ip(monkeypatch, tmp_pa
         assert b"Host: api.example\r\n" in requests[0]
 
 
-@pytest.mark.parametrize("supplier", SUPPLIERS, ids=lambda preset: preset.id)
+@pytest.mark.parametrize(
+    "supplier",
+    [preset for preset in SUPPLIERS if preset.kind == "text"],
+    ids=lambda preset: preset.id,
+)
 def test_official_request_contract_and_invalid_json_rejection(monkeypatch, settings, supplier):
     sent = []
     valid = StoryAnalysisContent(
@@ -275,7 +279,7 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
         update={
             "llm_supplier": supplier.id,
             "llm_response_format": supplier.response_format,
-            "llm_model": supplier.model,
+            "llm_model": "user-entered-model-id",
             "llm_base_url": supplier.base_url,
         }
     )
@@ -283,7 +287,7 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
     assert provider.analyze("story") == valid
     body = sent[0]
     assert body["response_format"]["type"] == supplier.response_format
-    assert body["model"] == supplier.model
+    assert body["model"] == "user-entered-model-id"
     if supplier.id == "openai":
         assert "max_completion_tokens" in body and "max_tokens" not in body
         assert (

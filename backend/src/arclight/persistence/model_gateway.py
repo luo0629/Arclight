@@ -41,7 +41,7 @@ class GatewayCall(Entity, Base):
     circuit_id: Mapped[str] = mapped_column(ForeignKey("model_gateway_circuits.id"))
     route_json: Mapped[dict] = mapped_column(JSON_TYPE)
     parameters_json: Mapped[dict] = mapped_column(JSON_TYPE)
-    maximum_cost: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    maximum_cost: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     __table_args__ = (UniqueConstraint("project_id", "operation_key", "sequence"),)
 
 

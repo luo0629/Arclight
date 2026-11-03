@@ -113,6 +113,43 @@ def test_gateway_missing_receipt_and_reconciliation_are_counted_once(client, epi
     assert "private-invoice" not in str(result)
 
 
+def test_unpriced_text_keeps_unknown_costs_and_does_not_break_later_budget_checks(client, episode):
+    started = client.post(
+        f"/api/v1/episodes/{episode['id']}/script-runs",
+        json={"story": "quiet forest"},
+        headers={"Idempotency-Key": str(uuid4())},
+    )
+    assert started.status_code == 202, started.text
+    workflow_id = UUID(started.json()["run_id"])
+    selected = route(maximum_cost=None)
+    invoke(
+        client.app.state.session_factory,
+        request(episode, selected, task="script", workflow_id=workflow_id),
+        selected,
+        lambda: "ok",
+        policy=GatewayPolicy(),
+        usage=lambda _: GatewayUsage(input_tokens=7, output_tokens=9),
+    )
+    for dimension in ("project", "episode", "task", "model"):
+        result = report(client, episode, group_by=dimension)["summary"]
+        assert result["entry_count"] == 1 and result["unpriced_count"] == 1
+        assert result["actual_cost"] is None and result["estimated_cost"] is None
+        assert result["projected_cost"] is None and result["cost_is_estimate"]
+    detail = client.get(url(episode) + "/entries").json()["items"][0]
+    assert detail["estimated_cost"] is None and detail["actual_cost"] is None
+    assert detail["pending_estimate"] == "0.000000"
+    set_policy(client, episode["project_id"], "5", task_limit="4")
+    priced_route = route()
+    invoke(
+        client.app.state.session_factory,
+        request(episode, priced_route, task="script", workflow_id=workflow_id),
+        priced_route,
+        lambda: "ok",
+        policy=GatewayPolicy(),
+    )
+    assert report(client, episode)["summary"]["unpriced_count"] == 1
+
+
 def test_media_gateway_and_duplicate_delivery_never_double_bill(client, episode, monkeypatch):
     priced(monkeypatch)
     set_policy(client, episode["project_id"], "20")

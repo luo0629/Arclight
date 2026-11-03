@@ -72,7 +72,7 @@ def costs(
         receipt = latest_receipt(db, call.id)
         if receipt is not None and receipt.actual_cost is not None:
             actual += receipt.actual_cost
-        else:
+        elif call.maximum_cost is not None:
             pending += call.maximum_cost
     return actual, pending
 
@@ -84,9 +84,9 @@ def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> N
     from arclight.persistence.generation_accounting import GenerationBudgetReservation
     from arclight.persistence.models import Project
 
-    if route.maximum_cost is None:
-        raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "模型调用缺少可信报价，已停止调用", 409)
     if request.generation_attempt_id is not None:
+        if route.maximum_cost is None:
+            raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "媒体调用缺少可信报价，已停止调用", 409)
         attempt = db.get(GenerationAttempt, request.generation_attempt_id)
         job = db.get(GenerationJob, attempt.job_id) if attempt else None
         reservation = (
@@ -116,6 +116,12 @@ def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> N
         ):
             raise DomainError("BUDGET_RESERVATION_CONFLICT", "媒体调用与现有预算预留不匹配", 409)
         return
+    # Personal text services are billed by the upstream account. An unknown
+    # price is recorded as unknown and does not require a local budget quote.
+    if route.maximum_cost is None:
+        if request.task not in {"script", "storyboard", "analyze", "outline", "rewrite"}:
+            raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "媒体调用缺少可信报价，已停止调用", 409)
+        return
     project = db.get(Project, request.project_id)
     assert project is not None
     policy = policy_for(db, project.id)
@@ -140,7 +146,7 @@ def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> N
                 used += (
                     receipt.actual_cost
                     if receipt and receipt.actual_cost is not None
-                    else call.maximum_cost
+                    else (call.maximum_cost or Decimal("0"))
                 )
         if used + amount > policy.task_limit:
             raise DomainError("BUDGET_TASK_EXCEEDED", "模型调用将超过任务预算", 409)

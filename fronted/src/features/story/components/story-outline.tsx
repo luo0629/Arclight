@@ -8,6 +8,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Notice, PagePanel, StatusBadge } from "@/components/ui-kit";
 import { api, json, message } from "@/lib/api/client";
+import { workflowErrorMessage } from "@/lib/workflow-errors";
 import type { Episode, Run } from "@/types/api";
 import { useSessionDraft } from "@/providers/draft-provider";
 import usePagedList from "@/hooks/use-paged-list";
@@ -493,6 +494,11 @@ export default function StoryOutline({
           <p className="flex items-center gap-2 text-sm">
             最近任务 <StatusBadge status={run.status} />
           </p>
+        )}
+        {run?.error_code && (
+          <Notice tone="error" role="alert">
+            {workflowErrorMessage(run.error_code)}
+          </Notice>
         )}
       </PagePanel>
       <div className="studio-outline-browser">
