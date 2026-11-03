@@ -215,4 +215,10 @@ def costs(
         legacy = legacy.where(GenerationJob.id == job_id)
     if batch_id is None:
         actual += sum((value for value in db.scalars(legacy) if value is not None), Decimal("0"))
+    if batch_id is None and job_id is None:
+        from arclight.application.gateway_accounting import costs as gateway_costs
+
+        text_actual, text_pending = gateway_costs(db, project_id, episode_id=episode_id)
+        actual += text_actual
+        pending += text_pending
     return actual, pending

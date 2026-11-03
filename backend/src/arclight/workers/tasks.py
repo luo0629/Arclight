@@ -46,6 +46,7 @@ def execute_generation(
             get_media_submission_provider(),
             policy=media_lease_policy(settings),
             execution_policy=settings.media_execution_policy,
+            gateway_policy=settings.model_gateway_policy,
             permit_id=UUID(permit_id) if permit_id is not None else None,
             permit_epoch=permit_epoch,
             require_permit=True,

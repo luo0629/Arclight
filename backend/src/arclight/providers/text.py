@@ -17,6 +17,7 @@ from arclight.agents.story_outline import OutlineEpisode, StoryOutlineContent
 from arclight.application.content_duration import duration_bounds
 from arclight.core.config import Settings
 from arclight.domain.context import check_call
+from arclight.domain.model_gateway import GatewayUsage
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
@@ -151,6 +152,7 @@ class OpenAICompatibleTextProvider:
     def __init__(self, settings: Settings, contexts: dict[str, dict] | None = None):
         self.settings = settings
         self.contexts = contexts or {}
+        self.last_usage = GatewayUsage()
 
     def _generate(self, contract: type[T], instruction: str, data: dict) -> T:
         stage = {
@@ -184,7 +186,13 @@ class OpenAICompatibleTextProvider:
                 },
             )
             response.raise_for_status()
-            return contract.model_validate_json(response.json()["choices"][0]["message"]["content"])
+            body = response.json()
+            usage = body.get("usage") or {}
+            self.last_usage = GatewayUsage(
+                input_tokens=usage.get("prompt_tokens"),
+                output_tokens=usage.get("completion_tokens"),
+            )
+            return contract.model_validate_json(body["choices"][0]["message"]["content"])
 
     def rewrite(self, context: dict) -> RewriteResult:
         return self._generate(

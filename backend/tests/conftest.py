@@ -141,6 +141,35 @@ def historical_content_registry(request, monkeypatch):
 
     monkeypatch.setattr(runtime, "text_settings", legacy_settings)
 
+    # Frozen pre-0040 writers have no gateway ledger. Once upgraded, the same
+    # historical records use the real admission/ledger with no production bypass.
+    from arclight.application import gateway_accounting, gateway_text
+
+    original_gateway_costs = gateway_accounting.costs
+    original_gateway_call = gateway_text.invoke_text
+
+    def legacy_gateway_costs(db, *args, **kwargs):
+        if inspect(db.get_bind()).has_table("model_gateway_calls"):
+            return original_gateway_costs(db, *args, **kwargs)
+        from decimal import Decimal
+
+        return Decimal("0"), Decimal("0")
+
+    def legacy_gateway_call(provider, stage, data, call):
+        from sqlalchemy import create_engine
+
+        # Read the active fixture configuration without touching a business DB.
+        configuration = request.getfixturevalue("settings")
+        engine = create_engine(configuration.database_url)
+        try:
+            installed = inspect(engine).has_table("model_gateway_calls")
+        finally:
+            engine.dispose()
+        return original_gateway_call(provider, stage, data, call) if installed else call()
+
+    monkeypatch.setattr(gateway_accounting, "costs", legacy_gateway_costs)
+    monkeypatch.setattr(gateway_text, "invoke_text", legacy_gateway_call)
+
     original_record = asset_versions.record_asset_file
 
     def record_on_current_schema(db, *args, **kwargs):

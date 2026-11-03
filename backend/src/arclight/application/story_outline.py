@@ -190,7 +190,15 @@ def generate_outline(
             build_provider(run_settings(settings, run.input_json.get("_text_service"))),
             consume_context(db, project_id, run, "outline", settings),
         )
-        content = StoryOutlineContent.model_validate(provider.outline(source))
+    content = StoryOutlineContent.model_validate(provider.outline(source))
+    with factory.begin() as db:
+        db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+        from arclight.application.gateway_text import validate_publication
+
+        validate_publication(db, run.id)
+        existing = db.scalar(select(StoryOutline).where(StoryOutline.run_id == run.id))
+        if existing:
+            return str(existing.id), existing.version_no
         if (
             content.target_episode_count != source["target_episode_count"]
             or content.episode_duration_ms != source["episode_duration_ms"]

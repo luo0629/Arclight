@@ -12,6 +12,7 @@ from arclight.application.content_references import (
     validate_storyboard_assets,
 )
 from arclight.application.dependencies import lock_dependency_graph
+from arclight.application.gateway_text import validate_publication
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 from arclight.workflows.production import Artifacts
 
@@ -43,7 +44,13 @@ class ArtifactStore(Artifacts):
             existing = db.scalar(select(Script).where(Script.run_id == self.run_id))
             if existing:
                 return str(existing.id), read_content(existing.content_json)
-            parsed = ScriptContent.model_validate(generate())
+        parsed = ScriptContent.model_validate(generate())
+        with self.factory.begin() as db:
+            lock_dependency_graph(db, project_id)
+            validate_publication(db, self.run_id)
+            existing = db.scalar(select(Script).where(Script.run_id == self.run_id))
+            if existing:
+                return str(existing.id), read_content(existing.content_json)
             episode = db.get(Episode, self.episode_id)
             if episode is None:
                 raise ValueError("剧集不存在")
@@ -86,7 +93,20 @@ class ArtifactStore(Artifacts):
             source = ScriptContent.model_validate(script.content_json)
             validate_script_assets(db, episode.project_id, source)
             validate_duration(source, self.target_duration_ms, self.tolerance_percent)
-            parsed = StoryboardContent.model_validate(generate())
+        parsed = StoryboardContent.model_validate(generate())
+        with self.factory.begin() as db:
+            lock_dependency_graph(db, project_id)
+            validate_publication(db, self.run_id)
+            existing = db.scalar(select(Storyboard).where(Storyboard.run_id == self.run_id))
+            if existing:
+                return str(existing.id), read_content(existing.content_json)
+            script = db.get(Script, UUID(script_id), populate_existing=True)
+            episode = db.get(Episode, self.episode_id, populate_existing=True)
+            if script is None or episode is None or script.episode_id != episode.id:
+                raise ValueError("分镜必须引用当前剧集的剧本版本")
+            source = ScriptContent.model_validate(script.content_json)
+            validate_script_assets(db, episode.project_id, source)
+            validate_duration(source, self.target_duration_ms, self.tolerance_percent)
             parsed.validate_against(source)
             validate_storyboard_assets(db, episode.project_id, parsed)
             validate_duration(parsed, self.target_duration_ms, self.tolerance_percent)

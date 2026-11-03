@@ -29,6 +29,12 @@ def resolve_capabilities(provider: str, model: str) -> MediaCapabilities:
     return MOCK_CAPABILITIES
 
 
+def resolve_parameters(provider: str, model: str) -> frozenset[str]:
+    """The installed adapter declares its options; a request cannot advertise support."""
+    resolve_capabilities(provider, model)
+    return frozenset({"steps"})
+
+
 def reference_count(inputs: list[dict]) -> int:
     return len(
         {item["source_asset_version_id"] for item in inputs if item["asset_type"] in IMAGE_KINDS}

@@ -141,7 +141,18 @@ def extract(factory: sessionmaker, settings: Settings, run: WorkflowRun) -> tupl
             build_provider(run_settings(settings, inputs.get("_text_service"))),
             consume_context(db, episode.project_id, run, "analyze", settings),
         )
-        content = StoryAnalysisContent.model_validate(provider.analyze(inputs["story"]))
+    # The frozen consumption receipt commits before durable gateway admission.
+    content = StoryAnalysisContent.model_validate(provider.analyze(inputs["story"]))
+    with factory.begin() as db:
+        from arclight.application.gateway_text import validate_publication
+
+        validate_publication(db, run.id)
+        db.execute(
+            select(Episode.id).where(Episode.id == run.episode_id).with_for_update(key_share=True)
+        )
+        existing = db.scalar(select(StoryAnalysis).where(StoryAnalysis.run_id == run.id))
+        if existing:
+            return str(existing.id), existing.version_no
         version = (
             db.scalar(
                 select(func.max(StoryAnalysis.version_no)).where(

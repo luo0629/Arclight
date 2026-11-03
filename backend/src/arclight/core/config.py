@@ -8,6 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from arclight.domain.context import ContextLimits
 from arclight.domain.generation_scheduling import ExecutionPolicy
+from arclight.domain.model_gateway import GatewayPolicy
 
 
 class Settings(BaseSettings):
@@ -31,6 +32,7 @@ class Settings(BaseSettings):
     media_heartbeat_seconds: int = Field(default=10, ge=1, le=120)
     media_poll_seconds: int = Field(default=30, ge=1, le=600)
     media_execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
+    model_gateway_policy: GatewayPolicy = Field(default_factory=GatewayPolicy)
     max_story_chars: int = 20000
     jwt_secret: SecretStr = SecretStr("arclight-local-jwt-secret-change-before-deploying")
     access_token_minutes: int = Field(default=15, ge=1, le=60)

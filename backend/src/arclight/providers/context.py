@@ -15,14 +15,22 @@ from arclight.domain.generation_requests import safe_metadata
 from arclight.providers.text import OpenAICompatibleTextProvider, TextProvider
 
 
-def provider_call[T](call: Callable[[], T]) -> T:
+def provider_call[T](
+    call: Callable[[], T], *, provider=None, stage: str = "", data: dict | None = None
+) -> T:
     # LangGraph persists exception strings in pending writes. Scrub transport
     # failures before they cross that boundary, rather than only in API logging.
     try:
-        result = call()
+        from arclight.application.gateway_text import invoke_text
+
+        result = invoke_text(provider, stage, data or {}, call) if stage else call()
         if isinstance(result, BaseModel):
             safe_metadata(result.model_dump(mode="json"))
         return result
+    except DomainError as exc:
+        if exc.code.startswith(("GATEWAY_", "BUDGET_")):
+            raise
+        raise DomainError("TEXT_PROVIDER_FAILED", "文本模型调用失败", 502) from None
     except Exception:
         raise DomainError("TEXT_PROVIDER_FAILED", "文本模型调用失败", 502) from None
 
@@ -33,19 +41,36 @@ class ContextTextProvider:
     contexts: dict[str, dict]
 
     def check(self, stage: str, value: dict) -> dict:
+        if stage not in self.contexts:
+            return value
         return check_call(self.contexts[stage], value)["task_input"]
 
     def analyze(self, story: str) -> StoryAnalysisContent:
         self.check("analyze", {"story": story})
-        return provider_call(lambda: self.provider.analyze(story))
+        return provider_call(
+            lambda: self.provider.analyze(story),
+            provider=self.provider,
+            stage="analyze",
+            data={"story": story},
+        )
 
     def outline(self, source: dict) -> StoryOutlineContent:
         checked = self.check("outline", source)
-        return provider_call(lambda: self.provider.outline(checked))
+        return provider_call(
+            lambda: self.provider.outline(checked),
+            provider=self.provider,
+            stage="outline",
+            data=checked,
+        )
 
     def rewrite(self, context: dict) -> RewriteResult:
         self.check("rewrite", context)
-        return provider_call(lambda: self.provider.rewrite(context))
+        return provider_call(
+            lambda: self.provider.rewrite(context),
+            provider=self.provider,
+            stage="rewrite",
+            data=context,
+        )
 
     def script(
         self,
@@ -78,19 +103,27 @@ class ContextTextProvider:
                 arguments[name] = value
         if "outline_context" in arguments:
             arguments["outline_context"] = checked_input["outline_context"]
-        return provider_call(lambda: self.provider.script(story, style, duration_ms, **arguments))
+        return provider_call(
+            lambda: self.provider.script(story, style, duration_ms, **arguments),
+            provider=self.provider,
+            stage="script",
+            data=checked_input,
+        )
 
     def storyboard(self, script: ScriptContent, duration_ms: int) -> StoryboardContent:
         self.check(
             "storyboard",
             {"script": script.model_dump(mode="json"), "target_duration_ms": duration_ms},
         )
-        return provider_call(lambda: self.provider.storyboard(script, duration_ms))
+        return provider_call(
+            lambda: self.provider.storyboard(script, duration_ms),
+            provider=self.provider,
+            stage="storyboard",
+            data={"script": script.model_dump(mode="json"), "duration_ms": duration_ms},
+        )
 
 
 def bind_contexts(provider: TextProvider, contexts: dict[str, dict]) -> TextProvider:
-    if not contexts:
-        return provider
     if isinstance(provider, OpenAICompatibleTextProvider):
         provider = OpenAICompatibleTextProvider(provider.settings, contexts)
     return ContextTextProvider(provider, contexts)

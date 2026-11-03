@@ -173,6 +173,7 @@ def capture_text(
         "max_tokens": TEXT_MAX_TOKENS,
         "timeout_seconds": settings.llm_timeout_seconds,
         "duration_tolerance_percent": settings.text_duration_tolerance_percent,
+        "gateway_policy": settings.model_gateway_policy.model_dump(mode="json"),
     }
     entries = [
         component(db, project_id, "TEXT", kind, stage, version, definition)
@@ -238,6 +239,8 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
     ):
         raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "提示词、Agent或Schema不兼容恢复", 409)
     model, parameters = snapshot["model"], snapshot["parameters"]
+    from arclight.domain.model_gateway import GatewayPolicy
+
     return settings.model_copy(
         update={
             "provider": model["provider"],
@@ -245,6 +248,9 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
             "llm_base_url": model["base_url"],
             "llm_timeout_seconds": parameters["timeout_seconds"],
             "text_duration_tolerance_percent": parameters["duration_tolerance_percent"],
+            "model_gateway_policy": GatewayPolicy.model_validate(parameters["gateway_policy"])
+            if "gateway_policy" in parameters
+            else settings.model_gateway_policy,
         }
     )
 

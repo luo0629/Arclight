@@ -29,6 +29,13 @@ logger = logging.getLogger(__name__)
 
 
 def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revision: int) -> None:
+    from arclight.application.gateway_text import runtime_scope
+
+    with runtime_scope(factory, settings, run_id, revision):
+        _execute_run(factory, settings, run_id, revision)
+
+
+def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revision: int) -> None:
     # PostgreSQL 行锁覆盖整次图推进，重复消息不会并发执行相同 thread。
     # SQLite 仅用于单进程开发/测试，不提供生产级多 Worker 互斥保障。
     with factory.begin() as db:
@@ -41,6 +48,9 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
             episode = db.get(Episode, run.episode_id)
             assert episode is not None
             settings = text_settings(db, episode.project_id, run, settings)
+            from arclight.application.gateway_text import frozen_settings
+
+            frozen_settings(settings)
             contexts = read_contexts(db, episode.project_id, run)
             if run.workflow_type in {"story_analysis", "story_outline"}:
                 expected_version = (
@@ -179,22 +189,30 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
                 run.revision += 1
         except Exception as exc:
             # 不把供应商响应、凭证、输入正文或内部路径写到业务错误响应。
-            logger.error("workflow_failed run_id=%s error_type=%s", run_id, type(exc).__name__)
+            logger.error(
+                "workflow_failed run_id=%s error_type=%s code=%s",
+                run_id,
+                type(exc).__name__,
+                exc.code if isinstance(exc, DomainError) else "EXECUTION_FAILED",
+            )
             run.status = RunStatus.FAILED
             run.error_code = (
                 exc.code
                 if isinstance(exc, DomainError)
-                and exc.code
-                in {
-                    "PRODUCTION_VERSION_INCOMPATIBLE",
-                    "CONTEXT_SNAPSHOT_INVALID",
-                    "CONTEXT_TOO_LARGE",
-                    "CONTEXT_INPUT_UNSAFE",
-                    "CONTEXT_REFERENCE_INVALID",
-                    "SCRIPT_DURATION_REQUIRED",
-                    "SCRIPT_DURATION_OUT_OF_RANGE",
-                    "STORYBOARD_DURATION_OUT_OF_RANGE",
-                }
+                and (
+                    exc.code.startswith(("GATEWAY_", "BUDGET_"))
+                    or exc.code
+                    in {
+                        "PRODUCTION_VERSION_INCOMPATIBLE",
+                        "CONTEXT_SNAPSHOT_INVALID",
+                        "CONTEXT_TOO_LARGE",
+                        "CONTEXT_INPUT_UNSAFE",
+                        "CONTEXT_REFERENCE_INVALID",
+                        "SCRIPT_DURATION_REQUIRED",
+                        "SCRIPT_DURATION_OUT_OF_RANGE",
+                        "STORYBOARD_DURATION_OUT_OF_RANGE",
+                    }
+                )
                 else "WORKFLOW_EXECUTION_FAILED"
             )
             run.revision += 1

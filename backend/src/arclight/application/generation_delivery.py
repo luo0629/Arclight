@@ -24,9 +24,9 @@ from arclight.application.generation_state import find_job, transition
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus as Status
 from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
+from arclight.domain.model_gateway import GatewayPolicy
 from arclight.persistence.base import utcnow
 from arclight.persistence.generation import GenerationAttempt, GenerationDispatch
-from arclight.providers.media_io import bounded_call
 from arclight.providers.media_submission import (
     MediaSubmission,
     MediaSubmissionProvider,
@@ -105,6 +105,7 @@ def consume_dispatch(
     *,
     policy: leases.LeasePolicy = leases.DEFAULT_POLICY,
     execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+    gateway_policy: GatewayPolicy | None = None,
     permit_id: UUID | None = None,
     permit_epoch: int | None = None,
     require_permit: bool = False,
@@ -202,7 +203,11 @@ def consume_dispatch(
     # No connection or business lock is held during the generation call.
     with leases.keep_alive(factory, job_id, token, policy):
         try:
-            raw = bounded_call(lambda: provider.submit(request), timeout)
+            from arclight.application.gateway_media import submit as gateway_submit
+
+            raw = gateway_submit(
+                factory, provider, request, timeout, gateway_policy or GatewayPolicy()
+            )
             receipt = SubmissionReceipt.model_validate(raw.model_dump(mode="json"))
             if receipt.result is not None and len(
                 receipt.result.output_handles
