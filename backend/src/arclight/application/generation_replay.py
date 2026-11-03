@@ -13,6 +13,7 @@ from arclight.application.commands import require_project
 from arclight.application.dependencies import lock_dependency_graph
 from arclight.application.generation_jobs import create_job
 from arclight.application.generation_state import check_revision, find_job
+from arclight.application.production_versions import check_media
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationCreate, MediaInput, safe_metadata
 from arclight.domain.generation_scheduling import ExecutionPolicy
@@ -73,6 +74,7 @@ def replay_job(
         )
     manifest = db.get(DependencyManifest, source.input_manifest_id)
     assert manifest is not None
+    check_media(db, project_id, source.id, manifest.id)
     snapshot = manifest.snapshot_json
     lane = db.scalar(select(GenerationLane.lane).where(GenerationLane.job_id == source.id))
     request = GenerationCreate.model_validate(
@@ -102,6 +104,7 @@ def replay_job(
         "replay:" + str(uuid4()),
         request,
         execution_policy=policy,
+        frozen_prompt_composition=snapshot["context"].get("prompt_composition"),
     )
     row = GenerationReplay(
         project_id=project_id,

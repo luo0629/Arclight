@@ -5,7 +5,7 @@ import json
 from copy import deepcopy
 from datetime import timedelta
 from itertools import count
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from pydantic import ValidationError
@@ -517,6 +517,18 @@ def test_authorized_replay_retains_exact_reference_selectors_and_batch(client, e
         )
         == "FAILED"
     )
+    changed_style = client.post(
+        f"/api/v1/projects/{job['project_id']}/visual-bible/versions",
+        json={
+            "expected_version_no": 0,
+            "creation_key": str(uuid4()),
+            "fields": {
+                "art_style": "new style after failure",
+                "negative_prompt": "new prohibition",
+            },
+        },
+    )
+    assert changed_style.status_code == 201, changed_style.text
     response = client.post(
         base(job["project_id"]) + f"/{job['id']}/replay",
         json={"expected_revision": fresh(client, job)["revision"], "reason": "bounded replay"},
@@ -526,3 +538,11 @@ def test_authorized_replay_retains_exact_reference_selectors_and_batch(client, e
     replay = response.json()
     assert manifest(client, replay)["inputs"] == manifest(client, job)["inputs"]
     assert manifest(client, replay)["context"]["generation"]["batch_size"] == 2
+    assert (
+        manifest(client, replay)["context"]["generation"]
+        == manifest(client, job)["context"]["generation"]
+    )
+    assert (
+        manifest(client, replay)["context"]["prompt_composition"]
+        == manifest(client, job)["context"]["prompt_composition"]
+    )

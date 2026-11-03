@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from copy import deepcopy
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError
@@ -89,6 +90,7 @@ def create_job(
     payload: GenerationCreate,
     *,
     execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+    frozen_prompt_composition: dict | None = None,
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
@@ -165,8 +167,9 @@ def create_job(
             )
     capabilities = resolve_capabilities(payload.spec.provider, payload.spec.model)
     effective_spec = payload.spec
-    prompt_composition = None
-    if payload.task_type == "IMAGE":
+    # Only authorized replay supplies a composition from its checked immutable manifest.
+    prompt_composition = deepcopy(frozen_prompt_composition)
+    if payload.task_type == "IMAGE" and prompt_composition is None:
         visual = visual_bible_state(db, project)
         visual_snapshot = {
             "source_key": (

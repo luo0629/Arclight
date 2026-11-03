@@ -4,17 +4,24 @@ from copy import deepcopy
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import select
 from test_asset_selection import approved
 from test_asset_versions import private_objects  # noqa: F401
 from test_assets import create, path
 from test_generation_jobs import capture, payload
 
-from arclight.application import generation_jobs
+from arclight.application import generation_jobs, production_versions
 from arclight.application.generation_attempts import start_attempt
+from arclight.core.errors import DomainError
 from arclight.domain.generation_prompts import BLOCK_LABELS, PROMPT_BLOCK_ORDER
 from arclight.domain.versions import digest
-from arclight.persistence.models import DependencyManifest, GenerationAttempt, VersionBinding
+from arclight.persistence.models import (
+    DependencyManifest,
+    GenerationAttempt,
+    GenerationJob,
+    VersionBinding,
+)
 
 
 def _profile(client, asset, profile_name, values):
@@ -285,3 +292,46 @@ def test_multiple_versions_of_one_visual_asset_are_rejected(client, episode):
     assert response.json()["error"]["code"] == "PROMPT_SOURCE_VERSION_CONFLICT"
     with client.app.state.session_factory() as db:
         assert db.scalar(select(DependencyManifest.id)) is None
+
+
+@pytest.mark.parametrize(
+    "spec_changes,code",
+    [
+        ({"prompt": "画" * 20000}, "PROMPT_COMPOSITION_TOO_LARGE"),
+        ({"negative_prompt": "字" * 10000}, "PROMPT_COMPOSITION_TOO_LARGE"),
+        ({"context": {"camera_language": {"unexpected": "object"}}}, "INVALID_PROMPT_CONTEXT"),
+    ],
+)
+def test_invalid_composition_rejects_without_partial_job(client, episode, spec_changes, code):
+    project_id = episode["project_id"]
+    _visual_version(client, project_id)
+    response = capture(client, project_id, payload(spec=payload()["spec"] | spec_changes))
+    assert response.status_code == 422, response.text
+    assert response.json()["error"]["code"] == code
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(GenerationJob.id)) is None
+        assert db.scalar(select(GenerationAttempt.id)) is None
+        assert db.scalar(select(DependencyManifest.id)) is None
+
+
+def test_composer_definition_change_rejects_attempt_and_preserves_input(
+    client, episode, monkeypatch
+):
+    response = capture(client, episode["project_id"])
+    assert response.status_code == 201, response.text
+    job = response.json()
+    before = _manifest(client, job)
+    monkeypatch.setattr(
+        production_versions,
+        "PROMPT_COMPOSER_DEFINITION",
+        production_versions.PROMPT_COMPOSER_DEFINITION | {"changed": True},
+    )
+    with (
+        pytest.raises(DomainError, match="媒体结果Schema不兼容恢复") as rejected,
+        client.app.state.session_factory.begin() as db,
+    ):
+        start_attempt(db, UUID(job["id"]), job["revision"])
+    assert rejected.value.code == "PRODUCTION_VERSION_INCOMPATIBLE"
+    assert _manifest(client, job) == before
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(GenerationAttempt.id)) is None
