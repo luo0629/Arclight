@@ -4,6 +4,7 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import select
+from sqlalchemy.engine import make_url
 
 from arclight.application.model_services import run_settings
 from arclight.application.runtime import execute_run
@@ -88,7 +89,17 @@ def test_key_storage_disabled_and_media_not_activated(client, settings):
 def test_endpoints_without_domain_allowlist_or_network(client, settings, monkeypatch):
     import socket
 
-    def unexpected_dns(*args, **kwargs):
+    resolve = socket.getaddrinfo
+    database = make_url(settings.database_url)
+
+    def unexpected_dns(host, port, *args, **kwargs):
+        # PostgreSQL may resolve its own test host on each new DB connection.
+        if (
+            database.get_backend_name() == "postgresql"
+            and host == database.host
+            and str(port) == str(database.port or 5432)
+        ):
+            return resolve(host, port, *args, **kwargs)
         raise AssertionError("Saving configuration must not resolve or call a supplier")
 
     monkeypatch.setattr(socket, "getaddrinfo", unexpected_dns)
