@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session
 
 from arclight.api.schemas import EpisodeRead
 from arclight.application.commands import require_project
+from arclight.application.costs import read_costs
+from arclight.domain.costs import CostTotals
 from arclight.persistence.models import (
     Episode,
     Script,
@@ -29,11 +31,10 @@ class ReviewCounts(BaseModel):
     total: int
 
 
-class CostCoverage(BaseModel):
-    status: Literal["UNAVAILABLE"] = "UNAVAILABLE"
+class CostCoverage(CostTotals):
+    status: Literal["AVAILABLE"] = "AVAILABLE"
     budget_limit: Decimal
-    actual_cost: None = None
-    currency: None = None
+    currency: Literal["USD"] = "USD"
 
 
 class DeliveryCoverage(BaseModel):
@@ -243,7 +244,10 @@ def project_overview(
             outline_confirmations=outlines,
             total=workflows + manual_scripts + manual_boards + outlines,
         ),
-        cost=CostCoverage(budget_limit=project.budget_limit),
+        cost=CostCoverage(
+            budget_limit=project.budget_limit,
+            **read_costs(db, project_id, actor).summary.model_dump(),
+        ),
         deliveries=DeliveryCoverage(),
         episodes=episodes,
         limit=limit,

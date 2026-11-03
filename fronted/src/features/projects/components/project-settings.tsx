@@ -60,7 +60,7 @@ export default function Settings({
       className="studio-page studio-settings"
       eyebrow="收好每一个小宇宙"
       title="项目设置"
-      description="归档不会删除历史版本；归档前请先完成或取消所有进行中的任务。预算当前仅保存额度，尚未执行模型费用扣费。"
+      description="归档不会删除历史版本；归档前请先完成或取消所有进行中的任务。预算用于调用准入与预留，实际费用及待核账估算可在项目总览查看。"
     >
       {error && (
         <Notice tone="error" className="error" role="alert">

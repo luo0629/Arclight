@@ -92,9 +92,7 @@ test("aggregates actual versions and tasks, refreshes reviews, opens tasks, and 
   await expect(surface(page)).toHaveAttribute("aria-busy", "false");
   await expect(page.getByText("剧本待审核 · 2", { exact: true })).toBeVisible();
   await expect(page.getByText("125.50", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("累计实际成本：暂无成本账本", { exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("实际成本", { exact: true })).toBeVisible();
   await expect(
     page.getByText("成片版本：尚未接入交付记录", { exact: true }),
   ).toBeVisible();

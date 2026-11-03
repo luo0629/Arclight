@@ -7,6 +7,7 @@ import type { Episode } from "@/types/api";
 import { statusText } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import ProjectCosts, { CostSummary, type CostTotals } from "./project-costs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   EmptyState,
@@ -34,11 +35,10 @@ type Overview = {
     outline_confirmations: number;
     total: number;
   };
-  cost: {
+  cost: CostTotals & {
     budget_limit: string;
-    actual_cost: null;
-    currency: null;
-    status: "UNAVAILABLE";
+    currency: "USD";
+    status: "AVAILABLE";
   };
   deliveries: { status: "UNAVAILABLE"; version_count: null };
   episodes: (Episode & { stage: string })[];
@@ -93,6 +93,7 @@ export default function ProjectOverview({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [opening, setOpening] = useState("");
+  const [showCosts, setShowCosts] = useState(false);
   const refresh = useRef<() => void>(() => {});
   const navigation = useRef<AbortController | null>(null);
   const limit = 20;
@@ -287,16 +288,16 @@ export default function ProjectOverview({
               <dl className="flex flex-col gap-3 text-sm">
                 <div>
                   <dt className="text-muted-foreground">
-                    已配置预算上限（未定义币种）
+                    已配置预算上限（USD）
                   </dt>
                   <dd className="mt-1 text-xl font-semibold tabular-nums">
                     {data.cost.budget_limit}
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium">累计实际成本：暂无成本账本</dt>
-                  <dd className="mt-1 text-muted-foreground">
-                    不展示为 0，也不据此计算剩余预算。
+                  <dt className="mb-2 font-medium">调用成本</dt>
+                  <dd>
+                    <CostSummary value={data.cost} />
                   </dd>
                 </div>
                 <div>
@@ -306,8 +307,16 @@ export default function ProjectOverview({
                   </dd>
                 </div>
               </dl>
+              <Button
+                variant="outline"
+                aria-expanded={showCosts}
+                onClick={() => setShowCosts((value) => !value)}
+              >
+                {showCosts ? "收起成本明细" : "查看成本明细"}
+              </Button>
             </PagePanel>
           </div>
+          {showCosts && <ProjectCosts key={projectId} projectId={projectId} />}
           <PagePanel
             title="剧集生产目录"
             description={`共 ${data.episode_count} 集（含归档），当前第 ${data.episode_count ? offset + 1 : 0}–${Math.min(offset + data.episodes.length, data.episode_count)} 集；汇总数字覆盖全部剧集。`}

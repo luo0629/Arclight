@@ -34,12 +34,12 @@ def test_empty_overview_reports_coverage_without_invented_zeros(client, episode)
     result = overview(client, episode)
     assert result["stage_counts"] == {"NOT_STARTED": 1}
     assert result["task_total"] == result["pending_reviews"]["total"] == 0
-    assert result["cost"] == {
-        "status": "UNAVAILABLE",
-        "budget_limit": "123.45",
-        "actual_cost": None,
-        "currency": None,
-    }
+    assert result["cost"]["status"] == "AVAILABLE"
+    assert result["cost"]["budget_limit"] == "123.45"
+    assert result["cost"]["actual_cost"] is None
+    assert result["cost"]["estimated_cost"] is None
+    assert result["cost"]["entry_count"] == 0
+    assert result["cost"]["currency"] == "USD"
     assert result["deliveries"] == {"status": "UNAVAILABLE", "version_count": None}
     assert result["recent_tasks"] == []
     assert result["generated_at"].endswith("Z")
