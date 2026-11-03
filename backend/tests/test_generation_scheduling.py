@@ -262,7 +262,9 @@ def test_error_classes_never_blindly_retry_nonservice_failures(client, episode, 
 
 
 def test_actual_timeout_is_bounded_retains_capacity_and_never_resubmits(client, episode):
-    configure(client, call_timeout_seconds=0.05, provider_concurrency=1)
+    # The gateway deadline includes database admission. Leave room for it so this
+    # case reaches the blocked adapter even when CI database I/O takes over 50 ms.
+    configure(client, call_timeout_seconds=1, provider_concurrency=1)
     job = capture_ok(client, episode["project_id"])
     blocked, release = Event(), Event()
 
