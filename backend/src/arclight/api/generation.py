@@ -180,6 +180,13 @@ def get_capabilities(
     return resolve_capabilities(provider, model)
 
 
+@router.get("/providers/openai/configuration")
+def get_image_configuration(project_id: UUID, db: Database, actor: Actor, request: Request) -> dict:
+    require_project(db, project_id, actor)
+    service = request.app.state.settings.image_service
+    return {"enabled": service.enabled, **service.public_configuration()}
+
+
 @router.get("/queue")
 def get_queue(project_id: UUID, db: Database, actor: Actor) -> dict:
     require_project(db, project_id, actor)

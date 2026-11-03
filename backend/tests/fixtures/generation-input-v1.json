@@ -1,0 +1,132 @@
+{
+  "$defs": {
+    "JsonValue": {}
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "provider": {
+      "const": "mock",
+      "default": "mock",
+      "title": "Provider",
+      "type": "string"
+    },
+    "model": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Model",
+      "type": "string"
+    },
+    "model_config_version": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Model Config Version",
+      "type": "string"
+    },
+    "prompt": {
+      "maxLength": 20000,
+      "minLength": 1,
+      "title": "Prompt",
+      "type": "string"
+    },
+    "prompt_version": {
+      "maxLength": 100,
+      "minLength": 1,
+      "title": "Prompt Version",
+      "type": "string"
+    },
+    "negative_prompt": {
+      "anyOf": [
+        {
+          "maxLength": 10000,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Negative Prompt"
+    },
+    "parameters": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Parameters",
+      "type": "object"
+    },
+    "output_spec": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Output Spec",
+      "type": "object"
+    },
+    "context": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "title": "Context",
+      "type": "object"
+    },
+    "seed": {
+      "anyOf": [
+        {
+          "maximum": 9223372036854775807,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Seed"
+    },
+    "variation": {
+      "anyOf": [
+        {
+          "maxLength": 100,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Variation"
+    },
+    "batch_size": {
+      "default": 1,
+      "maximum": 64,
+      "minimum": 1,
+      "title": "Batch Size",
+      "type": "integer"
+    },
+    "require_query": {
+      "default": false,
+      "title": "Require Query",
+      "type": "boolean"
+    },
+    "require_cancel": {
+      "default": false,
+      "title": "Require Cancel",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "model",
+    "model_config_version",
+    "prompt",
+    "prompt_version",
+    "output_spec"
+  ],
+  "title": "GenerationSpec",
+  "type": "object"
+}

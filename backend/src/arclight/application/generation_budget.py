@@ -37,6 +37,13 @@ def policy_for(db: Session, project_id: UUID, *, lock: bool = False) -> Generati
     return row
 
 
+def provider_quote(db: Session, spec: GenerationSpec, task_type: str) -> CostQuote | None:
+    if spec.provider == "mock":
+        return media_pricing.quote(spec, task_type)
+    settings = db.info.get("settings")
+    return media_pricing.quote(spec, task_type, settings.image_service if settings else None)
+
+
 def quote_job(db: Session, project_id: UUID, payload: GenerationCreate) -> CostQuote:
     if payload.batch_id is not None:
         batch = db.get(GenerationBudgetBatch, payload.batch_id)
@@ -44,7 +51,7 @@ def quote_job(db: Session, project_id: UUID, payload: GenerationCreate) -> CostQ
             raise DomainError("BUDGET_BATCH_NOT_FOUND", "预算批次不存在", 404)
         if payload.episode_id != batch.episode_id:
             raise DomainError("BUDGET_BATCH_MISMATCH", "预算批次与剧集不匹配", 422)
-    result = media_pricing.quote(payload.spec, payload.task_type)
+    result = provider_quote(db, payload.spec, payload.task_type)
     if result is None:
         raise DomainError(
             "BUDGET_QUOTE_UNAVAILABLE", "收费 Provider 未提供可信报价，已拒绝创建任务", 422
@@ -143,7 +150,7 @@ def check_execution(
         select(GenerationBudgetQuote).where(GenerationBudgetQuote.job_id == job.id)
     )
     # Do not fabricate historical quotes. Only provably free legacy jobs may proceed.
-    live = media_pricing.quote(spec, job.task_type)
+    live = provider_quote(db, spec, job.task_type)
     if live is None or (captured is None and live.maximum_cost != 0):
         raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "执行前缺少可信冻结报价", 409)
     live = CostQuote.model_validate(live.model_dump(mode="json"))

@@ -45,7 +45,7 @@ def submit(
             provider=job.provider,
             model=job.model,
             config_version=spec["model_config_version"],
-            credential_source="NONE",
+            credential_source="NONE" if job.provider == "mock" else "SERVER",
             capabilities=GatewayCapabilities(
                 version=provider.capabilities.version,
                 tasks=frozenset(provider.capabilities.task_types),

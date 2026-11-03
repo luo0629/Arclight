@@ -237,6 +237,15 @@ def create_job(
             "inputs": inputs,
             "context": {
                 "generation": effective_spec.model_dump(mode="json"),
+                **(
+                    {
+                        "provider_configuration": db.info[
+                            "settings"
+                        ].image_service.public_configuration()
+                    }
+                    if effective_spec.provider == "openai"
+                    else {}
+                ),
                 "origin": "generation_request",
                 "provider_capabilities": capabilities.model_dump(mode="json"),
                 "budget_quote": budget_quote.model_dump(mode="json"),

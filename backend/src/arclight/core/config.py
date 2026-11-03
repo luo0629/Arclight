@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from arclight.core.image_service import OpenAIImageSettings
 from arclight.domain.context import ContextLimits
 from arclight.domain.generation_scheduling import ExecutionPolicy
 from arclight.domain.model_gateway import GatewayPolicy
@@ -40,6 +41,7 @@ class Settings(BaseSettings):
     media_poll_seconds: int = Field(default=30, ge=1, le=600)
     media_execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     model_gateway_policy: GatewayPolicy = Field(default_factory=GatewayPolicy)
+    image_service: OpenAIImageSettings = Field(default_factory=OpenAIImageSettings)
     max_story_chars: int = 20000
     jwt_secret: SecretStr = SecretStr("arclight-local-jwt-secret-change-before-deploying")
     access_token_minutes: int = Field(default=15, ge=1, le=60)

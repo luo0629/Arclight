@@ -369,7 +369,7 @@ def test_outbox_republishes_until_claim_and_worker_duplicate_is_safe(
     assert len(messages[0]) == 4 and messages[0][3] == 1
     assert queues == ["generation.interactive"] * 2
     provider = Provider()
-    monkeypatch.setattr(tasks, "get_media_submission_provider", lambda: provider)
+    monkeypatch.setattr(tasks, "get_media_submission_provider", lambda name, settings: provider)
     assert tasks.execute_generation(*messages[0]) == "SUCCEEDED"
     assert tasks.execute_generation(*messages[1]) == "SUCCEEDED"
     tasks.dispatch_outbox()

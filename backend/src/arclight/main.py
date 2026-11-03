@@ -60,7 +60,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         engine = build_engine(settings)
         app.state.settings = settings
         app.state.engine = engine
-        app.state.session_factory = session_factory(engine)
+        app.state.session_factory = session_factory(engine, settings)
         yield
         engine.dispose()
 

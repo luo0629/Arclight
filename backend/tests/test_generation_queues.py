@@ -247,7 +247,7 @@ def test_production_worker_refuses_legacy_message_without_permit(
 
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     provider = Provider()
-    monkeypatch.setattr(tasks, "get_media_submission_provider", lambda: provider)
+    monkeypatch.setattr(tasks, "get_media_submission_provider", lambda name, settings: provider)
     job = new(client, episode["project_id"])
     assert tasks.execute_generation(job["id"], str(event_for(client, job))) == "CREATED"
     assert fresh(client, job)["attempt_count"] == 0 and not provider.requests

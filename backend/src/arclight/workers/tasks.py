@@ -13,7 +13,13 @@ from arclight.application.runtime import execute_run
 from arclight.core.config import Settings, get_settings
 from arclight.domain.enums import RunStatus
 from arclight.persistence.base import utcnow
-from arclight.persistence.models import OutboxEvent, RenderExecution, WorkflowRun
+from arclight.persistence.models import (
+    GenerationAttempt,
+    GenerationJob,
+    OutboxEvent,
+    RenderExecution,
+    WorkflowRun,
+)
 from arclight.persistence.session import build_engine, session_factory
 from arclight.providers.media_cancel import get_media_cancel_provider
 from arclight.providers.media_outputs import get_media_output_provider
@@ -27,7 +33,7 @@ def execute_workflow(run_id: str, revision: int) -> None:
     settings = get_settings()
     engine = build_engine(settings)
     try:
-        execute_run(session_factory(engine), settings, UUID(run_id), revision)
+        execute_run(session_factory(engine, settings), settings, UUID(run_id), revision)
     finally:
         engine.dispose()
 
@@ -39,11 +45,17 @@ def execute_generation(
     settings = get_settings()
     engine = build_engine(settings)
     try:
+        factory = session_factory(engine, settings)
+        with factory() as db:
+            job = db.get(GenerationJob, UUID(job_id))
+            if job is None:
+                return "NOT_FOUND"
+            provider = get_media_submission_provider(job.provider, settings)
         return consume_dispatch(
-            session_factory(engine),
+            factory,
             UUID(job_id),
             UUID(event_id),
-            get_media_submission_provider(),
+            provider,
             policy=media_lease_policy(settings),
             execution_policy=settings.media_execution_policy,
             gateway_policy=settings.model_gateway_policy,
@@ -67,7 +79,7 @@ def recover_generation(job_id: str) -> str:
     engine = build_engine(settings)
     try:
         return recover_job(
-            session_factory(engine),
+            session_factory(engine, settings),
             UUID(job_id),
             get_media_query_provider(),
             policy=media_lease_policy(settings),
@@ -83,7 +95,7 @@ def execute_render_preview(run_id: str) -> str:
     settings = get_settings()
     engine = build_engine(settings)
     try:
-        return execute_preview(session_factory(engine), settings, UUID(run_id))
+        return execute_preview(session_factory(engine, settings), settings, UUID(run_id))
     finally:
         engine.dispose()
 
@@ -101,8 +113,14 @@ def import_generation_candidates(attempt_id: str) -> int:
     settings = get_settings()
     engine = build_engine(settings)
     try:
+        factory = session_factory(engine, settings)
+        with factory() as db:
+            attempt = db.get(GenerationAttempt, UUID(attempt_id))
+            job = db.get(GenerationJob, attempt.job_id) if attempt is not None else None
+            if job is None:
+                return 0
         return import_attempt(
-            session_factory(engine), settings, UUID(attempt_id), get_media_output_provider()
+            factory, settings, UUID(attempt_id), get_media_output_provider(job.provider, settings)
         )
     finally:
         engine.dispose()
@@ -113,7 +131,7 @@ def dispatch_outbox() -> None:
     settings = get_settings()
     engine = build_engine(settings)
     try:
-        with session_factory(engine).begin() as db:
+        with session_factory(engine, settings).begin() as db:
             # QUEUED 是业务事实；即使 Broker 丢失已发布消息，也会周期性重新投递。
             # 重复投递由 revision + 状态 + 运行行锁消除，不能宣称外部模型 exactly-once。
             events = db.scalars(
@@ -132,16 +150,16 @@ def dispatch_outbox() -> None:
                 event.published_at = utcnow()
                 event.attempt_count += 1
         publish_dispatches(
-            session_factory(engine), publish_generation, settings.media_execution_policy
+            session_factory(engine, settings), publish_generation, settings.media_execution_policy
         )
-        for attempt_id in pending_attempts(session_factory(engine)):
+        for attempt_id in pending_attempts(session_factory(engine, settings)):
             import_generation_candidates.apply_async(args=[str(attempt_id)])
-        if claim_recovery_scan(session_factory(engine)):
+        if claim_recovery_scan(session_factory(engine, settings)):
             for job_id in recovery_candidates(
-                session_factory(engine), media_lease_policy(settings)
+                session_factory(engine, settings), media_lease_policy(settings)
             ):
                 recover_generation.apply_async(args=[str(job_id)])
-        with session_factory(engine)() as db:
+        with session_factory(engine, settings)() as db:
             previews = list(
                 db.scalars(
                     select(RenderExecution.id)

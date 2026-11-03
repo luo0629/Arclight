@@ -789,7 +789,9 @@ def test_real_deadline_preserves_uncertainty_and_disallows_fallback(client, epis
                 request(episode, selected),
                 selected,
                 slow,
-                policy=GatewayPolicy(timeout_seconds=0.25, max_attempts=2),
+                # Admission also consumes the deadline; leave room for real DB I/O
+                # so this test reaches the deliberately blocked provider on slow CI.
+                policy=GatewayPolicy(timeout_seconds=1, max_attempts=2),
                 fallback=(selected, lambda: pytest.fail("unknown cannot fallback")),
             )
         assert entered.is_set() and caught.value.code == "GATEWAY_RECONCILIATION_REQUIRED"

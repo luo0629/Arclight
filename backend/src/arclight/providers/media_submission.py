@@ -1,4 +1,4 @@
-"""Normalized, bounded media submissions. Only the no-cost Mock adapter is installed."""
+"""Normalized, bounded media submissions selected from installed adapters."""
 
 from dataclasses import dataclass
 from decimal import Decimal
@@ -7,6 +7,7 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
+from arclight.core.config import Settings
 from arclight.domain.generation_requests import GenerationResult, MediaErrorCode, MediaInput
 from arclight.domain.media_capabilities import MediaCapabilities
 from arclight.providers.media_capabilities import MOCK_CAPABILITIES
@@ -85,5 +86,15 @@ class MockMediaSubmissionProvider:
         )
 
 
-def get_media_submission_provider() -> MediaSubmissionProvider:
+def get_media_submission_provider(
+    provider: str = "mock", settings: Settings | None = None
+) -> MediaSubmissionProvider:
+    if provider == "openai" and settings is not None:
+        from arclight.providers.openai_images import OpenAIImageProvider
+
+        return OpenAIImageProvider(settings)
+    if provider != "mock":
+        from arclight.core.errors import DomainError
+
+        raise DomainError("PROVIDER_NOT_INSTALLED", "图像供应商未安装或缺少服务器配置", 422)
     return MockMediaSubmissionProvider()

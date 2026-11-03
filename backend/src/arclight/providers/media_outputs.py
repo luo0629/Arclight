@@ -6,6 +6,7 @@ from typing import Protocol
 
 from PIL import Image
 
+from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.asset_versions import MAX_IMAGE_BYTES
 from arclight.providers.media_submission import MediaSubmission
@@ -50,5 +51,13 @@ class MockMediaOutputProvider:
         return MediaOutput(data, "image/jpeg" if kind == "JPEG" else "image/png")
 
 
-def get_media_output_provider() -> MediaOutputProvider:
+def get_media_output_provider(
+    provider: str = "mock", settings: Settings | None = None
+) -> MediaOutputProvider:
+    if provider == "openai" and settings is not None:
+        from arclight.providers.openai_images import OpenAIImageProvider
+
+        return OpenAIImageProvider(settings)
+    if provider != "mock":
+        raise DomainError("PROVIDER_NOT_INSTALLED", "图像结果适配器不可用", 422)
     return MockMediaOutputProvider()

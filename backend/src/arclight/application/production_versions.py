@@ -297,7 +297,7 @@ def capture_media(
             "MEDIA",
             "SCHEMA",
             "generation-input",
-            "1",
+            "2",
             GenerationSpec.model_json_schema(),
         ),
         component(
@@ -398,14 +398,16 @@ def check_media(db: Session, project_id: UUID, job_id: UUID, manifest_id: UUID) 
         and composer_entries[0]["version"] == PROMPT_COMPOSER_VERSION
         and composer_entries[0]["digest"] == digest(PROMPT_COMPOSER_DEFINITION)
     )
+    input_schemas = {digest(GenerationSpec.model_json_schema())}
+    if manifest and manifest.snapshot_json["context"]["generation"]["provider"] == "mock":
+        # Exact pre-GEN-09 schema, independently frozen in the compatibility fixture.
+        input_schemas.add("5ce490e456d24b3f3f8cc7897706f1636c09de322dacc28edf05f42631702c4b")
     if (
         value["input_manifest_id"] != str(manifest_id)
         or not composition_compatible
-        or schemas
-        != {
-            "generation-input": digest(GenerationSpec.model_json_schema()),
-            "generation-result": digest(GenerationResult.model_json_schema()),
-        }
+        or set(schemas) != {"generation-input", "generation-result"}
+        or schemas["generation-input"] not in input_schemas
+        or schemas["generation-result"] != digest(GenerationResult.model_json_schema())
     ):
         raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "媒体结果Schema不兼容恢复", 409)
 

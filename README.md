@@ -20,6 +20,43 @@ AI 内容创作的难点不只在于生成一段文字或一张图片，还在�
 
 Arclight 先把文本创作与审核链路做实，再逐步向完整的漫剧生产流程扩展。
 
+### 图像 Provider 的服务端接入（GEN-09）
+
+图像任务 API／Worker 可安装 OpenAI Images 兼容的同步文字生图适配器，支持模型
+`gpt-image-2.5-flare-2026-09-08` 与 `gpt-image-2.5-sunburst`。服务默认关闭；本地 `.env` 或 Compose 共用的
+`ARCLIGHT_IMAGE_SERVICE` JSON 配置 `enabled`、`base_url`、`model`、`api_key_file`、
+`maximum_cost_per_image`（USD）与 `pricing_version`。Secret 文件须由部署侧只读挂载；
+不要将密钥写入任务、版本、请求正文或仓库。账号设置中的图片预设不会自动启用该服务。
+
+`base_url` 默认 `https://api.openai.com/v1`，可填写第三方公网 HTTPS/443 地址；
+只填域名根地址时自动补 `/v1`，显式路径保持不变。请求追加 `/images/generations`，
+沿用 DNS 公网校验、连接 IP 固定、禁止重定向／环境代理。`model` 保留配置的精确名称。
+例如：
+
+```dotenv
+ARCLIGHT_IMAGE_SERVICE={"enabled":true,"base_url":"https://image-provider.example","model":"gpt-image-2.5-sunburst","api_key_file":"/run/secrets/image_api_key","maximum_cost_per_image":"0.50","pricing_version":"provider-verified-price:1"}
+```
+
+示例报价须按实际供应商及账号计费核验后替换；地址、模型或报价改变会使排队任务的旧配置失效。
+
+运维报价须覆盖允许的提示词长度、low／medium／high 质量和三种尺寸
+（1024×1024、1536×1024、1024×1536），项目预算还须容纳整个批次（最多四张）。
+报价用于应用预算预留，不是供应商强制扣费上限。缺少报价／密钥、配置版本变化或不支持的能力
+会在发送前拒绝。创建任务前通过项目的
+`GET /api/v1/projects/{project_id}/generation-jobs/providers/openai/configuration`
+获取脱敏的 `configuration_version`，作为 `spec.model_config_version`；能力接口使用同一路径下的
+`providers/openai/capabilities?model=gpt-image-2.5-sunburst`（使用配置的模型名）。
+
+仅支持无参考图的文字生图、PNG／JPEG，无 seed、查询、取消及供应商幂等能力。
+同步结果保存为私有对象，经已有候选导入器验证后登记；仍须连续性审查和人工选用。
+供应商返回的格式或尺寸不符会登记为失败候选，保留原始结果和费用证据，不自动修改图片。
+当前单张原图上限为 1 MiB，建议首次验收用 low 质量 JPEG；超限不会绕过校验。
+API 未返回美元账单时保留预留，token 不冒充实际费用。超时、响应不明或接收后的存储失败
+转未知／人工核账，不自动重复提交。图像、媒体执行和网关超时须分别配置，实际取最短值。
+
+真实联调须另行确认费用及素材范围。默认测试全部使用 Mock HTTP；单次合成图验收入口
+`backend/tests/test_openai_images_live.py` 默认跳过，仅在明确授权后运行，见本地验收记录。
+
 ## 当前可以做什么
 
 ### 在贴纸画布上整理故事

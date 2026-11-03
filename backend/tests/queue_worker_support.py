@@ -20,5 +20,5 @@ class ControlledProvider(MockMediaSubmissionProvider):
         return super().submit(request)
 
 
-tasks.get_media_submission_provider = ControlledProvider
+tasks.get_media_submission_provider = lambda name, settings: ControlledProvider()
 app = celery_app

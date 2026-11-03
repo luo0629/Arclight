@@ -17,5 +17,5 @@ def build_engine(settings: Settings) -> Engine:
     return engine
 
 
-def session_factory(engine: Engine) -> sessionmaker:
-    return sessionmaker(engine, expire_on_commit=False)
+def session_factory(engine: Engine, settings: Settings | None = None) -> sessionmaker:
+    return sessionmaker(engine, expire_on_commit=False, info={"settings": settings})

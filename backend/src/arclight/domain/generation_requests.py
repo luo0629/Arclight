@@ -60,7 +60,7 @@ def safe_metadata(value: JsonValue) -> None:
 
 class GenerationSpec(MediaInput):
     schema_version: Literal[1] = 1
-    provider: Literal["mock"] = "mock"
+    provider: Literal["mock", "openai"] = "mock"
     model: str = Field(min_length=1, max_length=160)
     model_config_version: str = Field(min_length=1, max_length=100)
     prompt: str = Field(min_length=1, max_length=20000)
