@@ -13,9 +13,18 @@ from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.generation_prompts import (
+    PROMPT_COMPOSER_DEFINITION,
+    PROMPT_COMPOSER_VERSION,
+)
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
 from arclight.domain.versions import VersionRegistration, digest
-from arclight.persistence.models import ProductionVersion, VersionBinding, WorkflowRun
+from arclight.persistence.models import (
+    DependencyManifest,
+    ProductionVersion,
+    VersionBinding,
+    WorkflowRun,
+)
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
 TEXT_STAGES = {
@@ -248,6 +257,8 @@ def capture_media(
     task_type: str,
     spec: GenerationSpec,
     inputs: list[dict],
+    *,
+    prompt_composition: dict | None = None,
 ) -> None:
     entries = [
         component(
@@ -300,6 +311,18 @@ def capture_media(
             },
         ),
     ]
+    if prompt_composition is not None:
+        entries.append(
+            component(
+                db,
+                project_id,
+                "MEDIA",
+                "PROMPT",
+                "media-prompt-composer",
+                PROMPT_COMPOSER_VERSION,
+                PROMPT_COMPOSER_DEFINITION,
+            )
+        )
     parameters = {
         "parameters": spec.parameters,
         "seed": spec.seed,
@@ -324,6 +347,11 @@ def capture_media(
             "prompt_sha256": digest(
                 {"prompt": spec.prompt, "negative_prompt": spec.negative_prompt}
             ),
+            **(
+                {"prompt_composition_sha256": digest(prompt_composition)}
+                if prompt_composition is not None
+                else {}
+            ),
         },
     )
 
@@ -336,10 +364,37 @@ def check_media(db: Session, project_id: UUID, job_id: UUID, manifest_id: UUID) 
     schemas = {
         entry["name"]: entry["digest"] for entry in value["components"] if entry["kind"] == "SCHEMA"
     }
-    if value["input_manifest_id"] != str(manifest_id) or schemas != {
-        "generation-input": digest(GenerationSpec.model_json_schema()),
-        "generation-result": digest(GenerationResult.model_json_schema()),
-    }:
+    manifest = db.get(DependencyManifest, manifest_id)
+    composition = (
+        (manifest.snapshot_json.get("context") or {}).get("prompt_composition")
+        if manifest
+        else None
+    )
+    composition_digest = value.get("prompt_composition_sha256")
+    composer_entries = [
+        entry
+        for entry in value["components"]
+        if entry["kind"] == "PROMPT" and entry["name"] == "media-prompt-composer"
+    ]
+    composition_compatible = (
+        composition is None and composition_digest is None and not composer_entries
+    ) or (
+        isinstance(composition, dict)
+        and composition.get("composer_version") == PROMPT_COMPOSER_VERSION
+        and composition_digest == digest(composition)
+        and len(composer_entries) == 1
+        and composer_entries[0]["version"] == PROMPT_COMPOSER_VERSION
+        and composer_entries[0]["digest"] == digest(PROMPT_COMPOSER_DEFINITION)
+    )
+    if (
+        value["input_manifest_id"] != str(manifest_id)
+        or not composition_compatible
+        or schemas
+        != {
+            "generation-input": digest(GenerationSpec.model_json_schema()),
+            "generation-result": digest(GenerationResult.model_json_schema()),
+        }
+    ):
         raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "媒体结果Schema不兼容恢复", 409)
 
 

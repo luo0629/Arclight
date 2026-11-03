@@ -93,13 +93,22 @@ def test_generic_jobs_freeze_complete_inputs_without_placeholder_assets(client, 
     with client.app.state.session_factory() as db:
         manifest = db.get(DependencyManifest, UUID(row["input_manifest_id"]))
         spec = manifest.snapshot_json["context"]["generation"]
-        assert spec == body["spec"] | {
-            "schema_version": 1,
-            "provider": "mock",
-            "batch_size": 1,
-            "require_query": False,
-            "require_cancel": False,
-        }
+        if body["task_type"] == "IMAGE":
+            assert spec["prompt"] == (
+                "【画面描述】\n画面要求：雨夜中的街道\n\n【连续性上下文】\n剧情摘要：主角从车站回家"
+            )
+            assert spec["negative_prompt"] == body["spec"]["negative_prompt"]
+            composition = manifest.snapshot_json["context"]["prompt_composition"]
+            assert composition["composer_version"] == "1"
+            assert composition["provider_parameters"]["parameters"] == spec["parameters"]
+        else:
+            assert spec == body["spec"] | {
+                "schema_version": 1,
+                "provider": "mock",
+                "batch_size": 1,
+                "require_query": False,
+                "require_cancel": False,
+            }
         assert manifest.target_asset_id == (UUID(target["id"]) if target else None)
         assert manifest.snapshot_json["target"]["expected_asset"] == body.get("expected_asset")
         assert db.scalar(select(func.count()).select_from(GenerationAttempt)) == 0

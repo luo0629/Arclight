@@ -4,6 +4,7 @@ import hashlib
 import json
 from uuid import UUID, uuid4
 
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,11 +15,14 @@ from arclight.application.generation_budget import enforce_budget, quote_job
 from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_scheduling import schedule_for
 from arclight.application.generation_targets import require_available_target
+from arclight.application.visual_bible import state as visual_bible_state
 from arclight.core.errors import DomainError
 from arclight.domain.dependencies import validate_dependency_type
-from arclight.domain.generation_requests import GenerationCreate
+from arclight.domain.generation_prompts import compose_image_prompt
+from arclight.domain.generation_requests import GenerationCreate, GenerationSpec
 from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.domain.media_capabilities import validate_capabilities
+from arclight.domain.versions import digest
 from arclight.persistence.models import (
     DependencyInvalidation,
     DependencyManifest,
@@ -88,7 +92,7 @@ def create_job(
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
-    require_project(db, project_id, actor, write=True)
+    project = require_project(db, project_id, actor, write=True)
     fingerprint = request_fingerprint(payload)
     existing = db.scalar(
         select(GenerationJob).where(
@@ -105,6 +109,7 @@ def create_job(
     enforce_budget(db, project_id, payload, budget_quote.maximum_cost)
     require_available_target(db, payload.target_asset_id)
     inputs = []
+    prompt_sources = []
     for item in payload.inputs:
         version, source = exact_version(db, project_id, item.source_asset_version_id)
         validate_dependency_type(source.asset_type, payload.target_type, item.dependency_type)
@@ -124,8 +129,86 @@ def create_job(
                 "checksum": version.checksum,
             }
         )
+        if payload.task_type == "IMAGE" and source.asset_type in {
+            "CHARACTER",
+            "SCENE",
+            "PROP",
+            "STYLE",
+        }:
+            asset_snapshot = version.metadata_json.get("asset_snapshot")
+            if (
+                not isinstance(asset_snapshot, dict)
+                or asset_snapshot.get("id") != str(source.id)
+                or asset_snapshot.get("project_id") != str(project_id)
+                or asset_snapshot.get("asset_type") != source.asset_type
+                or not isinstance(asset_snapshot.get("name"), str)
+            ):
+                raise DomainError(
+                    "PROMPT_SOURCE_SNAPSHOT_MISSING",
+                    "精确资产版本缺少匹配的提示词资料快照，请创建新版本",
+                    409,
+                )
+            prompt_sources.append(
+                {
+                    "source_key": f"asset_version:{version.id}",
+                    "source_type": "ASSET_VERSION",
+                    "asset_type": source.asset_type,
+                    "asset_id": str(source.id),
+                    "asset_version_id": str(version.id),
+                    "version_no": version.version_no,
+                    "checksum": version.checksum,
+                    "asset_snapshot_sha256": digest(asset_snapshot),
+                    "dependency_type": item.dependency_type,
+                    "selectors": item.selectors,
+                    "asset_snapshot": asset_snapshot,
+                }
+            )
     capabilities = resolve_capabilities(payload.spec.provider, payload.spec.model)
-    validate_capabilities(capabilities, payload.spec, payload.task_type, reference_count(inputs))
+    effective_spec = payload.spec
+    prompt_composition = None
+    if payload.task_type == "IMAGE":
+        visual = visual_bible_state(db, project)
+        visual_snapshot = {
+            "source_key": (
+                f"visual_bible:{visual['id']}" if visual["id"] else "visual_bible:legacy:0"
+            ),
+            "source_type": ("VISUAL_BIBLE_VERSION" if visual["id"] else "LEGACY_STYLE_GUIDE"),
+            "version_id": str(visual["id"]) if visual["id"] else None,
+            "version_no": visual["version_no"],
+            "fields": visual["fields"],
+            "locked_fields": visual["locked_fields"],
+            "snapshot_sha256": digest(
+                {
+                    "version_id": str(visual["id"]) if visual["id"] else None,
+                    "version_no": visual["version_no"],
+                    "fields": visual["fields"],
+                    "locked_fields": visual["locked_fields"],
+                    "legacy_snapshot": visual["legacy_snapshot"],
+                }
+            ),
+        }
+        composed_prompt, composed_negative, prompt_composition = compose_image_prompt(
+            prompt=payload.spec.prompt,
+            negative_prompt=payload.spec.negative_prompt,
+            context=payload.spec.context,
+            parameters=payload.spec.parameters,
+            output_spec=payload.spec.output_spec,
+            seed=payload.spec.seed,
+            variation=payload.spec.variation,
+            batch_size=payload.spec.batch_size,
+            asset_sources=prompt_sources,
+            visual_bible=visual_snapshot,
+        )
+        try:
+            effective_spec = GenerationSpec.model_validate(
+                payload.spec.model_dump(mode="json")
+                | {"prompt": composed_prompt, "negative_prompt": composed_negative}
+            )
+        except ValidationError as error:
+            raise DomainError(
+                "PROMPT_COMPOSITION_INVALID", "组合后的提示词不符合媒体输入合同", 422
+            ) from error
+    validate_capabilities(capabilities, effective_spec, payload.task_type, reference_count(inputs))
     manifest = DependencyManifest(
         project_id=project_id,
         target_asset_id=asset.id if asset else None,
@@ -150,11 +233,16 @@ def create_job(
             },
             "inputs": inputs,
             "context": {
-                "generation": payload.spec.model_dump(mode="json"),
+                "generation": effective_spec.model_dump(mode="json"),
                 "origin": "generation_request",
                 "provider_capabilities": capabilities.model_dump(mode="json"),
                 "budget_quote": budget_quote.model_dump(mode="json"),
                 "budget_batch_id": str(payload.batch_id) if payload.batch_id else None,
+                **(
+                    {"prompt_composition": prompt_composition}
+                    if prompt_composition is not None
+                    else {}
+                ),
             },
         },
     )
@@ -196,7 +284,16 @@ def create_job(
     reserve_next(db, job, budget_quote.maximum_cost)
     from arclight.application.production_versions import capture_media
 
-    capture_media(db, project_id, job.id, manifest.id, payload.task_type, payload.spec, inputs)
+    capture_media(
+        db,
+        project_id,
+        job.id,
+        manifest.id,
+        payload.task_type,
+        effective_spec,
+        inputs,
+        prompt_composition=prompt_composition,
+    )
     schedule_for(db, job, execution_policy)
     from arclight.application.generation_queues import classify
 
