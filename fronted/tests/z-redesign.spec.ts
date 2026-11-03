@@ -239,22 +239,21 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
   await setup(page);
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  const supplier = dialog.getByRole("combobox", {
-    name: "模型供应商",
+  const supplier = dialog.getByRole("radio", {
+    name: "DeepSeek",
     exact: true,
   });
   const endpoint = dialog.getByLabel("服务地址", { exact: true });
   const key = dialog.getByLabel("API Key", { exact: true });
   await supplier.click();
-  await page.getByRole("option", { name: "DeepSeek", exact: true }).click();
   await expect(endpoint).toHaveValue("https://api.deepseek.com");
   await expect(endpoint).toHaveAttribute("readonly", "");
   await expect(dialog.getByLabel("模型名称", { exact: true })).not.toHaveValue(
     "",
   );
   await expect(
-    dialog.getByRole("combobox", { name: "文字任务服务", exact: true }),
-  ).toContainText("启用我的兼容服务");
+    dialog.getByText("用于新文字任务", { exact: true }),
+  ).toBeVisible();
   await key.fill("official-browser-test-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(
@@ -263,11 +262,12 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
   await expect(key).toHaveValue("");
   await page.reload();
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
-  await expect(supplier).toContainText("DeepSeek");
+  await expect(supplier).toBeChecked();
   await expect(endpoint).toHaveValue("https://api.deepseek.com");
   await key.fill("draft-that-must-be-cleared");
-  await supplier.click();
-  await page.getByRole("option", { name: "自定义供应商", exact: true }).click();
+  await dialog
+    .getByRole("radio", { name: "自定义服务商", exact: true })
+    .click();
   await expect(key).toHaveValue("");
   await endpoint.fill("https://independent-supplier.example/v1");
   await dialog
@@ -279,10 +279,10 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
     .click();
   await page.getByRole("option", { name: "JSON 对象", exact: true }).click();
   await expect(
-    dialog.getByText("供应商或地址已更改，请重新填写 API Key", { exact: true }),
+    dialog.getByText("服务商或地址已更改，请填写对应密钥", { exact: true }),
   ).toBeVisible();
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toContainText("启用文字服务需要");
+  await expect(dialog.getByRole("alert")).toContainText("请重新填写 API Key");
   await key.fill("custom-browser-test-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(
@@ -290,7 +290,9 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
   ).toContainText("已保存到当前账号");
   await page.reload();
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
-  await expect(supplier).toContainText("自定义供应商");
+  await expect(
+    dialog.getByRole("radio", { name: "自定义服务商", exact: true }),
+  ).toBeChecked();
   await expect(endpoint).toHaveValue("https://independent-supplier.example/v1");
   await expect(
     dialog.getByLabel("供应商名称（选填）", { exact: true }),
