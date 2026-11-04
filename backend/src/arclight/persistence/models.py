@@ -258,6 +258,48 @@ class WorkflowRun(Entity, Base):
     __table_args__ = (UniqueConstraint("episode_id", "idempotency_key"),)
 
 
+class AgentToolGrant(Entity, Base):
+    """User-authorized Agent tools, scoped to one run and project."""
+
+    __tablename__ = "agent_tool_grants"
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    agent_name: Mapped[str] = mapped_column(String(32))
+    actor_id: Mapped[str] = mapped_column(String(100))
+    allowed_tools_json: Mapped[list] = mapped_column(JSON_TYPE, default=list)
+    revision: Mapped[int] = mapped_column(default=0)
+    __table_args__ = (
+        UniqueConstraint("run_id", "agent_name", name="uq_agent_tool_grant_run_agent"),
+        CheckConstraint("revision >= 0", name="agent_tool_grant_revision_nonnegative"),
+    )
+
+
+class AgentToolInvocation(Entity, Base):
+    """Durable idempotency record and bounded feedback for a registered tool call."""
+
+    __tablename__ = "agent_tool_invocations"
+    run_id: Mapped[UUID] = mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)
+    agent_name: Mapped[str] = mapped_column(String(32))
+    actor_id: Mapped[str] = mapped_column(String(100))
+    tool_name: Mapped[str] = mapped_column(String(64))
+    idempotency_key: Mapped[str] = mapped_column(String(128))
+    request_fingerprint: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    feedback_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
+    __table_args__ = (
+        UniqueConstraint("run_id", "idempotency_key", name="uq_agent_tool_invocation_run_key"),
+        CheckConstraint(
+            "status IN ('RUNNING', 'SUCCEEDED', 'FAILED')", name="agent_tool_invocation_status"
+        ),
+        CheckConstraint(
+            "(status = 'RUNNING' AND feedback_json IS NULL) OR "
+            "(status IN ('SUCCEEDED', 'FAILED') AND feedback_json IS NOT NULL)",
+            name="agent_tool_invocation_feedback",
+        ),
+    )
+
+
 class Script(Entity, Base):
     __tablename__ = "scripts"
     episode_id: Mapped[UUID] = mapped_column(ForeignKey("episodes.id"), index=True)

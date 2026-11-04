@@ -369,6 +369,27 @@ def state_from_checkpoint(
     return restore_agent_state(seed, checkpoint_values, scope)
 
 
+def record_agent_tool_invocation(
+    value: AgentRunState | dict, scope: AgentRunScope, invocation_id: UUID
+) -> AgentRunState:
+    """Bind the durable invocation and its feedback to this run as private references."""
+    state = state_for_scope(value, scope)
+    if state.status != "RUNNING" or not any(step.status == "RUNNING" for step in state.steps):
+        raise AgentStateError("Tool invocation requires an active Agent step")
+    if invocation_id in state.tool_call_refs or invocation_id in state.observation_refs:
+        return state
+    if len(state.tool_call_refs) >= 256 or len(state.observation_refs) >= 256:
+        raise AgentStateError("Agent tool and observation reference limits are exhausted")
+    return AgentRunState.model_validate(
+        {
+            **state.model_dump(mode="json"),
+            "revision": state.revision + 1,
+            "tool_call_refs": [*state.tool_call_refs, invocation_id],
+            "observation_refs": [*state.observation_refs, invocation_id],
+        }
+    )
+
+
 def context_observation_ids(state_values: Mapping[str, Any], stage: str) -> tuple[UUID, ...]:
     refs = state_values.get("context_refs", {}).get(stage)
     if not isinstance(refs, dict):
