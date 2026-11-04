@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
 import { api, json } from "@/lib/api/client";
+import { runErrorMessage } from "@/lib/run-errors";
 import type { Run } from "@/types/api";
 import CharacterMatching from "@/features/story/components/character-matching";
 import ImpactButton from "@/features/dependencies/components/impact-button";
@@ -97,8 +98,8 @@ export default function Tasks({
               </p>
               <code className="task-id text-muted-foreground">{run.id}</code>
               {run.error_code && (
-                <Notice tone="error" className="error">
-                  错误代码：{run.error_code}。请检查服务配置和 Worker 日志。
+                <Notice tone="error" className="error" role="alert">
+                  {runErrorMessage(run.error_code)}
                 </Notice>
               )}
               {run.pending_review && (

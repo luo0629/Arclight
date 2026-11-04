@@ -79,7 +79,9 @@ def calls(
                 "parameters": call.parameters_json,
                 "circuit_id": call.circuit_id,
                 "created_at": call.created_at,
-                "maximum_cost": format(call.maximum_cost, ".6f"),
+                "maximum_cost": format(call.maximum_cost, ".6f")
+                if call.maximum_cost is not None
+                else None,
                 "status": receipt.status if receipt else "RESULT_UNKNOWN",
                 "error_code": receipt.error_code if receipt else None,
                 "usage": receipt.usage_json if receipt else {},

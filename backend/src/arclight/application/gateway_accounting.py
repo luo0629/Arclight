@@ -72,9 +72,25 @@ def costs(
         receipt = latest_receipt(db, call.id)
         if receipt is not None and receipt.actual_cost is not None:
             actual += receipt.actual_cost
-        else:
+        elif call.maximum_cost is not None:
             pending += call.maximum_cost
     return actual, pending
+
+
+def require_priced_history(db: Session, project_id: UUID) -> None:
+    """A later capped call must not treat earlier unpriced text as free."""
+    for call in db.scalars(
+        select(GatewayCall).where(
+            GatewayCall.project_id == project_id,
+            GatewayCall.generation_attempt_id.is_(None),
+            GatewayCall.maximum_cost.is_(None),
+        )
+    ):
+        receipt = latest_receipt(db, call.id)
+        if receipt is None or receipt.actual_cost is None:
+            raise DomainError(
+                "BUDGET_UNPRICED_HISTORY", "已有金额未知的文字调用，请先核账再启用预算门禁", 409
+            )
 
 
 def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> None:
@@ -85,6 +101,14 @@ def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> N
     from arclight.persistence.models import Project
 
     if route.maximum_cost is None:
+        if (
+            request.generation_attempt_id is None
+            and request.workflow_id is not None
+            and request.task in {"script", "storyboard", "analyze", "outline", "rewrite"}
+        ):
+            # Text may rely on the supplier's balance/quota without an app cap.
+            # A missing quote remains unknown in the immutable ledger and cost UI.
+            return
         raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "模型调用缺少可信报价，已停止调用", 409)
     if request.generation_attempt_id is not None:
         attempt = db.get(GenerationAttempt, request.generation_attempt_id)
@@ -119,6 +143,8 @@ def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> N
     project = db.get(Project, request.project_id)
     assert project is not None
     policy = policy_for(db, project.id)
+    if route.maximum_cost > 0:
+        require_priced_history(db, project.id)
     actual, pending = project_costs(db, project.id)
     amount = route.maximum_cost
     if amount > 0 and actual + pending + amount > project.budget_limit:
@@ -140,7 +166,7 @@ def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> N
                 used += (
                     receipt.actual_cost
                     if receipt and receipt.actual_cost is not None
-                    else call.maximum_cost
+                    else call.maximum_cost or Decimal("0")
                 )
         if used + amount > policy.task_limit:
             raise DomainError("BUDGET_TASK_EXCEEDED", "模型调用将超过任务预算", 409)

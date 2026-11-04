@@ -258,6 +258,10 @@ def invoke[T](
                     "SERVICE_DNS_UNAVAILABLE",
                     "SERVICE_ADDRESS_BLOCKED",
                     "SERVICE_REDIRECT_BLOCKED",
+                    "PROVIDER_QUOTA_EXHAUSTED",
+                    "PROVIDER_RATE_LIMITED",
+                    "PROVIDER_AUTHENTICATION_FAILED",
+                    "PROVIDER_ACCESS_DENIED",
                 }
                 else "RESULT_UNKNOWN"
             )
@@ -291,6 +295,30 @@ def invoke[T](
                         ) from None
                     current_route, current_call = candidate, candidate_call
                 continue
+            rejections = {
+                "PROVIDER_QUOTA_EXHAUSTED": (
+                    "GATEWAY_QUOTA_EXHAUSTED",
+                    "模型供应商余额不足或额度已耗尽，请充值或调整供应商额度后重试",
+                    402,
+                ),
+                "PROVIDER_RATE_LIMITED": (
+                    "GATEWAY_PROVIDER_RATE_LIMITED",
+                    "模型供应商请求过于频繁，请稍后重试",
+                    429,
+                ),
+                "PROVIDER_AUTHENTICATION_FAILED": (
+                    "GATEWAY_PROVIDER_AUTHENTICATION_FAILED",
+                    "模型供应商密钥无效或已失效，请更新文字服务密钥后重试",
+                    502,
+                ),
+                "PROVIDER_ACCESS_DENIED": (
+                    "GATEWAY_PROVIDER_ACCESS_DENIED",
+                    "模型供应商拒绝访问，请检查模型权限和服务配置后重试",
+                    502,
+                ),
+            }
+            if safe_failure and error in rejections:
+                raise DomainError(*rejections[error]) from None
             code = "GATEWAY_NOT_ACCEPTED" if safe_failure else "GATEWAY_RECONCILIATION_REQUIRED"
             raise DomainError(code, "模型调用失败，已保存安全诊断", 502) from None
         with factory.begin() as db:

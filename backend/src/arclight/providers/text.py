@@ -17,7 +17,7 @@ from arclight.agents.story_outline import OutlineEpisode, StoryOutlineContent
 from arclight.application.content_duration import duration_bounds
 from arclight.core.config import Settings
 from arclight.domain.context import check_call
-from arclight.domain.model_gateway import GatewayUsage
+from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.providers.network import PublicHTTPTransport
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
@@ -149,6 +149,41 @@ class MockTextProvider:
         )
 
 
+def _raise_for_provider_status(response: httpx.Response) -> None:
+    """Only structured rejection codes are exposed; provider messages stay private."""
+    if not response.is_error:
+        return
+    codes = set()
+    try:
+        body = response.json()
+        error = body.get("error", {}) if isinstance(body, dict) else {}
+        if isinstance(error, dict):
+            codes = {str(error.get(field, "")).lower() for field in ("code", "type")}
+    except ValueError:
+        pass
+    quota_codes = {
+        "insufficient_quota",
+        "insufficient_balance",
+        "balance_not_enough",
+        "quota_exceeded",
+        "billing_hard_limit_reached",
+        "credit_balance_too_low",
+        "1113",
+    }
+    status = response.status_code
+    if status == 401:
+        raise GatewayFailure("PROVIDER_AUTHENTICATION_FAILED", not_accepted=True)
+    if status == 402 or (status in {400, 403, 429} and codes & quota_codes):
+        raise GatewayFailure("PROVIDER_QUOTA_EXHAUSTED", not_accepted=True)
+    if status == 429:
+        raise GatewayFailure("PROVIDER_RATE_LIMITED", not_accepted=True)
+    if status == 403:
+        raise GatewayFailure("PROVIDER_ACCESS_DENIED", not_accepted=True)
+    if status in {400, 404, 422}:
+        raise GatewayFailure("INPUT_INVALID", not_accepted=True)
+    response.raise_for_status()
+
+
 class OpenAICompatibleTextProvider:
     def __init__(self, settings: Settings, contexts: dict[str, dict] | None = None):
         self.settings = settings
@@ -203,7 +238,7 @@ class OpenAICompatibleTextProvider:
                     "response_format": response_format,
                 },
             )
-            response.raise_for_status()
+            _raise_for_provider_status(response)
             body = response.json()
             usage = body.get("usage") or {}
             self.last_usage = GatewayUsage(
@@ -266,7 +301,7 @@ class OpenAICompatibleTextProvider:
             StoryboardContent,
             TEXT_PROMPTS["storyboard"],
             {
-                "script": script.model_dump(),
+                "script": script.model_dump(mode="json"),
                 "target_duration_ms": duration_ms,
                 "duration_range_ms": duration_bounds(
                     duration_ms, self.settings.text_duration_tolerance_percent

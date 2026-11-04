@@ -147,9 +147,6 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
 
     # The account's endpoint/key snapshot is resolved before reaching this layer.
     # No fallback route is authorized by the existing UI.
-    if not mock and route.maximum_cost is None:
-        raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "文字模型尚未配置可信调用报价", 409)
-
     def safe_call():
         try:
             return call()

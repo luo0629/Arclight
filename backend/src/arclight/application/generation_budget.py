@@ -107,6 +107,9 @@ def enforce_budget(
     # Free providers remain usable after a paid budget is exhausted.
     if maximum_cost == 0:
         return
+    from arclight.application.gateway_accounting import require_priced_history
+
+    require_priced_history(db, project_id)
     actual, pending = costs(db, project_id, exclude_pending_job=exclude_pending_job)
     projected = actual + pending + maximum_cost
     if projected > project.budget_limit:
