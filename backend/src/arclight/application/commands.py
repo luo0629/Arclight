@@ -225,6 +225,9 @@ def start_run(
     )
     db.add(run)
     db.flush()
+    from arclight.application.agent_runtime_state import initialize_run_state
+
+    initialize_run_state(run, episode.project_id)
     from arclight.application.production_versions import capture_text
 
     capture_text(db, episode.project_id, run, settings, actor=actor)
@@ -307,8 +310,39 @@ def resume_run(
 def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW]:
         raise DomainError("NOT_CANCELLABLE", "仅排队或等待审核的工作流可以取消")
+    agent_state = None
+    if run.agent_state_json is not None:
+        from arclight.domain.agent_state import AgentStateError, terminate_agent_state
+
+        try:
+            episode = db.get(Episode, run.episode_id)
+            if episode is None:
+                raise AgentStateError("Run episode is missing")
+            from arclight.application.production_versions import input_summary
+            from arclight.domain.agent_state import AgentRunScope
+            from arclight.domain.versions import digest
+
+            scope = AgentRunScope(
+                run_id=run.id,
+                project_id=episode.project_id,
+                workflow_type=run.workflow_type,
+                workflow_version=run.workflow_version,
+                input_sha256=digest(input_summary(run.input_json)),
+            )
+            state = terminate_agent_state(
+                run.agent_state_json,
+                scope,
+                reason="CANCELLED",
+            )
+        except AgentStateError as exc:
+            raise DomainError(
+                "AGENT_STATE_INVALID", "运行状态不可安全取消，请联系管理员", 409
+            ) from exc
+        agent_state = state.model_dump(mode="json")
     run.status = RunStatus.CANCELLED
     run.pending_review = None
+    if agent_state is not None:
+        run.agent_state_json = agent_state
     run.revision += 1
     emit(db, run, "workflow.cancelled")
     return run
@@ -328,6 +362,16 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     if active:
         raise DomainError("EPISODE_BUSY", "该剧集已有其他未完成工作流")
     # 此重试由用户主动请求；模型超时不触发隐式付费重提。
+    if run.agent_state_json is not None:
+        from arclight.domain.agent_state import AgentStateError, retry_agent_state
+
+        try:
+            state = retry_agent_state(run.agent_state_json)
+        except AgentStateError as exc:
+            raise DomainError(
+                "AGENT_STATE_INVALID", "运行状态不可安全重试，请联系管理员", 409
+            ) from exc
+        run.agent_state_json = state.model_dump(mode="json")
     run.status = RunStatus.QUEUED
     run.error_code = None
     run.revision += 1

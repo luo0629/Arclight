@@ -212,6 +212,7 @@ def test_replay_saved_artifact_does_not_build_provider(client, episode, settings
         saver.delete_thread(run_id)
     with client.app.state.session_factory.begin() as db:
         run = db.get(WorkflowRun, UUID(run_id))
+        saved_agent_state = copy.deepcopy(run.agent_state_json)
         run.status, run.revision, run.pending_review = "QUEUED", 0, None
 
     def forbidden(*args):
@@ -221,6 +222,8 @@ def test_replay_saved_artifact_does_not_build_provider(client, episode, settings
     assert advance(client, settings, run_id)["status"] == "WAITING_REVIEW"
     execute_run(client.app.state.session_factory, settings, UUID(run_id), 0)
     assert len(scripts(client, episode)) == 2
+    with client.app.state.session_factory() as db:
+        assert db.get(WorkflowRun, UUID(run_id)).agent_state_json == saved_agent_state
 
 
 @pytest.mark.parametrize(
@@ -537,11 +540,27 @@ def test_deleted_project_blocks_rewrite_and_restore_keeps_exact_versions(client,
     assert start(client, episode, body(base)).status_code == 409
 
 
-@pytest.mark.legacy_schema
-def test_input_limits_legacy_duration_and_foreign_episode(
-    client, episode, settings, protect_history
-):
+def test_input_limits_legacy_duration_and_foreign_episode(client, episode, settings):
     base = source(client, episode)
+    legacy_content = copy.deepcopy(base["content_json"])
+    legacy_content.pop("estimated_duration_ms")
+    with client.app.state.session_factory.begin() as db:
+        original = db.get(Script, UUID(base["id"]))
+        legacy = Script(
+            episode_id=original.episode_id,
+            run_id=None,
+            version_no=original.version_no + 1,
+            content_json=legacy_content,
+            status=original.status,
+        )
+        db.add(legacy)
+        db.flush()
+        legacy_base = {
+            **base,
+            "id": str(legacy.id),
+            "version_no": legacy.version_no,
+            "content_json": legacy_content,
+        }
     other = client.post(
         f"/api/v1/projects/{episode['project_id']}/episodes",
         json={"episode_no": 2, "title": "其他"},
@@ -552,15 +571,10 @@ def test_input_limits_legacy_duration_and_foreign_episode(
     settings.max_story_chars = 1
     assert start(client, episode, body(base)).json()["error"]["code"] == "REWRITE_INPUT_TOO_LARGE"
     settings.max_story_chars = 20000
-    with client.app.state.session_factory.begin() as db:
-        legacy = db.get(Script, UUID(base["id"]))
-        content = copy.deepcopy(legacy.content_json)
-        content.pop("estimated_duration_ms")
-        legacy.content_json = (
-            content  # Isolated legacy fixture; production never overwrites content.
-        )
-    protect_history()
-    assert start(client, episode, body(base)).json()["error"]["code"] == "SCRIPT_DURATION_REQUIRED"
+    assert (
+        start(client, episode, body(legacy_base)).json()["error"]["code"]
+        == "SCRIPT_DURATION_REQUIRED"
+    )
     assert client.get(prefix(episode) + "/runs").json() == []
 
 

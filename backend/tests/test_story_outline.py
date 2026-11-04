@@ -96,6 +96,7 @@ def test_generation_defaults_exact_source_independence_and_replay(
     with client.app.state.session_factory.begin() as db:
         assert db.scalar(select(func.count()).select_from(Script)) == 0
         run = db.get(WorkflowRun, UUID(accepted["run_id"]))
+        saved_agent_state = copy.deepcopy(run.agent_state_json)
         run.status, run.revision = RunStatus.QUEUED, 0
 
     def forbidden(*args):
@@ -104,6 +105,8 @@ def test_generation_defaults_exact_source_independence_and_replay(
     monkeypatch.setattr("arclight.application.story_outline.build_provider", forbidden)
     execute(client, settings, accepted["run_id"])
     assert len(calls) == 1
+    with client.app.state.session_factory() as db:
+        assert db.get(WorkflowRun, UUID(accepted["run_id"])).agent_state_json == saved_agent_state
     assert client.get(path(episode) + "/story-outlines/" + row["id"]).json() == row
     assert client.put(path(episode) + "/story-outlines/" + row["id"], json={}).status_code == 405
 

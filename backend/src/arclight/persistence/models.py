@@ -250,6 +250,7 @@ class WorkflowRun(Entity, Base):
     idempotency_key: Mapped[str] = mapped_column(String(128))
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     input_json: Mapped[dict] = mapped_column(JSON_TYPE)
+    agent_state_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     pending_review: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     resume_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)

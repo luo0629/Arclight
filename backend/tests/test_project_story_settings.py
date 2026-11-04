@@ -229,6 +229,7 @@ def test_legacy_run_without_brief_does_not_load_current_settings(
         run.input_json = {
             k: v for k, v in run.input_json.items() if k not in {"story_settings", "story_context"}
         }
+        run.agent_state_json = None
         db.get(Project, UUID(episode["project_id"])).story_settings = BRIEF
     protect_history()
     calls = []

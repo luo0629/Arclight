@@ -1,10 +1,11 @@
 from uuid import UUID, uuid4
 
+import pytest
 from sqlalchemy import func, select
 
 from arclight.application.runtime import execute_run
 from arclight.main import create_app
-from arclight.persistence.models import OutboxEvent, Review, Script, Shot, Storyboard
+from arclight.persistence.models import OutboxEvent, Review, Script, Shot, Storyboard, WorkflowRun
 
 
 def start(client, episode, key="first", story="雨夜，主角在街角发现一封信。"):
@@ -94,13 +95,18 @@ def test_uniform_run_contract_freezes_inputs_reports_versions_usage_and_results(
         for value in ("api_key", "encrypted_key", "input_json", "resume_json")
     )
 
-    from arclight.persistence.models import Project
+    from arclight.persistence.models import Project, WorkflowRun
 
     with client.app.state.session_factory.begin() as db:
+        run = db.get(WorkflowRun, UUID(run_id))
+        frozen_agent_input = run.agent_state_json["input_sha256"]
         project = db.get(Project, UUID(episode["project_id"]))
         project.style_guide = {"changed_after_start": True}
     unchanged = client.get(f"/api/v1/runs/{run_id}").json()
     assert unchanged["contract"]["input_snapshot"] == contract["input_snapshot"]
+    with client.app.state.session_factory() as db:
+        saved_agent_input = db.get(WorkflowRun, UUID(run_id)).agent_state_json["input_sha256"]
+        assert saved_agent_input == frozen_agent_input
 
     pending = advance(client, settings, run_id)
     contract = pending["contract"]
@@ -129,6 +135,206 @@ def test_uniform_run_contract_freezes_inputs_reports_versions_usage_and_results(
     assert len(contract["result"]["artifact_ids"]) == 2
     listed = client.get(f"/api/v1/episodes/{episode['id']}/runs").json()
     assert listed[0]["contract"] == contract
+
+
+def test_agent_state_persists_with_runtime_and_remains_private(client, episode, settings):
+    from arclight.persistence.models import WorkflowRun
+
+    story = "agent-state-secret-input"
+    run_id = start(client, episode, key="agent-state", story=story).json()["run_id"]
+    initial = client.get(f"/api/v1/runs/{run_id}").json()
+    assert "agent_state" not in initial and "agent_state_json" not in initial
+
+    pending = advance(client, settings, run_id)
+    assert pending["status"] == "WAITING_REVIEW"
+    with client.app.state.session_factory() as db:
+        run = db.get(WorkflowRun, UUID(run_id))
+        state = run.agent_state_json
+        original_inputs = dict(run.input_json)
+    assert state["schema_version"] == 1
+    assert state["status"] == "WAITING_REVIEW"
+    assert state["steps"][0]["status"] == "SUCCEEDED"
+    assert state["steps"][1]["status"] == "WAITING_REVIEW"
+    assert state["working_drafts"][0]["artifact_id"] == pending["pending_review"]["version_id"]
+    assert story not in str(state)
+
+    from fastapi.testclient import TestClient
+
+    from arclight.main import create_app
+
+    with TestClient(create_app(settings)) as restarted:
+        restarted.headers["Authorization"] = "Bearer test-token"
+        resumed = review(restarted, pending)
+        assert resumed.status_code == 202, resumed.text
+        advanced = advance(restarted, settings, run_id)
+        assert advanced["status"] == "WAITING_REVIEW"
+
+    with client.app.state.session_factory() as db:
+        run = db.get(WorkflowRun, UUID(run_id))
+        assert run.agent_state_json["steps"][1]["status"] == "SUCCEEDED"
+        assert run.agent_state_json["steps"][2]["status"] == "SUCCEEDED"
+        assert run.agent_state_json["steps"][3]["status"] == "WAITING_REVIEW"
+        assert run.input_json == original_inputs
+
+
+def test_agent_state_migration_preserves_legacy_run_and_is_protected_on_downgrade(
+    settings, migrated, episode
+):
+    from alembic import command
+    from fastapi.testclient import TestClient
+    from sqlalchemy import create_engine, inspect, text
+
+    from arclight.application.workflow_contracts import serialize_run
+
+    with TestClient(create_app(settings)) as client:
+        client.headers["Authorization"] = "Bearer test-token"
+        run_id = start(client, episode, key="legacy-state-migration").json()["run_id"]
+        with client.app.state.session_factory.begin() as db:
+            run = db.get(WorkflowRun, UUID(run_id))
+            run.agent_state_json = None
+        with client.app.state.session_factory() as db:
+            run = db.get(WorkflowRun, UUID(run_id))
+            assert serialize_run(db, run)["status"] == "QUEUED"
+
+        command.downgrade(migrated, "0042")
+        engine = create_engine(settings.database_url)
+        try:
+            assert "agent_state_json" not in {
+                item["name"] for item in inspect(engine).get_columns("workflow_runs")
+            }
+        finally:
+            engine.dispose()
+        engine = create_engine(settings.database_url)
+        try:
+            with engine.connect() as connection:
+                assert connection.scalar(text("SELECT count(*) FROM workflow_runs")) == 1
+        finally:
+            engine.dispose()
+        command.upgrade(migrated, "head")
+        engine = create_engine(settings.database_url)
+        try:
+            assert "agent_state_json" in {
+                item["name"] for item in inspect(engine).get_columns("workflow_runs")
+            }
+        finally:
+            engine.dispose()
+        response = client.get(f"/api/v1/runs/{run_id}")
+        assert response.status_code == 200
+        assert response.json()["status"] == "QUEUED"
+        with client.app.state.session_factory() as db:
+            assert db.get(WorkflowRun, UUID(run_id)).agent_state_json is None
+        with client.app.state.session_factory.begin() as db:
+            run = db.get(WorkflowRun, UUID(run_id))
+            run.agent_state_json = {
+                "schema_version": 1,
+                "run_id": str(run.id),
+                "project_id": episode["project_id"],
+                "workflow_type": run.workflow_type,
+                "workflow_version": run.workflow_version,
+                "input_sha256": "a" * 64,
+                "revision": 0,
+                "status": "RUNNING",
+                "plan": [{"step_id": "script", "operation": "DRAFT_SCRIPT"}],
+                "steps": [{"step_id": "script", "status": "PENDING"}],
+                "tool_call_refs": [],
+                "observation_refs": [],
+                "working_drafts": [],
+                "termination_reason": None,
+                "extensions": {},
+            }
+
+    with pytest.raises(RuntimeError, match="Agent runtime state exists"):
+        command.downgrade(migrated, "0042")
+
+
+def test_checkpoint_cannot_replace_frozen_input_before_resume(client, episode, settings):
+    from arclight.providers.text import MockTextProvider
+    from arclight.workflows.checkpoints import open_checkpointer
+    from arclight.workflows.production import Artifacts, build_graph
+
+    run_id = start(client, episode).json()["run_id"]
+    pending = advance(client, settings, run_id)
+    with open_checkpointer(settings) as saver:
+        graph = build_graph(MockTextProvider(), Artifacts(), saver)
+        graph.update_state({"configurable": {"thread_id": run_id}}, {"story": "changed input"})
+    assert review(client, pending).status_code == 202
+    assert advance(client, settings, run_id)["status"] == "FAILED"
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(Storyboard)) == 0
+        assert db.get(WorkflowRun, UUID(run_id)).input_json["story"] != "changed input"
+
+
+def test_legacy_text_checkpoint_migrates_and_resumes_in_actual_runtime(client, episode, settings):
+    from arclight.application.artifacts import ArtifactStore
+    from arclight.application.context_sources import public_startup
+    from arclight.providers.text import MockTextProvider
+    from arclight.workflows.checkpoints import open_checkpointer
+    from arclight.workflows.production import build_graph
+
+    run_id = start(client, episode).json()["run_id"]
+    with client.app.state.session_factory.begin() as db:
+        run = db.get(WorkflowRun, UUID(run_id))
+        run.agent_state_json = None
+        inputs = public_startup(run.input_json)
+    store = ArtifactStore(
+        client.app.state.session_factory,
+        UUID(run_id),
+        UUID(episode["id"]),
+        inputs["target_duration_ms"],
+        settings.text_duration_tolerance_percent,
+    )
+    with open_checkpointer(settings) as saver:
+        legacy_graph = build_graph(MockTextProvider(), store, saver)
+        config = {"configurable": {"thread_id": run_id}}
+        legacy_graph.invoke({"run_id": run_id, **inputs}, config, durability="sync")
+        assert "agent_state" not in legacy_graph.get_state(config).values
+    pending = advance(client, settings, run_id)
+    assert pending["status"] == "WAITING_REVIEW"
+    with client.app.state.session_factory() as db:
+        state = db.get(WorkflowRun, UUID(run_id)).agent_state_json
+        assert state["schema_version"] == 1
+        assert state["steps"][0]["status"] == "SUCCEEDED"
+        assert len(state["working_drafts"]) == 1
+    assert review(client, pending).status_code == 202
+    assert advance(client, settings, run_id)["pending_review"]["resource_type"] == "storyboard"
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(Script)) == 1
+
+
+def test_run_and_checkpoint_state_from_another_project_is_rejected(client, episode, settings):
+    from arclight.application.production_versions import input_summary
+    from arclight.domain.agent_state import AgentRunScope, initial_agent_state
+    from arclight.domain.versions import digest
+    from arclight.persistence.models import Episode
+
+    project = client.post("/api/v1/projects", json={"name": "隔离项目"})
+    other_episode = client.post(
+        f"/api/v1/projects/{project.json()['id']}/episodes",
+        json={"episode_no": 1, "title": "隔离剧集", "target_duration_ms": 30000},
+    )
+    assert other_episode.status_code == 201
+    first_run_id = start(client, episode, key="first-isolation").json()["run_id"]
+    second_run_id = start(client, other_episode.json(), key="second-isolation").json()["run_id"]
+    with client.app.state.session_factory.begin() as db:
+        first = db.get(WorkflowRun, UUID(first_run_id))
+        second = db.get(WorkflowRun, UUID(second_run_id))
+        first_state = initial_agent_state(
+            AgentRunScope(
+                run_id=first.id,
+                project_id=db.get(Episode, first.episode_id).project_id,
+                workflow_type=first.workflow_type,
+                workflow_version=first.workflow_version,
+                input_sha256=digest(input_summary(first.input_json)),
+            )
+        )
+        second.agent_state_json = first_state.model_dump(mode="json")
+    response = client.get(f"/api/v1/runs/{second_run_id}")
+    assert response.status_code == 200
+    execute_run(client.app.state.session_factory, settings, UUID(second_run_id), 0)
+    with client.app.state.session_factory() as db:
+        second = db.get(WorkflowRun, UUID(second_run_id))
+        assert second.status == "FAILED"
+        assert second.agent_state_json == first_state.model_dump(mode="json")
 
 
 def test_legacy_run_without_version_binding_remains_readable(client, episode):
@@ -248,15 +454,23 @@ def test_rejection_stops_before_storyboard(client, episode, settings):
     run_id = start(client, episode).json()["run_id"]
     state = advance(client, settings, run_id)
     assert review(client, state, "REJECT").status_code == 202
-    assert advance(client, settings, run_id)["status"] == "REJECTED"
+    rejected = advance(client, settings, run_id)
+    assert rejected["status"] == "REJECTED"
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(Storyboard)) == 0
+        agent_state = db.get(WorkflowRun, UUID(run_id)).agent_state_json
+        assert agent_state["status"] == "REJECTED"
+        assert agent_state["termination_reason"] == "REVIEW_REJECTED"
 
 
 def test_cancel_queued_run_and_unknown_resource(client, episode, settings):
     run_id = start(client, episode).json()["run_id"]
     cancelled = client.post(f"/api/v1/runs/{run_id}/cancel").json()
     assert cancelled["status"] == "CANCELLED"
+    with client.app.state.session_factory() as db:
+        state = db.get(WorkflowRun, UUID(run_id)).agent_state_json
+        assert state["status"] == "CANCELLED"
+        assert state["termination_reason"] == "CANCELLED"
     assert cancelled["contract"]["finished_at"] is not None
     assert cancelled["contract"]["started_at"] is None
     assert advance(client, settings, run_id)["status"] == "CANCELLED"
@@ -282,10 +496,18 @@ def test_failure_is_sanitized_and_explicit_retry_recovers(client, episode, setti
     assert failed["error_code"] == "WORKFLOW_EXECUTION_FAILED"
     assert failed["contract"]["finished_at"] is not None
     assert failed["contract"]["retry_count"] == 0
+    with client.app.state.session_factory() as db:
+        failed_state = db.get(WorkflowRun, UUID(run_id)).agent_state_json
+        assert failed_state["status"] == "FAILED"
+        assert failed_state["termination_reason"] == "EXECUTION_FAILED"
     response = client.post(f"/api/v1/runs/{run_id}/retry")
     assert response.status_code == 202
     assert response.json()["contract"]["retry_count"] == 1
     assert response.json()["contract"]["finished_at"] is None
+    with client.app.state.session_factory() as db:
+        retry_state = db.get(WorkflowRun, UUID(run_id)).agent_state_json
+        assert retry_state["status"] == "RUNNING"
+        assert retry_state["termination_reason"] is None
     monkeypatch.setattr(runtime, "build_provider", lambda _: MockTextProvider())
     recovered = advance(client, settings, run_id)
     assert recovered["status"] == "WAITING_REVIEW"
@@ -321,11 +543,15 @@ def test_recovers_checkpoint_after_business_transaction_loss(client, episode, se
         run.status = "QUEUED"
         run.pending_review = None
         run.revision = 0
+        run.agent_state_json = None
     recovered = advance(client, settings, run_id)
     assert recovered["pending_review"] == state["pending_review"]
     assert recovered["status"] == "WAITING_REVIEW"
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(Script)) == 1
+        recovered_state = db.get(WorkflowRun, UUID(run_id)).agent_state_json
+        assert recovered_state["status"] == "WAITING_REVIEW"
+        assert recovered_state["steps"][0]["status"] == "SUCCEEDED"
 
 
 def test_failed_run_cannot_retry_when_another_run_is_active(client, episode):
@@ -374,6 +600,10 @@ def test_postgres_concurrent_duplicate_delivery(client, episode, settings, monke
     assert client.get(f"/api/v1/runs/{run_id}").json()["status"] == "WAITING_REVIEW"
     with factory() as db:
         assert db.scalar(select(func.count()).select_from(Script)) == 1
+        state = db.get(WorkflowRun, run_id).agent_state_json
+        assert state["revision"] == 2
+        assert state["steps"][0]["status"] == "SUCCEEDED"
+        assert len(state["working_drafts"]) == 1
 
 
 def test_transaction_commits_before_success_response(client):

@@ -104,6 +104,9 @@ def start_analysis(
     )
     db.add(run)
     db.flush()
+    from arclight.application.agent_runtime_state import initialize_run_state
+
+    initialize_run_state(run, episode.project_id)
     from arclight.application.production_versions import capture_text
 
     capture_text(db, episode.project_id, run, settings, actor=actor)

@@ -43,6 +43,7 @@ MUTABLE = {
     "character_confirmations": set(),
     "workflow_runs": {
         "status",
+        "agent_state_json",
         "pending_review",
         "resume_json",
         "error_code",

@@ -262,6 +262,22 @@ def migrated(settings, request):
     # This marker is test-only; ordinary business tests always start at head.
     target = "0018" if request.node.get_closest_marker("legacy_schema") else "head"
     command.upgrade(config, target)
+    if target == "0018":
+        from arclight.persistence.models import WorkflowRun
+
+        engine = create_engine(settings.database_url)
+        try:
+            columns = {column["name"] for column in inspect(engine).get_columns("workflow_runs")}
+            if "agent_state_json" not in columns:
+                column_type = WorkflowRun.__table__.c.agent_state_json.type.compile(
+                    dialect=engine.dialect
+                )
+                with engine.begin() as db:
+                    db.execute(
+                        text(f"ALTER TABLE workflow_runs ADD COLUMN agent_state_json {column_type}")
+                    )
+        finally:
+            engine.dispose()
     return config
 
 

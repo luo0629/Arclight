@@ -361,12 +361,14 @@ def test_binding_cannot_be_reassigned_and_legacy_absence_is_explicit(client, epi
 def test_upgrade_preserves_legacy_run_without_inventing_current_version_evidence(
     client, episode, settings, migrated, monkeypatch
 ):
-    command.downgrade(migrated, "0034")
     original = versions.capture_text
     monkeypatch.setattr(versions, "capture_text", lambda *args, **kwargs: None)
     run_id = start(client, episode).json()["run_id"]
-    with client.app.state.session_factory() as db:
-        before = deepcopy(db.get(WorkflowRun, UUID(run_id)).input_json)
+    with client.app.state.session_factory.begin() as db:
+        run = db.get(WorkflowRun, UUID(run_id))
+        run.agent_state_json = None
+        before = deepcopy(run.input_json)
+    command.downgrade(migrated, "0034")
     command.upgrade(migrated, "head")
     monkeypatch.setattr(versions, "capture_text", original)
     assert not bindings(client, episode, run_id)

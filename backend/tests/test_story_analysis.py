@@ -94,6 +94,7 @@ def test_extraction_is_independent_immutable_and_replayable(client, episode, set
         run = db.get(WorkflowRun, UUID(run_id))
         run.status = RunStatus.QUEUED
         run.revision = 0
+        saved_agent_state = copy.deepcopy(run.agent_state_json)
 
     def forbidden(*args):
         raise AssertionError("saved extraction must not construct a provider")
@@ -101,6 +102,8 @@ def test_extraction_is_independent_immutable_and_replayable(client, episode, set
     monkeypatch.setattr("arclight.application.story_analysis.build_provider", forbidden)
     execute(client, settings, run_id)
     assert client.get(f"/api/v1/runs/{run_id}").json()["status"] == "SUCCEEDED"
+    with client.app.state.session_factory() as db:
+        assert db.get(WorkflowRun, UUID(run_id)).agent_state_json == saved_agent_state
     assert calls == [text]
     assert client.get(detail_path).json() == detail
     with client.app.state.session_factory() as db:

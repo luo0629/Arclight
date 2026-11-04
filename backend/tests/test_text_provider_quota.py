@@ -22,6 +22,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayPolicy, GatewayUsage
 from arclight.domain.model_suppliers import supplier_by_id
 from arclight.persistence.model_gateway import GatewayCall
+from arclight.persistence.models import WorkflowRun
 from arclight.providers.text import MockTextProvider
 
 
@@ -74,6 +75,8 @@ def test_no_quote_or_project_cap_required_and_missing_money_stays_unknown(
     assert summary["unpriced_count"] == 1
     assert summary["actual_cost"] is None and summary["estimated_cost"] is None
     assert summary["projected_cost"] is None
+    with client.app.state.session_factory.begin() as db:
+        db.get(WorkflowRun, UUID(run_id)).agent_state_json = None
     with pytest.raises(RuntimeError, match="Unpriced text history"):
         command.downgrade(migrated, "0041")
     # The rejected downgrade rolls back. The same unknown quote and guards survive.
