@@ -202,14 +202,6 @@ def import_attempt(
                 with staging.open("rb") as stream:
                     staged = stream.read(MAX_IMAGE_BYTES + 1)
                 image = decode_image(base64.b64encode(staged).decode(), output.media_type)
-            spec = request.snapshot["context"]["generation"]["output_spec"]
-            if any(
-                spec.get(key, actual) != actual
-                for key, actual in (("width", image.width), ("height", image.height))
-            ) or spec.get("format", "png") not in (
-                {"png"} if image.media_type == "image/png" else {"jpeg", "jpg"}
-            ):
-                raise DomainError("GENERATION_OUTPUT_MISMATCH", "图片不匹配冻结的输出规格", 422)
         except DomainError as exc:
             if exc.status_code >= 500:
                 continue  # Temporary retrieval/storage failure remains durably pending.

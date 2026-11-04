@@ -53,6 +53,14 @@ def result_object_key(handle: str) -> str:
     return "provider-results/openai/" + hashlib.sha256(handle.encode()).hexdigest()
 
 
+def _actual_image_kind(data: bytes, requested_kind: str) -> str:
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "png"
+    if data.startswith(b"\xff\xd8"):
+        return "jpeg"
+    return requested_kind
+
+
 class OpenAIImageProvider:
     name = "openai"
     supports_idempotency = False
@@ -150,14 +158,15 @@ class OpenAIImageProvider:
                     raise ValueError
             except (ValueError, binascii.Error):
                 raise GatewayFailure("INVALID_RESPONSE") from None
+            actual_kind = _actual_image_kind(data, kind)
             checksum = hashlib.sha256(data).hexdigest()
             handle = (
                 f"openai/image/{request.job_id.hex}/{request.attempt_id.hex}/"
-                f"{index}/{checksum}.{kind}"
+                f"{index}/{checksum}.{actual_kind}"
             )
             key = result_object_key(handle)
             try:
-                self.store.put(key, data, "image/" + kind)
+                self.store.put(key, data, "image/" + actual_kind)
             except DomainError as exc:
                 if exc.code != "OBJECT_EXISTS":
                     raise GatewayFailure("PROVIDER_FAILED") from None

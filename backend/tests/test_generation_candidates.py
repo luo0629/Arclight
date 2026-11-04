@@ -135,7 +135,6 @@ class OutputFake:
     [
         (MediaOutput(b"broken", "image/png"), "INVALID_IMAGE"),
         (MediaOutput(image_bytes()[:-16], "image/png"), "INVALID_IMAGE"),
-        (MediaOutput(image_bytes(size=(9, 12)), "image/png"), "GENERATION_OUTPUT_MISMATCH"),
         (MediaOutput(image_bytes(), "image/jpeg"), "INVALID_IMAGE"),
         (MediaOutput(b"x" * (1024 * 1024 + 1), "image/png"), "INVALID_IMAGE"),
     ],

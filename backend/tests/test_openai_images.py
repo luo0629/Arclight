@@ -577,12 +577,15 @@ def test_image_endpoint_rejects_private_unsafe_or_secret_bearing_urls(endpoint):
 @pytest.mark.parametrize(
     "kind,size,error",
     [
-        ("PNG", (1024, 1024), "INVALID_IMAGE"),
-        ("PNG", (1254, 1254), "INVALID_IMAGE"),
-        ("JPEG", (1254, 1254), "GENERATION_OUTPUT_MISMATCH"),
+        ("PNG", (1024, 1024), None),
+        ("PNG", (1254, 1254), None),
+        ("JPEG", (1254, 1254), None),
+        ("PNG", (2001, 2000), "INVALID_IMAGE"),
+        ("PNG", (4097, 1), "INVALID_IMAGE"),
+        ("INVALID", (1, 1), "INVALID_IMAGE"),
     ],
 )
-def test_provider_ignoring_output_spec_keeps_failed_candidate_and_cost_evidence(
+def test_provider_output_variants_keep_actual_metadata_and_cost_evidence(
     configured, client, episode, kind, size, error
 ):
     project_id = episode["project_id"]
@@ -598,9 +601,8 @@ def test_provider_ignoring_output_spec_keeps_failed_candidate_and_cost_evidence(
         requests.append(request)
         assert json.loads(request.content)["size"] == "1024x1024"
         assert json.loads(request.content)["output_format"] == "jpeg"
-        return response(
-            success(data=[{"b64_json": base64.b64encode(image_bytes(kind, size)).decode()}])
-        )
+        data = b"not an image" if kind == "INVALID" else image_bytes(kind, size)
+        return response(success(data=[{"b64_json": base64.b64encode(data).decode()}]))
 
     provider = OpenAIImageProvider(configured, transport=httpx.MockTransport(handle))
     event = event_for(client, job)
@@ -612,7 +614,15 @@ def test_provider_ignoring_output_spec_keeps_failed_candidate_and_cost_evidence(
     assert import_attempt(factory, configured, attempt.id, provider) == 0
     rows = candidates(client, project_id, job)
     assert len(requests) == 1 and len(rows) == 1
-    assert rows[0]["error_code"] == error and rows[0]["asset_version_id"] is None
+    assert rows[0]["error_code"] == error
+    if error is None:
+        media = rows[0]["version"]["media"]
+        expected_media_type = "image/png" if kind == "PNG" else "image/jpeg"
+        assert rows[0]["asset_version_id"] is not None
+        assert media["media_type"] == expected_media_type
+        assert (media["width"], media["height"]) == size
+    else:
+        assert rows[0]["asset_version_id"] is None and rows[0]["version"] is None
     assert current(client, target)["current_version_id"] is None
     costs = client.get(f"/api/v1/projects/{project_id}/costs").json()["summary"]
     assert costs["entry_count"] == 1 and costs["pending_estimate"] == "0.500000"
