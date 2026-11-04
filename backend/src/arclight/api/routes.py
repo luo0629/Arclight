@@ -31,6 +31,7 @@ from arclight.application.commands import (
     retry_run,
     start_run,
 )
+from arclight.application.workflow_contracts import serialize_run
 from arclight.core.errors import DomainError
 from arclight.persistence.models import (
     Episode,
@@ -183,7 +184,7 @@ def create_storyboard_run(
 
 @router.get("/runs/{run_id}", tags=["workflows"])
 def get_run(run_id: UUID, db: Database, actor: Actor) -> RunRead:
-    return RunRead.model_validate(require_run(db, run_id, actor))
+    return RunRead.model_validate(serialize_run(db, require_run(db, run_id, actor)))
 
 
 @router.post("/runs/{run_id}/resume", tags=["workflows"], status_code=202)
@@ -193,14 +194,14 @@ def review_and_resume(
     run = require_run(db, run_id, actor, lock=True)
     resume_run(db, run, actor, payload, request.app.state.settings)
     db.flush()
-    return RunRead.model_validate(run)
+    return RunRead.model_validate(serialize_run(db, run))
 
 
 @router.post("/runs/{run_id}/cancel", tags=["workflows"])
 def cancel(run_id: UUID, db: Database, actor: Actor) -> RunRead:
     run = cancel_run(db, require_run(db, run_id, actor, lock=True))
     db.flush()
-    return RunRead.model_validate(run)
+    return RunRead.model_validate(serialize_run(db, run))
 
 
 @router.get("/runs/{run_id}/events", tags=["workflows"])
@@ -311,4 +312,4 @@ def get_shots(
 def retry(run_id: UUID, db: Database, actor: Actor) -> RunRead:
     run = retry_run(db, require_run(db, run_id, actor, lock=True))
     db.flush()
-    return RunRead.model_validate(run)
+    return RunRead.model_validate(serialize_run(db, run))

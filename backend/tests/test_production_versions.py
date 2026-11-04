@@ -125,6 +125,11 @@ def test_analysis_and_outline_bind_their_independent_output_versions(
     assert accepted.status_code == 202, accepted.text
     run_id = accepted.json()["run_id"]
     assert advance(client, settings, run_id)["status"] == "SUCCEEDED"
+    contract = client.get(f"/api/v1/runs/{run_id}").json()["contract"]
+    assert contract["task_type"] == ("story_analysis" if kind == "ANALYSIS" else "story_outline")
+    assert contract["result"]["status"] == "SUCCEEDED"
+    assert contract["result"]["requires_human_review"] == (kind == "OUTLINE")
+    assert contract["result"]["artifact_ids"]
     outputs = bindings(client, episode, kind=kind)
     assert len(outputs) == 1 and outputs[0]["snapshot_json"]["source_id"] == run_id
 
@@ -157,6 +162,10 @@ def test_director_and_rewrite_have_specific_templates_and_precise_source_version
     state = advance(client, settings, run_id)
     assert state["status"] == "WAITING_REVIEW", state
     assert bindings(client, episode, state["pending_review"]["version_id"])
+    contract = state["contract"]
+    assert contract["task_type"] == ("storyboard" if operation == "director" else "script_rewrite")
+    assert base["id"] in {entry["value"] for entry in contract["input_snapshot"]["references"]}
+    assert contract["result"]["artifact_ids"] == [state["pending_review"]["version_id"]]
 
 
 @pytest.mark.parametrize("changed", ["prompt", "schema", "agent"])
@@ -177,6 +186,7 @@ def test_incompatible_definitions_fail_before_provider_or_artifact_writes(
     monkeypatch.setattr(versions, "text_definitions", incompatible)
     state = advance(client, settings, run_id)
     assert state["status"] == "FAILED" and state["error_code"] == "PRODUCTION_VERSION_INCOMPATIBLE"
+    assert state["contract"]["versions"]["state"] == "INCOMPATIBLE"
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(Script)) == 0
     assert bindings(client, episode, run_id) == before
@@ -202,6 +212,13 @@ def test_model_parameters_and_exact_inputs_survive_server_configuration_changes(
         assert restored.llm_model == settings.llm_model
         assert restored.llm_timeout_seconds == settings.llm_timeout_seconds
         assert restored.text_duration_tolerance_percent == settings.text_duration_tolerance_percent
+        public = client.get(f"/api/v1/runs/{run_id}").json()["contract"]["versions"]
+        assert public["model"]["model"] == settings.llm_model
+        assert (
+            public["parameter_sha256"]
+            == bindings(client, episode)[0]["snapshot_json"]["parameter_sha256"]
+        )
+        assert "base_url" not in str(public) and "system_template" not in str(public)
         assert "encrypted_key" not in str(bindings(client, episode))
         source = versions.input_summary(run.input_json)
         assert source["sha256"] and source["references"]

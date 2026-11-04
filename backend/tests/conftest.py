@@ -170,6 +170,25 @@ def historical_content_registry(request, monkeypatch):
     monkeypatch.setattr(gateway_accounting, "costs", legacy_gateway_costs)
     monkeypatch.setattr(gateway_text, "invoke_text", legacy_gateway_call)
 
+    from arclight.application import workflow_contracts
+    from arclight.domain.workflow_contracts import RunUsage
+
+    original_binding = workflow_contracts._binding
+    original_usage = workflow_contracts._usage
+
+    def legacy_binding(db, *args, **kwargs):
+        if inspect(db.get_bind()).has_table("version_bindings"):
+            return original_binding(db, *args, **kwargs)
+        return None
+
+    def legacy_usage(db, *args, **kwargs):
+        if inspect(db.get_bind()).has_table("model_gateway_calls"):
+            return original_usage(db, *args, **kwargs)
+        return RunUsage(total_calls=0, calls=[])
+
+    monkeypatch.setattr(workflow_contracts, "_binding", legacy_binding)
+    monkeypatch.setattr(workflow_contracts, "_usage", legacy_usage)
+
     original_record = asset_versions.record_asset_file
 
     def record_on_current_schema(db, *args, **kwargs):

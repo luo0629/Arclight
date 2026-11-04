@@ -14,6 +14,7 @@ from pydantic import (
 
 from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
 from arclight.domain.project_settings import ProjectStorySettings
+from arclight.domain.workflow_contracts import WorkflowRunContract
 
 
 class Input(BaseModel):
@@ -93,6 +94,7 @@ class RunRead(Resource):
     pending_review: dict | None
     error_code: str | None
     revision: int
+    contract: WorkflowRunContract
 
 
 class AcceptedRun(BaseModel):

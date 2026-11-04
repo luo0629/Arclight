@@ -64,6 +64,142 @@ def test_idempotency_and_duplicate_episode(client, episode):
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
+def test_uniform_run_contract_freezes_inputs_reports_versions_usage_and_results(
+    client, episode, settings
+):
+    story = "私密运行输入-8fca0b44"
+    run_id = start(client, episode, key="contract-fixture", story=story).json()["run_id"]
+    initial = client.get(f"/api/v1/runs/{run_id}").json()
+    contract = initial["contract"]
+    assert contract["schema_version"] == 1
+    assert contract["run_id"] == run_id
+    assert contract["project_id"] == episode["project_id"]
+    assert contract["episode_id"] == episode["id"]
+    assert contract["requested_by"]
+    assert contract["task_type"] == "script_storyboard"
+    assert contract["requested_at"].startswith(initial["created_at"][:19])
+    assert contract["started_at"] is None and contract["finished_at"] is None
+    assert contract["retry_count"] == 0
+    assert contract["input_snapshot"]["sha256"]
+    assert contract["versions"]["state"] == "BOUND"
+    assert contract["versions"]["model"]["provider"] == "mock"
+    assert contract["versions"]["parameter_sha256"]
+    assert {item["family"] for item in contract["versions"]["components"]} == {"TEXT"}
+    assert contract["budget"]["scope"] == "project"
+    assert contract["usage"]["calls"] == []
+    assert contract["result"] is None
+    assert story not in str(initial)
+    assert all(
+        value not in str(initial)
+        for value in ("api_key", "encrypted_key", "input_json", "resume_json")
+    )
+
+    from arclight.persistence.models import Project
+
+    with client.app.state.session_factory.begin() as db:
+        project = db.get(Project, UUID(episode["project_id"]))
+        project.style_guide = {"changed_after_start": True}
+    unchanged = client.get(f"/api/v1/runs/{run_id}").json()
+    assert unchanged["contract"]["input_snapshot"] == contract["input_snapshot"]
+
+    pending = advance(client, settings, run_id)
+    contract = pending["contract"]
+    result = contract["result"]
+    assert contract["started_at"] is not None and contract["finished_at"] is None
+    assert pending["status"] == "WAITING_REVIEW"
+    assert result["result_id"]
+    assert result["status"] == "WAITING_REVIEW"
+    assert result["requires_human_review"] is True
+    assert result["artifact_ids"] == [pending["pending_review"]["version_id"]]
+    assert contract["usage"]["calls"]
+    assert {call["status"] for call in contract["usage"]["calls"]} == {"SUCCEEDED"}
+    assert "actual_cost" in contract["usage"]["calls"][0]["usage"]
+    assert story not in str(pending)
+
+    assert review(client, pending).status_code == 202
+    storyboard_review = advance(client, settings, run_id)
+    assert storyboard_review["status"] == "WAITING_REVIEW"
+    assert review(client, storyboard_review).status_code == 202
+    completed = advance(client, settings, run_id)
+    contract = completed["contract"]
+    assert completed["status"] == "SUCCEEDED"
+    assert contract["finished_at"] is not None
+    assert contract["result"]["status"] == "SUCCEEDED"
+    assert contract["result"]["requires_human_review"] is False
+    assert len(contract["result"]["artifact_ids"]) == 2
+    listed = client.get(f"/api/v1/episodes/{episode['id']}/runs").json()
+    assert listed[0]["contract"] == contract
+
+
+def test_legacy_run_without_version_binding_remains_readable(client, episode):
+    from arclight.persistence.models import WorkflowRun
+
+    with client.app.state.session_factory.begin() as db:
+        run = WorkflowRun(
+            episode_id=UUID(episode["id"]),
+            workflow_type="story_analysis",
+            workflow_version="legacy-1",
+            status="SUCCEEDED",
+            trace_id="legacy-trace",
+            idempotency_key="legacy-unbound",
+            request_fingerprint="0" * 64,
+            input_json={
+                "story": "legacy private input",
+                "untrusted_asset_id": "private-inline-reference",
+                "_text_service": {"encrypted_key": "private-encrypted-fixture"},
+            },
+        )
+        db.add(run)
+        db.flush()
+        run_id = run.id
+
+    response = client.get(f"/api/v1/runs/{run_id}")
+    assert response.status_code == 200, response.text
+    value = response.json()
+    assert value["status"] == "SUCCEEDED"
+    assert value["contract"]["versions"] == {
+        "state": "LEGACY_UNBOUND",
+        "workflow_version": "legacy-1",
+        "components": [],
+        "model": None,
+        "parameter_sha256": None,
+    }
+    assert value["contract"]["result"] is None
+    assert value["contract"]["requested_by"] is None
+    assert value["contract"]["started_at"] is None
+    assert value["contract"]["finished_at"] is None
+    assert value["contract"]["budget"]["origin"] == "UNKNOWN"
+    assert value["contract"]["budget"]["cost_estimate"] is None
+    assert value["contract"]["input_snapshot"]["references"] == []
+    assert "legacy private input" not in response.text
+    assert "private-inline-reference" not in response.text
+    assert "private-encrypted-fixture" not in response.text
+
+
+def test_invalid_legacy_contract_returns_a_sanitized_error(client, episode):
+    from arclight.persistence.models import WorkflowRun
+
+    with client.app.state.session_factory.begin() as db:
+        run = WorkflowRun(
+            episode_id=UUID(episode["id"]),
+            workflow_type="story_analysis",
+            workflow_version="legacy-1",
+            status="SUCCEEDED",
+            trace_id="Bearer private-legacy-fixture",
+            idempotency_key="legacy-invalid",
+            request_fingerprint="0" * 64,
+            input_json={"story": "private input from legacy record"},
+        )
+        db.add(run)
+        db.flush()
+        run_id = run.id
+    response = client.get(f"/api/v1/runs/{run_id}")
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "RUN_CONTRACT_INVALID"
+    assert "private-legacy-fixture" not in response.text
+    assert "private input" not in response.text
+
+
 def test_persistent_workflow_and_version_bound_reviews(client, episode, settings):
     created = start(client, episode)
     run_id = created.json()["run_id"]
@@ -79,6 +215,7 @@ def test_persistent_workflow_and_version_bound_reviews(client, episode, settings
             restarted.get(f"/api/v1/runs/{run_id}").json()["pending_review"]
             == state["pending_review"]
         )
+        assert restarted.get(f"/api/v1/runs/{run_id}").json()["contract"] == state["contract"]
     stale = {
         **state["pending_review"],
         "version_id": str(uuid4()),
@@ -118,7 +255,10 @@ def test_rejection_stops_before_storyboard(client, episode, settings):
 
 def test_cancel_queued_run_and_unknown_resource(client, episode, settings):
     run_id = start(client, episode).json()["run_id"]
-    assert client.post(f"/api/v1/runs/{run_id}/cancel").json()["status"] == "CANCELLED"
+    cancelled = client.post(f"/api/v1/runs/{run_id}/cancel").json()
+    assert cancelled["status"] == "CANCELLED"
+    assert cancelled["contract"]["finished_at"] is not None
+    assert cancelled["contract"]["started_at"] is None
     assert advance(client, settings, run_id)["status"] == "CANCELLED"
     assert client.get(f"/api/v1/runs/{uuid4()}").status_code == 404
     assert client.get(f"/api/v1/projects/{uuid4()}").status_code == 404
@@ -140,9 +280,17 @@ def test_failure_is_sanitized_and_explicit_retry_recovers(client, episode, setti
     assert failed["status"] == "FAILED"
     assert "secret-provider-key" not in str(failed)
     assert failed["error_code"] == "WORKFLOW_EXECUTION_FAILED"
-    assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
+    assert failed["contract"]["finished_at"] is not None
+    assert failed["contract"]["retry_count"] == 0
+    response = client.post(f"/api/v1/runs/{run_id}/retry")
+    assert response.status_code == 202
+    assert response.json()["contract"]["retry_count"] == 1
+    assert response.json()["contract"]["finished_at"] is None
     monkeypatch.setattr(runtime, "build_provider", lambda _: MockTextProvider())
-    assert advance(client, settings, run_id)["status"] == "WAITING_REVIEW"
+    recovered = advance(client, settings, run_id)
+    assert recovered["status"] == "WAITING_REVIEW"
+    assert recovered["contract"]["retry_count"] == 1
+    assert recovered["contract"]["result"]["warnings"] == []
     assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 409
 
 

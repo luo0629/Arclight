@@ -12,6 +12,7 @@ from arclight.api.schemas import EpisodeRead, Input, ProjectRead, RunRead
 from arclight.application.audit import audit as audit
 from arclight.application.commands import require_episode, require_project
 from arclight.application.visual_bible import append_version
+from arclight.application.workflow_contracts import serialize_run
 from arclight.core.errors import DomainError
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.persistence.models import (
@@ -275,7 +276,7 @@ def runs(
 ) -> list[RunRead]:
     require_episode(db, episode_id, actor)
     return [
-        RunRead.model_validate(row)
+        RunRead.model_validate(serialize_run(db, row))
         for row in db.scalars(
             select(WorkflowRun)
             .where(WorkflowRun.episode_id == episode_id)
