@@ -12,10 +12,10 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from pydantic import ValidationError
 
 from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.core.errors import DomainError
+from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.model_suppliers import SUPPLIERS
 from arclight.providers import network
 from arclight.providers.text import OpenAICompatibleTextProvider
@@ -294,5 +294,13 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
         assert "max_tokens" in body and "JSON Schema" in body["messages"][0]["content"]
     assert (body.get("thinking") == {"type": "disabled"}) == (supplier.id == "deepseek")
     assert provider.last_usage.input_tokens == 4
-    with pytest.raises(ValidationError):
+    with pytest.raises(GatewayFailure) as caught:
         provider.analyze("story")
+    assert caught.value.code == "INVALID_RESPONSE"
+    assert caught.value.completed and not caught.value.not_accepted
+    assert caught.value.usage == provider.last_usage
+    assert caught.value.usage.input_tokens == 4
+    assert caught.value.usage.output_tokens == 8
+    assert caught.value.usage.actual_cost is None
+    assert str(caught.value) == "Model service call failed"
+    assert len(sent) == 2
