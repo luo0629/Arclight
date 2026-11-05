@@ -77,7 +77,8 @@ def test_no_quote_or_project_cap_required_and_missing_money_stays_unknown(
     assert summary["projected_cost"] is None
     with client.app.state.session_factory.begin() as db:
         db.get(WorkflowRun, UUID(run_id)).agent_state_json = None
-    with pytest.raises(RuntimeError, match="Unpriced text history"):
+    # The new append-only stage history is now the first downgrade guard.
+    with pytest.raises(RuntimeError, match="Production event history exists"):
         command.downgrade(migrated, "0041")
     # The rejected downgrade rolls back. The same unknown quote and guards survive.
     with client.app.state.session_factory() as db:
@@ -92,6 +93,47 @@ def test_no_quote_or_project_cap_required_and_missing_money_stays_unknown(
             text("UPDATE model_gateway_calls SET maximum_cost=0 WHERE id=:id"),
             {"id": identity.hex if db.bind.dialect.name == "sqlite" else identity},
         )
+
+
+def test_pre_stage_schema_still_protects_unpriced_text_history(
+    settings, migrated, monkeypatch, text_service
+):
+    from fastapi.testclient import TestClient
+    from legacy_outbox import OutboxEvent as LegacyOutboxEvent
+    from test_collaboration import create_project
+
+    from arclight.application import commands, production_events
+    from arclight.main import create_app
+
+    # Seed the actual schema immediately before stage notifications existed.
+    # These patches model only the old writer; current-schema coverage above
+    # always writes real production events and retains their earlier guard.
+    command.downgrade(migrated, "0047")
+    monkeypatch.setattr(commands, "OutboxEvent", LegacyOutboxEvent)
+    monkeypatch.setattr(production_events, "enqueue_text", lambda db, run: None)
+    text_service(script_response)
+    with TestClient(create_app(settings)) as client:
+        client.headers["Authorization"] = "Bearer test-token"
+        project = create_project(client)
+        response = client.post(
+            f"/api/v1/projects/{project['id']}/episodes",
+            json={
+                "episode_no": 1,
+                "title": "旧版费用记录",
+                "target_duration_ms": 30000,
+            },
+        )
+        assert response.status_code == 201
+        run_id = start(client, response.json()).json()["run_id"]
+        assert advance(client, settings, run_id)["status"] == "WAITING_REVIEW"
+        with client.app.state.session_factory.begin() as db:
+            db.get(WorkflowRun, UUID(run_id)).agent_state_json = None
+        with pytest.raises(RuntimeError, match="Unpriced text history"):
+            command.downgrade(migrated, "0041")
+        with client.app.state.session_factory() as db:
+            assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0047"
+            call = db.scalar(select(GatewayCall).where(GatewayCall.workflow_id == UUID(run_id)))
+            assert call.maximum_cost is None
 
 
 @pytest.mark.parametrize(
