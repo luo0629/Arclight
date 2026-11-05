@@ -95,6 +95,17 @@ def require_run(db: Session, run_id: UUID, actor: str, *, lock: bool = False) ->
 
 def emit(db: Session, run: WorkflowRun, event_type: str, payload: dict | None = None) -> None:
     db.add(WorkflowEvent(run_id=run.id, event_type=event_type, payload_json=payload or {}))
+    if event_type in {
+        "review.submitted",
+        "workflow.waiting_review",
+        "workflow.finished",
+        "workflow.failed",
+        "workflow.cancelled",
+        "workflow.retry_requested",
+    }:
+        from arclight.application.production_events import enqueue_text
+
+        enqueue_text(db, run)
 
 
 def start_run(

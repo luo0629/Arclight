@@ -73,11 +73,24 @@ def historical_content_registry(request, monkeypatch):
     """
     if request.node.get_closest_marker("legacy_schema") is None:
         return
+    import legacy_outbox
     import legacy_story_sources
 
     from arclight.api import rights
     from arclight.api import story_sources as source_api
-    from arclight.application import commands, story_analysis, story_outline, story_sources
+    from arclight.application import (
+        commands,
+        script_rewrite,
+        story_analysis,
+        story_outline,
+        story_sources,
+    )
+
+    # These explicit historical seeds use the old workflow-only table. Once at
+    # head this writer still creates valid workflow messages; stage messages use
+    # their real current model and are never hidden from ordinary tests.
+    for module in (commands, script_rewrite, story_analysis, story_outline):
+        monkeypatch.setattr(module, "OutboxEvent", legacy_outbox.OutboxEvent)
 
     # Explicit historical-schema fixtures exercise the frozen database writer.
     # Ordinary/current-schema tests always use real private objects and current code.
@@ -102,7 +115,17 @@ def historical_content_registry(request, monkeypatch):
 
         return seeded
 
-    from arclight.application import production_versions
+    from arclight.application import production_events, production_versions
+
+    original_enqueue_text = production_events.enqueue_text
+
+    def current_stage_events(db, *args, **kwargs):
+        if inspect(db.get_bind()).has_table("production_events"):
+            return original_enqueue_text(db, *args, **kwargs)
+        return None
+
+    # Historical seeds predate stage notifications; current-schema tests never skip them.
+    monkeypatch.setattr(production_events, "enqueue_text", current_stage_events)
 
     def current_versions(function):
         def wrapped(db, *args, **kwargs):

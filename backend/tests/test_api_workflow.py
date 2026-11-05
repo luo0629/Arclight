@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -78,7 +79,10 @@ def test_uniform_run_contract_freezes_inputs_reports_versions_usage_and_results(
     assert contract["episode_id"] == episode["id"]
     assert contract["requested_by"]
     assert contract["task_type"] == "script_storyboard"
-    assert contract["requested_at"].startswith(initial["created_at"][:19])
+    created_at = datetime.fromisoformat(initial["created_at"])
+    if created_at.tzinfo is None:
+        created_at = created_at.replace(tzinfo=UTC)
+    assert datetime.fromisoformat(contract["requested_at"]) == created_at
     assert contract["started_at"] is None and contract["finished_at"] is None
     assert contract["retry_count"] == 0
     assert contract["input_snapshot"]["sha256"]
@@ -523,13 +527,19 @@ def test_outbox_redelivers_until_consumed(client, episode, settings, monkeypatch
     deliveries = []
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     monkeypatch.setattr(tasks.execute_workflow, "apply_async", lambda **kw: deliveries.append(kw))
+    stage_deliveries = []
+    monkeypatch.setattr(
+        tasks.coordinate_production, "apply_async", lambda **kw: stage_deliveries.append(kw)
+    )
     tasks.dispatch_outbox.run()
     tasks.dispatch_outbox.run()
     assert len(deliveries) == 2
+    assert stage_deliveries == []
     assert deliveries[0]["args"] == [run_id, 0]
     advance(client, settings, run_id)
     tasks.dispatch_outbox.run()
     assert len(deliveries) == 2
+    assert len(stage_deliveries) == 1
 
 
 def test_recovers_checkpoint_after_business_transaction_loss(client, episode, settings):

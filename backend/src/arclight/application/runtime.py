@@ -266,6 +266,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 )
                 run.agent_state_json = agent_state.model_dump(mode="json")
                 run.resume_json = None
+                run.revision += 1
                 if snapshot.interrupts:
                     run.status = RunStatus.WAITING_REVIEW
                     run.pending_review = snapshot.interrupts[0].value
@@ -280,7 +281,6 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     run.status = RunStatus.SUCCEEDED if approved else RunStatus.REJECTED
                     run.pending_review = None
                     emit(db, run, "workflow.finished", {"status": run.status})
-                run.revision += 1
         except Exception as exc:
             # 不把供应商响应、凭证、输入正文或内部路径写到业务错误响应。
             logger.error(

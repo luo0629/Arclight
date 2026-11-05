@@ -8,6 +8,7 @@ from arclight.application.generation_events import publish_dispatches
 from arclight.application.generation_leases import LeasePolicy
 from arclight.application.generation_queues import QUEUES, claim_recovery_scan
 from arclight.application.generation_recovery import recover_job, recovery_candidates
+from arclight.application.production_events import consume_stage_event, publish_stage_events
 from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
 from arclight.core.config import Settings, get_settings
@@ -108,6 +109,21 @@ def publish_generation(
     )
 
 
+@celery_app.task(name="arclight.coordinate_production")
+def coordinate_production(event_id: str) -> str:
+    settings = get_settings()
+    engine = build_engine(settings)
+    try:
+        result = consume_stage_event(session_factory(engine, settings), UUID(event_id))
+        return result.disposition
+    finally:
+        engine.dispose()
+
+
+def publish_production(event_id: UUID) -> None:
+    coordinate_production.apply_async(args=[str(event_id)], queue="scheduler.control")
+
+
 @celery_app.task(name="arclight.import_generation_candidates")
 def import_generation_candidates(attempt_id: str) -> int:
     settings = get_settings()
@@ -152,6 +168,7 @@ def dispatch_outbox() -> None:
         publish_dispatches(
             session_factory(engine, settings), publish_generation, settings.media_execution_policy
         )
+        publish_stage_events(session_factory(engine, settings), publish_production)
         for attempt_id in pending_attempts(session_factory(engine, settings)):
             import_generation_candidates.apply_async(args=[str(attempt_id)])
         if claim_recovery_scan(session_factory(engine, settings)):

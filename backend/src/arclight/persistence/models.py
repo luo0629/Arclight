@@ -26,6 +26,8 @@ from arclight.persistence.generation_candidates import GenerationCandidate as Ge
 from arclight.persistence.generation_queues import GenerationLane as GenerationLane
 from arclight.persistence.generation_scheduling import GenerationSchedule as GenerationSchedule
 from arclight.persistence.model_gateway import GatewayCall as GatewayCall
+from arclight.persistence.production_events import ProductionEvent as ProductionEvent
+from arclight.persistence.production_events import ProductionEventReceipt as ProductionEventReceipt
 from arclight.persistence.rendering import RenderExecution as RenderExecution
 from arclight.persistence.versions import ProductionVersion as ProductionVersion
 from arclight.persistence.versions import VersionBinding as VersionBinding
@@ -363,12 +365,24 @@ class WorkflowEvent(Entity, Base):
 
 class OutboxEvent(Entity, Base):
     __tablename__ = "outbox_events"
-    run_id: Mapped[UUID] = mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    run_id: Mapped[UUID | None] = mapped_column(ForeignKey("workflow_runs.id"), index=True)
+    production_event_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("production_events.id"), unique=True
+    )
     event_type: Mapped[str] = mapped_column(String(64), default="workflow.execute")
     revision: Mapped[int]
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     attempt_count: Mapped[int] = mapped_column(default=0)
-    __table_args__ = (UniqueConstraint("run_id", "revision"),)
+    __table_args__ = (
+        UniqueConstraint("run_id", "revision"),
+        CheckConstraint(
+            "(run_id IS NOT NULL AND production_event_id IS NULL "
+            "AND event_type = 'workflow.execute') OR "
+            "(run_id IS NULL AND production_event_id IS NOT NULL "
+            "AND event_type = 'production.coordinate')",
+            name="outbox_target",
+        ),
+    )
 
 
 class VisualAsset(Entity, Base):

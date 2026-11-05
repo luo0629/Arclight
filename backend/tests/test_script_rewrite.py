@@ -465,7 +465,22 @@ def test_postgres_rewrite_start_and_delivery_are_serialized(client, episode, set
     assert calls == [1]
     assert len(scripts(client, episode)) == 2
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(OutboxEvent)
+                .where(OutboxEvent.run_id == UUID(run_id))
+            )
+            == 1
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(OutboxEvent)
+                .where(OutboxEvent.production_event_id.is_not(None))
+            )
+            == 1
+        )
 
 
 def test_custom_service_snapshot_is_used_and_never_enters_checkpoint(client, settings, monkeypatch):
