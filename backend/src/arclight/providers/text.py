@@ -19,6 +19,7 @@ from arclight.core.config import Settings
 from arclight.domain.context import check_call
 from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
 from arclight.domain.project_settings import ProjectStorySettings
+from arclight.providers.chat import completed_message, raise_for_provider_status, response_usage
 from arclight.providers.network import PublicHTTPTransport
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
@@ -149,41 +150,6 @@ class MockTextProvider:
         )
 
 
-def _raise_for_provider_status(response: httpx.Response) -> None:
-    """Only structured rejection codes are exposed; provider messages stay private."""
-    if not response.is_error:
-        return
-    codes = set()
-    try:
-        body = response.json()
-        error = body.get("error", {}) if isinstance(body, dict) else {}
-        if isinstance(error, dict):
-            codes = {str(error.get(field, "")).lower() for field in ("code", "type")}
-    except ValueError:
-        pass
-    quota_codes = {
-        "insufficient_quota",
-        "insufficient_balance",
-        "balance_not_enough",
-        "quota_exceeded",
-        "billing_hard_limit_reached",
-        "credit_balance_too_low",
-        "1113",
-    }
-    status = response.status_code
-    if status == 401:
-        raise GatewayFailure("PROVIDER_AUTHENTICATION_FAILED", not_accepted=True)
-    if status == 402 or (status in {400, 403, 429} and codes & quota_codes):
-        raise GatewayFailure("PROVIDER_QUOTA_EXHAUSTED", not_accepted=True)
-    if status == 429:
-        raise GatewayFailure("PROVIDER_RATE_LIMITED", not_accepted=True)
-    if status == 403:
-        raise GatewayFailure("PROVIDER_ACCESS_DENIED", not_accepted=True)
-    if status in {400, 404, 422}:
-        raise GatewayFailure("INPUT_INVALID", not_accepted=True)
-    response.raise_for_status()
-
-
 class OpenAICompatibleTextProvider:
     def __init__(self, settings: Settings, contexts: dict[str, dict] | None = None):
         self.settings = settings
@@ -191,6 +157,7 @@ class OpenAICompatibleTextProvider:
         self.last_usage = GatewayUsage()
 
     def _generate(self, contract: type[T], instruction: str, data: dict) -> T:
+        self.last_usage = GatewayUsage()
         stage = {
             ScriptContent: "script",
             StoryboardContent: "storyboard",
@@ -238,14 +205,20 @@ class OpenAICompatibleTextProvider:
                     "response_format": response_format,
                 },
             )
-            _raise_for_provider_status(response)
-            body = response.json()
-            usage = body.get("usage") or {}
-            self.last_usage = GatewayUsage(
-                input_tokens=usage.get("prompt_tokens"),
-                output_tokens=usage.get("completion_tokens"),
-            )
-            return contract.model_validate_json(body["choices"][0]["message"]["content"])
+            raise_for_provider_status(response)
+            try:
+                body = response.json()
+                if not isinstance(body, dict):
+                    raise ValueError("Invalid completion")
+                self.last_usage = response_usage(body)
+                message, reason = completed_message(body, strict=False)
+                if reason != "stop" or message.get("tool_calls"):
+                    raise ValueError("Unexpected tool selection")
+                return contract.model_validate_json(message["content"])
+            except (KeyError, TypeError, ValueError):
+                raise GatewayFailure(
+                    "INVALID_RESPONSE", completed=True, usage=self.last_usage
+                ) from None
 
     def rewrite(self, context: dict) -> RewriteResult:
         return self._generate(

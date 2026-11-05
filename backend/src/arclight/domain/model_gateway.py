@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_serializer, model_validator
 
+from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.media_capabilities import MediaCapabilities
 
@@ -34,6 +35,9 @@ class GatewayCapabilities(GatewayValue):
     tasks: frozenset[str]
     parameters: frozenset[str] = frozenset()
     media: MediaCapabilities | None = None
+    agent: AgentModelCapabilities | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_serializer("tasks", "parameters")
     def sorted_values(self, value: frozenset[str]) -> list[str]:
@@ -120,8 +124,22 @@ class GatewayUsage(GatewayValue):
 class GatewayFailure(Exception):
     """Only an adapter with explicit non-acceptance evidence may permit a retry."""
 
-    def __init__(self, code: str, *, not_accepted: bool = False, transient: bool = False):
+    def __init__(
+        self,
+        code: str,
+        *,
+        not_accepted: bool = False,
+        transient: bool = False,
+        completed: bool = False,
+        usage: GatewayUsage | None = None,
+    ):
+        if not_accepted and (completed or usage is not None):
+            raise ValueError("Non-acceptance cannot assert completed usage")
+        if usage is not None and not completed:
+            raise ValueError("Usage requires a completed provider response")
         self.code = code
         self.not_accepted = not_accepted
         self.transient = transient
+        self.completed = completed
+        self.usage = GatewayUsage.model_validate(usage.model_dump()) if usage else GatewayUsage()
         super().__init__("Model service call failed")

@@ -7,6 +7,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from arclight.core.image_service import OpenAIImageSettings
+from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.context import ContextLimits
 from arclight.domain.generation_scheduling import ExecutionPolicy
 from arclight.domain.model_gateway import GatewayPolicy
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
     llm_dns_timeout_seconds: float = Field(default=5, gt=0, le=30)
     llm_supplier: str = "custom"
     llm_response_format: Literal["json_schema", "json_object"] = "json_schema"
+    llm_agent_capabilities: AgentModelCapabilities | None = None
     service_encryption_key: SecretStr = SecretStr("")
     service_encryption_key_file: Path | None = None
     service_encryption_previous_keys: list[SecretStr] = Field(default_factory=list)

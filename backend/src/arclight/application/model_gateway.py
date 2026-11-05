@@ -245,6 +245,7 @@ def invoke[T](
             actual.validate_status(status)
         except Exception as exc:
             safe_failure = isinstance(exc, GatewayFailure) and exc.not_accepted
+            completed = isinstance(exc, GatewayFailure) and exc.completed
             error = (
                 exc.code
                 if isinstance(exc, GatewayFailure)
@@ -262,6 +263,8 @@ def invoke[T](
                     "PROVIDER_RATE_LIMITED",
                     "PROVIDER_AUTHENTICATION_FAILED",
                     "PROVIDER_ACCESS_DENIED",
+                    "PROVIDER_REFUSED",
+                    "PROVIDER_TRUNCATED",
                 }
                 else "RESULT_UNKNOWN"
             )
@@ -269,8 +272,12 @@ def invoke[T](
                 finish(
                     db,
                     call_id,
-                    "NOT_ACCEPTED" if safe_failure else "RESULT_UNKNOWN",
-                    GatewayUsage(actual_cost=Decimal("0")) if safe_failure else GatewayUsage(),
+                    "NOT_ACCEPTED" if safe_failure else "FAILED" if completed else "RESULT_UNKNOWN",
+                    GatewayUsage(actual_cost=Decimal("0"))
+                    if safe_failure
+                    else exc.usage
+                    if isinstance(exc, GatewayFailure) and completed
+                    else GatewayUsage(),
                     policy,
                     error,
                 )
@@ -317,8 +324,21 @@ def invoke[T](
                     502,
                 ),
             }
-            if safe_failure and error in rejections:
+            if (safe_failure or completed) and error in rejections:
                 raise DomainError(*rejections[error]) from None
+            if completed:
+                response_errors = {
+                    "PROVIDER_UNAVAILABLE": ("GATEWAY_PROVIDER_FAILED", "模型供应商执行失败"),
+                    "PROVIDER_REFUSED": ("GATEWAY_MODEL_REFUSED", "模型拒绝了本次内容请求"),
+                    "PROVIDER_TRUNCATED": (
+                        "GATEWAY_MODEL_TRUNCATED",
+                        "模型响应达到长度限制，未接受不完整结果",
+                    ),
+                }
+                code, message = response_errors.get(
+                    error, ("GATEWAY_INVALID_RESPONSE", "模型响应不符合协议或输出合同")
+                )
+                raise DomainError(code, message, 502) from None
             code = "GATEWAY_NOT_ACCEPTED" if safe_failure else "GATEWAY_RECONCILIATION_REQUIRED"
             raise DomainError(code, "模型调用失败，已保存安全诊断", 502) from None
         with factory.begin() as db:

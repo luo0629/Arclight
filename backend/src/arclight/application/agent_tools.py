@@ -94,6 +94,47 @@ class AgentToolRegistry:
         return self._tools.get(name)
 
 
+def available_agent_tools(
+    db: Session,
+    registry: AgentToolRegistry,
+    run_id: UUID,
+    agent_name: AgentName,
+    actor_id: str,
+    stage: str,
+) -> tuple[AgentToolDefinition, ...]:
+    """Select declarations using the same live grant, scope and step as execution."""
+    run, episode = _locked_run(db, run_id)
+    _require_enabled_actor(db, actor_id)
+    require_project(db, episode.project_id, actor_id, write=True)
+    if run.status != RunStatus.RUNNING or run.agent_state_json is None:
+        raise DomainError("WORKFLOW_NOT_ACTIVE", "Agent 当前没有活动步骤", 409)
+    try:
+        scope = scope_for_run(run, episode.project_id)
+        state = state_for_scope(run.agent_state_json, scope)
+    except AgentStateError:
+        raise DomainError("RUN_STATE_INVALID", "工作流运行状态无效", 409) from None
+    if state.status != "RUNNING" or [
+        step.step_id for step in state.steps if step.status == "RUNNING"
+    ] != [stage]:
+        raise DomainError("WORKFLOW_NOT_ACTIVE", "模型请求不属于当前 Agent 步骤", 409)
+    grant = db.scalar(
+        select(AgentToolGrant).where(
+            AgentToolGrant.run_id == run.id, AgentToolGrant.agent_name == agent_name
+        )
+    )
+    if grant is None:
+        return ()
+    if grant.project_id != episode.project_id or grant.actor_id != actor_id:
+        raise DomainError("AGENT_TOOL_GRANT_FORBIDDEN", "工具授权不属于当前调用者", 403)
+    return tuple(
+        tool
+        for name in sorted(grant.allowed_tools_json)
+        if (tool := registry.get(name)) is not None
+        and agent_name in tool.allowed_agents
+        and stage in tool.allowed_steps
+    )
+
+
 def _locked_run(db: Session, run_id: UUID) -> tuple[WorkflowRun, Episode]:
     run = db.scalar(
         select(WorkflowRun)

@@ -13,6 +13,7 @@ from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.generation_prompts import (
     PROMPT_COMPOSER_DEFINITION,
     PROMPT_COMPOSER_VERSION,
@@ -164,7 +165,7 @@ def capture_text(
 
     contexts = capture_contexts(db, project_id, run, settings, actor)
     service = run.input_json.get("_text_service")
-    model = {
+    model: dict = {
         "provider": "openai_compatible" if service else settings.provider,
         "model": service["model"] if service else settings.llm_model,
         "base_url": service["base_url"] if service else settings.llm_base_url,
@@ -173,6 +174,8 @@ def capture_text(
         if service
         else settings.llm_response_format,
     }
+    if settings.llm_agent_capabilities is not None:
+        model["agent_capabilities"] = settings.llm_agent_capabilities.model_dump(mode="json")
     parameters = {
         "max_tokens": TEXT_MAX_TOKENS,
         "timeout_seconds": settings.llm_timeout_seconds,
@@ -252,6 +255,11 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
             "llm_base_url": model["base_url"],
             "llm_supplier": model.get("supplier", "custom"),
             "llm_response_format": model.get("response_format", "json_schema"),
+            "llm_agent_capabilities": AgentModelCapabilities.model_validate(
+                model["agent_capabilities"]
+            )
+            if model.get("agent_capabilities")
+            else None,
             "llm_timeout_seconds": parameters["timeout_seconds"],
             "text_duration_tolerance_percent": parameters["duration_tolerance_percent"],
             "model_gateway_policy": GatewayPolicy.model_validate(parameters["gateway_policy"])

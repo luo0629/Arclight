@@ -91,45 +91,15 @@ def read_context_image(
     db: Database,
     actor: Actor,
 ) -> Response:
-    from arclight.application.asset_objects import read_object
-    from arclight.application.context_evidence import read_trace
-    from arclight.core.errors import DomainError
-    from arclight.persistence.models import AssetVersion, Episode, StoredFile
+    from arclight.application.context_images import load_context_images
 
     run = require_run(db, run_id, actor)
-    trace = read_trace(db, run, stage, actor)
-    sources = list((trace["startup"] or {}).get("sources", []))
-    for item in trace["evidence"]:
-        sources.extend(item["sources"])
-    reference = next(
-        (
-            item["object_ref"]
-            for item in sources
-            if item["kind"] == "ASSET_VERSION"
-            and item.get("object_ref")
-            and item["object_ref"]["file_id"] == str(file_id)
-        ),
-        None,
-    )
-    if reference is None:
-        raise DomainError("NOT_FOUND", "图片不属于当前上下文", 404)
-    row = db.get(StoredFile, file_id)
-    episode = db.get(Episode, run.episode_id)
-    version = db.get(AssetVersion, UUID(reference["asset_version_id"]))
-    if row is None or episode is None or row.project_id != episode.project_id or version is None:
-        raise DomainError("CONTEXT_REFERENCE_INVALID", "上下文图片引用缺失", 409)
-    data = read_object(
-        request.app.state.settings,
-        row.project_id,
-        version.id,
-        version.object_key,
-        reference["checksum"],
-    )
-    if len(data) != reference["byte_size"]:
-        raise DomainError("CONTEXT_REFERENCE_INVALID", "上下文图片长度不匹配", 409)
+    image = load_context_images(db, request.app.state.settings, run, stage, actor, [file_id])[
+        file_id
+    ]
     return Response(
-        data,
-        media_type=reference["media_type"],
+        image.data,
+        media_type=image.media_type,
         headers={
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
