@@ -10,10 +10,29 @@ from arclight.api.dependencies import Actor, Database
 from arclight.application.commands import require_project, require_run
 from arclight.application.context_builder import build_context
 from arclight.application.context_snapshots import manifest_references, read_contexts
+from arclight.domain.agent_memory import MAX_MEMORY_SOURCES, MEMORY_VERSION, PreferenceChange
 from arclight.domain.context import BUILDER_VERSION, TASK_CONTRACTS, ContextRequest
 from arclight.domain.context_trace import MAX_EVIDENCE_ROUNDS, EvidenceRequest
 
 router = APIRouter(prefix="/api/v1", tags=["context"])
+
+
+@router.get("/projects/{project_id}/agent-preferences")
+def get_agent_preferences(project_id: UUID, db: Database, actor: Actor) -> dict:
+    from arclight.application.agent_preferences import read_preferences
+
+    return {"preferences": read_preferences(db, project_id, actor)}
+
+
+@router.post("/projects/{project_id}/agent-preferences")
+def set_agent_preference(
+    project_id: UUID, payload: PreferenceChange, response: Response, db: Database, actor: Actor
+) -> dict:
+    from arclight.application.agent_preferences import confirm_preference, preference_snapshot
+
+    row, created = confirm_preference(db, project_id, actor, payload)
+    response.status_code = 201 if created else 200
+    return preference_snapshot(row)
 
 
 @router.get("/projects/{project_id}/context-policy")
@@ -25,6 +44,13 @@ def read_policy(project_id: UUID, request: Request, db: Database, actor: Actor) 
         "tasks": {task: asdict(contract) for task, contract in TASK_CONTRACTS.items()},
         "overflow": "REJECT_REQUIRED_INPUT",
         "max_evidence_rounds": MAX_EVIDENCE_ROUNDS,
+        "memory_policy": {
+            "version": MEMORY_VERSION,
+            "max_sources": MAX_MEMORY_SOURCES,
+            "preference_confirmation": "EXPLICIT_OWNER_CONFIRMATION",
+            "preference_role": "ADVISORY_DATA",
+            "overflow": "REJECT_REQUIRED_INPUT",
+        },
     }
 
 
@@ -62,6 +88,13 @@ def get_trace(
 
     run = require_run(db, run_id, actor)
     return read_trace(db, run, stage, actor, through_round)
+
+
+@router.get("/runs/{run_id}/contexts/{stage}/memory")
+def get_agent_memory(run_id: UUID, stage: str, db: Database, actor: Actor) -> dict:
+    from arclight.application.agent_memory import read_agent_memory
+
+    return read_agent_memory(db, require_run(db, run_id, actor), stage, actor)
 
 
 @router.post("/runs/{run_id}/contexts/{stage}/evidence")

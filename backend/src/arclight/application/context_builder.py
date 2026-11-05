@@ -9,6 +9,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import ScriptContent
+from arclight.application.agent_preferences import snapshot_preferences
 from arclight.application.commands import require_project
 from arclight.application.content_dependencies import reference_ids
 from arclight.application.dependencies import exact_version
@@ -432,5 +433,8 @@ def build_context(
         "history": history,
         "contract": asdict(contract),
     }
+    preferences = snapshot_preferences(db, project_id, request.task)
+    if preferences:
+        required["preferences"] = preferences
     check_size(result, limits)
     return result

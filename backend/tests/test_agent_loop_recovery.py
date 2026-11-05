@@ -35,6 +35,7 @@ from arclight.application.agent_loop_store import (
     keep_loop_alive,
     submit_agent_decision,
 )
+from arclight.application.agent_memory import read_agent_memory
 from arclight.application.agent_tools import AgentToolRegistry
 from arclight.application.audit import audit
 from arclight.application.context_evidence import read_trace
@@ -659,13 +660,13 @@ def test_human_answer_context_overflow_stops_without_discarding_frozen_evidence(
 ):
     run_id, actor, registry = setup_loop(client, episode, settings)
     with client.app.state.session_factory() as db:
-        trace = read_trace(db, db.get(WorkflowRun, run_id), "script", actor)
+        memory = read_agent_memory(db, db.get(WorkflowRun, run_id), "script", actor)
     seed = model_request(run_id, messages=[AgentUserMessage(data={"padding": ""})])
     observed = AgentModelRequest.model_validate(
         seed.model_dump(mode="json")
         | {
             "messages": [item.model_dump(mode="json") for item in seed.messages]
-            + [AgentUserMessage(data={"observation": trace}).model_dump(mode="json")]
+            + [AgentUserMessage(data=memory).model_dump(mode="json")]
         }
     )
     size = len(json.dumps(observed.model_dump(mode="json"), ensure_ascii=False).encode())
@@ -682,3 +683,4 @@ def test_human_answer_context_overflow_stops_without_discarding_frozen_evidence(
     assert stopped.stop_code == "AGENT_CONTEXT_LIMIT" and len(sent) == 1
     with client.app.state.session_factory() as db:
         assert db.get(AgentLoop, waiting.loop_id).seed_json == seed.model_dump(mode="json")
+        assert read_trace(db, db.get(WorkflowRun, run_id), "script", actor) == memory["observation"]

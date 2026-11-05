@@ -20,6 +20,7 @@ from arclight.application.context_sources import (
 from arclight.application.source_objects import source_text
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_memory import MAX_MEMORY_SOURCES, MEMORY_VERSION
 from arclight.domain.context import TASK_CONTRACTS, ContextLimits, check_size
 from arclight.domain.context_trace import MAX_EVIDENCE_ROUNDS, TRACE_VERSION, EvidenceRequest
 from arclight.domain.versions import digest
@@ -98,6 +99,10 @@ def bounded_trace(
         all_sources.extend(row.snapshot_json["context"]["sources"])
     if receipt and receipt.get("resolved_input"):
         all_sources.extend(receipt["resolved_input"]["sources"])
+    if (initial.get("trace") or {}).get("memory_version") == MEMORY_VERSION and len(
+        all_sources
+    ) > MAX_MEMORY_SOURCES:
+        raise DomainError("AGENT_MEMORY_LIMIT", "必需记忆来源超过数量限额，不能裁剪", 422)
     for kind, field, maximum in (
         ("ASSET_VERSION", "asset_version_id", limits.max_assets),
         ("STORY_ENTRY", "id", limits.max_story_entries),
@@ -226,6 +231,9 @@ def append_evidence(
             "stories": stories,
         },
     }
+    from arclight.application.agent_memory_sources import capture_memory_sources
+
+    value["context"].update(capture_memory_sources(db, root.project_id, sources))
     row = DependencyManifest(
         id=round_key(root.id, number),
         project_id=root.project_id,
@@ -235,9 +243,10 @@ def append_evidence(
         request_fingerprint=digest(value),
         snapshot_json=value,
     )
+    from arclight.application.agent_memory import project_agent_memory
     from arclight.application.context_consumption import consumption
 
-    bounded_trace(root, [*rounds, row], consumption(db, root))
+    project_agent_memory(run, bounded_trace(root, [*rounds, row], consumption(db, root)))
     db.add(row)
     db.flush()
     audit(

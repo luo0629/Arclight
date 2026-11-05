@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_limits import configure_agent_run, validate_agent_execution
+from arclight.application.agent_memory import project_agent_memory
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolRegistry, execute_agent_tool
 from arclight.application.context_evidence import read_trace
@@ -139,17 +140,6 @@ class _AgentRuntime[T: BaseModel]:
                 count = len(trace["evidence"])
                 if count < state["observed_round"]:
                     raise DomainError("CONTEXT_REFERENCE_INVALID", "Agent 证据链不能回退", 409)
-                messages = list(request.messages)
-                if state["observed_round"] < 0:
-                    messages.append(AgentUserMessage(data={"observation": trace}))
-                elif count > state["observed_round"]:
-                    messages.append(
-                        AgentUserMessage(
-                            data={
-                                "evidence": trace["evidence"][state["observed_round"] :],
-                            }
-                        )
-                    )
                 scope = scope_for_run(run, project_id)
                 assert run.agent_state_json is not None  # validated by the admission scope
                 current = state_for_scope(run.agent_state_json, scope)
@@ -168,6 +158,19 @@ class _AgentRuntime[T: BaseModel]:
                     ),
                 )
                 run.agent_state_json = updated.model_dump(mode="json")
+                memory = project_agent_memory(run, trace)
+                messages = list(request.messages)
+                if state["observed_round"] < 0:
+                    messages.append(AgentUserMessage(data=memory))
+                elif count > state["observed_round"]:
+                    messages.append(
+                        AgentUserMessage(
+                            data={
+                                "evidence": trace["evidence"][state["observed_round"] :],
+                                "memory": memory["memory"],
+                            }
+                        )
+                    )
                 request = AgentModelRequest.model_validate(
                     request.model_dump(mode="json")
                     | {

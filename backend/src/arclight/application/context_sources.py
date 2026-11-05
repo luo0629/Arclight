@@ -117,6 +117,9 @@ def asset_sources(db: Session, project_id: UUID, assets: list[dict]) -> list[dic
 def capture_sources(db: Session, project_id: UUID, inputs: dict, context: dict) -> list[dict]:
     """Resolve only IDs already selected by the authorized task, never current pointers."""
     sources = asset_sources(db, project_id, context["required"].get("assets", []))
+    from arclight.application.agent_preferences import preference_source
+
+    sources.extend(preference_source(value) for value in context["required"].get("preferences", []))
     containers = [inputs]
     outline = inputs.get("outline_context")
     if outline:
@@ -215,6 +218,10 @@ def validate_sources(db: Session, project_id: UUID, sources: list[dict]) -> None
         elif kind == "STORY_SOURCE":
             if source_snapshot(db, project_id, UUID(source["source_id"])) != source:
                 invalid()
+        elif kind == "AGENT_PREFERENCE":
+            from arclight.application.agent_preferences import validate_preference_source
+
+            validate_preference_source(db, project_id, source)
         elif kind in {"STORY_ENTRY", "VISUAL_BIBLE", "OUTLINE", "ANALYSIS"}:
             model = {
                 "STORY_ENTRY": StoryEntry,

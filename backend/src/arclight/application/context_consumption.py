@@ -63,7 +63,7 @@ def consume_context(
     assert root is not None
     receipt = consumption(db, root)
     if receipt is None:
-        resolved = None
+        resolved: dict | None = None
         if stage == "storyboard":
             identity = run.input_json.get("script_version_id")
             script = (
@@ -93,6 +93,9 @@ def consume_context(
                     ],
                 ),
             }
+            from arclight.application.agent_memory_sources import capture_memory_sources
+
+            resolved.update(capture_memory_sources(db, project_id, resolved["sources"]))
         value = {
             "schema_version": 1,
             "target": deepcopy(root.snapshot_json["target"]),
@@ -119,7 +122,9 @@ def consume_context(
         db.flush()
         receipt = consumption(db, root)
         assert receipt is not None
-        bounded_trace(root, evidence_rounds(db, root), receipt)
+        from arclight.application.agent_memory import project_agent_memory
+
+        project_agent_memory(run, bounded_trace(root, evidence_rounds(db, root), receipt))
     refs = receipt["evidence_manifest_ids"]
     context["retrieval_evidence"] = context["retrieval_evidence"][: len(refs)]
     context["trace_ref"]["evidence_manifest_ids"] = refs

@@ -142,6 +142,20 @@ def capture_contexts(
             "startup_sha256": digest(public),
             "sources": capture_sources(db, project_id, run.input_json, value),
         }
+        from arclight.application.agent_memory_sources import capture_memory_sources
+
+        trace.update(
+            capture_memory_sources(
+                db,
+                project_id,
+                trace["sources"],
+                candidate_ids={
+                    UUID(row["asset_version_id"])
+                    for row in value["required"].get("assets", [])
+                    if row["purpose"] == "REVIEW_CANDIDATE"
+                },
+            )
+        )
         verify_images(db, settings, project_id, trace["sources"])
         check_size(
             {"task_context": value, "trace": trace}, ContextLimits.model_validate(value["limits"])
@@ -160,6 +174,10 @@ def capture_contexts(
             db.flush()
         elif row.snapshot_json != snapshot:
             raise DomainError("CONTEXT_SNAPSHOT_CONFLICT", "启动上下文不能覆盖", 409)
+        from arclight.application.agent_memory import project_agent_memory
+        from arclight.application.context_evidence import bounded_trace
+
+        project_agent_memory(run, bounded_trace(row, []))
         contexts[stage] = str(row.id)
     return contexts
 
