@@ -53,6 +53,7 @@ def utc(value):
 def admit(
     db: Session, request: GatewayRequest, route: GatewayRoute, policy: GatewayPolicy
 ) -> GatewayCall:
+    from arclight.application.agent_limits import check_gateway_action, record_gateway_action
     from arclight.application.commands import require_project
     from arclight.persistence.models import Episode, User, WorkflowRun
 
@@ -146,6 +147,7 @@ def admit(
         db.scalar(recent.where(GatewayCall.actor == request.actor)) or 0
     ) >= policy.user_per_minute:
         raise DomainError("GATEWAY_RATE_LIMITED", "模型调用频率达到限制", 429)
+    check_gateway_action(db, request, route)
     admit_budget(db, request, route)
     row = GatewayCall(
         project_id=request.project_id,
@@ -164,6 +166,7 @@ def admit(
     )
     db.add(row)
     db.flush()
+    record_gateway_action(db, request, row.id)
     if circuit.opened_until is not None:
         circuit.probe_call_id = row.id
         circuit.probe_until = now + timedelta(seconds=policy.timeout_seconds)
@@ -231,6 +234,8 @@ def invoke[T](
     crash_errors: tuple[type[Exception], ...] = (),
     fallback: tuple[GatewayRoute, Callable[[], T]] | None = None,
 ) -> T:
+    from arclight.application.agent_limits import gateway_dispatch_seconds
+
     started = utcnow()
     current_route, current_call = route, call
     for attempt in range(policy.max_attempts):
@@ -238,7 +243,24 @@ def invoke[T](
             row = admit(db, request, current_route, policy)
             call_id = row.id
         try:
+            with factory() as db:
+                execution_seconds = gateway_dispatch_seconds(db, request)
+        except DomainError as exc:
+            # Admission committed, but the adapter has not run: explicit safe zero billing.
+            with factory.begin() as db:
+                finish(
+                    db,
+                    call_id,
+                    "NOT_ACCEPTED",
+                    GatewayUsage(actual_cost=Decimal("0")),
+                    policy,
+                    exc.code,
+                )
+            raise
+        try:
             remaining = policy.timeout_seconds - (utcnow() - started).total_seconds()
+            if execution_seconds is not None:
+                remaining = min(remaining, execution_seconds)
             result = bounded_call(current_call, remaining)
             actual = GatewayUsage.model_validate(usage(result).model_dump(mode="json"))
             status = outcome(result)

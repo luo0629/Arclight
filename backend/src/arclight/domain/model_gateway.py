@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_serializer, model_validator
 
+from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.media_capabilities import MediaCapabilities
@@ -79,6 +80,9 @@ class GatewayRequest(GatewayValue):
     workflow_id: UUID | None = None
     generation_attempt_id: UUID | None = None
     authorized_routes: frozenset[str] = frozenset()
+    execution: AgentExecutionContext | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def safe_request(self):

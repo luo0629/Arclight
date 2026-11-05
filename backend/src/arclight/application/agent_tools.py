@@ -289,6 +289,8 @@ def execute_agent_tool(
     registry: AgentToolRegistry,
     agent_name: AgentName,
     request: AgentToolCall,
+    *,
+    step_key: str | None = None,
 ) -> AgentToolFeedback:
     """Execute one server-registered tool inside the caller's DB transaction.
 
@@ -296,7 +298,16 @@ def execute_agent_tool(
     arguments. Registered handlers must use application/domain services for writes and
     must not commit the session or perform an external side effect.
     """
+    from arclight.application.agent_limits import (
+        check_tool_action,
+        record_tool_action,
+    )
+    from arclight.application.model_gateway import lock_gate
+
     try:
+        # Serialize first policy configuration against the first tool, too.
+        # Keep the existing run/project order used by grants and declarations.
+        lock_gate(db)
         run, episode = _locked_run(db, request.run_id)
     except DomainError as exc:
         return _context_error(request, exc)
@@ -373,6 +384,19 @@ def execute_agent_tool(
     if len(agent_state.tool_call_refs) >= 256 or len(agent_state.observation_refs) >= 256:
         return _failure(request, "REFERENCE_LIMIT", "工作流工具引用数量已达上限")
 
+    try:
+        execution = check_tool_action(
+            db,
+            run.id,
+            agent_name,
+            running_steps[0],
+            tool.name,
+            grant.actor_id,
+            step_key or "tool-" + hashlib.sha256(request.idempotency_key.encode()).hexdigest(),
+        )
+    except DomainError as exc:
+        return _context_error(request, exc)
+
     invocation = AgentToolInvocation(
         run_id=run.id,
         project_id=episode.project_id,
@@ -386,6 +410,7 @@ def execute_agent_tool(
     )
     db.add(invocation)
     db.flush()
+    record_tool_action(db, execution, invocation.id)
 
     context = AgentToolContext(
         db=db,

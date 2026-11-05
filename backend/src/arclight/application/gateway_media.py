@@ -6,6 +6,7 @@ from sqlalchemy.orm import sessionmaker
 
 from arclight.application.model_gateway import invoke, route_id
 from arclight.core.errors import DomainError
+from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.model_gateway import (
     GatewayCapabilities,
     GatewayFailure,
@@ -31,6 +32,8 @@ def submit(
     request: MediaSubmission,
     timeout: float,
     policy: GatewayPolicy,
+    *,
+    execution: AgentExecutionContext | None = None,
 ) -> SubmissionReceipt:
     from sqlalchemy import select
 
@@ -69,6 +72,7 @@ def submit(
             input_sha256=digest(request.snapshot),
             parameters=spec["parameters"],
             authorized_routes=frozenset({route_id(route)}),
+            execution=execution,
         )
 
     def submit_adapter() -> SubmissionReceipt:

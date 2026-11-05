@@ -12,6 +12,7 @@ from arclight.application.model_services import run_settings
 from arclight.application.production_versions import text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.agent_model import (
     AgentModelRequest,
     AgentModelResponse,
@@ -29,9 +30,18 @@ def invoke_agent[T: BaseModel](
     request: AgentModelRequest,
     registry: AgentToolRegistry,
     result_model: type[T],
+    *,
+    execution: AgentExecutionContext | None = None,
 ) -> AgentModelResponse[T]:
     """Return tool selections or a validated final result without executing either."""
     request = AgentModelRequest.model_validate(request.model_dump(mode="json"))
+    if execution is not None and (
+        execution.run_id != request.run_id
+        or execution.agent_name != request.agent_name
+        or execution.stage != request.stage
+        or execution.kind != "MODEL"
+    ):
+        raise DomainError("AGENT_SCOPE_INVALID", "Agent 通信与执行器行动标识不匹配", 409)
     with factory() as db:
         run = db.get(WorkflowRun, request.run_id)
         if run is None:
@@ -130,6 +140,7 @@ def invoke_agent[T: BaseModel](
                 "result_schema_sha256": digest(result_model.model_json_schema()),
             },
             authorized_routes=frozenset({route_id(route)}),
+            execution=execution,
         )
     # The preparation transaction and business row locks are released before external I/O.
     provider = OpenAICompatibleAgentProvider(settings)
