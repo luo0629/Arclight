@@ -141,6 +141,27 @@ def test_actual_text_terminal_states_do_not_invent_downstream_artifacts(client, 
     assert state["script_version_id"] is None and state["shot_count"] == 0
 
 
+@pytest.mark.parametrize("stage", ["script", "storyboard"])
+def test_cancelling_a_pending_review_keeps_history_but_reports_terminal_execution(
+    client, episode, settings, stage
+):
+    run_id = start(client, episode).json()["run_id"]
+    pending = advance(client, settings, run_id)
+    if stage == "storyboard":
+        assert review(client, pending).status_code == 202
+        advance(client, settings, run_id)
+    before = read(client, episode)
+    expected = "WAITING_SCRIPT_REVIEW" if stage == "script" else "WAITING_STORYBOARD_REVIEW"
+    assert before["phase"] == expected
+    assert client.post(f"/api/v1/runs/{run_id}/cancel").status_code == 200
+    state = read(client, episode)
+    assert state["phase"] == "CANCELLED" and state["blocked_phase"] == expected
+    assert state["script_version_id"] == before["script_version_id"]
+    assert state["storyboard_version_id"] == before["storyboard_version_id"]
+    assert state["task_counts"] == {"CANCELLED": 1}
+    assert "EXECUTION_CANCELLED" in state["issues"]
+
+
 def test_latest_version_and_stale_registry_override_old_success(client, episode, settings):
     finish_text(client, episode, settings)
     before = read(client, episode)

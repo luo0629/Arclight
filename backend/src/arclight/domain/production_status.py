@@ -193,10 +193,9 @@ def episode_state(facts: EpisodeFacts) -> EpisodeProductionState:
         )
         if script and script.status == "READY_FOR_REVIEW" and not script.stale:
             phase = EpisodePhase.WAITING_SCRIPT_REVIEW
-        else:
-            phase, blocked_phase, issues = execution_phase(
-                phase, facts.script_execution, facts.episode_id
-            )
+        phase, blocked_phase, issues = execution_phase(
+            phase, facts.script_execution, facts.episode_id
+        )
         issues = list(dict.fromkeys([*issues, *script_issues]))
     elif facts.input_issues:
         phase, issues = EpisodePhase.ASSET_PREPARATION, facts.input_issues
@@ -204,10 +203,9 @@ def episode_state(facts: EpisodeFacts) -> EpisodeProductionState:
         phase = EpisodePhase.STORYBOARDING
         if board and board.status == "READY_FOR_REVIEW" and board_issues == ["ASSET_NOT_APPROVED"]:
             phase = EpisodePhase.WAITING_STORYBOARD_REVIEW
-        else:
-            phase, blocked_phase, issues = execution_phase(
-                phase, facts.storyboard_execution, facts.episode_id
-            )
+        phase, blocked_phase, issues = execution_phase(
+            phase, facts.storyboard_execution, facts.episode_id
+        )
         issues = list(dict.fromkeys([*issues, *board_issues]))
     elif shot_issues:
         phase = EpisodePhase.GENERATING_MEDIA

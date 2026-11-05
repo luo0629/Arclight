@@ -272,6 +272,20 @@ def test_text_execution_terminal_outcome_is_reported_without_inventing_an_artifa
     assert "MISSING_SCRIPT" in state.issues
 
 
+@pytest.mark.parametrize("stage", ["script", "storyboard"])
+@pytest.mark.parametrize("status", ["FAILED", "CANCELLED"])
+def test_terminal_review_execution_overrides_preserved_unapproved_candidate(stage, status):
+    values = evidence()
+    values[stage]["status"] = "READY_FOR_REVIEW"
+    values[stage + "_execution"] = execution(values, status)
+    state = episode_state(EpisodeFacts.model_validate(values))
+    assert state.phase == status
+    assert state.blocked_phase == (
+        "WAITING_SCRIPT_REVIEW" if stage == "script" else "WAITING_STORYBOARD_REVIEW"
+    )
+    assert state.script_version_id == EpisodeFacts.model_validate(values).script.version_id
+
+
 @pytest.mark.parametrize(
     ("path", "value", "phase", "issue"),
     [
