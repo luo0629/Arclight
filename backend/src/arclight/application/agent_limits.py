@@ -110,6 +110,14 @@ def _active_chain(db: Session, control: AgentRunLimit, stage: str | None = None)
         current = parent
 
 
+def validate_agent_execution(db: Session, run_id: UUID, stage: str) -> AgentRunLimits:
+    """Recheck the active scope without reserving another action or charging completion."""
+    control = db.get(AgentRunLimit, run_id)
+    if control is None:
+        raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 调用尚未建立运行限制", 409)
+    return _active_chain(db, control, stage)
+
+
 def configure_agent_run(
     db: Session,
     run_id: UUID,

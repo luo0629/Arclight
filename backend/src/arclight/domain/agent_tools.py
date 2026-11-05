@@ -59,6 +59,29 @@ class ReadStoryEntryResult(AgentToolContract):
     data: dict[str, JsonValue]
 
 
+class RetrieveEvidenceParameters(AgentToolContract):
+    """Request exact references; the server assigns the evidence round and identity."""
+
+    asset_version_ids: list[UUID] = Field(default_factory=list, max_length=64)
+    story_entry_ids: list[UUID] = Field(default_factory=list, max_length=100)
+    source_ids: list[UUID] = Field(default_factory=list, max_length=16)
+    include_images: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def exact_selections(self):
+        selections = (self.asset_version_ids, self.story_entry_ids, self.source_ids)
+        if not any(selections) or any(len(set(items)) != len(items) for items in selections):
+            raise ValueError("Evidence requires unique, exact references")
+        return self
+
+
+class RetrieveEvidenceResult(AgentToolContract):
+    manifest_id: UUID
+    startup_manifest_id: UUID
+    evidence_round: int = Field(strict=True, ge=1, le=32)
+    image_file_ids: list[UUID] = Field(default_factory=list, max_length=8)
+
+
 class AgentToolError(AgentToolContract):
     code: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[A-Z][A-Z0-9_]*$")]
     message: Annotated[str, Field(min_length=1, max_length=300)]

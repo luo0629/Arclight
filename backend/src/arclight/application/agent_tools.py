@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 from sqlalchemy import null, select
@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.commands import emit, require_project
+from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_state import (
     AgentStateError,
@@ -30,6 +31,8 @@ from arclight.domain.agent_tools import (
     AgentToolGrantRequest,
     ReadStoryEntryParameters,
     ReadStoryEntryResult,
+    RetrieveEvidenceParameters,
+    RetrieveEvidenceResult,
     validation_fields,
 )
 from arclight.domain.enums import RunStatus
@@ -513,9 +516,9 @@ def _read_story_entry(context: AgentToolContext, parameters: AgentToolContract) 
     }
 
 
-def build_agent_tool_registry() -> AgentToolRegistry:
-    """Build the default catalog of bounded, read-only tools over project facts."""
-    return AgentToolRegistry(
+def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolRegistry:
+    """Reuse the catalog; configured runtimes may also append isolated retrieval evidence."""
+    registry = AgentToolRegistry(
         [
             AgentToolDefinition(
                 name="read_story_entry",
@@ -530,3 +533,59 @@ def build_agent_tool_registry() -> AgentToolRegistry:
             )
         ]
     )
+    if settings is not None:
+        from arclight.application.context_evidence import append_evidence, read_trace
+        from arclight.domain.context_trace import EvidenceRequest
+
+        def retrieve(context: AgentToolContext, parameters: AgentToolContract) -> dict:
+            assert isinstance(parameters, RetrieveEvidenceParameters)
+            run = context.db.get(WorkflowRun, context.run_id)
+            assert run is not None
+            assert run.agent_state_json is not None
+            state = state_for_scope(run.agent_state_json, scope_for_run(run, context.project_id))
+            stage = next(step.step_id for step in state.steps if step.status == "RUNNING")
+            trace = read_trace(context.db, run, stage, context.actor_id)
+            manifest, _ = append_evidence(
+                context.db,
+                run,
+                stage,
+                context.actor_id,
+                EvidenceRequest(
+                    creation_key=uuid4(),
+                    expected_round=len(trace["evidence"]),
+                    **parameters.model_dump(exclude={"include_images"}),
+                ),
+                settings,
+            )
+            return {
+                "manifest_id": manifest.id,
+                "startup_manifest_id": UUID(trace["startup_manifest_id"]),
+                "evidence_round": len(trace["evidence"]) + 1,
+                "image_file_ids": [
+                    UUID(source["object_ref"]["file_id"])
+                    for source in manifest.snapshot_json["context"]["sources"]
+                    if parameters.include_images and source.get("object_ref")
+                ],
+            }
+
+        registry.register(
+            AgentToolDefinition(
+                name="retrieve_context_evidence",
+                allowed_agents=frozenset(
+                    {
+                        "producer",
+                        "screenwriter",
+                        "director",
+                        "art_director",
+                        "continuity_reviewer",
+                    }
+                ),
+                allowed_steps=frozenset({"analyze", "outline", "rewrite", "script", "storyboard"}),
+                parameters_model=RetrieveEvidenceParameters,
+                result_model=RetrieveEvidenceResult,
+                scope_validator=lambda context, parameters: None,
+                handler=retrieve,
+                requires_write=True,
+            )
+        )
+    return registry
