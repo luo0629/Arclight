@@ -44,6 +44,7 @@ class DeliveryCoverage(BaseModel):
 
 class OverviewEpisode(EpisodeRead):
     stage: str
+    production_state_url: str
 
 
 class RecentTask(BaseModel):
@@ -207,7 +208,11 @@ def project_overview(
     workflows = task_counts.get("WAITING_REVIEW", 0)
     rows = db.execute(stages.order_by(Episode.episode_no, Episode.id).limit(limit).offset(offset))
     episodes = [
-        OverviewEpisode(**EpisodeRead.model_validate(episode).model_dump(), stage=stage)
+        OverviewEpisode(
+            **EpisodeRead.model_validate(episode).model_dump(),
+            stage=stage,
+            production_state_url=f"/api/v1/episodes/{episode.id}/production-state",
+        )
         for episode, stage in rows
     ]
     tasks = db.execute(

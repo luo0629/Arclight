@@ -28,6 +28,7 @@ from arclight.api.generation_budget import router as generation_budget_router
 from arclight.api.generation_candidates import router as generation_candidates_router
 from arclight.api.model_gateway import router as model_gateway_router
 from arclight.api.model_services import router as model_services_router
+from arclight.api.production_state import router as production_state_router
 from arclight.api.production_versions import router as production_versions_router
 from arclight.api.project_deletion import router as project_deletion_router
 from arclight.api.project_overview import router as project_overview_router
@@ -178,6 +179,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(script_rewrite_router)
     app.include_router(character_matching_router)
     app.include_router(project_overview_router)
+    app.include_router(production_state_router)
     return app
 
 

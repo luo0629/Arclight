@@ -9,6 +9,7 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input
 from arclight.application.commands import require_episode
 from arclight.application.dependencies import query_dependencies
+from arclight.application.project_reads import lock_project_snapshot
 from arclight.core.errors import DomainError
 from arclight.persistence.models import (
     AssetVersion,
@@ -51,15 +52,7 @@ class LayoutInput(Input):
 
 def graph_data(db, episode):
     # Share the writer's project lock so versions and edges form one coherent read.
-    connection = db.connection()
-    if connection.dialect.name == "sqlite":
-        driver = connection.connection.driver_connection
-        # sqlite3 legacy transaction control does not BEGIN for SELECT, and ignores FOR SHARE.
-        if not driver.in_transaction:
-            connection.exec_driver_sql("BEGIN")
-    db.execute(
-        select(Project.id).where(Project.id == episode.project_id).with_for_update(read=True)
-    )
+    lock_project_snapshot(db, episode.project_id)
     nodes = [
         {
             "id": "episode:" + str(episode.id),
