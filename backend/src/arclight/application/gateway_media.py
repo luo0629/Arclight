@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from arclight.application.model_gateway import invoke, route_id
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentExecutionContext
+from arclight.domain.generation_requests import MediaErrorCode
 from arclight.domain.model_gateway import (
     GatewayCapabilities,
     GatewayFailure,
@@ -112,10 +113,37 @@ def submit(
     except DomainError as exc:
         if exc.code == "GATEWAY_RECONCILIATION_REQUIRED":
             return SubmissionReceipt(status="RESULT_UNKNOWN", error_code="RESULT_UNKNOWN")
+        if exc.code.startswith("BUDGET_") or exc.code in {
+            "AGENT_BUDGET_EXCEEDED",
+            "AGENT_CALL_LIMIT",
+            "AGENT_MODEL_CALL_LIMIT",
+            "AGENT_TOOL_CALL_LIMIT",
+            "AGENT_AGENT_CALL_LIMIT",
+            "AGENT_STEP_LIMIT",
+            "AGENT_DEADLINE_EXCEEDED",
+        }:
+            rejection: MediaErrorCode = "BUDGET_EXCEEDED"
+        elif exc.code.startswith("AGENT_") or (
+            execution is not None
+            and exc.code
+            in {
+                "FORBIDDEN",
+                "NOT_FOUND",
+                "PROJECT_ARCHIVED",
+                "RUN_STATE_INVALID",
+                "GATEWAY_SCOPE_INVALID",
+                "GATEWAY_ROUTE_FORBIDDEN",
+                "GATEWAY_CAPABILITY_REJECTED",
+                "GATEWAY_IDEMPOTENCY_CONFLICT",
+                "GATEWAY_ATTEMPT_LIMIT",
+            }
+        ):
+            # Domain/authorization refusals are terminal, not transient provider failures.
+            rejection = "INPUT_INVALID"
+        else:
+            rejection = "PROVIDER_UNAVAILABLE"
         return SubmissionReceipt(
             status="FAILED",
-            error_code="BUDGET_EXCEEDED"
-            if exc.code.startswith("BUDGET_")
-            else "PROVIDER_UNAVAILABLE",
+            error_code=rejection,
             cost=Decimal("0"),
         )

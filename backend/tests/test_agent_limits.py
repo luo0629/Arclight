@@ -829,9 +829,79 @@ def test_paid_media_tool_uses_original_gen_reservation_and_settlement_once(
     assert Decimal(project["pending_estimate"]) == (2 if actual is None else 0)
     assert Decimal(project["actual_cost"]) == (actual or 0)
     second = capture_ok(client, episode["project_id"])
-    deliver(client, second, provider)
+    assert deliver(client, second, provider) == "FAILED"
     assert len(provider.requests) == 1
     assert len(usage_for(client, run_id)["actions"]) == 1
+    from arclight.persistence.generation_scheduling import GenerationDeadLetter
+
+    with client.app.state.session_factory() as db:
+        stopped = db.scalar(
+            select(GenerationDeadLetter).where(GenerationDeadLetter.job_id == UUID(second["id"]))
+        )
+        assert stopped.reason == "NOT_RETRYABLE" and stopped.error_code == "BUDGET_EXCEEDED"
+
+
+@pytest.mark.parametrize(
+    "change,error",
+    [
+        (name, "BUDGET_EXCEEDED")
+        for name in (
+            "max_calls",
+            "max_tool_calls",
+            "max_steps",
+            "max_agent_calls",
+            "budget",
+            "deadline",
+        )
+    ]
+    + [("cancel", "INPUT_INVALID"), ("grant", "INPUT_INVALID")],
+)
+def test_media_executor_stops_permanent_agent_refusals_without_automatic_retry(
+    client,
+    episode,
+    monkeypatch,
+    change,
+    error,
+):
+    from arclight.persistence.generation import GenerationDispatch
+    from arclight.persistence.generation_scheduling import GenerationDeadLetter
+
+    set_policy(client, episode["project_id"], "100")
+    priced(monkeypatch, "2")
+    limits = {"maximum_cost": "0" if change == "budget" else "10"}
+    if change.startswith("max_"):
+        limits[change] = 0
+    run_id, actor = bounded_run(client, episode, **limits)
+    tool_setup(client, episode, run_id, actor)
+    job = capture_ok(client, episode["project_id"])
+    with client.app.state.session_factory.begin() as db:
+        if change == "deadline":
+            deadline = utc(db.get(AgentRunLimit, run_id).deadline_at)
+            monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline)
+        elif change == "cancel":
+            db.get(WorkflowRun, run_id).status = "CANCELLED"
+        elif change == "grant":
+            db.scalar(
+                select(AgentToolGrant).where(AgentToolGrant.run_id == run_id)
+            ).allowed_tools_json = []
+    original = gateway_media.submit
+
+    def bounded_submit(*args, **kwargs):
+        return original(*args, **kwargs, execution=execution(run_id, kind="TOOL"))
+
+    monkeypatch.setattr(gateway_media, "submit", bounded_submit)
+    provider = Provider()
+    assert deliver(client, job, provider) == "FAILED"
+    assert provider.requests == [] and usage_for(client, run_id)["actions"] == []
+    with client.app.state.session_factory() as db:
+        dead = db.scalar(
+            select(GenerationDeadLetter).where(GenerationDeadLetter.job_id == UUID(job["id"]))
+        )
+        assert dead.reason == "NOT_RETRYABLE" and dead.error_code == error
+        assert db.scalar(select(func.count()).select_from(GenerationDispatch)) == 1
+        assert db.scalar(select(func.count()).select_from(GatewayCall)) == 0
+    budget = client.get(f"/api/v1/projects/{episode['project_id']}/budget").json()
+    assert Decimal(budget["actual_cost"]) == Decimal(budget["pending_estimate"]) == 0
 
 
 @pytest.mark.parametrize(
