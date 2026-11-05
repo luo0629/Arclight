@@ -59,17 +59,44 @@ class AgentLoopResult[T: BaseModel](BaseModel):
     stage: AgentStepId
     status: Literal["COMPLETED", "HUMAN_REVIEW", "STOPPED"]
     model_turns: int = Field(strict=True, ge=0, le=4096)
+    loop_id: UUID | None = None
+    question_id: UUID | None = None
+    input_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     result: T | None = None
     human_request: HumanDecisionRequest | None = None
     stop_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
 
     @model_validator(mode="after")
     def consistent_outcome(self):
+        if (self.loop_id is not None) != (self.input_sha256 is not None) or (
+            self.question_id is not None and (self.status != "HUMAN_REVIEW" or self.loop_id is None)
+        ):
+            raise ValueError("Durable decisions must identify their loop and frozen input")
         if (
             (self.result is not None) != (self.status == "COMPLETED")
             or (self.human_request is not None) != (self.status == "HUMAN_REVIEW")
             or (self.stop_code is not None) != (self.status == "STOPPED")
         ):
             raise ValueError("Loop status and outcome must agree")
+        safe_metadata(self.model_dump(mode="json"))
+        return self
+
+
+class AgentHumanDecision(BaseModel):
+    """An authenticated human answer, never a domain approval or a model instruction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
+
+    question_id: UUID
+    input_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    decision: Literal["ANSWER", "STOP"]
+    answer: str | None = Field(default=None, min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def consistent_answer(self):
+        if (self.answer is not None) != (self.decision == "ANSWER"):
+            raise ValueError("Only an answer decision contains answer text")
+        if self.answer is not None and not self.answer.strip():
+            raise ValueError("An answer must contain nonempty text")
         safe_metadata(self.model_dump(mode="json"))
         return self

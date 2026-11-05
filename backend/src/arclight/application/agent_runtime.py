@@ -28,7 +28,7 @@ from arclight.domain.agent_model import (
 )
 from arclight.domain.agent_runtime import AgentDecision, AgentLoopResult
 from arclight.domain.agent_state import state_for_scope, transition_agent_step
-from arclight.domain.agent_tools import RetrieveEvidenceResult
+from arclight.domain.agent_tools import AgentToolCall, AgentToolFeedback, RetrieveEvidenceResult
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
@@ -191,17 +191,30 @@ class _AgentRuntime[T: BaseModel]:
                     "operation_key": f"loop:{self.identity}:{turn}",
                 }
             )
-            response = invoke_agent(
-                self.factory,
-                self.settings,
-                request,
-                self.registry,
-                self.decision_model,
-                execution=self._execution(turn),
-            )
+            response = self.invoke_model(request, turn)
             return {"model_turns": turn, "response": response.model_dump(mode="json")}
         except (DomainError, GatewayFailure) as exc:
             return {"model_turns": turn, **self._stop(advanced, exc.code)}
+
+    def invoke_model(
+        self, request: AgentModelRequest, turn: int
+    ) -> AgentModelResponse[AgentDecision[T]]:
+        return invoke_agent(
+            self.factory,
+            self.settings,
+            request,
+            self.registry,
+            self.decision_model,
+            execution=self._execution(turn),
+        )
+
+    def execute_tool(self, request: AgentToolCall, step_key: str) -> AgentToolFeedback:
+        with self.factory.begin() as db:
+            self._context(db)
+            validate_agent_execution(db, request.run_id, self.seed.stage)
+            return execute_agent_tool(
+                db, self.registry, self.seed.agent_name, request, step_key=step_key
+            )
 
     def tools(self, state: AgentLoopState) -> AgentLoopState:
         try:
@@ -217,16 +230,7 @@ class _AgentRuntime[T: BaseModel]:
                 tool_request = call.tool_request(request.run_id).model_copy(
                     update={"idempotency_key": action_key}
                 )
-                with self.factory.begin() as db:
-                    self._context(db)
-                    validate_agent_execution(db, request.run_id, request.stage)
-                    feedback = execute_agent_tool(
-                        db,
-                        self.registry,
-                        request.agent_name,
-                        tool_request,
-                        step_key=execution.step_key,
-                    )
+                feedback = self.execute_tool(tool_request, execution.step_key)
                 if feedback.error and (
                     feedback.error.code.startswith("AGENT_")
                     or feedback.error.code in _FATAL_TOOL_ERRORS

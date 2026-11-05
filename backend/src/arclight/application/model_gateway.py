@@ -233,6 +233,8 @@ def invoke[T](
     outcome: Callable[[T], str] = lambda _: "SUCCEEDED",
     crash_errors: tuple[type[Exception], ...] = (),
     fallback: tuple[GatewayRoute, Callable[[], T]] | None = None,
+    on_admit: Callable[[Session, UUID], None] | None = None,
+    on_result: Callable[[Session, UUID, T], None] | None = None,
 ) -> T:
     from arclight.application.agent_limits import gateway_dispatch_seconds
 
@@ -242,6 +244,8 @@ def invoke[T](
         with factory.begin() as db:
             row = admit(db, request, current_route, policy)
             call_id = row.id
+            if on_admit is not None:
+                on_admit(db, call_id)
         try:
             with factory() as db:
                 execution_seconds = gateway_dispatch_seconds(db, request)
@@ -365,5 +369,7 @@ def invoke[T](
             raise DomainError(code, "模型调用失败，已保存安全诊断", 502) from None
         with factory.begin() as db:
             finish(db, call_id, status, actual, policy)
+            if on_result is not None:
+                on_result(db, call_id, result)
         return result
     raise DomainError("GATEWAY_ATTEMPT_LIMIT", "模型调用已达到尝试上限", 409)

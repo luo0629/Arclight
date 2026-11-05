@@ -25,6 +25,7 @@ from arclight.application.agent_limits import action_usage
 from arclight.application.agent_runtime import run_agent_loop
 from arclight.application.agent_tools import AgentToolRegistry, build_agent_tool_registry
 from arclight.application.context_evidence import read_trace
+from arclight.application.gateway_text import execution_actor
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_runtime import AgentDecision, AgentLoopResult, HumanDecisionRequest
@@ -66,13 +67,16 @@ def final(decision="COMPLETE", **patch):
     }
 
 
-def setup_loop(client, episode, settings, *, quote="0", allowed=None):
+def setup_loop(client, episode, settings, *, quote="0", allowed=None, attempts=1):
     settings.model_gateway_policy = GatewayPolicy(
         text_maximum_cost=Decimal(quote) if quote is not None else None,
         pricing_version="runtime-test:1" if quote is not None else "unconfigured",
+        max_attempts=attempts,
     )
     run_id = create_run(client, episode, key=uuid4().hex)
     actor = activate_run(client, run_id, episode["id"])
+    with client.app.state.session_factory() as db:
+        actor = execution_actor(db, db.get(WorkflowRun, run_id))
     registry = build_agent_tool_registry(settings=settings)
     grant(
         client,

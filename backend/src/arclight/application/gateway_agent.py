@@ -1,5 +1,8 @@
 """Prepare one authorized Agent turn and account for it through the shared gateway."""
 
+from collections.abc import Callable
+from uuid import UUID
+
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -32,6 +35,8 @@ def invoke_agent[T: BaseModel](
     result_model: type[T],
     *,
     execution: AgentExecutionContext | None = None,
+    on_admit: Callable[[Session, UUID], None] | None = None,
+    on_result: Callable[[Session, UUID, AgentModelResponse[T]], None] | None = None,
 ) -> AgentModelResponse[T]:
     """Return tool selections or a validated final result without executing either."""
     request = AgentModelRequest.model_validate(request.model_dump(mode="json"))
@@ -153,4 +158,6 @@ def invoke_agent[T: BaseModel](
             update={"timeout_seconds": min(policy.timeout_seconds, settings.llm_timeout_seconds)}
         ),
         usage=lambda _: provider.last_usage,
+        on_admit=on_admit,
+        on_result=on_result,
     )

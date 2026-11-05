@@ -35,9 +35,11 @@ def clock(db: Session) -> datetime:
     source = (
         func.clock_timestamp()
         if db.get_bind().dialect.name == "postgresql"
-        else func.current_timestamp()
+        else func.strftime("%Y-%m-%d %H:%M:%f", "now")
     )
     value = db.scalar(select(source))
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
     assert isinstance(value, datetime)
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value
 
