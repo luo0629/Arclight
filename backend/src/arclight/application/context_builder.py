@@ -180,6 +180,8 @@ def resolve_assets(
     limits: ContextLimits,
     editable_script: UUID | None = None,
     candidate: UUID | None = None,
+    *,
+    follow_profile_references: bool = True,
 ) -> list[dict]:
     if len(version_ids) > limits.max_assets:
         raise DomainError("CONTEXT_TOO_LARGE", "精确资产引用超过上下文数量限制", 422)
@@ -219,7 +221,8 @@ def resolve_assets(
         )
         if standard is not None:
             profile["standard_image"] = standard
-        pending.update(reference_ids(profile) - visited)
+        if follow_profile_references:
+            pending.update(reference_ids(profile) - visited)
         result.append(
             {
                 "asset_id": str(asset.id),

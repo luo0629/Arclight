@@ -245,8 +245,14 @@ class _AgentRuntime[T: BaseModel]:
                         feedback=feedback.model_copy(update={"idempotency_key": call.call_id}),
                     )
                 )
-                if call.tool_name == "retrieve_context_evidence" and feedback.status == "SUCCEEDED":
-                    evidence = RetrieveEvidenceResult.model_validate(feedback.result)
+                tool = self.registry.get(call.tool_name)
+                if (
+                    feedback.status == "SUCCEEDED"
+                    and tool is not None
+                    and issubclass(tool.result_model, RetrieveEvidenceResult)
+                ):
+                    evidence = tool.result_model.model_validate(feedback.result)
+                    assert isinstance(evidence, RetrieveEvidenceResult)
                     images = [
                         identity
                         for identity in evidence.image_file_ids

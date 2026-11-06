@@ -5,12 +5,14 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from arclight.application.asset_objects import read_object
+from arclight.application.context_builder import resolve_assets
 from arclight.application.context_evidence import read_trace
 from arclight.application.context_sources import image_reference
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelCapabilities, ContextImage
-from arclight.persistence.models import AssetVersion, Episode, WorkflowRun
+from arclight.domain.context import ContextLimits
+from arclight.persistence.models import AssetVersion, Episode, VisualAsset, WorkflowRun
 
 
 def load_context_images(
@@ -53,6 +55,15 @@ def load_context_images(
     episode = db.get(Episode, run.episode_id)
     if episode is None:
         raise DomainError("CONTEXT_REFERENCE_INVALID", "上下文作用范围缺失", 409)
+    candidate = trace["task_context"]["scope"].get("candidate_version_id")
+    resolve_assets(
+        db,
+        episode.project_id,
+        {item["asset_version_id"] for item in selected},
+        ContextLimits.model_validate(trace["task_context"]["limits"]),
+        candidate=UUID(candidate) if candidate else None,
+        follow_profile_references=False,
+    )
     images = {}
     for reference in selected:
         identity = UUID(reference["file_id"])
@@ -63,6 +74,13 @@ def load_context_images(
             raise DomainError("CONTEXT_REFERENCE_INVALID", "上下文图片引用不匹配", 409)
         version = db.get(AssetVersion, version_id)
         assert version is not None
+        asset = db.get(VisualAsset, version.asset_id)
+        assert asset is not None
+        scope = asset.metadata_json.get("usage_scope", {})
+        if scope.get("kind", "PROJECT") != "PROJECT" and str(episode.id) not in scope.get(
+            "episode_ids", []
+        ):
+            raise DomainError("CONTEXT_SCOPE_NOT_ALLOWED", "图片不在当前剧集使用范围", 403)
         data = read_object(
             settings, episode.project_id, version.id, version.object_key, reference["checksum"]
         )
