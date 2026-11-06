@@ -1,5 +1,6 @@
 """Append bounded retrieval rounds to immutable startup manifests."""
 
+from collections.abc import Callable
 from copy import deepcopy
 from uuid import UUID, uuid5
 
@@ -135,22 +136,29 @@ def append_evidence(
     request: EvidenceRequest,
     settings: Settings,
 ) -> tuple[DependencyManifest, bool]:
-    episode = require_episode(db, run.episode_id, actor, write=True)
-    # Existing writers use the same project gate, serializing round allocation.
-    require_project(db, episode.project_id, actor, write=True)
-    root = root_manifest(db, run, stage, actor)
-    if "trace" not in root.snapshot_json["context"]:
-        raise DomainError("CONTEXT_TRACE_UNAVAILABLE", "旧运行不能补造启动来源", 409)
-    rounds = evidence_rounds(db, root)
-    fingerprint = digest(request.model_dump(mode="json"))
-    for previous in rounds:
-        value = previous.snapshot_json["context"]
-        if value["creation_key"] == str(request.creation_key):
-            if value["request_sha256"] != fingerprint:
-                raise DomainError("IDEMPOTENCY_CONFLICT", "同一检索键不能用于不同输入", 409)
-            return previous, False
-    if len(rounds) != request.expected_round:
-        raise DomainError("CONTEXT_ROUND_CONFLICT", "检索轮次已变化，请刷新后追加", 409)
+    def resolve(root, rounds, limits):
+        return _resolve_evidence(db, root, stage, request, settings, limits)
+
+    return append_resolved_evidence(
+        db,
+        run,
+        stage,
+        actor,
+        creation_key=request.creation_key,
+        expected_round=request.expected_round,
+        request_sha256=digest(request.model_dump(mode="json")),
+        resolve=resolve,
+    )
+
+
+def _resolve_evidence(
+    db: Session,
+    root: DependencyManifest,
+    stage: str,
+    request: EvidenceRequest,
+    settings: Settings,
+    limits: ContextLimits,
+) -> dict:
     contract = TASK_CONTRACTS[stage]
     if (
         (request.asset_version_ids and not contract.assets)
@@ -158,8 +166,6 @@ def append_evidence(
         or (request.source_ids and stage not in {"analyze", "outline", "script", "rewrite"})
     ):
         raise DomainError("CONTEXT_SCOPE_NOT_ALLOWED", "当前任务不允许此检索范围", 422)
-    context = root.snapshot_json["context"]["task_context"]
-    limits = ContextLimits.model_validate(context["limits"])
     sources = []
     entries = []
     for identity in request.story_entry_ids:
@@ -199,9 +205,48 @@ def append_evidence(
             {"source_id": str(identity), "text": source_text(db, settings, story_source)}
         )
         sources.append(source)
+    return {"sources": sources, "assets": assets, "story_entries": entries, "stories": stories}
+
+
+def append_resolved_evidence(
+    db: Session,
+    run: WorkflowRun,
+    stage: str,
+    actor: str,
+    *,
+    creation_key: UUID,
+    expected_round: int,
+    request_sha256: str,
+    resolve: Callable[[DependencyManifest, list[DependencyManifest], ContextLimits], dict],
+) -> tuple[DependencyManifest, bool]:
+    """Append server-collected materials through the original lock, chain and memory gates.
+
+    The resolver runs under the project write gate, after idempotency validation.
+    It is application code, never a client-supplied source or confirmation payload.
+    """
+    episode = require_episode(db, run.episode_id, actor, write=True)
+    # Existing writers use the same project gate, serializing round allocation.
+    require_project(db, episode.project_id, actor, write=True)
+    root = root_manifest(db, run, stage, actor)
+    if "trace" not in root.snapshot_json["context"]:
+        raise DomainError("CONTEXT_TRACE_UNAVAILABLE", "旧运行不能补造启动来源", 409)
+    rounds = evidence_rounds(db, root)
+    for previous in rounds:
+        value = previous.snapshot_json["context"]
+        if value["creation_key"] == str(creation_key):
+            if value["request_sha256"] != request_sha256:
+                raise DomainError("IDEMPOTENCY_CONFLICT", "同一检索键不能用于不同输入", 409)
+            return previous, False
+    if len(rounds) != expected_round:
+        raise DomainError("CONTEXT_ROUND_CONFLICT", "检索轮次已变化，请刷新后追加", 409)
+    context = root.snapshot_json["context"]["task_context"]
+    limits = ContextLimits.model_validate(context["limits"])
     number = len(rounds) + 1
     if number > MAX_EVIDENCE_ROUNDS:
         raise DomainError("CONTEXT_TOO_LARGE", "检索轮次达到上限", 422)
+    collected = resolve(root, rounds, limits)
+    sources = collected["sources"]
+    validate_sources(db, root.project_id, sources)
     value = {
         "schema_version": 1,
         "target": deepcopy(root.snapshot_json["target"]),
@@ -213,7 +258,7 @@ def append_evidence(
                 "dependency_type": "REFERENCE_DEPENDENCY",
                 "selectors": [],
             }
-            for item in assets
+            for item in collected.get("assets", [])
         ],
         "context": {
             "origin": "context_evidence",
@@ -223,12 +268,9 @@ def append_evidence(
             "startup_manifest_id": str(root.id),
             "parent_manifest_id": str(rounds[-1].id if rounds else root.id),
             "round": number,
-            "creation_key": str(request.creation_key),
-            "request_sha256": fingerprint,
-            "sources": sources,
-            "assets": assets,
-            "story_entries": entries,
-            "stories": stories,
+            "creation_key": str(creation_key),
+            "request_sha256": request_sha256,
+            **collected,
         },
     }
     from arclight.application.agent_memory_sources import capture_memory_sources

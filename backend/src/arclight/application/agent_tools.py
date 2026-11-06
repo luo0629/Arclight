@@ -535,7 +535,33 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
     )
     if settings is not None:
         from arclight.application.context_evidence import append_evidence, read_trace
+        from arclight.application.screenwriter_research import investigate_story
         from arclight.domain.context_trace import EvidenceRequest
+        from arclight.domain.screenwriter_research import (
+            InvestigateStoryParameters,
+            InvestigateStoryResult,
+        )
+
+        def investigate(context: AgentToolContext, parameters: AgentToolContract) -> dict:
+            assert isinstance(parameters, InvestigateStoryParameters)
+            run = context.db.get(WorkflowRun, context.run_id)
+            assert run is not None and run.agent_state_json is not None
+            state = state_for_scope(run.agent_state_json, scope_for_run(run, context.project_id))
+            stage = next(step.step_id for step in state.steps if step.status == "RUNNING")
+            return investigate_story(context.db, settings, run, stage, context.actor_id, parameters)
+
+        registry.register(
+            AgentToolDefinition(
+                name="investigate_story",
+                allowed_agents=frozenset({"screenwriter"}),
+                allowed_steps=frozenset({"outline", "rewrite", "script"}),
+                parameters_model=InvestigateStoryParameters,
+                result_model=InvestigateStoryResult,
+                scope_validator=lambda context, parameters: None,
+                handler=investigate,
+                requires_write=True,
+            )
+        )
 
         def retrieve(context: AgentToolContext, parameters: AgentToolContract) -> dict:
             assert isinstance(parameters, RetrieveEvidenceParameters)
