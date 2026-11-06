@@ -24,6 +24,12 @@ from arclight.application.story_sources import (
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
+from arclight.domain.director_creation import (
+    DIRECTOR_VERSION,
+    DIRECTOR_VERSIONS,
+    PRODUCTION_VERSION,
+    REVISED_PRODUCTION_VERSION,
+)
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION
@@ -130,11 +136,16 @@ def start_run(
     professional: bool = False,
     agent_limits: AgentRunLimits | None = None,
     revision_rounds: int | None = None,
+    professional_director: bool = False,
 ) -> WorkflowRun:
     options = ScreenwriterRevisionOptions(
-        professional=professional, agent_limits=agent_limits, revision_rounds=revision_rounds
+        professional=professional or professional_director,
+        agent_limits=agent_limits,
+        revision_rounds=revision_rounds,
     )
-    if professional:
+    if professional_director and script_version_id is None and not professional:
+        raise DomainError("DIRECTOR_TASK_INVALID", "专业双审核须选择专业编剧", 422)
+    if professional or professional_director:
         from arclight.application.model_gateway import lock_gate
 
         lock_gate(db)
@@ -165,6 +176,11 @@ def start_run(
         }
         if revision_rounds is not None:
             payload["revision_rounds"] = revision_rounds
+    if professional_director:
+        payload |= {
+            "professional_director": True,
+            "agent_limits": options.frozen_limits().model_dump(mode="json"),
+        }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -252,17 +268,29 @@ def start_run(
         inputs["screenwriter"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
         if revision_rounds is not None:
             inputs["screenwriter"]["revision_rounds"] = revision_rounds
+    if professional_director:
+        inputs["director"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
+    if professional_director:
+        version = (
+            DIRECTOR_VERSION
+            if script_version_id is not None
+            else REVISED_PRODUCTION_VERSION
+            if revision_rounds is not None
+            else PRODUCTION_VERSION
+        )
+    elif professional:
+        version = (
+            REVISED_SCREENWRITER_VERSION if revision_rounds is not None else SCREENWRITER_VERSION
+        )
+    else:
+        version = WORKFLOW_VERSION if script_version_id is None else DIRECTOR_WORKFLOW_VERSION
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=fingerprint,
         workflow_type="script_storyboard" if script_version_id is None else "storyboard",
-        workflow_version=(
-            REVISED_SCREENWRITER_VERSION if revision_rounds is not None else SCREENWRITER_VERSION
-        )
-        if professional
-        else (WORKFLOW_VERSION if script_version_id is None else DIRECTOR_WORKFLOW_VERSION),
+        workflow_version=version,
         input_json=inputs,
     )
     db.add(run)
@@ -277,6 +305,10 @@ def start_run(
         from arclight.application.screenwriter_creation import authorize_screenwriter
 
         authorize_screenwriter(db, run, actor, settings)
+    if professional_director:
+        from arclight.application.director_creation import authorize_director
+
+        authorize_director(db, run, actor, settings)
     if story_source is not None:
         bind_source(db, run, story_source.id)
     db.add(
@@ -374,8 +406,8 @@ def resume_run(
 def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     from arclight.application.screenwriter_creation import waiting_for_answer
 
-    if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW] and not waiting_for_answer(
-        db, run
+    if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW] and not (
+        waiting_for_answer(db, run) or waiting_for_answer(db, run, "director")
     ):
         raise DomainError("NOT_CANCELLABLE", "仅排队、等待审核或等待创作回答的工作流可以取消")
     agent_state = None
@@ -451,6 +483,18 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
                 "revision": state.revision + 1,
                 "extensions": state.extensions
                 | {"screenwriter.creation": {"attempt": creation_attempt(run) + 1}},
+            }
+        ).model_dump(mode="json")
+    if run.workflow_version in DIRECTOR_VERSIONS:
+        from arclight.application.director_creation import creation_attempt as director_attempt
+        from arclight.domain.agent_state import AgentRunState
+
+        state = AgentRunState.model_validate(run.agent_state_json)
+        run.agent_state_json = state.model_copy(
+            update={
+                "revision": state.revision + 1,
+                "extensions": state.extensions
+                | {"director.creation": {"attempt": director_attempt(run) + 1}},
             }
         ).model_dump(mode="json")
     run.status = RunStatus.QUEUED

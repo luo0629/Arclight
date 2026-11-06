@@ -10,6 +10,7 @@ from pydantic import SecretStr
 from arclight.agents.contracts import ScriptContent
 from arclight.application import production_versions
 from arclight.domain.agent_model import AgentModelCapabilities
+from arclight.domain.director_creation import DIRECTOR_VERSIONS
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.screenwriter_creation import SCREENWRITER_OUTLINE_VERSION, SCREENWRITER_VERSION
 from arclight.domain.screenwriter_revision import CHECKS, PATCH_TOOL, REVISION_WORKFLOWS
@@ -139,6 +140,10 @@ def _respond(request):
             ),
         )
     seed = data["data"]
+    if seed["phase"] == "DIRECT_SCENE_ONLY" or "script_version_id" in seed.get("constraints", {}):
+        from e2e_director import respond
+
+        return respond(payload)
     if seed["phase"] == "CRITIQUE_SCRIPT":
         return httpx.Response(200, json=_critique(seed, payload))
     if seed["phase"] == "PLANNING_ONLY":
@@ -275,7 +280,9 @@ def install():
     def capture(db, project_id, run, settings, *, actor=None):
         if (
             run.workflow_version
-            in {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION} | REVISION_WORKFLOWS
+            in {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION}
+            | REVISION_WORKFLOWS
+            | DIRECTOR_VERSIONS
         ):
             settings = settings.model_copy(
                 update={

@@ -17,6 +17,21 @@ type Scene = {
   dialogue: { line_id: string; speaker: string; text: string }[];
 };
 type Working = {
+  scenes?: {
+    scene_id: string;
+    dramatic_goal: string;
+    emotion: string;
+    staging: string[];
+    rhythm: string[];
+    estimated_duration_ms: number;
+  }[];
+  shots?: {
+    shot_no: number;
+    duration_ms: number;
+    visual_description: string;
+    characters: string[];
+    dialogue_line_ids: string[];
+  }[];
   decision?: "ACCEPT" | "REVISE" | "ESCALATE";
   checks?: string[];
   issues?: Issue[];
@@ -73,6 +88,16 @@ type Revision = {
   }[];
 };
 type Operation = {
+  observations?: {
+    tool: string;
+    feedback: {
+      status: string;
+      result?: {
+        materials?: { source_kind: string; source_id: string }[];
+        missing?: { reason: string }[];
+      };
+    };
+  }[];
   loop_id: string;
   kind: "plan" | "scene" | "critique";
   revision?: Revision;
@@ -93,7 +118,9 @@ export default function ScreenwriterProgress({
   busy,
   act,
   reload,
+  agent = "screenwriter",
 }: {
+  agent?: "screenwriter" | "director";
   run: Run;
   writable: boolean;
   busy: boolean;
@@ -108,7 +135,7 @@ export default function ScreenwriterProgress({
     let timer: ReturnType<typeof setTimeout>;
     async function load() {
       try {
-        const result = await api<Progress>(`/runs/${run.id}/screenwriter`);
+        const result = await api<Progress>(`/runs/${run.id}/${agent}`);
         if (!cancelled) {
           setData(result);
           setError("");
@@ -124,13 +151,12 @@ export default function ScreenwriterProgress({
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [run.id, run.status, run.revision, refresh]);
+  }, [run.id, run.status, run.revision, refresh, agent]);
+  const title =
+    agent === "director" ? "导演计划与镜头工作稿" : "编剧计划与工作稿";
   return (
-    <section
-      aria-label="编剧计划与工作稿"
-      className="flex min-w-0 flex-col gap-3"
-    >
-      <h4>编剧计划与工作稿</h4>
+    <section aria-label={title} className="flex min-w-0 flex-col gap-3">
+      <h4>{title}</h4>
       <p className="text-sm text-muted-foreground">
         工作片段会逐段保存；完整候选通过校验后进入下方审核。
       </p>
@@ -150,7 +176,9 @@ export default function ScreenwriterProgress({
         >
           <summary>
             {operation.kind === "plan"
-              ? "故事计划"
+              ? agent === "director"
+                ? "场景调度与节奏计划"
+                : "故事计划"
               : operation.kind === "critique"
                 ? `评价与修订 ${(operation.revision?.round ?? 0) + 1}`
                 : `场景 ${operation.scene_no}`}{" "}
@@ -170,6 +198,67 @@ export default function ScreenwriterProgress({
           <div className="flex flex-col gap-3 py-3">
             {operation.revision && <RevisionDetails operation={operation} />}
             {operation.result?.objective && <p>{operation.result.objective}</p>}
+            {operation.result?.scenes && (
+              <ol className="list-decimal pl-5">
+                {operation.result.scenes.map((scene) => (
+                  <li key={scene.scene_id}>
+                    <strong>{scene.dramatic_goal}</strong> ·{" "}
+                    {scene.estimated_duration_ms / 1000} 秒
+                    <p>情绪：{scene.emotion}</p>
+                    <p>调度：{scene.staging.join("；")}</p>
+                    <p>节奏：{scene.rhythm.join("；")}</p>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {operation.result?.shots && (
+              <ol className="list-decimal pl-5">
+                {operation.result.shots.map((shot) => (
+                  <li key={shot.shot_no}>
+                    <strong>场景内镜头 {shot.shot_no}</strong> ·{" "}
+                    {shot.duration_ms / 1000} 秒<p>{shot.visual_description}</p>
+                    <p>
+                      出镜：{shot.characters.join("、") || "无"} · 台词引用{" "}
+                      {shot.dialogue_line_ids.length} 条
+                    </p>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {!!operation.observations?.length && (
+              <details>
+                <summary>
+                  调查与工具反馈（{operation.observations.length}）
+                </summary>
+                <ul>
+                  {operation.observations.map((observation, i) => (
+                    <li key={i}>
+                      调查 {i + 1}：
+                      {observation.feedback.status === "SUCCEEDED"
+                        ? "成功"
+                        : "未成功"}
+                      {observation.feedback.result?.materials?.map((item) => (
+                        <p key={item.source_id}>
+                          {(
+                            {
+                              SCRIPT: "精确剧本",
+                              VISUAL: "视觉规范",
+                              ASSET: "精确资产",
+                              CAPABILITY: "生产能力声明",
+                            } as Record<string, string>
+                          )[item.source_kind] ?? item.source_kind}
+                        </p>
+                      ))}
+                      {observation.feedback.result?.missing?.map(
+                        (item, index) => (
+                          <p key={index}>缺少材料：{item.reason}</p>
+                        ),
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
             {operation.result?.goals && (
               <ul className="list-disc pl-5">
                 {operation.result.goals.map((goal, i) => (
@@ -250,7 +339,7 @@ export default function ScreenwriterProgress({
                 submit={(answer) =>
                   act(async () => {
                     await api(
-                      `/runs/${run.id}/screenwriter/${operation.loop_id}/answers`,
+                      `/runs/${run.id}/${agent}/${operation.loop_id}/answers`,
                       json("POST", {
                         question_id: operation.question_id,
                         input_sha256: operation.input_sha256,

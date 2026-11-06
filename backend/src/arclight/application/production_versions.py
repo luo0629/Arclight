@@ -13,6 +13,7 @@ from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain import director_creation, director_planning
 from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.generation_prompts import (
     PROMPT_COMPOSER_DEFINITION,
@@ -140,6 +141,57 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    if workflow_version in director_creation.DIRECTOR_VERSIONS and stage == "storyboard":
+        return [
+            (
+                "AGENT",
+                workflow_version,
+                {
+                    "operation": stage,
+                    "workflow_version": workflow_version,
+                    "runtime": "persistent-agent/1",
+                    "planning_version": director_planning.PLAN_VERSION,
+                    "plan_max_tokens": 16000,
+                    "fragment_version": director_creation.FRAGMENT_VERSION,
+                    "fragment_max_tokens": 8000,
+                    "assembly": "complete-scenes-contiguous-shots/1",
+                },
+            ),
+            (
+                "PROMPT",
+                workflow_version,
+                {
+                    "planning": director_planning.PLANNING_PROMPT,
+                    "fragment": director_creation.FRAGMENT_PROMPT,
+                },
+            ),
+            (
+                "SCHEMA",
+                workflow_version,
+                {
+                    "planning": director_planning.DirectorPlan.model_json_schema(),
+                    "fragment": director_creation.DirectorFragment.model_json_schema(),
+                    "candidate": StoryboardContent.model_json_schema(),
+                },
+            ),
+        ]
+    if workflow_version in director_creation.PRODUCTION_VERSIONS and stage == "script":
+        writer_version = (
+            "screenwriter/2.0"
+            if workflow_version == director_creation.REVISED_PRODUCTION_VERSION
+            else SCREENWRITER_VERSION
+        )
+        return [
+            (
+                kind,
+                workflow_version,
+                {
+                    **definition,
+                    **({"workflow_version": workflow_version} if kind == "AGENT" else {}),
+                },
+            )
+            for kind, _, definition in text_definitions(stage, writer_version)
+        ]
     if workflow_version in REVISION_WORKFLOWS and stage in {"script", "rewrite"}:
         definitions = text_definitions("script", SCREENWRITER_VERSION)
         result = []

@@ -105,6 +105,9 @@ export default function Inspector({
   const directorKey = useRef({ scriptId: "", key: "" });
   const requestKey = useRef({ story: "", key: "" });
   const [creation, setCreation] = useState(initialCreationOptions);
+  const [directorCreation, setDirectorCreation] = useState(
+    initialCreationOptions,
+  );
   const active = runs.some((run) =>
     ["QUEUED", "RUNNING", "WAITING_REVIEW"].includes(run.status),
   );
@@ -139,11 +142,16 @@ export default function Inspector({
     });
   }
   async function direct(scriptId: string) {
-    if (directorKey.current.scriptId !== scriptId || !directorKey.current.key)
-      directorKey.current = { scriptId, key: crypto.randomUUID() };
+    const body = {
+      script_version_id: scriptId,
+      ...creationPayload(directorCreation),
+    };
+    const signature = JSON.stringify(body);
+    if (directorKey.current.scriptId !== signature || !directorKey.current.key)
+      directorKey.current = { scriptId: signature, key: crypto.randomUUID() };
     const ok = await act(async () => {
       await api(`/episodes/${episode.id}/storyboard-runs`, {
-        ...json("POST", { script_version_id: scriptId }),
+        ...json("POST", body),
         headers: { "Idempotency-Key": directorKey.current.key },
       });
       await reload();
@@ -253,6 +261,7 @@ export default function Inspector({
             {story.length} / 20000
           </p>
           <CreationOptionsFields
+            allowDirector
             value={creation}
             onChange={setCreation}
             disabled={!writable || busy || active}
@@ -370,11 +379,20 @@ export default function Inspector({
             version.status === "APPROVED" &&
             writable && (
               <>
+                <CreationOptionsFields
+                  directorOnly
+                  allowReview={false}
+                  value={directorCreation}
+                  onChange={setDirectorCreation}
+                  disabled={busy || active}
+                />
                 <Button
                   variant="default"
                   size="lg"
                   className="wide w-full"
-                  disabled={busy || active}
+                  disabled={
+                    busy || active || !validCreationOptions(directorCreation)
+                  }
                   onClick={() => void direct(version.id)}
                 >
                   从此版本生成分镜

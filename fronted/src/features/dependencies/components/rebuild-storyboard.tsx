@@ -9,6 +9,11 @@ import {
 import { Notice, FormLabel } from "@/components/ui-kit";
 import { api, json, message } from "@/lib/api/client";
 import type { ContentVersion } from "@/types/api";
+import CreationOptionsFields, {
+  creationPayload,
+  initialCreationOptions,
+  validCreationOptions,
+} from "@/features/editor/components/creation-options";
 
 export default function RebuildStoryboard({
   episodeId,
@@ -25,6 +30,7 @@ export default function RebuildStoryboard({
 }) {
   const [scripts, setScripts] = useState<ContentVersion[]>([]);
   const [source, setSource] = useState("");
+  const [creation, setCreation] = useState(initialCreationOptions);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [attempt, setAttempt] = useState(0);
@@ -50,18 +56,27 @@ export default function RebuildStoryboard({
     return () => controller.abort();
   }, [episodeId, attempt]);
   async function rebuild() {
-    if (!source || disabled || submitting.current) return;
+    if (
+      !source ||
+      disabled ||
+      submitting.current ||
+      !validCreationOptions(creation)
+    )
+      return;
     submitting.current = true;
     setBusy(true);
     setError("");
-    if (key.current.source !== source)
-      key.current = { source, value: crypto.randomUUID() };
+    const body = {
+      script_version_id: source,
+      rebuild_from_version_id: versionId,
+      ...creationPayload(creation),
+    };
+    const signature = JSON.stringify(body);
+    if (key.current.source !== signature)
+      key.current = { source: signature, value: crypto.randomUUID() };
     try {
       await api(`/episodes/${episodeId}/storyboard-runs`, {
-        ...json("POST", {
-          script_version_id: source,
-          rebuild_from_version_id: versionId,
-        }),
+        ...json("POST", body),
         headers: { "Idempotency-Key": key.current.value },
       });
       await reload();
@@ -105,8 +120,17 @@ export default function RebuildStoryboard({
           ))}
         </NativeSelect>
       </FormLabel>
+      <CreationOptionsFields
+        directorOnly
+        allowReview={false}
+        value={creation}
+        onChange={setCreation}
+        disabled={disabled || busy}
+      />
       <Button
-        disabled={!source || disabled || busy}
+        disabled={
+          !source || disabled || busy || !validCreationOptions(creation)
+        }
         onClick={() => void rebuild()}
       >
         从所选来源重新生成分镜

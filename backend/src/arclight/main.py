@@ -21,6 +21,7 @@ from arclight.api.content import router as content_router
 from arclight.api.contexts import router as contexts_router
 from arclight.api.costs import router as costs_router
 from arclight.api.dependencies_graph import router as dependencies_router
+from arclight.api.director import router as director_router
 from arclight.api.file_transfers import router as file_transfers_router
 from arclight.api.files import router as files_router
 from arclight.api.generation import router as generation_router
@@ -181,6 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(story_outline_router)
     app.include_router(script_rewrite_router)
     app.include_router(screenwriter_router)
+    app.include_router(director_router)
     app.include_router(character_matching_router)
     app.include_router(project_overview_router)
     app.include_router(production_state_router)

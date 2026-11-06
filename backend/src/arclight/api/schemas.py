@@ -14,6 +14,7 @@ from pydantic import (
 
 from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
 from arclight.domain.project_settings import ProjectStorySettings
+from arclight.domain.screenwriter_creation import ScreenwriterOptions
 from arclight.domain.screenwriter_revision import ScreenwriterRevisionOptions
 from arclight.domain.workflow_contracts import WorkflowRunContract
 
@@ -54,6 +55,7 @@ class EpisodeRead(Resource, EpisodeCreate):
 
 
 class RunCreate(Input, ScreenwriterRevisionOptions):
+    professional_director: bool = Field(default=False, strict=True)
     story: Annotated[str, StringConstraints(strip_whitespace=False)] | None = Field(
         default=None, min_length=1, max_length=20000
     )
@@ -62,6 +64,8 @@ class RunCreate(Input, ScreenwriterRevisionOptions):
 
     @model_validator(mode="after")
     def one_source(self) -> "RunCreate":
+        if self.professional_director and not self.professional:
+            raise ValueError("专业双审核须选择专业编剧；独立导演使用storyboard-runs入口")
         if (
             sum(
                 value is not None for value in (self.story, self.outline_version_id, self.source_id)
@@ -72,7 +76,7 @@ class RunCreate(Input, ScreenwriterRevisionOptions):
         return self
 
 
-class StoryboardRunCreate(Input):
+class StoryboardRunCreate(Input, ScreenwriterOptions):
     script_version_id: UUID
     rebuild_from_version_id: UUID | None = None
 

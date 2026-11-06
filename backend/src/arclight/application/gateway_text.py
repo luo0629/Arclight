@@ -186,10 +186,11 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
 
 def _professional_execution(run, stage, revision):
     from arclight.domain.agent_limits import AgentExecutionContext
+    from arclight.domain.director_creation import DIRECTOR_VERSIONS
     from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION
     from arclight.domain.screenwriter_revision import REVISION_WORKFLOWS
 
-    if run.workflow_version not in {SCREENWRITER_VERSION} | REVISION_WORKFLOWS:
+    if run.workflow_version not in {SCREENWRITER_VERSION} | REVISION_WORKFLOWS | DIRECTOR_VERSIONS:
         return None
     return AgentExecutionContext(
         run_id=run.id,

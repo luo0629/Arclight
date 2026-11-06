@@ -14,6 +14,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type CreationOptions = {
   professional: boolean;
+  professionalDirector?: boolean;
   review: boolean;
   revisionRounds: string;
   cost: string;
@@ -22,6 +23,7 @@ export type CreationOptions = {
 };
 export const initialCreationOptions: CreationOptions = {
   professional: false,
+  professionalDirector: false,
   review: false,
   revisionRounds: "3",
   cost: "",
@@ -50,6 +52,7 @@ export function creationPayload(value: CreationOptions) {
   return value.professional
     ? {
         professional: true,
+        ...(value.professionalDirector ? { professional_director: true } : {}),
         ...(value.review
           ? { revision_rounds: Number(value.revisionRounds) }
           : {}),
@@ -67,6 +70,8 @@ export function isCreationOptions(value: unknown): value is CreationOptions {
   const row = value as Record<string, unknown>;
   return (
     typeof row.professional === "boolean" &&
+    (row.professionalDirector === undefined ||
+      typeof row.professionalDirector === "boolean") &&
     typeof row.review === "boolean" &&
     ["revisionRounds", "cost", "seconds", "calls"].every(
       (key) => typeof row[key] === "string",
@@ -79,24 +84,30 @@ export default function CreationOptionsFields({
   disabled,
   allowReview = true,
   rewrite = false,
+  allowDirector = false,
+  directorOnly = false,
 }: {
   value: CreationOptions;
   onChange: (value: CreationOptions) => void;
   disabled: boolean;
   allowReview?: boolean;
   rewrite?: boolean;
+  allowDirector?: boolean;
+  directorOnly?: boolean;
 }) {
   const id = useId();
   return (
     <FieldSet disabled={disabled}>
-      <FieldLegend variant="label">创作方式</FieldLegend>
+      <FieldLegend variant="label">
+        {directorOnly ? "分镜方式" : "创作方式"}
+      </FieldLegend>
       <FieldGroup>
         <Field>
           <ToggleGroup
             className="w-full flex-wrap"
             type="single"
             variant="outline"
-            aria-label="创作方式"
+            aria-label={directorOnly ? "分镜方式" : "创作方式"}
             value={
               value.professional
                 ? !rewrite && value.review
@@ -109,16 +120,22 @@ export default function CreationOptionsFields({
                 onChange({
                   ...value,
                   professional: mode !== "standard",
+                  professionalDirector:
+                    mode === "standard" ? false : value.professionalDirector,
                   review:
                     mode === "reviewed" || (rewrite && mode === "professional"),
                 });
             }}
           >
             <ToggleGroupItem value="standard">
-              {rewrite ? "直接改写" : "直接起稿"}
+              {directorOnly ? "直接拆镜" : rewrite ? "直接改写" : "直接起稿"}
             </ToggleGroupItem>
             <ToggleGroupItem value="professional">
-              {rewrite ? "调查、规划与评价改写" : "调查、规划与分段创作"}
+              {directorOnly
+                ? "调查、规划与逐场景拆镜"
+                : rewrite
+                  ? "调查、规划与评价改写"
+                  : "调查、规划与分段创作"}
             </ToggleGroupItem>
             {allowReview && !rewrite && (
               <ToggleGroupItem value="reviewed">
@@ -128,14 +145,44 @@ export default function CreationOptionsFields({
           </ToggleGroup>
           {value.professional && (
             <FieldDescription>
-              {value.review
-                ? "结合剧情评价和规则检查，按限定范围修订；无法解决的问题会请你决定。最终稿仍须审核。"
-                : "先调查并保存计划，再逐段创作；遇到问题会等待你的回答。完整稿仍须审核。"}
+              {directorOnly
+                ? "先调查精确批准剧本并保存场景计划，再逐场景拆镜；遇到问题会等待你的回答，完整分镜仍须审核。"
+                : value.review
+                  ? "结合剧情评价和规则检查，按限定范围修订；无法解决的问题会请你决定。最终稿仍须审核。"
+                  : "先调查并保存计划，再逐段创作；遇到问题会等待你的回答。完整稿仍须审核。"}
             </FieldDescription>
           )}
         </Field>
         {value.professional && (
           <>
+            {allowDirector && (
+              <Field>
+                <FieldLabel>剧本批准后的分镜方式</FieldLabel>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  aria-label="剧本批准后的分镜方式"
+                  value={
+                    value.professionalDirector ? "professional" : "standard"
+                  }
+                  onValueChange={(mode) => {
+                    if (mode)
+                      onChange({
+                        ...value,
+                        professionalDirector: mode === "professional",
+                      });
+                  }}
+                >
+                  <ToggleGroupItem value="standard">直接拆镜</ToggleGroupItem>
+                  <ToggleGroupItem value="professional">
+                    调查、规划与逐场景拆镜
+                  </ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>
+                  先审核剧本，再审核完整分镜；两个阶段共用本次执行限制。
+                </FieldDescription>
+              </Field>
+            )}
             {value.review && (
               <Field>
                 <FieldLabel htmlFor={id + "-rounds"}>

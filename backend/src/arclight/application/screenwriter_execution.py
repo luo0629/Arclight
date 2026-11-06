@@ -64,19 +64,26 @@ def _active(db: Session, run_id: UUID, revision: int) -> WorkflowRun:
 
 
 def _waiting(
-    factory: sessionmaker[Session], run_id: UUID, revision: int, outcome: AgentLoopResult
+    factory: sessionmaker[Session],
+    run_id: UUID,
+    revision: int,
+    outcome: AgentLoopResult,
+    agent_name: str = "screenwriter",
 ) -> bool:
     if outcome.status == "COMPLETED":
         return False
     if outcome.status == "STOPPED":
         raise DomainError(
-            outcome.stop_code or "SCREENWRITER_STOPPED", "专业编剧已停止，请查看问题或显式重试", 409
+            outcome.stop_code or f"{agent_name.upper()}_STOPPED",
+            "专业创作已停止，请查看问题或显式重试",
+            409,
         )
     with factory.begin() as db:
         run = _active(db, run_id, revision)
+        run.pending_review = None
         previous = db.scalars(
             select(WorkflowEvent).where(
-                WorkflowEvent.run_id == run.id, WorkflowEvent.event_type == "screenwriter.question"
+                WorkflowEvent.run_id == run.id, WorkflowEvent.event_type == f"{agent_name}.question"
             )
         )
         if not any(
@@ -85,7 +92,7 @@ def _waiting(
             emit(
                 db,
                 run,
-                "screenwriter.question",
+                f"{agent_name}.question",
                 {"loop_id": str(outcome.loop_id), "question_id": str(outcome.question_id)},
             )
     return True
@@ -127,7 +134,9 @@ def _review_graph(
     with factory.begin() as db:
         run = _active(db, run_id, revision)
         assert run.agent_state_json is not None
-        plan_ref = run.agent_state_json["extensions"]["screenwriter.planning"]
+        plan_ref = run.agent_state_json["extensions"][
+            "director.planning" if run.workflow_type == "storyboard" else "screenwriter.planning"
+        ]
         loop = db.get(AgentLoop, UUID(plan_ref["loop_id"]))
         assert loop is not None and loop.status == "COMPLETED"
         token = claim_loop(db, loop)
@@ -148,7 +157,18 @@ def _review_graph(
             with factory.begin() as db:
                 store.guard(db, execution=False)
                 current = _active(db, run_id, revision)
+                saved = restore_agent_state(current.agent_state_json, None, scope)
+                if updated != saved and updated.revision != saved.revision + 1:
+                    raise DomainError(
+                        "AGENT_STATE_CONFLICT", "工作图状态已变化，须从原运行恢复", 409
+                    )
                 current.agent_state_json = updated.model_dump(mode="json")
+
+        def current_state() -> AgentRunState:
+            with factory.begin() as db:
+                store.guard(db, execution=False)
+                current = _active(db, run_id, revision)
+                return restore_agent_state(current.agent_state_json, None, scope)
 
         artifacts = ArtifactStore(
             factory,
@@ -173,6 +193,9 @@ def _review_graph(
                 agent_state_updated=save_state,
             )
         else:
+            from arclight.application.director_execution import generate_storyboard
+            from arclight.domain.director_creation import DIRECTOR_VERSIONS
+
             graph = build_graph(
                 bind_contexts(build_provider(provider_settings), contexts),
                 artifacts,
@@ -181,6 +204,11 @@ def _review_graph(
                 agent_scope=scope,
                 agent_state_seed=state,
                 agent_state_updated=save_state,
+                agent_state_current=current_state,
+                director_only=run.workflow_type == "storyboard",
+                director_generate=(lambda: generate_storyboard(factory, settings, run_id, revision))
+                if run.workflow_version in DIRECTOR_VERSIONS
+                else None,
             )
         config = {"configurable": {"thread_id": str(run_id)}}
         snapshot = graph.get_state(config)
@@ -207,7 +235,12 @@ def _review_graph(
             ):
                 raise DomainError("AGENT_STALE_DECISION", "审核对象与原图不一致", 409)
             value = Command(resume=resume)
-        graph.invoke(value, config, durability="sync")
+        from arclight.application.director_execution import DirectorWaiting
+
+        try:
+            graph.invoke(value, config, durability="sync")
+        except DirectorWaiting:
+            return
         snapshot = graph.get_state(config)
         with factory.begin() as db:
             store.guard(db, execution=False)

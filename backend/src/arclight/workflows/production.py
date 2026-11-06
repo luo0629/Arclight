@@ -59,6 +59,8 @@ def build_graph(
     agent_scope: AgentRunScope | None = None,
     agent_state_seed: AgentRunState | dict | None = None,
     agent_state_updated: Callable[[AgentRunState], None] | None = None,
+    agent_state_current: Callable[[], AgentRunState] | None = None,
+    director_generate: Callable[[], dict] | None = None,
 ):
     if (agent_scope is None) != (agent_state_seed is None):
         raise ValueError("Agent state scope and seed must be provided together")
@@ -87,7 +89,9 @@ def build_graph(
         current = state_from_checkpoint(
             state,
             agent_scope,
-            latest_agent_state or AgentRunState.model_validate(agent_state_seed),
+            agent_state_current()
+            if agent_state_current is not None
+            else latest_agent_state or AgentRunState.model_validate(agent_state_seed),
         )
         updated = transition_agent_step(
             current,
@@ -112,7 +116,9 @@ def build_graph(
         current = state_from_checkpoint(
             state,
             agent_scope,
-            latest_agent_state or AgentRunState.model_validate(agent_state_seed),
+            agent_state_current()
+            if agent_state_current is not None
+            else latest_agent_state or AgentRunState.model_validate(agent_state_seed),
         )
         return any(step.step_id == step_id and step.status == "SUCCEEDED" for step in current.steps)
 
@@ -171,7 +177,11 @@ def build_graph(
 
         def generate() -> dict:
             script = ScriptContent.model_validate(state["script"])
-            content = provider.storyboard(script, state["target_duration_ms"])
+            content = (
+                director_generate()
+                if director_generate is not None
+                else provider.storyboard(script, state["target_duration_ms"])
+            )
             return StoryboardContent.model_validate(content).validate_against(script).model_dump()
 
         version_id, content = artifacts.storyboard(state["script_version_id"], generate)

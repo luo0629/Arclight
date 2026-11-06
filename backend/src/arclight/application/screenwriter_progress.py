@@ -97,7 +97,13 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
 
 
 def queue_answer(
-    db: Session, run_id: UUID, loop_id: UUID, actor: str, decision: AgentHumanDecision
+    db: Session,
+    run_id: UUID,
+    loop_id: UUID,
+    actor: str,
+    decision: AgentHumanDecision,
+    *,
+    agent_name: str = "screenwriter",
 ) -> WorkflowRun:
     # Preserve the shared gateway -> run lock order used by loop execution.
     from arclight.application.model_gateway import lock_gate
@@ -109,10 +115,14 @@ def queue_answer(
     loop = db.get(AgentLoop, loop_id)
     question = db.get(AgentLoopQuestion, decision.question_id)
     episode = db.get(Episode, run.episode_id)
+    from arclight.domain.director_creation import DIRECTOR_VERSIONS
+
+    versions = DIRECTOR_VERSIONS if agent_name == "director" else PROFESSIONAL_VERSIONS
     if (
-        run.workflow_version not in PROFESSIONAL_VERSIONS
+        run.workflow_version not in versions
         or loop is None
         or loop.run_id != run.id
+        or loop.seed_json.get("agent_name") != agent_name
         or question is None
         or question.loop_id != loop.id
     ):
@@ -138,7 +148,7 @@ def queue_answer(
     emit(
         db,
         run,
-        "screenwriter.answer_queued",
+        f"{agent_name}.answer_queued",
         {"loop_id": str(loop.id), "question_id": str(question.id)},
     )
     return run

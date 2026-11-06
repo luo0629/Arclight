@@ -103,8 +103,22 @@ export default function Tasks({
                 "screenwriter-outline/1.0",
                 "screenwriter/2.0",
                 "screenwriter-rewrite/1.0",
+                "production/1.0",
+                "production/2.0",
               ].includes(run.workflow_version ?? "") && (
                 <ScreenwriterProgress
+                  run={run}
+                  writable={writable}
+                  busy={busy}
+                  act={act}
+                  reload={reload}
+                />
+              )}
+              {["director/1.0", "production/1.0", "production/2.0"].includes(
+                run.workflow_version ?? "",
+              ) && (
+                <ScreenwriterProgress
+                  agent="director"
                   run={run}
                   writable={writable}
                   busy={busy}
