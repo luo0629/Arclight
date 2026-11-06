@@ -72,9 +72,9 @@ def require_project(
             None
             if actor == "service-owner"
             else db.scalar(
-                select(ProjectMember).where(
-                    ProjectMember.project_id == project_id, ProjectMember.user_id == UUID(actor)
-                )
+                select(ProjectMember)
+                .where(ProjectMember.project_id == project_id, ProjectMember.user_id == UUID(actor))
+                .execution_options(populate_existing=True)
             )
         )
         if membership is None:
