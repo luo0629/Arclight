@@ -147,6 +147,7 @@ def create_script_run(
         source_id=payload.source_id,
         professional=payload.professional,
         agent_limits=payload.agent_limits,
+        revision_rounds=payload.revision_rounds,
     )
     return AcceptedRun(
         run_id=run.id,

@@ -23,6 +23,13 @@ import { api, json, message } from "@/lib/api/client";
 import type { ContentVersion, Episode } from "@/types/api";
 import Dialog from "@/components/shared/app-dialog";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
+import CreationOptionsFields, {
+  creationPayload,
+  initialCreationOptions,
+  isCreationOptions,
+  validCreationOptions,
+  type CreationOptions,
+} from "./creation-options";
 
 type Scene = {
   scene_id: string;
@@ -32,6 +39,7 @@ type Scene = {
   dialogue: { line_id: string; speaker: string; text: string }[];
 };
 type Draft = {
+  creation?: CreationOptions;
   scope: string;
   first: string;
   last: string;
@@ -64,7 +72,8 @@ function validDraft(value: unknown): value is Draft {
     draftFields.every((key) => typeof row[key] === "string") &&
     ["scene", "chapter", "paragraph"].includes(String(row.scope)) &&
     Number.isSafeInteger(row.start) &&
-    Number.isSafeInteger(row.end)
+    Number.isSafeInteger(row.end) &&
+    (row.creation === undefined || isCreationOptions(row.creation))
   );
 }
 
@@ -108,6 +117,7 @@ export default function ScriptRewrite({
       narrationLimit: "",
       fingerprint: "",
       key: "",
+      creation: initialCreationOptions,
     },
     validate: validDraft,
   });
@@ -126,6 +136,7 @@ export default function ScriptRewrite({
     };
   }, []);
   const draft = local.value;
+  const creation = draft.creation ?? initialCreationOptions;
   const scene = scenes.find((row) => row.scene_id === draft.first);
   const text =
     draft.field === "action"
@@ -178,7 +189,13 @@ export default function ScriptRewrite({
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (disabled || saving.current || !validSelection) return;
+    if (
+      disabled ||
+      saving.current ||
+      !validSelection ||
+      !validCreationOptions(creation)
+    )
+      return;
     saving.current = true;
     setSubmitting(true);
     setError("");
@@ -201,6 +218,7 @@ export default function ScriptRewrite({
               end: draft.end,
             };
     const body = {
+      ...creationPayload(creation),
       base_version_id: version.id,
       target,
       instructions: {
@@ -477,6 +495,12 @@ export default function ScriptRewrite({
                   </FieldDescription>
                 </Field>
               </FieldGroup>
+              <CreationOptionsFields
+                value={creation}
+                onChange={(value) => update({ creation: value })}
+                disabled={disabled}
+                rewrite
+              />
               {!validSelection && (
                 <Notice tone="error">
                   选区已失效，请重新选择本版本的场景和段落。
@@ -491,6 +515,7 @@ export default function ScriptRewrite({
                 disabled={
                   disabled ||
                   !validSelection ||
+                  !validCreationOptions(creation) ||
                   !(
                     draft.instruction.trim() ||
                     draft.tone.trim() ||

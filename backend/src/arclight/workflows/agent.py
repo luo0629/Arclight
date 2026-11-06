@@ -29,13 +29,16 @@ def build_agent_graph(
     *,
     checkpointer=None,
     human: Callable[[AgentLoopState], AgentLoopState] | None = None,
+    start_with_human: bool = False,
 ):
+    if start_with_human and human is None:
+        raise ValueError("An initial question requires the persistent human handler")
     graph = StateGraph(AgentLoopState)
     graph.add_node("observe", driver.observe)
     graph.add_node("decide", driver.decide)
     graph.add_node("tools", driver.tools)
     graph.add_node("finish", driver.finish)
-    graph.add_edge(START, "observe")
+    graph.add_edge(START, "human" if start_with_human else "observe")
     graph.add_conditional_edges(
         "observe",
         lambda state: "stop" if state.get("outcome") else "decide",

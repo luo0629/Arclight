@@ -39,6 +39,7 @@ from arclight.domain.agent_state import (
 )
 from arclight.domain.screenwriter_creation import SCREENWRITER_OUTLINE_VERSION, ScriptFragment
 from arclight.domain.screenwriter_planning import EpisodePlan, SeasonPlan
+from arclight.domain.screenwriter_revision import REVISION_WORKFLOWS
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import Episode, Script, WorkflowEvent, WorkflowRun
 from arclight.providers.context import bind_contexts
@@ -156,22 +157,40 @@ def _review_graph(
             inputs["target_duration_ms"],
             settings.text_duration_tolerance_percent,
         )
-        graph = build_graph(
-            bind_contexts(build_provider(provider_settings), contexts),
-            artifacts,
-            saver,
-            contexts=contexts,
-            agent_scope=scope,
-            agent_state_seed=state,
-            agent_state_updated=save_state,
-        )
+        if run.workflow_type == "script_rewrite":
+            from arclight.workflows.rewrite import build_rewrite_graph
+
+            def already_saved(_inputs: dict) -> dict:
+                raise DomainError("SCREENWRITER_INCOMPLETE", "终稿尚未保存，不能进入审核", 409)
+
+            graph = build_rewrite_graph(
+                artifacts,
+                saver,
+                already_saved,
+                contexts=contexts,
+                agent_scope=scope,
+                agent_state_seed=state,
+                agent_state_updated=save_state,
+            )
+        else:
+            graph = build_graph(
+                bind_contexts(build_provider(provider_settings), contexts),
+                artifacts,
+                saver,
+                contexts=contexts,
+                agent_scope=scope,
+                agent_state_seed=state,
+                agent_state_updated=save_state,
+            )
         config = {"configurable": {"thread_id": str(run_id)}}
         snapshot = graph.get_state(config)
         for name, frozen in inputs.items():
             if name in snapshot.values and snapshot.values[name] != frozen:
                 raise DomainError("AGENT_INPUT_CHANGED", "审核图冻结输入已变化", 409)
-        if contexts and (
-            "director" in snapshot.next or (resume and resume.get("decision") == "APPROVE")
+        if (
+            run.workflow_type != "script_rewrite"
+            and contexts
+            and ("director" in snapshot.next or (resume and resume.get("decision") == "APPROVE"))
         ):
             with factory.begin() as db:
                 current = _active(db, run_id, revision)
@@ -207,7 +226,13 @@ def _review_graph(
                 emit(db, current, "workflow.waiting_review", current.pending_review)
             else:
                 current.status = (
-                    "SUCCEEDED" if snapshot.values.get("storyboard_approved") else "REJECTED"
+                    "SUCCEEDED"
+                    if snapshot.values.get(
+                        "script_approved"
+                        if run.workflow_type == "script_rewrite"
+                        else "storyboard_approved"
+                    )
+                    else "REJECTED"
                 )
                 current.pending_review = None
                 emit(db, current, "workflow.finished", {"status": current.status})
@@ -234,7 +259,11 @@ def execute_screenwriter(
             scope = scope_for_run(run, episode.project_id)
             state = restore_agent_state(run.agent_state_json, None, scope)
             stage: AgentStepId = (
-                "outline" if run.workflow_version == SCREENWRITER_OUTLINE_VERSION else "script"
+                "outline"
+                if run.workflow_version == SCREENWRITER_OUTLINE_VERSION
+                else "rewrite"
+                if run.workflow_type == "script_rewrite"
+                else "script"
             )
             if next(step for step in state.steps if step.step_id == stage).status == "PENDING":
                 state = transition_agent_step(
@@ -247,7 +276,7 @@ def execute_screenwriter(
             actor = execution_actor(db, run)
             candidate = (
                 db.scalar(select(Script.id).where(Script.run_id == run.id))
-                if stage == "script"
+                if stage in {"script", "rewrite"}
                 else None
             )
         if candidate is None:
@@ -258,17 +287,40 @@ def execute_screenwriter(
                 _finish_outline(factory, run_id, revision, outcome)
                 return True
             assert outcome.loop_id is not None and outcome.result is not None
-            assert isinstance(outcome.result.plan, EpisodePlan)
-            fragments: list[ScriptFragment] = []
-            for scene_no in range(1, len(outcome.result.plan.scenes) + 1):
-                fragment = create_fragment(
-                    factory, settings, run_id, outcome.loop_id, outcome.result, scene_no, fragments
+            if stage == "rewrite":
+                from arclight.agents.contracts import ScriptContent
+
+                content = ScriptContent.model_validate(
+                    run.input_json["rewrite_input"]["source_script"]
                 )
-                if _waiting(factory, run_id, revision, fragment):
+            else:
+                assert isinstance(outcome.result.plan, EpisodePlan)
+                fragments: list[ScriptFragment] = []
+                for scene_no in range(1, len(outcome.result.plan.scenes) + 1):
+                    fragment = create_fragment(
+                        factory,
+                        settings,
+                        run_id,
+                        outcome.loop_id,
+                        outcome.result,
+                        scene_no,
+                        fragments,
+                    )
+                    if _waiting(factory, run_id, revision, fragment):
+                        return True
+                    assert fragment.result is not None
+                    fragments.append(fragment.result)
+                content = assemble_script(outcome.loop_id, outcome.result, fragments)
+            if run.workflow_version in REVISION_WORKFLOWS:
+                from arclight.application.screenwriter_revision import revise_script
+
+                evaluated, final_content = revise_script(
+                    factory, settings, run_id, outcome.result, content
+                )
+                if _waiting(factory, run_id, revision, evaluated):
                     return True
-                assert fragment.result is not None
-                fragments.append(fragment.result)
-            content = assemble_script(outcome.loop_id, outcome.result, fragments)
+                assert final_content is not None
+                content = final_content
             with factory.begin() as db:
                 run = _active(db, run_id, revision)
                 lock_dependency_graph(db, scope.project_id)

@@ -26,7 +26,11 @@ from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
-from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION, ScreenwriterOptions
+from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION
+from arclight.domain.screenwriter_revision import (
+    REVISED_SCREENWRITER_VERSION,
+    ScreenwriterRevisionOptions,
+)
 from arclight.persistence.models import (
     AuditEvent,
     Episode,
@@ -125,8 +129,11 @@ def start_run(
     rebuild_from_version_id: UUID | None = None,
     professional: bool = False,
     agent_limits: AgentRunLimits | None = None,
+    revision_rounds: int | None = None,
 ) -> WorkflowRun:
-    options = ScreenwriterOptions(professional=professional, agent_limits=agent_limits)
+    options = ScreenwriterRevisionOptions(
+        professional=professional, agent_limits=agent_limits, revision_rounds=revision_rounds
+    )
     if professional:
         from arclight.application.model_gateway import lock_gate
 
@@ -156,6 +163,8 @@ def start_run(
             "professional": True,
             "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
+        if revision_rounds is not None:
+            payload["revision_rounds"] = revision_rounds
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -241,13 +250,17 @@ def start_run(
         inputs["_text_service"] = snapshot
     if professional:
         inputs["screenwriter"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
+        if revision_rounds is not None:
+            inputs["screenwriter"]["revision_rounds"] = revision_rounds
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=fingerprint,
         workflow_type="script_storyboard" if script_version_id is None else "storyboard",
-        workflow_version=SCREENWRITER_VERSION
+        workflow_version=(
+            REVISED_SCREENWRITER_VERSION if revision_rounds is not None else SCREENWRITER_VERSION
+        )
         if professional
         else (WORKFLOW_VERSION if script_version_id is None else DIRECTOR_WORKFLOW_VERSION),
         input_json=inputs,

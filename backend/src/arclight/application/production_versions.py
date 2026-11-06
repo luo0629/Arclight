@@ -27,6 +27,14 @@ from arclight.domain.screenwriter_creation import (
     ScriptFragment,
 )
 from arclight.domain.screenwriter_planning import PLAN_VERSION, PLANNING_PROMPT, ScreenwriterPlan
+from arclight.domain.screenwriter_revision import (
+    REVISION_PROMPT,
+    REVISION_VERSION,
+    REVISION_WORKFLOWS,
+    CheckPatchParameters,
+    CheckPatchResult,
+    ScriptCritique,
+)
 from arclight.domain.versions import VersionRegistration, digest
 from arclight.persistence.models import (
     DependencyManifest,
@@ -132,6 +140,35 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    if workflow_version in REVISION_WORKFLOWS and stage in {"script", "rewrite"}:
+        definitions = text_definitions("script", SCREENWRITER_VERSION)
+        result = []
+        for kind, _, original in definitions:
+            definition = deepcopy(original)
+            if kind == "AGENT":
+                definition |= {
+                    "operation": stage,
+                    "workflow_version": workflow_version,
+                    "revision_version": REVISION_VERSION,
+                    "revision_max_tokens": 8000,
+                    "repair_policy": "frozen-bounded-receipts/1",
+                    "human_escalation": "server-initial-question/1",
+                }
+            elif kind == "PROMPT":
+                definition["revision"] = REVISION_PROMPT
+            else:
+                definition |= {
+                    "revision_version": REVISION_VERSION,
+                    "revision": ScriptCritique.model_json_schema(),
+                    "patch_parameters": CheckPatchParameters.model_json_schema(),
+                    "patch_result": CheckPatchResult.model_json_schema(),
+                    "candidate": ScriptContent.model_json_schema(),
+                }
+            if stage == "rewrite":
+                for name in ("fragment", "fragment_version", "fragment_max_tokens"):
+                    definition.pop(name, None)
+            result.append((kind, workflow_version, definition))
+        return result
     if workflow_version in {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION} and stage in {
         "script",
         "outline",

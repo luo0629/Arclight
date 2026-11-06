@@ -14,12 +14,16 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type CreationOptions = {
   professional: boolean;
+  review: boolean;
+  revisionRounds: string;
   cost: string;
   seconds: string;
   calls: string;
 };
 export const initialCreationOptions: CreationOptions = {
   professional: false,
+  review: false,
+  revisionRounds: "3",
   cost: "",
   seconds: "300",
   calls: "32",
@@ -33,6 +37,11 @@ export function validCreationOptions(value: CreationOptions) {
       Number.isInteger(Number(value.calls)) &&
       Number(value.calls) >= 1 &&
       Number(value.calls) <= 1024 &&
+      (!value.review ||
+        (value.revisionRounds.trim() !== "" &&
+          Number.isInteger(Number(value.revisionRounds)) &&
+          Number(value.revisionRounds) >= 0 &&
+          Number(value.revisionRounds) <= 8)) &&
       (!value.cost ||
         (/^\d+(\.\d{1,6})?$/.test(value.cost) && Number(value.cost) < 1e12)))
   );
@@ -41,6 +50,9 @@ export function creationPayload(value: CreationOptions) {
   return value.professional
     ? {
         professional: true,
+        ...(value.review
+          ? { revision_rounds: Number(value.revisionRounds) }
+          : {}),
         agent_limits: {
           maximum_cost: value.cost || null,
           max_duration_seconds: Number(value.seconds),
@@ -50,14 +62,29 @@ export function creationPayload(value: CreationOptions) {
       }
     : {};
 }
+export function isCreationOptions(value: unknown): value is CreationOptions {
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.professional === "boolean" &&
+    typeof row.review === "boolean" &&
+    ["revisionRounds", "cost", "seconds", "calls"].every(
+      (key) => typeof row[key] === "string",
+    )
+  );
+}
 export default function CreationOptionsFields({
   value,
   onChange,
   disabled,
+  allowReview = true,
+  rewrite = false,
 }: {
   value: CreationOptions;
   onChange: (value: CreationOptions) => void;
   disabled: boolean;
+  allowReview?: boolean;
+  rewrite?: boolean;
 }) {
   const id = useId();
   return (
@@ -66,28 +93,71 @@ export default function CreationOptionsFields({
       <FieldGroup>
         <Field>
           <ToggleGroup
+            className="w-full flex-wrap"
             type="single"
             variant="outline"
             aria-label="创作方式"
-            value={value.professional ? "professional" : "standard"}
+            value={
+              value.professional
+                ? !rewrite && value.review
+                  ? "reviewed"
+                  : "professional"
+                : "standard"
+            }
             onValueChange={(mode) => {
               if (mode)
-                onChange({ ...value, professional: mode === "professional" });
+                onChange({
+                  ...value,
+                  professional: mode !== "standard",
+                  review:
+                    mode === "reviewed" || (rewrite && mode === "professional"),
+                });
             }}
           >
-            <ToggleGroupItem value="standard">直接起稿</ToggleGroupItem>
-            <ToggleGroupItem value="professional">
-              调查、规划与分段创作
+            <ToggleGroupItem value="standard">
+              {rewrite ? "直接改写" : "直接起稿"}
             </ToggleGroupItem>
+            <ToggleGroupItem value="professional">
+              {rewrite ? "调查、规划与评价改写" : "调查、规划与分段创作"}
+            </ToggleGroupItem>
+            {allowReview && !rewrite && (
+              <ToggleGroupItem value="reviewed">
+                创作、评价与局部修订
+              </ToggleGroupItem>
+            )}
           </ToggleGroup>
           {value.professional && (
             <FieldDescription>
-              先调查并保存计划，再逐段创作；遇到问题会等待你的回答。完整稿仍须审核。
+              {value.review
+                ? "结合剧情评价和规则检查，按限定范围修订；无法解决的问题会请你决定。最终稿仍须审核。"
+                : "先调查并保存计划，再逐段创作；遇到问题会等待你的回答。完整稿仍须审核。"}
             </FieldDescription>
           )}
         </Field>
         {value.professional && (
           <>
+            {value.review && (
+              <Field>
+                <FieldLabel htmlFor={id + "-rounds"}>
+                  最多自动修订轮数
+                </FieldLabel>
+                <Input
+                  id={id + "-rounds"}
+                  type="number"
+                  min={0}
+                  max={8}
+                  step={1}
+                  value={value.revisionRounds}
+                  onChange={(e) =>
+                    onChange({ ...value, revisionRounds: e.target.value })
+                  }
+                />
+                <FieldDescription>
+                  修订后重新检查；额度用完会保留问题并请你决定。
+                  {rewrite && "首次按你的指令改写不计入修订轮数。"}
+                </FieldDescription>
+              </Field>
+            )}
             <Field>
               <FieldLabel htmlFor={id + "-cost"}>
                 本次可选费用上限（USD）

@@ -1,5 +1,6 @@
 """Test-server-only HTTP fixtures for the actual professional Runtime and review graph."""
 
+import copy
 import json
 from uuid import uuid4
 
@@ -11,6 +12,7 @@ from arclight.application import production_versions
 from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.screenwriter_creation import SCREENWRITER_OUTLINE_VERSION, SCREENWRITER_VERSION
+from arclight.domain.screenwriter_revision import CHECKS, PATCH_TOOL, REVISION_WORKFLOWS
 from arclight.providers import agent_model, text
 
 
@@ -24,6 +26,102 @@ def _completion(value):
         ],
         "usage": {"prompt_tokens": 20, "completion_tokens": 10, "actual_cost": "0"},
     }
+
+
+def _critique(seed, payload):
+    """Only replace model HTTP; real tool execution, receipts and persistence remain active."""
+    source = seed["source_script"]
+    target = seed["permitted_target"] or {
+        "scope": "scene",
+        "scene_id": source["scenes"][0]["scene_id"],
+    }
+    selected = target.get("scene_ids", [target.get("scene_id")])
+    scene = next(item for item in source["scenes"] if item["scene_id"] in selected)
+    issue = {
+        "category": "MOTIVATION",
+        "scene_id": scene["scene_id"],
+        "line_id": None,
+        "problem": "寻找失主的动机需要说明",
+        "evidence": scene["action"],
+        "suggestion": "补充失主的嘱托",
+    }
+    result = {
+        "source_sha256": seed["source_sha256"],
+        "checks": sorted(CHECKS),
+        "issues": [],
+        "decision": "ACCEPT",
+    }
+    answered = any("human_decision" in str(item.get("content")) for item in payload["messages"])
+    needs_patch = seed["round"] == 0
+    if not answered and (
+        needs_patch
+        and seed["remaining_patches"] == 0
+        or "修订耗尽" in seed["objective"]
+        and seed["round"] >= 1
+    ):
+        result |= {"decision": "ESCALATE", "issues": [issue]}
+    elif needs_patch and not answered:
+        feedback = [
+            json.loads(item["content"]) for item in payload["messages"] if item["role"] == "tool"
+        ]
+        if (
+            feedback
+            and feedback[-1]["status"] == "SUCCEEDED"
+            and feedback[-1]["result"]["accepted"]
+        ):
+            result |= {
+                "decision": "REVISE",
+                "issues": [issue],
+                "patch_sha256": feedback[-1]["result"]["patch_sha256"],
+            }
+        else:
+            patch = {
+                "estimated_duration_ms": source["estimated_duration_ms"],
+                "scenes": [],
+                "text": None,
+            }
+            if target["scope"] == "paragraph":
+                patch["text"] = "因为记得失主的嘱托🙂，他决定送信。"
+            else:
+                patch["scenes"] = [
+                    {
+                        key: copy.deepcopy(row[key])
+                        for key in ("scene_id", "title", "action", "dialogue")
+                    }
+                    for row in source["scenes"]
+                    if row["scene_id"] in selected
+                ]
+                for row in patch["scenes"]:
+                    row["action"] += "因为记得失主的嘱托，他决定送信。"
+            arguments = {
+                "operation_key": seed["operation_key"],
+                "source_sha256": seed["source_sha256"],
+                "target": target,
+                "instructions": seed["instructions"] or {"instruction": "补充动机"},
+                "patch": patch,
+            }
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "check-patch",
+                                    "type": "function",
+                                    "function": {
+                                        "name": PATCH_TOOL,
+                                        "arguments": json.dumps(arguments, ensure_ascii=False),
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 10, "actual_cost": "0"},
+            }
+    return _completion({"decision": "COMPLETE", "result": result, "human_request": None})
 
 
 def _respond(request):
@@ -41,6 +139,8 @@ def _respond(request):
             ),
         )
     seed = data["data"]
+    if seed["phase"] == "CRITIQUE_SCRIPT":
+        return httpx.Response(200, json=_critique(seed, payload))
     if seed["phase"] == "PLANNING_ONLY":
         feedback = [json.loads(m["content"]) for m in payload["messages"] if m["role"] == "tool"]
         if not feedback:
@@ -85,6 +185,18 @@ def _respond(request):
                 .outline({"story": "离线纸船故事", **constraints})
                 .model_dump(mode="json"),
             }
+        elif constraints["mode"] == "rewrite":
+            target = constraints["target"]
+            plan = {
+                "mode": "rewrite",
+                "base_version_id": constraints["base_version_id"],
+                "target": target,
+                "estimated_duration_ms": constraints["target_duration_ms"],
+                "scenes": [
+                    {"scene_id": identity, "goal": "按用户范围补充动机", "beats": ["保留前后文"]}
+                    for identity in target.get("scene_ids", [target.get("scene_id")])
+                ],
+            }
         else:
             duration = constraints["target_duration_ms"]
             plan = {
@@ -104,7 +216,9 @@ def _respond(request):
             }
         result = {
             "schema_version": "screenwriter-plan/1",
-            "objective": "沿冻结故事规划纸船的归途",
+            "objective": "修订耗尽需人工决定"
+            if "修订耗尽" in json.dumps(payload, ensure_ascii=False)
+            else "沿冻结故事规划纸船的归途",
             "goals": ["保持动机与设定一致"],
             "plan": plan,
             "evidence": evidence,
@@ -159,7 +273,10 @@ def install():
     original_capture = production_versions.capture_text
 
     def capture(db, project_id, run, settings, *, actor=None):
-        if run.workflow_version in {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION}:
+        if (
+            run.workflow_version
+            in {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION} | REVISION_WORKFLOWS
+        ):
             settings = settings.model_copy(
                 update={
                     "provider": "openai_compatible",

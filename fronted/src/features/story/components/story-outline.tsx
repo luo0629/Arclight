@@ -493,6 +493,7 @@ export default function StoryOutline({
             </p>
             {draft.recovered && <Notice>已恢复本机的大纲输入草稿。</Notice>}
             <CreationOptionsFields
+              allowReview={false}
               value={creation}
               onChange={(next) => {
                 setCreation(next);

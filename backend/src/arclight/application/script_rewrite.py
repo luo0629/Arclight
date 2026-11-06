@@ -15,7 +15,12 @@ from arclight.application.model_services import text_snapshot
 from arclight.application.rewrite_content import content_hash, merge_rewrite, provider_context
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.enums import RunStatus
+from arclight.domain.screenwriter_revision import (
+    REWRITE_SCREENWRITER_VERSION,
+    ScreenwriterRevisionOptions,
+)
 from arclight.persistence.models import AuditEvent, OutboxEvent, Script, WorkflowRun
 from arclight.providers.text import build_provider
 from arclight.workflows.rewrite import REWRITE_VERSION
@@ -29,14 +34,30 @@ def start_rewrite(
     key: str,
     request_id: str,
     settings: Settings,
+    *,
+    professional: bool = False,
+    agent_limits: AgentRunLimits | None = None,
+    revision_rounds: int | None = None,
 ) -> WorkflowRun:
+    options = ScreenwriterRevisionOptions(
+        professional=professional, agent_limits=agent_limits, revision_rounds=revision_rounds
+    )
+    if professional:
+        from arclight.application.model_gateway import lock_gate
+
+        lock_gate(db)
     episode = require_episode(db, episode_id, actor, write=True)
     db.refresh(episode, with_for_update={"key_share": True})
     if episode.status == "ARCHIVED":
         raise DomainError("EPISODE_ARCHIVED", "归档剧集只允许查看", 409)
-    fingerprint = content_hash(
-        {"workflow_type": "script_rewrite", **request.model_dump(mode="json")}
-    )
+    payload = {"workflow_type": "script_rewrite", **request.model_dump(mode="json")}
+    if professional:
+        payload |= {
+            "professional": True,
+            "agent_limits": options.frozen_limits().model_dump(mode="json"),
+            "revision_rounds": revision_rounds if revision_rounds is not None else 3,
+        }
+    fingerprint = content_hash(payload)
     existing = db.scalar(
         select(WorkflowRun).where(
             WorkflowRun.episode_id == episode_id, WorkflowRun.idempotency_key == key
@@ -90,13 +111,18 @@ def start_rewrite(
     service = text_snapshot(db, actor)
     if service:
         inputs["_text_service"] = service
+    if professional:
+        inputs["screenwriter"] = {
+            "agent_limits": options.frozen_limits().model_dump(mode="json"),
+            "revision_rounds": revision_rounds if revision_rounds is not None else 3,
+        }
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=fingerprint,
         workflow_type="script_rewrite",
-        workflow_version=REWRITE_VERSION,
+        workflow_version=REWRITE_SCREENWRITER_VERSION if professional else REWRITE_VERSION,
         input_json=inputs,
     )
     db.add(run)
@@ -107,6 +133,10 @@ def start_rewrite(
     from arclight.application.production_versions import capture_text
 
     capture_text(db, episode.project_id, run, settings, actor=actor)
+    if professional:
+        from arclight.application.screenwriter_creation import authorize_screenwriter
+
+        authorize_screenwriter(db, run, actor, settings)
     db.add(
         AuditEvent(
             project_id=episode.project_id,

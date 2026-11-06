@@ -14,7 +14,7 @@ from pydantic import (
 
 from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
 from arclight.domain.project_settings import ProjectStorySettings
-from arclight.domain.screenwriter_creation import ScreenwriterOptions
+from arclight.domain.screenwriter_revision import ScreenwriterRevisionOptions
 from arclight.domain.workflow_contracts import WorkflowRunContract
 
 
@@ -53,7 +53,7 @@ class EpisodeRead(Resource, EpisodeCreate):
     status: str
 
 
-class RunCreate(Input, ScreenwriterOptions):
+class RunCreate(Input, ScreenwriterRevisionOptions):
     story: Annotated[str, StringConstraints(strip_whitespace=False)] | None = Field(
         default=None, min_length=1, max_length=20000
     )

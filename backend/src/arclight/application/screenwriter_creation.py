@@ -30,10 +30,11 @@ from arclight.domain.screenwriter_creation import (
     ScriptFragment,
 )
 from arclight.domain.screenwriter_planning import PLAN_VERSION, EpisodePlan, ScreenwriterPlan
+from arclight.domain.screenwriter_revision import PATCH_TOOL, REVISION_WORKFLOWS
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision, AgentLoopQuestion
 from arclight.persistence.models import Episode, WorkflowRun
 
-PROFESSIONAL_VERSIONS = {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION}
+PROFESSIONAL_VERSIONS = {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION} | REVISION_WORKFLOWS
 
 
 def authorize_screenwriter(db: Session, run: WorkflowRun, actor: str, settings: Settings) -> None:
@@ -41,7 +42,10 @@ def authorize_screenwriter(db: Session, run: WorkflowRun, actor: str, settings: 
     grant_agent_tools(
         db,
         AgentToolGrantRequest(
-            run_id=run.id, agent_name="screenwriter", allowed_tools=["investigate_story"]
+            run_id=run.id,
+            agent_name="screenwriter",
+            allowed_tools=["investigate_story"]
+            + ([PATCH_TOOL] if run.workflow_version in REVISION_WORKFLOWS else []),
         ),
         actor,
         build_agent_tool_registry(settings=settings),

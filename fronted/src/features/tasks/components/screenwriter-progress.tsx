@@ -10,12 +10,16 @@ import { api, json, message } from "@/lib/api/client";
 import type { Run } from "@/types/api";
 
 type Scene = {
+  scene_id: string;
   scene_no: number;
   title: string;
   action: string;
   dialogue: { line_id: string; speaker: string; text: string }[];
 };
 type Working = {
+  decision?: "ACCEPT" | "REVISE" | "ESCALATE";
+  checks?: string[];
+  issues?: Issue[];
   objective?: string;
   goals?: string[];
   plan?: {
@@ -40,15 +44,38 @@ type Working = {
   };
   scene?: Scene;
   estimated_duration_ms?: number;
-  evidence: {
+  evidence?: {
     manifest_id: string;
     source_id: string;
     content_sha256: string;
   }[];
 };
+type Issue = {
+  category: string;
+  scene_id: string | null;
+  line_id: string | null;
+  problem: string;
+  evidence: string;
+  suggestion: string;
+};
+type RuleIssue = { code: string; message: string };
+type Revision = {
+  round: number;
+  remaining_patches: number;
+  source_sha256: string;
+  deterministic_issues: RuleIssue[];
+  previous_issues: Issue[];
+  working_script: { title: string; scenes: Scene[] };
+  patch_checks: {
+    accepted: boolean;
+    patch_sha256: string;
+    issues: RuleIssue[];
+  }[];
+};
 type Operation = {
   loop_id: string;
-  kind: "plan" | "scene";
+  kind: "plan" | "scene" | "critique";
+  revision?: Revision;
   scene_no: number | null;
   status: string;
   result: Working | null;
@@ -124,7 +151,9 @@ export default function ScreenwriterProgress({
           <summary>
             {operation.kind === "plan"
               ? "故事计划"
-              : `场景 ${operation.scene_no}`}{" "}
+              : operation.kind === "critique"
+                ? `评价与修订 ${(operation.revision?.round ?? 0) + 1}`
+                : `场景 ${operation.scene_no}`}{" "}
             ·{" "}
             {operation.status === "COMPLETED"
               ? "已保存"
@@ -139,6 +168,7 @@ export default function ScreenwriterProgress({
                     : "创作中"}
           </summary>
           <div className="flex flex-col gap-3 py-3">
+            {operation.revision && <RevisionDetails operation={operation} />}
             {operation.result?.objective && <p>{operation.result.objective}</p>}
             {operation.result?.goals && (
               <ul className="list-disc pl-5">
@@ -182,7 +212,7 @@ export default function ScreenwriterProgress({
                 ))}
               </>
             )}
-            {operation.result?.evidence.length ? (
+            {operation.result?.evidence?.length ? (
               <details>
                 <summary>
                   调查来源（{operation.result.evidence.length}）
@@ -246,6 +276,103 @@ export default function ScreenwriterProgress({
         刷新创作进度
       </Button>
     </section>
+  );
+}
+
+const categories: Record<string, string> = {
+  CAUSALITY: "因果",
+  MOTIVATION: "人物动机",
+  DIALOGUE: "对白",
+  SETTING: "设定",
+  DETERMINISTIC: "规则检查",
+};
+function RevisionDetails({ operation }: { operation: Operation }) {
+  const revision = operation.revision!;
+  const issues = operation.result?.issues ?? revision.previous_issues;
+  return (
+    <>
+      <p>剩余自动修订：{revision.remaining_patches} 轮</p>
+      {operation.result?.checks && (
+        <p>
+          已检查：
+          {operation.result.checks
+            .map((item) => categories[item] ?? item)
+            .join("、")}
+        </p>
+      )}
+      {operation.result?.decision && (
+        <p>
+          {operation.result.decision === "ACCEPT"
+            ? "评价与规则检查通过，交完整稿审核。"
+            : operation.result.decision === "REVISE"
+              ? "已采用范围内补丁，继续检查。"
+              : "保留问题，请你决定。"}
+        </p>
+      )}
+      {issues.length > 0 && (
+        <ul className="list-disc pl-5">
+          {issues.map((issue, index) => (
+            <li key={index}>
+              <strong>
+                {categories[issue.category] ?? issue.category}：{issue.problem}
+              </strong>
+              <p>
+                位置：
+                {issue.scene_id
+                  ? (() => {
+                      const scene = revision.working_script.scenes.find(
+                        (item) => item.scene_id === issue.scene_id,
+                      );
+                      const line = scene?.dialogue.find(
+                        (item) => item.line_id === issue.line_id,
+                      );
+                      return `场景 ${scene?.scene_no} · ${scene?.title}${line ? ` · 台词：${line.text}` : ""}`;
+                    })()
+                  : "全稿规则"}
+              </p>
+              <p>依据：{issue.evidence}</p>
+              <p>建议：{issue.suggestion}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      {revision.deterministic_issues.map((issue, index) => (
+        <Notice key={index}>{issue.message}</Notice>
+      ))}
+      {revision.patch_checks.map((check, index) => (
+        <div key={check.patch_sha256 + index}>
+          <p>
+            补丁检查 {index + 1}：{check.accepted ? "通过" : "未通过"}
+          </p>
+          {check.issues.map((issue, i) => (
+            <Notice key={i}>{issue.message}</Notice>
+          ))}
+        </div>
+      ))}
+      <details>
+        <summary>查看本轮工作稿</summary>
+        <strong>{revision.working_script.title}</strong>
+        {revision.working_script.scenes.map((scene) => (
+          <section
+            key={scene.scene_no}
+            aria-label={`工作场景 ${scene.scene_no}`}
+          >
+            <h5>
+              {scene.scene_no} · {scene.title}
+            </h5>
+            <p>{scene.action}</p>
+            {scene.dialogue.map((line) => (
+              <p key={line.line_id}>
+                {line.speaker}：{line.text}
+              </p>
+            ))}
+          </section>
+        ))}
+        <p className="break-all text-xs">
+          工作稿 SHA-256：{revision.source_sha256}
+        </p>
+      </details>
+    </>
   );
 }
 

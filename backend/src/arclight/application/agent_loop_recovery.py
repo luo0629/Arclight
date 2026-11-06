@@ -29,12 +29,42 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentModelResponse, AgentUserMessage
-from arclight.domain.agent_runtime import AgentDecision, AgentHumanDecision, AgentLoopResult
+from arclight.domain.agent_runtime import (
+    AgentDecision,
+    AgentHumanDecision,
+    AgentLoopResult,
+    HumanDecisionRequest,
+)
 from arclight.domain.agent_tools import AgentToolCall, AgentToolFeedback
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.workflows.agent import AgentLoopState, build_agent_graph
 from arclight.workflows.checkpoints import open_checkpointer
+
+_INITIAL_QUESTION = "_server_initial_question"
+
+
+def with_initial_question(
+    request: AgentModelRequest, question: HumanDecisionRequest
+) -> AgentModelRequest:
+    """Freeze a server-required pause in a new operation, before any model call.
+
+    This reserved control message is constructed by application services, never by
+    an HTTP story/answer body. It is part of the exact journal seed and hash.
+    Existing operations and their graph entry points remain unchanged.
+    """
+    control = AgentUserMessage(data={_INITIAL_QUESTION: question.model_dump(mode="json")})
+    return AgentModelRequest.model_validate(
+        request.model_dump(mode="json")
+        | {"messages": [item.model_dump(mode="json") for item in [*request.messages, control]]}
+    )
+
+
+def _initial_question(request: AgentModelRequest) -> HumanDecisionRequest | None:
+    last = request.messages[-1]
+    if isinstance(last, AgentUserMessage) and set(last.data) == {_INITIAL_QUESTION}:
+        return HumanDecisionRequest.model_validate(last.data[_INITIAL_QUESTION])
+    return None
 
 
 class _RecoveryRequired(DomainError):
@@ -214,7 +244,13 @@ def _execute[T: BaseModel](
         "recursion_limit": min(runtime.limits.max_steps, runtime.limits.max_model_calls) * 4 + 10,
     }
     with keep_loop_alive(store, lease_policy), open_checkpointer(runtime.settings) as saver:
-        graph = build_agent_graph(persistent, checkpointer=saver, human=persistent.human)
+        initial_question = _initial_question(runtime.seed)
+        graph = build_agent_graph(
+            persistent,
+            checkpointer=saver,
+            human=persistent.human,
+            start_with_human=initial_question is not None,
+        )
         snapshot = graph.get_state(config)
         value: AgentLoopState | Command | None
         if snapshot.values:
@@ -232,6 +268,14 @@ def _execute[T: BaseModel](
             value = AgentLoopState(
                 request=runtime.seed.model_dump(mode="json"), observed_round=-1, model_turns=0
             )
+            if initial_question is not None:
+                question = initial_question.model_dump(mode="json")
+                value["outcome"] = persistent._outcome(
+                    value,
+                    status="HUMAN_REVIEW",
+                    human_request=question,
+                    question_id=str(store.question(0, question)),
+                )
             store.stamp({}, dict(value))
         try:
             state = graph.invoke(value, config, durability="sync")

@@ -98,9 +98,12 @@ export default function Tasks({
                 {run.revision}
               </p>
               <code className="task-id text-muted-foreground">{run.id}</code>
-              {["screenwriter/1.0", "screenwriter-outline/1.0"].includes(
-                run.workflow_version ?? "",
-              ) && (
+              {[
+                "screenwriter/1.0",
+                "screenwriter-outline/1.0",
+                "screenwriter/2.0",
+                "screenwriter-rewrite/1.0",
+              ].includes(run.workflow_version ?? "") && (
                 <ScreenwriterProgress
                   run={run}
                   writable={writable}

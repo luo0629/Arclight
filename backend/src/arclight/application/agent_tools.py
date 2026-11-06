@@ -535,12 +535,15 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
     )
     if settings is not None:
         from arclight.application.context_evidence import append_evidence, read_trace
+        from arclight.application.screenwriter_patch import patch_tool
         from arclight.application.screenwriter_research import investigate_story
         from arclight.domain.context_trace import EvidenceRequest
         from arclight.domain.screenwriter_research import (
             InvestigateStoryParameters,
             InvestigateStoryResult,
         )
+
+        registry.register(patch_tool(settings))
 
         def investigate(context: AgentToolContext, parameters: AgentToolContract) -> dict:
             assert isinstance(parameters, InvestigateStoryParameters)
