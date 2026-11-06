@@ -14,7 +14,13 @@ from arclight.application.production_versions import text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_state import restore_agent_state, transition_agent_step
-from arclight.domain.director_creation import DIRECTOR_VERSION, DirectorFragment
+from arclight.domain.director_creation import (
+    DIRECTOR_VERSION,
+    ITERATIVE_DIRECTOR_VERSION,
+    ITERATIVE_DIRECTOR_VERSIONS,
+    DirectorFragment,
+)
+from arclight.domain.director_revision import DirectorWorkingFragment
 from arclight.persistence.models import Episode, Storyboard, WorkflowRun
 
 logger = logging.getLogger(__name__)
@@ -36,6 +42,34 @@ def generate_storyboard(
     if _waiting(factory, run_id, revision, outcome, "director"):
         raise DirectorWaiting
     assert outcome.result is not None and outcome.loop_id is not None
+    with factory() as db:
+        current = db.get(WorkflowRun, run_id)
+        assert current is not None
+        iterative = current.workflow_version in ITERATIVE_DIRECTOR_VERSIONS
+    if iterative:
+        from arclight.application.director_revision import revise_storyboard
+        from arclight.application.director_working import assemble_working, create_working_fragment
+
+        working: list[DirectorWorkingFragment] = []
+        for scene_no in range(1, len(outcome.result.scenes) + 1):
+            part = create_working_fragment(
+                factory, settings, run_id, outcome.loop_id, outcome.result, scene_no, working
+            )
+            if _waiting(factory, run_id, revision, part, "director"):
+                raise DirectorWaiting
+            assert part.result is not None
+            working.append(part.result)
+        checked, content = revise_storyboard(
+            factory,
+            settings,
+            run_id,
+            outcome.result,
+            assemble_working(outcome.loop_id, outcome.result, working),
+        )
+        if _waiting(factory, run_id, revision, checked, "director"):
+            raise DirectorWaiting
+        assert content is not None
+        return content.model_dump(mode="json")
     fragments: list[DirectorFragment] = []
     for scene_no in range(1, len(outcome.result.scenes) + 1):
         fragment = create_fragment(
@@ -60,7 +94,10 @@ def execute_director(
 
     with factory() as db:
         run = db.get(WorkflowRun, run_id)
-        if run is None or run.workflow_version != DIRECTOR_VERSION:
+        if run is None or run.workflow_version not in {
+            DIRECTOR_VERSION,
+            ITERATIVE_DIRECTOR_VERSION,
+        }:
             return False
     try:
         with factory.begin() as db:

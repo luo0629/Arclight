@@ -8,6 +8,10 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Notice } from "@/components/ui-kit";
 import { api, json, message } from "@/lib/api/client";
 import type { Run } from "@/types/api";
+import DirectorRevisionDetails, {
+  type DirectorCheck,
+  type DirectorRevision,
+} from "./director-revision-details";
 
 type Scene = {
   scene_id: string;
@@ -33,6 +37,7 @@ type Working = {
     dialogue_line_ids: string[];
   }[];
   decision?: "ACCEPT" | "REVISE" | "ESCALATE";
+  reason?: string;
   checks?: string[];
   issues?: Issue[];
   objective?: string;
@@ -95,12 +100,13 @@ type Operation = {
       result?: {
         materials?: { source_kind: string; source_id: string }[];
         missing?: { reason: string }[];
-      };
+      } & Partial<DirectorCheck>;
     };
   }[];
   loop_id: string;
-  kind: "plan" | "scene" | "critique";
+  kind: "plan" | "scene" | "critique" | "director_check";
   revision?: Revision;
+  director_revision?: DirectorRevision;
   scene_no: number | null;
   status: string;
   result: Working | null;
@@ -181,7 +187,9 @@ export default function ScreenwriterProgress({
                 : "故事计划"
               : operation.kind === "critique"
                 ? `评价与修订 ${(operation.revision?.round ?? 0) + 1}`
-                : `场景 ${operation.scene_no}`}{" "}
+                : operation.kind === "director_check"
+                  ? `导演检查与修订 ${(operation.director_revision?.round ?? 0) + 1}`
+                  : `场景 ${operation.scene_no}`}{" "}
             ·{" "}
             {operation.status === "COMPLETED"
               ? "已保存"
@@ -197,6 +205,21 @@ export default function ScreenwriterProgress({
           </summary>
           <div className="flex flex-col gap-3 py-3">
             {operation.revision && <RevisionDetails operation={operation} />}
+            {operation.director_revision && (
+              <DirectorRevisionDetails
+                revision={operation.director_revision}
+                decision={operation.result?.decision}
+                reason={operation.result?.reason}
+                checks={(operation.observations ?? [])
+                  .filter(
+                    (item) =>
+                      item.tool === "check_director_storyboard" &&
+                      item.feedback.status === "SUCCEEDED" &&
+                      item.feedback.result?.check_sha256,
+                  )
+                  .map((item) => item.feedback.result as DirectorCheck)}
+              />
+            )}
             {operation.result?.objective && <p>{operation.result.objective}</p>}
             {operation.result?.scenes && (
               <ol className="list-decimal pl-5">

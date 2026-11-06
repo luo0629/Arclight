@@ -8,7 +8,10 @@ from pydantic import Field, model_validator
 from arclight.agents.contracts import ScriptContent
 from arclight.agents.script_rewrite import RewriteInstructions, RewriteResult, RewriteTarget
 from arclight.domain.agent_tools import AgentToolContract
-from arclight.domain.director_creation import REVISED_PRODUCTION_VERSION
+from arclight.domain.director_creation import (
+    REVISED_ITERATIVE_PRODUCTION_VERSION,
+    REVISED_PRODUCTION_VERSION,
+)
 from arclight.domain.screenwriter_creation import ScreenwriterOptions
 from arclight.domain.screenwriter_planning import PlanEvidence, PlanningValue
 
@@ -18,6 +21,7 @@ REVISION_WORKFLOWS = {
     REVISED_SCREENWRITER_VERSION,
     REWRITE_SCREENWRITER_VERSION,
     REVISED_PRODUCTION_VERSION,
+    REVISED_ITERATIVE_PRODUCTION_VERSION,
 }
 REVISION_VERSION = "screenwriter-revision/1"
 PATCH_TOOL = "check_screenwriter_patch"

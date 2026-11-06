@@ -144,7 +144,7 @@ export default function Inspector({
   async function direct(scriptId: string) {
     const body = {
       script_version_id: scriptId,
-      ...creationPayload(directorCreation),
+      ...creationPayload(directorCreation, true),
     };
     const signature = JSON.stringify(body);
     if (directorKey.current.scriptId !== signature || !directorKey.current.key)
@@ -381,7 +381,6 @@ export default function Inspector({
               <>
                 <CreationOptionsFields
                   directorOnly
-                  allowReview={false}
                   value={directorCreation}
                   onChange={setDirectorCreation}
                   disabled={busy || active}

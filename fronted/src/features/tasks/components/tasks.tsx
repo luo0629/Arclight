@@ -105,6 +105,8 @@ export default function Tasks({
                 "screenwriter-rewrite/1.0",
                 "production/1.0",
                 "production/2.0",
+                "production/3.0",
+                "production/4.0",
               ].includes(run.workflow_version ?? "") && (
                 <ScreenwriterProgress
                   run={run}
@@ -114,9 +116,14 @@ export default function Tasks({
                   reload={reload}
                 />
               )}
-              {["director/1.0", "production/1.0", "production/2.0"].includes(
-                run.workflow_version ?? "",
-              ) && (
+              {[
+                "director/1.0",
+                "director/2.0",
+                "production/1.0",
+                "production/2.0",
+                "production/3.0",
+                "production/4.0",
+              ].includes(run.workflow_version ?? "") && (
                 <ScreenwriterProgress
                   agent="director"
                   run={run}

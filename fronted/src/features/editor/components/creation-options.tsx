@@ -15,6 +15,8 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 export type CreationOptions = {
   professional: boolean;
   professionalDirector?: boolean;
+  directorReview?: boolean;
+  directorRevisionRounds?: string;
   review: boolean;
   revisionRounds: string;
   cost: string;
@@ -24,6 +26,8 @@ export type CreationOptions = {
 export const initialCreationOptions: CreationOptions = {
   professional: false,
   professionalDirector: false,
+  directorReview: false,
+  directorRevisionRounds: "3",
   review: false,
   revisionRounds: "3",
   cost: "",
@@ -44,17 +48,31 @@ export function validCreationOptions(value: CreationOptions) {
           Number.isInteger(Number(value.revisionRounds)) &&
           Number(value.revisionRounds) >= 0 &&
           Number(value.revisionRounds) <= 8)) &&
+      (!value.directorReview ||
+        (String(value.directorRevisionRounds ?? "3").trim() !== "" &&
+          Number.isInteger(Number(value.directorRevisionRounds ?? "3")) &&
+          Number(value.directorRevisionRounds ?? "3") >= 0 &&
+          Number(value.directorRevisionRounds ?? "3") <= 8)) &&
       (!value.cost ||
         (/^\d+(\.\d{1,6})?$/.test(value.cost) && Number(value.cost) < 1e12)))
   );
 }
-export function creationPayload(value: CreationOptions) {
+export function creationPayload(value: CreationOptions, directorOnly = false) {
   return value.professional
     ? {
         professional: true,
         ...(value.professionalDirector ? { professional_director: true } : {}),
         ...(value.review
-          ? { revision_rounds: Number(value.revisionRounds) }
+          ? directorOnly
+            ? { director_revision_rounds: Number(value.revisionRounds) }
+            : { revision_rounds: Number(value.revisionRounds) }
+          : {}),
+        ...(value.professionalDirector && value.directorReview
+          ? {
+              director_revision_rounds: Number(
+                value.directorRevisionRounds ?? "3",
+              ),
+            }
           : {}),
         agent_limits: {
           maximum_cost: value.cost || null,
@@ -72,6 +90,10 @@ export function isCreationOptions(value: unknown): value is CreationOptions {
     typeof row.professional === "boolean" &&
     (row.professionalDirector === undefined ||
       typeof row.professionalDirector === "boolean") &&
+    (row.directorReview === undefined ||
+      typeof row.directorReview === "boolean") &&
+    (row.directorRevisionRounds === undefined ||
+      typeof row.directorRevisionRounds === "string") &&
     typeof row.review === "boolean" &&
     ["revisionRounds", "cost", "seconds", "calls"].every(
       (key) => typeof row[key] === "string",
@@ -139,14 +161,16 @@ export default function CreationOptionsFields({
             </ToggleGroupItem>
             {allowReview && !rewrite && (
               <ToggleGroupItem value="reviewed">
-                创作、评价与局部修订
+                {directorOnly ? "拆镜、检查与局部修订" : "创作、评价与局部修订"}
               </ToggleGroupItem>
             )}
           </ToggleGroup>
           {value.professional && (
             <FieldDescription>
               {directorOnly
-                ? "先调查精确批准剧本并保存场景计划，再逐场景拆镜；遇到问题会等待你的回答，完整分镜仍须审核。"
+                ? value.review
+                  ? "工具检查对白覆盖、镜头顺序和时长；导演选择局部修法并复查，通过后交完整分镜审核。"
+                  : "先调查精确批准剧本并保存场景计划，再逐场景拆镜；遇到问题会等待你的回答，完整分镜仍须审核。"
                 : value.review
                   ? "结合剧情评价和规则检查，按限定范围修订；无法解决的问题会请你决定。最终稿仍须审核。"
                   : "先调查并保存计划，再逐段创作；遇到问题会等待你的回答。完整稿仍须审核。"}
@@ -163,13 +187,18 @@ export default function CreationOptionsFields({
                   variant="outline"
                   aria-label="剧本批准后的分镜方式"
                   value={
-                    value.professionalDirector ? "professional" : "standard"
+                    value.professionalDirector
+                      ? value.directorReview
+                        ? "checked"
+                        : "professional"
+                      : "standard"
                   }
                   onValueChange={(mode) => {
                     if (mode)
                       onChange({
                         ...value,
-                        professionalDirector: mode === "professional",
+                        professionalDirector: mode !== "standard",
+                        directorReview: mode === "checked",
                       });
                   }}
                 >
@@ -177,16 +206,45 @@ export default function CreationOptionsFields({
                   <ToggleGroupItem value="professional">
                     调查、规划与逐场景拆镜
                   </ToggleGroupItem>
+                  <ToggleGroupItem value="checked">
+                    拆镜、检查与局部修订
+                  </ToggleGroupItem>
                 </ToggleGroup>
                 <FieldDescription>
                   先审核剧本，再审核完整分镜；两个阶段共用本次执行限制。
                 </FieldDescription>
               </Field>
             )}
+            {allowDirector &&
+              value.professionalDirector &&
+              value.directorReview && (
+                <Field>
+                  <FieldLabel htmlFor={id + "-director-rounds"}>
+                    最多导演自动修订轮数
+                  </FieldLabel>
+                  <Input
+                    id={id + "-director-rounds"}
+                    type="number"
+                    min={0}
+                    max={8}
+                    step={1}
+                    value={value.directorRevisionRounds ?? "3"}
+                    onChange={(e) =>
+                      onChange({
+                        ...value,
+                        directorRevisionRounds: e.target.value,
+                      })
+                    }
+                  />
+                  <FieldDescription>
+                    对白、镜头顺序和时长全部通过后才交审核；耗尽时保存问题并等待你的决定。
+                  </FieldDescription>
+                </Field>
+              )}
             {value.review && (
               <Field>
                 <FieldLabel htmlFor={id + "-rounds"}>
-                  最多自动修订轮数
+                  {directorOnly ? "最多导演自动修订轮数" : "最多自动修订轮数"}
                 </FieldLabel>
                 <Input
                   id={id + "-rounds"}

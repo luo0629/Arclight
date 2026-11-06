@@ -140,7 +140,11 @@ def _respond(request):
             ),
         )
     seed = data["data"]
-    if seed["phase"] == "DIRECT_SCENE_ONLY" or "script_version_id" in seed.get("constraints", {}):
+    if seed["phase"] in {
+        "DIRECT_SCENE_ONLY",
+        "DIRECT_WORKING_SCENE",
+        "CHECK_DIRECTOR",
+    } or "script_version_id" in seed.get("constraints", {}):
         from e2e_director import respond
 
         return respond(payload)

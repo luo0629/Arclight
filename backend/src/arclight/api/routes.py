@@ -149,6 +149,7 @@ def create_script_run(
         agent_limits=payload.agent_limits,
         revision_rounds=payload.revision_rounds,
         professional_director=payload.professional_director,
+        director_revision_rounds=payload.director_revision_rounds,
     )
     return AcceptedRun(
         run_id=run.id,
@@ -178,6 +179,7 @@ def create_storyboard_run(
         script_version_id=payload.script_version_id,
         rebuild_from_version_id=payload.rebuild_from_version_id,
         professional_director=payload.professional,
+        director_revision_rounds=payload.director_revision_rounds,
         agent_limits=payload.agent_limits,
     )
     return AcceptedRun(

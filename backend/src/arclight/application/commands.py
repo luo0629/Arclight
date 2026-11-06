@@ -27,9 +27,13 @@ from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.director_creation import (
     DIRECTOR_VERSION,
     DIRECTOR_VERSIONS,
+    ITERATIVE_DIRECTOR_VERSION,
+    ITERATIVE_PRODUCTION_VERSION,
     PRODUCTION_VERSION,
+    REVISED_ITERATIVE_PRODUCTION_VERSION,
     REVISED_PRODUCTION_VERSION,
 )
+from arclight.domain.director_revision import DirectorRevisionOptions
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION
@@ -137,11 +141,15 @@ def start_run(
     agent_limits: AgentRunLimits | None = None,
     revision_rounds: int | None = None,
     professional_director: bool = False,
+    director_revision_rounds: int | None = None,
 ) -> WorkflowRun:
     options = ScreenwriterRevisionOptions(
         professional=professional or professional_director,
         agent_limits=agent_limits,
         revision_rounds=revision_rounds,
+    )
+    DirectorRevisionOptions(
+        professional=professional_director, director_revision_rounds=director_revision_rounds
     )
     if professional_director and script_version_id is None and not professional:
         raise DomainError("DIRECTOR_TASK_INVALID", "专业双审核须选择专业编剧", 422)
@@ -181,6 +189,8 @@ def start_run(
             "professional_director": True,
             "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
+        if director_revision_rounds is not None:
+            payload["director_revision_rounds"] = director_revision_rounds
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -270,6 +280,8 @@ def start_run(
             inputs["screenwriter"]["revision_rounds"] = revision_rounds
     if professional_director:
         inputs["director"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
+        if director_revision_rounds is not None:
+            inputs["director"]["revision_rounds"] = director_revision_rounds
     if professional_director:
         version = (
             DIRECTOR_VERSION
@@ -278,6 +290,14 @@ def start_run(
             if revision_rounds is not None
             else PRODUCTION_VERSION
         )
+        if director_revision_rounds is not None:
+            version = (
+                ITERATIVE_DIRECTOR_VERSION
+                if script_version_id is not None
+                else REVISED_ITERATIVE_PRODUCTION_VERSION
+                if revision_rounds is not None
+                else ITERATIVE_PRODUCTION_VERSION
+            )
     elif professional:
         version = (
             REVISED_SCREENWRITER_VERSION if revision_rounds is not None else SCREENWRITER_VERSION

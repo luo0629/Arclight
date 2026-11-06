@@ -13,7 +13,7 @@ from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain import director_creation, director_planning
+from arclight.domain import director_creation, director_planning, director_revision
 from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.generation_prompts import (
     PROMPT_COMPOSER_DEFINITION,
@@ -141,6 +141,37 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    if workflow_version in director_creation.ITERATIVE_DIRECTOR_VERSIONS and stage == "storyboard":
+        result = []
+        for kind, _, original in text_definitions(stage, director_creation.DIRECTOR_VERSION):
+            definition = deepcopy(original)
+            if kind == "AGENT":
+                definition |= {
+                    "workflow_version": workflow_version,
+                    "fragment_version": director_revision.WORKING_VERSION,
+                    "revision_version": director_revision.REVISION_VERSION,
+                    "revision_max_tokens": 8000,
+                    "assembly": "complete-scenes-checked-local-patches/1",
+                    "repair_policy": "frozen-bounded-director-receipts/1",
+                    "human_escalation": "server-initial-question/1",
+                }
+            elif kind == "PROMPT":
+                definition |= {
+                    "fragment": director_revision.WORKING_PROMPT,
+                    "revision": director_revision.REVISION_PROMPT,
+                }
+            else:
+                definition |= {
+                    "fragment": director_revision.DirectorWorkingFragment.model_json_schema(),
+                    "work": director_revision.DirectorWorkingStoryboard.model_json_schema(),
+                    "revision": director_revision.DirectorRevisionDecision.model_json_schema(),
+                    "check_parameters": (
+                        director_revision.DirectorCheckParameters.model_json_schema()
+                    ),
+                    "check_result": director_revision.DirectorCheckResult.model_json_schema(),
+                }
+            result.append((kind, workflow_version, definition))
+        return result
     if workflow_version in director_creation.DIRECTOR_VERSIONS and stage == "storyboard":
         return [
             (
@@ -178,7 +209,11 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
     if workflow_version in director_creation.PRODUCTION_VERSIONS and stage == "script":
         writer_version = (
             "screenwriter/2.0"
-            if workflow_version == director_creation.REVISED_PRODUCTION_VERSION
+            if workflow_version
+            in {
+                director_creation.REVISED_PRODUCTION_VERSION,
+                director_creation.REVISED_ITERATIVE_PRODUCTION_VERSION,
+            }
             else SCREENWRITER_VERSION
         )
         return [

@@ -23,10 +23,12 @@ from arclight.domain.director_creation import (
     DIRECTOR_VERSION,
     FRAGMENT_PROMPT,
     FRAGMENT_VERSION,
+    ITERATIVE_DIRECTOR_VERSIONS,
     DirectorFragment,
     DirectorFragmentSeed,
 )
 from arclight.domain.director_planning import PLAN_VERSION, RESEARCH_TOOL, DirectorPlan
+from arclight.domain.director_revision import CHECK_TOOL
 from arclight.domain.versions import digest
 from arclight.persistence.models import Episode, WorkflowRun
 
@@ -34,7 +36,12 @@ from arclight.persistence.models import Episode, WorkflowRun
 def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Settings) -> None:
     grant_agent_tools(
         db,
-        AgentToolGrantRequest(run_id=run.id, agent_name="director", allowed_tools=[RESEARCH_TOOL]),
+        AgentToolGrantRequest(
+            run_id=run.id,
+            agent_name="director",
+            allowed_tools=[RESEARCH_TOOL]
+            + ([CHECK_TOOL] if run.workflow_version in ITERATIVE_DIRECTOR_VERSIONS else []),
+        ),
         actor,
         build_agent_tool_registry(settings=settings),
     )

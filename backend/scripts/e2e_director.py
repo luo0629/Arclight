@@ -12,6 +12,10 @@ def respond(payload):
     from e2e_screenwriter import _completion
 
     seed = json.loads(payload["messages"][1]["content"])["data"]
+    if seed["phase"] == "CHECK_DIRECTOR":
+        from e2e_director_revision import respond as revise
+
+        return httpx.Response(200, json=revise(seed, payload))
     answered = any("human_decision" in str(item.get("content")) for item in payload["messages"])
     if seed["phase"] == "PLANNING_ONLY":
         feedback = [
@@ -119,6 +123,10 @@ def respond(payload):
             "shots": shots,
             "evidence": seed["plan"]["evidence"],
         }
+        if seed["phase"] == "DIRECT_WORKING_SCENE":
+            result["schema_version"] = "director-working/1"
+            if "导演检查遗漏" in scene.get("notes", ""):
+                result["shots"][0]["dialogue_line_ids"] = []
     return httpx.Response(
         200, json=_completion({"decision": "COMPLETE", "result": result, "human_request": None})
     )
