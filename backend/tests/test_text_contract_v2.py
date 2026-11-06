@@ -12,8 +12,10 @@ from sqlalchemy import func, select
 from arclight.agents.contracts import AssetReference, ScriptContent
 from arclight.application import runtime
 from arclight.application.runtime import execute_run
+from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewResume
 from arclight.persistence.models import (
     AssetVersion,
+    OutboxEvent,
     Project,
     Review,
     Script,
@@ -22,6 +24,13 @@ from arclight.persistence.models import (
     WorkflowRun,
 )
 from arclight.providers.text import MockTextProvider, OpenAICompatibleTextProvider
+
+
+def review_effect_counts(db):
+    return tuple(
+        db.scalar(select(func.count()).select_from(model))
+        for model in (Review, HumanReviewDecision, HumanReviewResume, OutboxEvent)
+    )
 
 
 def legacy_script():
@@ -420,14 +429,14 @@ def test_stale_asset_blocks_manual_approval_and_director_start(client, episode, 
     script = save_script(client, episode, bound_script(assets), approve=False)
     with client.app.state.session_factory.begin() as db:
         db.get(AssetVersion, UUID(assets["CHARACTER"]["asset_version_id"])).stale = True
+        before = review_effect_counts(db)
     prefix = f"/api/v1/episodes/{episode['id']}"
-    assert (
-        client.post(
-            prefix + f"/scripts/{script['id']}/review", json={"decision": "APPROVE"}
-        ).status_code
-        == 422
-    )
+    blocked = client.post(prefix + f"/scripts/{script['id']}/review", json={"decision": "APPROVE"})
+    assert blocked.status_code == 422
+    assert blocked.json()["error"]["code"] == "ASSET_NOT_USABLE"
     with client.app.state.session_factory.begin() as db:
+        assert review_effect_counts(db) == before
+        assert db.get(Script, UUID(script["id"])).status == "READY_FOR_REVIEW"
         db.get(Script, UUID(script["id"])).status = "APPROVED"
     assert (
         client.post(
@@ -522,6 +531,7 @@ def test_workflow_approval_rechecks_references_without_consuming_review(
         assert run["pending_review"]["resource_type"] == resource
         with client.app.state.session_factory.begin() as db:
             db.get(AssetVersion, UUID(assets["CHARACTER"]["asset_version_id"])).stale = True
+            before = review_effect_counts(db)
         body = {
             **run["pending_review"],
             "decision": "APPROVE",
@@ -529,9 +539,11 @@ def test_workflow_approval_rechecks_references_without_consuming_review(
         }
         blocked = client.post(f"/api/v1/runs/{run_id}/resume", json=body)
         assert blocked.status_code == 422, blocked.text
+        assert blocked.json()["error"]["code"] == "ASSET_NOT_USABLE"
         unchanged = client.get(f"/api/v1/runs/{run_id}").json()
         assert unchanged["status"] == "WAITING_REVIEW" and unchanged["revision"] == run["revision"]
         with client.app.state.session_factory.begin() as db:
+            assert review_effect_counts(db) == before
             reviews = db.scalars(select(Review).where(Review.run_id == UUID(run_id))).all()
             assert len(reviews) == (0 if resource == "script" else 1)
             db.get(AssetVersion, UUID(assets["CHARACTER"]["asset_version_id"])).stale = False

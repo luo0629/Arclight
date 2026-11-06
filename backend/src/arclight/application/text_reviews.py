@@ -153,6 +153,24 @@ def prepare_text_decision(
     return row, submit_decision(db, row.id, actor, payload)
 
 
+def validate_manual_approval(
+    db: Session, artifact: Script | Storyboard, settings: Settings
+) -> None:
+    episode = db.get(Episode, artifact.episode_id)
+    assert episode is not None
+    parsed: ScriptContent | StoryboardContent
+    if isinstance(artifact, Script):
+        parsed = ScriptContent.model_validate(artifact.content_json)
+        validate_script_assets(db, episode.project_id, parsed)
+    else:
+        source = db.get(Script, artifact.script_version_id, populate_existing=True)
+        if source is None or source.episode_id != episode.id or source.status != "APPROVED":
+            raise DomainError("SCRIPT_NOT_APPROVED", "请先批准本剧集的来源剧本版本", 409)
+        parsed = StoryboardContent.model_validate(artifact.content_json)
+        validate_storyboard_assets(db, episode.project_id, parsed)
+    validate_duration(parsed, episode.target_duration_ms, settings.text_duration_tolerance_percent)
+
+
 def apply_manual_content(
     db: Session,
     artifact: Script | Storyboard,
@@ -162,20 +180,8 @@ def apply_manual_content(
 ) -> dict:
     episode = db.get(Episode, artifact.episode_id)
     assert episode is not None
-    parsed: ScriptContent | StoryboardContent
     if payload.decision == "APPROVE":
-        if isinstance(artifact, Script):
-            parsed = ScriptContent.model_validate(artifact.content_json)
-            validate_script_assets(db, episode.project_id, parsed)
-        else:
-            source = db.get(Script, artifact.script_version_id, populate_existing=True)
-            if source is None or source.episode_id != episode.id or source.status != "APPROVED":
-                raise DomainError("SCRIPT_NOT_APPROVED", "请先批准本剧集的来源剧本版本", 409)
-            parsed = StoryboardContent.model_validate(artifact.content_json)
-            validate_storyboard_assets(db, episode.project_id, parsed)
-        validate_duration(
-            parsed, episode.target_duration_ms, settings.text_duration_tolerance_percent
-        )
+        validate_manual_approval(db, artifact, settings)
     artifact.status = "APPROVED" if payload.decision == "APPROVE" else "REJECTED"
     if isinstance(artifact, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):
@@ -252,6 +258,10 @@ def complete_manual_review(
     comment: str,
     impact_digest: str | None,
 ) -> dict:
+    # Preserve the established manual endpoint's domain error precedence.
+    # The unified journal still independently checks the exact frozen inputs.
+    if decision == "APPROVE":
+        validate_manual_approval(db, artifact, settings)
     row, decision_record = prepare_text_decision(
         db, artifact, actor, decision, comment, impact_digest
     )

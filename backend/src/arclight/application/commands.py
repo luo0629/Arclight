@@ -279,9 +279,6 @@ def resume_run(
     from arclight.application.human_reviews import record_resume
     from arclight.application.text_reviews import prepare_text_decision
 
-    review_request, review_decision = prepare_text_decision(
-        db, artifact, actor, review.decision, review.comment, review.impact_digest
-    )
     if review.decision == "APPROVE":
         episode = require_episode(db, run.episode_id, actor)
         if isinstance(artifact, Script):
@@ -298,6 +295,9 @@ def resume_run(
         validate_duration(
             parsed, run.input_json["target_duration_ms"], settings.text_duration_tolerance_percent
         )
+    review_request, review_decision = prepare_text_decision(
+        db, artifact, actor, review.decision, review.comment, review.impact_digest
+    )
     artifact.status = AssetStatus.APPROVED if review.decision == "APPROVE" else AssetStatus.REJECTED
     if isinstance(artifact, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):
