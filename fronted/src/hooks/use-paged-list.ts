@@ -53,7 +53,12 @@ export default function usePagedList<T extends { id: string }>(path: string) {
           do {
             const limit = refresh || findId ? 100 : size.current;
             const page = await api<T[]>(
-              path + "?limit=" + limit + "&offset=" + offset,
+              path +
+                (path.includes("?") ? "&" : "?") +
+                "limit=" +
+                limit +
+                "&offset=" +
+                offset,
               { signal: abort.signal },
             );
             offset += page.length;

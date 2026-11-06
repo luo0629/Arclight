@@ -60,6 +60,8 @@ def append_version(
     key: UUID,
     patch: dict | None = None,
     locks: list[str] | None = None,
+    *,
+    confirmed_locked_fields: frozenset[str] = frozenset(),
 ) -> tuple[VisualBibleVersion, bool]:
     kind = "EDIT" if patch is not None else "LOCK"
     fingerprint = hashlib.sha256(
@@ -85,7 +87,12 @@ def append_version(
     fields = current["fields"]
     locked = current["locked_fields"]
     if patch is not None:
-        if any(name in locked and fields[name] != value for name, value in patch.items()):
+        # Only the transactional art approval handler supplies the exact fields
+        # acknowledged by the current Owner. Ordinary edit APIs never set this.
+        if any(
+            name in locked and name not in confirmed_locked_fields and fields[name] != value
+            for name, value in patch.items()
+        ):
             raise DomainError("VISUAL_FIELD_LOCKED", "请由Owner先解锁对应视觉规范字段", 409)
         try:
             fields = VisualFields(**{**fields, **patch}).model_dump()

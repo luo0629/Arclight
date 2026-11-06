@@ -28,12 +28,14 @@ from arclight.persistence.models import Episode, Project, User
 class ReviewHandler:
     read: Callable[[Session, ReviewSnapshot], ReviewSnapshot]
     apply: Callable[[Session, HumanReviewRequest, HumanReviewDecision, str], dict]
+    check_decision: Callable[[Session, HumanReviewRequest, HumanDecision, str], None] | None = None
 
 
 def handlers() -> Mapping[str, ReviewHandler]:
+    from arclight.application.art_reviews import ART_HANDLERS
     from arclight.application.text_reviews import TEXT_HANDLERS
 
-    return TEXT_HANDLERS
+    return {**TEXT_HANDLERS, **ART_HANDLERS}
 
 
 def require_review(db: Session, request_id: UUID, actor: str) -> HumanReviewRequest:
@@ -188,7 +190,9 @@ def submit_decision(
         if resumed is None:
             _current(db, row, registry if registry is not None else handlers())
         return prior
-    _current(db, row, registry if registry is not None else handlers())
+    handler = _current(db, row, registry if registry is not None else handlers())
+    if handler.check_decision is not None:
+        handler.check_decision(db, row, decision, actor)
     result = HumanReviewDecision(
         request_id=row.id, actor_id=actor, decision_json=decision.model_dump(mode="json")
     )

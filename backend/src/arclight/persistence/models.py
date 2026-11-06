@@ -19,6 +19,10 @@ from arclight.persistence.agent_limits import AgentAction as AgentAction
 from arclight.persistence.agent_limits import AgentRunLimit as AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop as AgentLoop
 from arclight.persistence.agent_preferences import AgentPreference as AgentPreference
+from arclight.persistence.art_proposals import ArtApprovedVersion as ArtApprovedVersion
+from arclight.persistence.art_proposals import ArtProposalRecord as ArtProposalRecord
+from arclight.persistence.art_proposals import ArtProposalReview as ArtProposalReview
+from arclight.persistence.art_proposals import ArtProposalVersion as ArtProposalVersion
 from arclight.persistence.base import JSON_TYPE, Base, Entity
 from arclight.persistence.generation import GenerationAttempt as GenerationAttempt
 from arclight.persistence.generation import GenerationJob as GenerationJob
