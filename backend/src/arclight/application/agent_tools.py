@@ -535,15 +535,40 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
     )
     if settings is not None:
         from arclight.application.context_evidence import append_evidence, read_trace
+        from arclight.application.director_research import investigate_production
         from arclight.application.screenwriter_patch import patch_tool
         from arclight.application.screenwriter_research import investigate_story
         from arclight.domain.context_trace import EvidenceRequest
+        from arclight.domain.director_planning import (
+            RESEARCH_TOOL,
+            InvestigateProductionParameters,
+            InvestigateProductionResult,
+        )
         from arclight.domain.screenwriter_research import (
             InvestigateStoryParameters,
             InvestigateStoryResult,
         )
 
         registry.register(patch_tool(settings))
+
+        def investigate_director(context: AgentToolContext, parameters: AgentToolContract) -> dict:
+            assert isinstance(parameters, InvestigateProductionParameters)
+            run = context.db.get(WorkflowRun, context.run_id)
+            assert run is not None
+            return investigate_production(context.db, settings, run, context.actor_id, parameters)
+
+        registry.register(
+            AgentToolDefinition(
+                name=RESEARCH_TOOL,
+                allowed_agents=frozenset({"director"}),
+                allowed_steps=frozenset({"storyboard"}),
+                parameters_model=InvestigateProductionParameters,
+                result_model=InvestigateProductionResult,
+                scope_validator=lambda context, parameters: None,
+                handler=investigate_director,
+                requires_write=True,
+            )
+        )
 
         def investigate(context: AgentToolContext, parameters: AgentToolContract) -> dict:
             assert isinstance(parameters, InvestigateStoryParameters)
