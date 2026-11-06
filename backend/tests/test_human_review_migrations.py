@@ -59,6 +59,8 @@ def test_upgrade_resumes_pre_journal_text_pause_without_changing_original_identi
 def test_review_history_blocks_entire_downgrade_without_partial_loss(
     client, episode, settings, migrated
 ):
+    # Exercise this migration's rollback at its own revision, independent of later DDL.
+    command.downgrade(migrated, "0049")
     _, row = pending_review(client, episode, settings)
     saved = decide(client, row).json()
     assert resume(client, row, saved).status_code == 200
