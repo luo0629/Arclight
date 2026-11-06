@@ -14,6 +14,7 @@ from arclight.application.screenwriter_creation import (
     PROFESSIONAL_VERSIONS,
     creation_loops,
     operation,
+    waiting_for_answer,
 )
 from arclight.core.errors import DomainError
 from arclight.domain.agent_runtime import AgentHumanDecision
@@ -48,7 +49,12 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
                 else None,
             }
         )
-    return {"run_id": str(run.id), "workflow_version": run.workflow_version, "operations": values}
+    return {
+        "run_id": str(run.id),
+        "workflow_version": run.workflow_version,
+        "operations": values,
+        "can_cancel": waiting_for_answer(db, run),
+    }
 
 
 def queue_answer(

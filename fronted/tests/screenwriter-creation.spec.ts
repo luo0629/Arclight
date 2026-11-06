@@ -132,6 +132,54 @@ test("starts segmented creation, views saved work, answers after refresh and use
   });
 });
 
+test("cancels an unanswered working question while retaining saved plan and scenes", async ({
+  page,
+}) => {
+  const { episode, headers } = await setup(page);
+  await page
+    .getByLabel("故事灵感", { exact: true })
+    .fill("需要澄清：雨夜的纸船。");
+  await page
+    .getByRole("radio", { name: "调查、规划与分段创作", exact: true })
+    .click();
+  await page
+    .getByRole("button", { name: "请编剧开始创作", exact: true })
+    .click();
+  const working = page.getByRole("region", { name: "编剧计划与工作稿" });
+  await expect(
+    working.getByText("纸船是否送回失主？", { exact: true }),
+  ).toBeVisible({ timeout: 20000 });
+  const runs = await (
+    await page.request.get(`/api/v1/episodes/${episode.id}/runs`, { headers })
+  ).json();
+  const before = await (
+    await page.request.get(`/api/v1/runs/${runs[0].id}/screenwriter`, {
+      headers,
+    })
+  ).json();
+  expect(before.can_cancel).toBe(true);
+  await working
+    .getByRole("button", { name: "停止本次创作", exact: true })
+    .click();
+  await expect(page.getByText("已取消", { exact: true }).first()).toBeVisible();
+  await expect(
+    working.getByRole("button", { name: "停止本次创作", exact: true }),
+  ).toBeDisabled();
+  const after = await (
+    await page.request.get(`/api/v1/runs/${runs[0].id}/screenwriter`, {
+      headers,
+    })
+  ).json();
+  expect(after.operations).toEqual(before.operations);
+  expect(after.can_cancel).toBe(false);
+  await page.reload();
+  await openWorkspacePanels(page);
+  await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
+  await expect(
+    working.getByText("场景 2 · 已停止", { exact: true }),
+  ).toBeVisible();
+});
+
 test("delivers professional season outline and derives a professional episode from the confirmed version", async ({
   page,
 }) => {

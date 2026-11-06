@@ -58,7 +58,7 @@ type Operation = {
   input_sha256: string;
   human_request: { question: string; reason: string; options: string[] } | null;
 };
-type Progress = { operations: Operation[] };
+type Progress = { operations: Operation[]; can_cancel: boolean };
 
 export default function ScreenwriterProgress({
   run,
@@ -129,7 +129,9 @@ export default function ScreenwriterProgress({
             {operation.status === "COMPLETED"
               ? "已保存"
               : operation.status === "WAITING_HUMAN"
-                ? "等待回答"
+                ? run.status === "CANCELLED"
+                  ? "已停止"
+                  : "等待回答"
                 : operation.status === "STOPPED"
                   ? "已停止"
                   : operation.status === "RECOVERY_REQUIRED"
@@ -207,15 +209,23 @@ export default function ScreenwriterProgress({
                 operation={operation}
                 run={run}
                 disabled={!writable || busy || run.status !== "RUNNING"}
-                submit={(decision, answer) =>
+                canStop={data.can_cancel}
+                stop={() =>
+                  act(async () => {
+                    await api(`/runs/${run.id}/cancel`, json("POST"));
+                    setRefresh((value) => value + 1);
+                    await reload();
+                  })
+                }
+                submit={(answer) =>
                   act(async () => {
                     await api(
                       `/runs/${run.id}/screenwriter/${operation.loop_id}/answers`,
                       json("POST", {
                         question_id: operation.question_id,
                         input_sha256: operation.input_sha256,
-                        decision,
-                        ...(decision === "ANSWER" ? { answer } : {}),
+                        decision: "ANSWER",
+                        answer,
                       }),
                     );
                     setRefresh((value) => value + 1);
@@ -243,12 +253,16 @@ function Answer({
   operation,
   run,
   disabled,
+  canStop,
+  stop,
   submit,
 }: {
   operation: Operation;
   run: Run;
   disabled: boolean;
-  submit: (decision: "ANSWER" | "STOP", answer?: string) => Promise<boolean>;
+  canStop: boolean;
+  stop: () => Promise<boolean>;
+  submit: (answer: string) => Promise<boolean>;
 }) {
   const [answer, setAnswer] = useState("");
   const question = operation.human_request!;
@@ -256,7 +270,7 @@ function Answer({
     <form
       onSubmit={(event) => {
         event.preventDefault();
-        if (!disabled && answer.trim()) void submit("ANSWER", answer);
+        if (!disabled && answer.trim()) void submit(answer);
       }}
     >
       <FieldGroup>
@@ -298,8 +312,8 @@ function Answer({
           <Button
             type="button"
             variant="outline"
-            disabled={disabled}
-            onClick={() => void submit("STOP")}
+            disabled={disabled || !canStop}
+            onClick={() => void stop()}
           >
             停止本次创作
           </Button>

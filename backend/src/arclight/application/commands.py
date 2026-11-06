@@ -359,8 +359,12 @@ def resume_run(
 
 
 def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
-    if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW]:
-        raise DomainError("NOT_CANCELLABLE", "仅排队或等待审核的工作流可以取消")
+    from arclight.application.screenwriter_creation import waiting_for_answer
+
+    if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW] and not waiting_for_answer(
+        db, run
+    ):
+        raise DomainError("NOT_CANCELLABLE", "仅排队、等待审核或等待创作回答的工作流可以取消")
     agent_state = None
     if run.agent_state_json is not None:
         from arclight.domain.agent_state import AgentStateError, terminate_agent_state

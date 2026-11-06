@@ -30,7 +30,7 @@ from arclight.domain.screenwriter_creation import (
     ScriptFragment,
 )
 from arclight.domain.screenwriter_planning import PLAN_VERSION, EpisodePlan, ScreenwriterPlan
-from arclight.persistence.agent_loops import AgentLoop
+from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision, AgentLoopQuestion
 from arclight.persistence.models import Episode, WorkflowRun
 
 PROFESSIONAL_VERSIONS = {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION}
@@ -65,6 +65,26 @@ def creation_loops(db: Session, run_id: UUID) -> list[AgentLoop]:
             .order_by(AgentLoop.created_at, AgentLoop.id)
         )
     )
+
+
+def waiting_for_answer(db: Session, run: WorkflowRun) -> bool:
+    """Cancellation needs no model admission, but cannot interrupt an answered question."""
+    if run.workflow_version not in PROFESSIONAL_VERSIONS or run.status != "RUNNING":
+        return False
+    for loop in creation_loops(db, run.id):
+        identity = (loop.outcome_json or {}).get("question_id")
+        if loop.status != "WAITING_HUMAN" or identity is None:
+            continue
+        question = db.get(AgentLoopQuestion, UUID(identity))
+        if (
+            question is not None
+            and question.loop_id == loop.id
+            and not db.scalar(
+                select(AgentLoopDecision.id).where(AgentLoopDecision.question_id == question.id)
+            )
+        ):
+            return True
+    return False
 
 
 def operation(loop: AgentLoop) -> str:

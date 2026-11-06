@@ -143,6 +143,8 @@ def test_progress_and_answer_authority_scope(client, settings, model_service, mo
         f"/api/v1/runs/{run_id}/screenwriter/{question['loop_id']}/answers", json=body
     )
     assert response.status_code in {401, 403, 404, 409}, response.text
+    if case in {"foreign", "viewer", "disabled", "archived"}:
+        assert client.post(f"/api/v1/runs/{run_id}/cancel").status_code in {401, 403, 404, 409}
     assert len(sent) == 4
     if read.status_code == 200:
         serialized = read.text
@@ -155,6 +157,83 @@ def test_progress_and_answer_authority_scope(client, settings, model_service, mo
                 "private-agent-transport-key",
             )
         )
+
+
+@pytest.mark.parametrize("season,human", [(False, "plan"), (False, 2), (True, "plan")])
+def test_unanswered_creation_can_cancel_after_deadline_and_keep_working_history(
+    client, episode, settings, model_service, monkeypatch, season, human
+):
+    sent, errors = install(model_service, monkeypatch, settings, human=human)
+    run_id = start(client, episode, season=season)
+    run = run_once(client, settings, run_id)
+    assert run["status"] == "RUNNING", errors
+    saved = copy.deepcopy(progress(client, run_id))
+    waiting = saved[-1]
+    count = len(sent)
+    factory = client.app.state.session_factory
+    from arclight.application.model_gateway import utc
+
+    with factory() as db:
+        deadline = db.get(AgentRunLimit, run_id).deadline_at
+    monkeypatch.setattr(
+        "arclight.application.agent_limits.utcnow", lambda: utc(deadline) + timedelta(seconds=1)
+    )
+    assert client.get(f"/api/v1/runs/{run_id}/screenwriter").json()["can_cancel"]
+    rejected = client.post(
+        f"/api/v1/runs/{run_id}/screenwriter/{waiting['loop_id']}/answers",
+        json={
+            "question_id": waiting["question_id"],
+            "input_sha256": waiting["input_sha256"],
+            "decision": "ANSWER",
+            "answer": "补充",
+        },
+    )
+    assert rejected.status_code == 409
+    assert rejected.json()["error"]["code"] == "AGENT_DEADLINE_EXCEEDED"
+    cancelled = client.post(f"/api/v1/runs/{run_id}/cancel")
+    assert cancelled.status_code == 200 and cancelled.json()["status"] == "CANCELLED"
+    assert progress(client, run_id) == saved
+    assert not client.get(f"/api/v1/runs/{run_id}/screenwriter").json()["can_cancel"]
+    assert run_once(client, settings, run_id)["status"] == "CANCELLED" and len(sent) == count
+    with factory() as db:
+        assert db.get(WorkflowRun, run_id).agent_state_json["status"] == "CANCELLED"
+        assert db.get(AgentRunLimit, run_id).deadline_at == deadline
+        assert (
+            db.scalar(select(func.count()).select_from(Script).where(Script.run_id == run_id)) == 0
+        )
+    replacement = start(client, episode, season=season)
+    assert replacement != run_id and len(sent) == count
+    assert client.post(f"/api/v1/runs/{replacement}/cancel").status_code == 200
+
+
+def test_answered_question_does_not_allow_cancelling_active_model_work(
+    client, episode, settings, model_service, monkeypatch
+):
+    target, outcomes = [], []
+
+    def on_http(payload):
+        if not any("human_decision" in str(item.get("content")) for item in payload["messages"]):
+            return
+        assert not client.get(f"/api/v1/runs/{target[0]}/screenwriter").json()["can_cancel"]
+        outcomes.append(client.post(f"/api/v1/runs/{target[0]}/cancel").status_code)
+
+    sent, errors = install(model_service, monkeypatch, settings, human=2, on_http=on_http)
+    run_id = start(client, episode)
+    target.append(run_id)
+    run_once(client, settings, run_id)
+    waiting = progress(client, run_id)[-1]
+    queued = client.post(
+        f"/api/v1/runs/{run_id}/screenwriter/{waiting['loop_id']}/answers",
+        json={
+            "question_id": waiting["question_id"],
+            "input_sha256": waiting["input_sha256"],
+            "decision": "ANSWER",
+            "answer": "补充",
+        },
+    )
+    assert queued.status_code == 202
+    run = run_once(client, settings, run_id)
+    assert run["status"] == "WAITING_REVIEW" and outcomes == [409] and len(sent) == 5, errors
 
 
 @pytest.mark.parametrize("case", ["disabled", "archived", "cancelled", "changed_input"])
