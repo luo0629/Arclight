@@ -37,6 +37,7 @@ from arclight.api.protection import RequestProtection
 from arclight.api.render_previews import router as render_previews_router
 from arclight.api.rights import router as rights_router
 from arclight.api.routes import router
+from arclight.api.screenwriter import router as screenwriter_router
 from arclight.api.script_rewrite import router as script_rewrite_router
 from arclight.api.storage_cleanup import router as storage_cleanup_router
 from arclight.api.story_analysis import router as story_analysis_router
@@ -179,6 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(story_analysis_router)
     app.include_router(story_outline_router)
     app.include_router(script_rewrite_router)
+    app.include_router(screenwriter_router)
     app.include_router(character_matching_router)
     app.include_router(project_overview_router)
     app.include_router(production_state_router)

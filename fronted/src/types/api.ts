@@ -178,6 +178,7 @@ export type ContentVersion = {
   script_version_id?: string;
 };
 export type Run = {
+  workflow_version?: string;
   episode_id: string;
   workflow_type: string;
   id: string;

@@ -11,6 +11,7 @@ from arclight.application.generation_recovery import recover_job, recovery_candi
 from arclight.application.production_events import consume_stage_event, publish_stage_events
 from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
+from arclight.application.screenwriter_execution import ScreenwriterExecutionDeferred
 from arclight.core.config import Settings, get_settings
 from arclight.domain.enums import RunStatus
 from arclight.persistence.base import utcnow
@@ -29,7 +30,12 @@ from arclight.providers.media_submission import get_media_submission_provider
 from arclight.workers.celery_app import celery_app
 
 
-@celery_app.task(name="arclight.execute_workflow")
+@celery_app.task(
+    name="arclight.execute_workflow",
+    autoretry_for=(ScreenwriterExecutionDeferred,),
+    max_retries=None,
+    retry_kwargs={"countdown": 10},
+)
 def execute_workflow(run_id: str, revision: int) -> None:
     settings = get_settings()
     engine = build_engine(settings)

@@ -23,8 +23,10 @@ from arclight.application.story_sources import (
 )
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
+from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION, ScreenwriterOptions
 from arclight.persistence.models import (
     AuditEvent,
     Episode,
@@ -121,7 +123,16 @@ def start_run(
     outline_version_id: UUID | None = None,
     source_id: UUID | None = None,
     rebuild_from_version_id: UUID | None = None,
+    professional: bool = False,
+    agent_limits: AgentRunLimits | None = None,
 ) -> WorkflowRun:
+    options = ScreenwriterOptions(professional=professional, agent_limits=agent_limits)
+    if professional:
+        from arclight.application.model_gateway import lock_gate
+
+        lock_gate(db)
+    if professional and script_version_id is not None:
+        raise DomainError("SCREENWRITER_TASK_INVALID", "专业编剧须从故事或大纲发起", 422)
     episode = require_episode(db, episode_id, actor, write=True)
     # 同一剧集写入串行化，同时保护版本号分配；唯一约束作为最终防线。
     db.refresh(episode, with_for_update={"key_share": True})
@@ -129,7 +140,7 @@ def start_run(
         raise DomainError("EPISODE_ARCHIVED", "归档剧集只允许查看", 409)
     project = require_project(db, episode.project_id, actor)
     # 旧请求指纹保持不变；两种启动方式共享剧集内的幂等键空间。
-    payload = (
+    payload: dict = (
         {"story": story}
         if script_version_id is None
         else {"script_version_id": str(script_version_id)}
@@ -140,6 +151,11 @@ def start_run(
         payload = {"source_id": str(source_id)}
     if rebuild_from_version_id is not None:
         payload["rebuild_from_version_id"] = str(rebuild_from_version_id)
+    if professional:
+        payload |= {
+            "professional": True,
+            "agent_limits": options.frozen_limits().model_dump(mode="json"),
+        }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -223,15 +239,17 @@ def start_run(
         inputs["rebuild_from_version_id"] = str(rebuild_from_version_id)
     if snapshot:
         inputs["_text_service"] = snapshot
+    if professional:
+        inputs["screenwriter"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=fingerprint,
         workflow_type="script_storyboard" if script_version_id is None else "storyboard",
-        workflow_version=WORKFLOW_VERSION
-        if script_version_id is None
-        else DIRECTOR_WORKFLOW_VERSION,
+        workflow_version=SCREENWRITER_VERSION
+        if professional
+        else (WORKFLOW_VERSION if script_version_id is None else DIRECTOR_WORKFLOW_VERSION),
         input_json=inputs,
     )
     db.add(run)
@@ -242,6 +260,10 @@ def start_run(
     from arclight.application.production_versions import capture_text
 
     capture_text(db, episode.project_id, run, settings, actor=actor)
+    if professional:
+        from arclight.application.screenwriter_creation import authorize_screenwriter
+
+        authorize_screenwriter(db, run, actor, settings)
     if story_source is not None:
         bind_source(db, run, story_source.id)
     db.add(
@@ -401,6 +423,19 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
                 "AGENT_STATE_INVALID", "运行状态不可安全重试，请联系管理员", 409
             ) from exc
         run.agent_state_json = state.model_dump(mode="json")
+    from arclight.application.screenwriter_creation import PROFESSIONAL_VERSIONS, creation_attempt
+
+    if run.workflow_version in PROFESSIONAL_VERSIONS:
+        from arclight.domain.agent_state import AgentRunState
+
+        state = AgentRunState.model_validate(run.agent_state_json)
+        run.agent_state_json = state.model_copy(
+            update={
+                "revision": state.revision + 1,
+                "extensions": state.extensions
+                | {"screenwriter.creation": {"attempt": creation_attempt(run) + 1}},
+            }
+        ).model_dump(mode="json")
     run.status = RunStatus.QUEUED
     run.error_code = None
     run.revision += 1

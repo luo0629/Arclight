@@ -138,6 +138,7 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
             input_sha256=digest(data),
             parameters={"max_tokens": TEXT_MAX_TOKENS},
             authorized_routes=frozenset({route_id(route)}),
+            execution=_professional_execution(run, stage, runtime.revision),
         )
 
     def usage(_result) -> GatewayUsage:
@@ -181,3 +182,17 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
         if mock and exc.code == "GATEWAY_NOT_ACCEPTED":
             raise ValueError("Mock text execution failed") from None
         raise
+
+
+def _professional_execution(run, stage, revision):
+    from arclight.domain.agent_limits import AgentExecutionContext
+    from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION
+
+    if run.workflow_version != SCREENWRITER_VERSION:
+        return None
+    return AgentExecutionContext(
+        run_id=run.id,
+        agent_name="director" if stage == "storyboard" else "screenwriter",
+        stage=stage,
+        step_key=f"text:{revision}:{stage}",
+    )

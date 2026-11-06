@@ -22,7 +22,7 @@ class AgentRunLimits(BaseModel):
     max_duration_seconds: int = Field(default=300, strict=True, ge=1, le=86400)
     max_delegations: int = Field(default=8, strict=True, ge=0, le=128)
     max_delegation_depth: int = Field(default=2, strict=True, ge=0, le=8)
-    maximum_cost: Decimal = Field(default=Decimal("0"), ge=0, lt=10**12, decimal_places=6)
+    maximum_cost: Decimal | None = Field(default=Decimal("0"), ge=0, lt=10**12, decimal_places=6)
 
     @field_validator("schema_version", mode="before")
     @classmethod

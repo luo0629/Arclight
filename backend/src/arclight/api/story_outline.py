@@ -17,13 +17,14 @@ from arclight.application.story_outline import (
     save_outline,
     start_outline,
 )
+from arclight.domain.screenwriter_creation import ScreenwriterOptions
 from arclight.persistence.models import StoryOutline
 
 router = APIRouter(prefix="/api/v1/episodes/{episode_id}", tags=["story-outlines"])
 Key = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)]
 
 
-class OutlineCreate(Input):
+class OutlineCreate(Input, ScreenwriterOptions):
     story: Annotated[str, StringConstraints(strip_whitespace=False)] | None = Field(
         default=None, min_length=1, max_length=20000
     )
@@ -89,7 +90,12 @@ def create_outline(
         db,
         episode_id,
         actor,
-        payload.model_dump(mode="json"),
+        payload.model_dump(mode="json", exclude={"professional", "agent_limits"})
+        | (
+            {"professional": True, "agent_limits": payload.frozen_limits().model_dump(mode="json")}
+            if payload.professional
+            else {}
+        ),
         idempotency_key,
         request.state.request_id,
         request.app.state.settings,

@@ -12,6 +12,11 @@ import type { Episode, Run } from "@/types/api";
 import { useSessionDraft } from "@/providers/draft-provider";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
+import CreationOptionsFields, {
+  creationPayload,
+  initialCreationOptions,
+  validCreationOptions,
+} from "@/features/editor/components/creation-options";
 
 type Entry = {
   episode_no: number;
@@ -135,6 +140,7 @@ export default function StoryOutline({
   const sequence = useRef(0);
   const submitted = useRef(0);
   const writerKey = useRef({ version: "", key: "" });
+  const [creation, setCreation] = useState(initialCreationOptions);
   useEffect(() => {
     live.current = true;
     return () => {
@@ -227,7 +233,13 @@ export default function StoryOutline({
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (saving.current || !writable || active(run)) return;
+    if (
+      saving.current ||
+      !writable ||
+      active(run) ||
+      !validCreationOptions(creation)
+    )
+      return;
     saving.current = true;
     setBusy(true);
     setError("");
@@ -236,6 +248,7 @@ export default function StoryOutline({
     const key = value.key || crypto.randomUUID();
     if (!value.key) draft.update({ ...value, key });
     const body = {
+      ...creationPayload(creation),
       ...(value.mode === "manual"
         ? { story: value.story }
         : value.mode === "source"
@@ -257,7 +270,10 @@ export default function StoryOutline({
           },
         },
       );
-      if (!live.current) return;
+      if (!live.current) {
+        await onQueued();
+        return;
+      }
       setRun({
         episode_id: episode.id,
         id: accepted.run_id,
@@ -300,24 +316,38 @@ export default function StoryOutline({
     }
   }
   async function derive() {
-    if (!detail || !writable || saving.current) return;
+    if (
+      !detail ||
+      !writable ||
+      saving.current ||
+      !validCreationOptions(creation)
+    )
+      return;
     saving.current = true;
     setBusy(true);
     setError("");
-    if (writerKey.current.version !== detail.id)
-      writerKey.current = { version: detail.id, key: crypto.randomUUID() };
+    const writerBody = {
+      outline_version_id: detail.id,
+      ...creationPayload(creation),
+    };
+    const signature = JSON.stringify(writerBody);
+    if (writerKey.current.version !== signature)
+      writerKey.current = { version: signature, key: crypto.randomUUID() };
     try {
       const accepted = await api<{ run_id: string; status: string }>(
         prefix + "/script-runs",
         {
-          ...json("POST", { outline_version_id: detail.id }),
+          ...json("POST", writerBody),
           headers: {
             "Content-Type": "application/json",
             "Idempotency-Key": writerKey.current.key,
           },
         },
       );
-      if (!live.current) return;
+      if (!live.current) {
+        await onQueued();
+        return;
+      }
       setRun({
         episode_id: episode.id,
         id: accepted.run_id,
@@ -462,12 +492,21 @@ export default function StoryOutline({
               集数或时长留空时使用提交时的项目设定。手动输入保存在当前账号的本机草稿中。
             </p>
             {draft.recovered && <Notice>已恢复本机的大纲输入草稿。</Notice>}
+            <CreationOptionsFields
+              value={creation}
+              onChange={(next) => {
+                setCreation(next);
+                draft.update({ ...value, key: crypto.randomUUID() });
+              }}
+              disabled={!writable || blocked}
+            />
             <div className="flex flex-wrap gap-2">
               <Button
                 type="submit"
                 disabled={
                   !writable ||
                   blocked ||
+                  !validCreationOptions(creation) ||
                   !(value.mode === "manual"
                     ? value.story.trim()
                     : value.mode === "source"
@@ -589,6 +628,7 @@ export default function StoryOutline({
                     disabled={
                       !writable ||
                       blocked ||
+                      !validCreationOptions(creation) ||
                       detail.content.episode_duration_ms !==
                         episode.target_duration_ms ||
                       !detail.content.episodes.some(

@@ -42,7 +42,10 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
     from arclight.application.gateway_text import runtime_scope
 
     with runtime_scope(factory, settings, run_id, revision):
-        _execute_run(factory, settings, run_id, revision)
+        from arclight.application.screenwriter_execution import execute_screenwriter
+
+        if not execute_screenwriter(factory, settings, run_id, revision):
+            _execute_run(factory, settings, run_id, revision)
 
 
 def _store_agent_state(run: WorkflowRun, state: AgentRunState) -> None:

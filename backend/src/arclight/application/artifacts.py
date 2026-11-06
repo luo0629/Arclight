@@ -2,7 +2,7 @@ from collections.abc import Callable
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agents.contracts import ScriptContent, StoryboardContent, read_content
 from arclight.application.content_dependencies import register_content
@@ -51,28 +51,14 @@ class ArtifactStore(Artifacts):
             existing = db.scalar(select(Script).where(Script.run_id == self.run_id))
             if existing:
                 return str(existing.id), read_content(existing.content_json)
-            episode = db.get(Episode, self.episode_id)
-            if episode is None:
-                raise ValueError("剧集不存在")
-            validate_script_assets(db, episode.project_id, parsed)
-            validate_duration(parsed, self.target_duration_ms, self.tolerance_percent)
-            content = parsed.model_dump(mode="json")
-            version = (
-                db.scalar(
-                    select(func.max(Script.version_no)).where(Script.episode_id == self.episode_id)
-                )
-                or 0
+            return save_script_candidate(
+                db,
+                self.run_id,
+                self.episode_id,
+                parsed,
+                self.target_duration_ms,
+                self.tolerance_percent,
             )
-            script = Script(
-                episode_id=self.episode_id,
-                run_id=self.run_id,
-                version_no=version + 1,
-                content_json=content,
-            )
-            db.add(script)
-            db.flush()
-            register_content(db, script, "workflow:" + str(self.run_id))
-            return str(script.id), content
 
     def storyboard(self, script_id: str, generate: Callable[[], dict]) -> tuple[str, dict]:
         with self.factory.begin() as db:
@@ -140,3 +126,30 @@ class ArtifactStore(Artifacts):
                 )
             register_content(db, storyboard, "workflow:" + str(self.run_id))
             return str(storyboard.id), content
+
+
+def save_script_candidate(
+    db: Session,
+    run_id: UUID,
+    episode_id: UUID,
+    parsed: ScriptContent,
+    target_duration_ms: int,
+    tolerance_percent: int,
+) -> tuple[str, dict]:
+    """Shared domain save; caller holds the project dependency gate and run fence."""
+    episode = db.get(Episode, episode_id)
+    if episode is None:
+        raise ValueError("剧集不存在")
+    validate_script_assets(db, episode.project_id, parsed)
+    validate_duration(parsed, target_duration_ms, tolerance_percent)
+    content = parsed.model_dump(mode="json")
+    version = (
+        db.scalar(select(func.max(Script.version_no)).where(Script.episode_id == episode_id)) or 0
+    )
+    script = Script(
+        episode_id=episode_id, run_id=run_id, version_no=version + 1, content_json=content
+    )
+    db.add(script)
+    db.flush()
+    register_content(db, script, "workflow:" + str(run_id))
+    return str(script.id), content

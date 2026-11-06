@@ -29,6 +29,11 @@ import CharacterMatching from "@/features/story/components/character-matching";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import RebuildStoryboard from "@/features/dependencies/components/rebuild-storyboard";
+import CreationOptionsFields, {
+  creationPayload,
+  initialCreationOptions,
+  validCreationOptions,
+} from "@/features/editor/components/creation-options";
 
 export default function Inspector({
   node,
@@ -99,6 +104,7 @@ export default function Inspector({
   const panel = useRef<HTMLElement>(null);
   const directorKey = useRef({ scriptId: "", key: "" });
   const requestKey = useRef({ story: "", key: "" });
+  const [creation, setCreation] = useState(initialCreationOptions);
   const active = runs.some((run) =>
     ["QUEUED", "RUNNING", "WAITING_REVIEW"].includes(run.status),
   );
@@ -118,11 +124,13 @@ export default function Inspector({
     await onCreated(row, kind);
   };
   async function generate() {
-    if (requestKey.current.story !== story || !requestKey.current.key)
-      requestKey.current = { story, key: crypto.randomUUID() };
+    const body = { story, ...creationPayload(creation) };
+    const signature = JSON.stringify(body);
+    if (requestKey.current.story !== signature || !requestKey.current.key)
+      requestKey.current = { story: signature, key: crypto.randomUUID() };
     await act(async () => {
       await api(`/episodes/${episode.id}/script-runs`, {
-        ...json("POST", { story }),
+        ...json("POST", body),
         headers: { "Idempotency-Key": requestKey.current.key },
       });
       storyDraft.clear();
@@ -244,11 +252,22 @@ export default function Inspector({
           <p className="counter -mt-2 text-right text-xs text-muted-foreground">
             {story.length} / 20000
           </p>
+          <CreationOptionsFields
+            value={creation}
+            onChange={setCreation}
+            disabled={!writable || busy || active}
+          />
           <Button
             variant="default"
             size="lg"
             className="wide w-full"
-            disabled={!writable || busy || active || !story.trim()}
+            disabled={
+              !writable ||
+              busy ||
+              active ||
+              !story.trim() ||
+              !validCreationOptions(creation)
+            }
             onClick={() => void generate()}
           >
             {busy ? "正在提交…" : "请编剧开始创作"}

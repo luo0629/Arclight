@@ -1,0 +1,310 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import { Notice } from "@/components/ui-kit";
+import { api, json, message } from "@/lib/api/client";
+import type { Run } from "@/types/api";
+
+type Scene = {
+  scene_no: number;
+  title: string;
+  action: string;
+  dialogue: { line_id: string; speaker: string; text: string }[];
+};
+type Working = {
+  objective?: string;
+  goals?: string[];
+  plan?: {
+    mode: string;
+    scenes?: {
+      scene_id: string;
+      title: string;
+      goal: string;
+      beats: string[];
+      estimated_duration_ms: number;
+    }[];
+    outline?: {
+      episodes: {
+        episode_no: number;
+        title: string;
+        goal: string;
+        conflict: string;
+        turning_point: string;
+        ending_hook: string;
+      }[];
+    };
+  };
+  scene?: Scene;
+  estimated_duration_ms?: number;
+  evidence: {
+    manifest_id: string;
+    source_id: string;
+    content_sha256: string;
+  }[];
+};
+type Operation = {
+  loop_id: string;
+  kind: "plan" | "scene";
+  scene_no: number | null;
+  status: string;
+  result: Working | null;
+  stop_code: string | null;
+  model_turns: number;
+  question_id: string | null;
+  input_sha256: string;
+  human_request: { question: string; reason: string; options: string[] } | null;
+};
+type Progress = { operations: Operation[] };
+
+export default function ScreenwriterProgress({
+  run,
+  writable,
+  busy,
+  act,
+  reload,
+}: {
+  run: Run;
+  writable: boolean;
+  busy: boolean;
+  act: (action: () => Promise<unknown>) => Promise<boolean>;
+  reload: () => Promise<void>;
+}) {
+  const [data, setData] = useState<Progress | null>(null);
+  const [error, setError] = useState("");
+  const [refresh, setRefresh] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    async function load() {
+      try {
+        const result = await api<Progress>(`/runs/${run.id}/screenwriter`);
+        if (!cancelled) {
+          setData(result);
+          setError("");
+        }
+      } catch (e) {
+        if (!cancelled) setError(message(e));
+      }
+      if (!cancelled && ["QUEUED", "RUNNING"].includes(run.status))
+        timer = setTimeout(() => void load(), 1500);
+    }
+    void load();
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [run.id, run.status, run.revision, refresh]);
+  return (
+    <section
+      aria-label="编剧计划与工作稿"
+      className="flex min-w-0 flex-col gap-3"
+    >
+      <h4>编剧计划与工作稿</h4>
+      <p className="text-sm text-muted-foreground">
+        工作片段会逐段保存；完整候选通过校验后进入下方审核。
+      </p>
+      {error && (
+        <Notice tone="error" role="alert">
+          {error}
+        </Notice>
+      )}
+      {!data && !error && <p role="status">正在读取创作进度…</p>}
+      {data && data.operations.length === 0 && (
+        <p role="status">任务排队后开始调查与规划。</p>
+      )}
+      {data?.operations.map((operation) => (
+        <details
+          key={operation.loop_id}
+          open={operation.status === "WAITING_HUMAN"}
+        >
+          <summary>
+            {operation.kind === "plan"
+              ? "故事计划"
+              : `场景 ${operation.scene_no}`}{" "}
+            ·{" "}
+            {operation.status === "COMPLETED"
+              ? "已保存"
+              : operation.status === "WAITING_HUMAN"
+                ? "等待回答"
+                : operation.status === "STOPPED"
+                  ? "已停止"
+                  : operation.status === "RECOVERY_REQUIRED"
+                    ? "等待核验原调用"
+                    : "创作中"}
+          </summary>
+          <div className="flex flex-col gap-3 py-3">
+            {operation.result?.objective && <p>{operation.result.objective}</p>}
+            {operation.result?.goals && (
+              <ul className="list-disc pl-5">
+                {operation.result.goals.map((goal, i) => (
+                  <li key={i}>{goal}</li>
+                ))}
+              </ul>
+            )}
+            {operation.result?.plan?.scenes && (
+              <ol className="list-decimal pl-5">
+                {operation.result.plan.scenes.map((scene) => (
+                  <li key={scene.scene_id}>
+                    <strong>{scene.title}</strong> ·{" "}
+                    {scene.estimated_duration_ms / 1000} 秒<p>{scene.goal}</p>
+                    <p>{scene.beats.join("；")}</p>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {operation.result?.plan?.outline?.episodes && (
+              <ol className="list-decimal pl-5">
+                {operation.result.plan.outline.episodes.map((episode) => (
+                  <li key={episode.episode_no}>
+                    <strong>{episode.title}</strong>
+                    <p>{episode.goal}</p>
+                    <p>冲突：{episode.conflict}</p>
+                    <p>转折：{episode.turning_point}</p>
+                    <p>结尾：{episode.ending_hook}</p>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {operation.result?.scene && (
+              <>
+                <strong>{operation.result.scene.title}</strong>
+                <p>{operation.result.scene.action}</p>
+                {operation.result.scene.dialogue.map((line) => (
+                  <p key={line.line_id}>
+                    {line.speaker}：{line.text}
+                  </p>
+                ))}
+              </>
+            )}
+            {operation.result?.evidence.length ? (
+              <details>
+                <summary>
+                  调查来源（{operation.result.evidence.length}）
+                </summary>
+                <ul>
+                  {operation.result.evidence.map((evidence, i) => (
+                    <li key={i} className="break-all text-xs">
+                      来源 {evidence.source_id} · 调查 {evidence.manifest_id} ·
+                      SHA-256 {evidence.content_sha256}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+            {operation.stop_code && (
+              <Notice>
+                停止原因：{operation.stop_code}
+                。可使用本任务的重试入口；已有成功片段会保留。
+              </Notice>
+            )}
+            {operation.human_request && (
+              <Answer
+                key={operation.question_id}
+                operation={operation}
+                run={run}
+                disabled={!writable || busy || run.status !== "RUNNING"}
+                submit={(decision, answer) =>
+                  act(async () => {
+                    await api(
+                      `/runs/${run.id}/screenwriter/${operation.loop_id}/answers`,
+                      json("POST", {
+                        question_id: operation.question_id,
+                        input_sha256: operation.input_sha256,
+                        decision,
+                        ...(decision === "ANSWER" ? { answer } : {}),
+                      }),
+                    );
+                    setRefresh((value) => value + 1);
+                    await reload();
+                  })
+                }
+              />
+            )}
+          </div>
+        </details>
+      ))}
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => setRefresh((value) => value + 1)}
+      >
+        刷新创作进度
+      </Button>
+    </section>
+  );
+}
+
+function Answer({
+  operation,
+  run,
+  disabled,
+  submit,
+}: {
+  operation: Operation;
+  run: Run;
+  disabled: boolean;
+  submit: (decision: "ANSWER" | "STOP", answer?: string) => Promise<boolean>;
+}) {
+  const [answer, setAnswer] = useState("");
+  const question = operation.human_request!;
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!disabled && answer.trim()) void submit("ANSWER", answer);
+      }}
+    >
+      <FieldGroup>
+        <Notice>{question.question}</Notice>
+        <Field data-disabled={disabled}>
+          <FieldLabel htmlFor={`answer-${run.id}-${operation.loop_id}`}>
+            创作问题回答
+          </FieldLabel>
+          {question.options.length ? (
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              aria-label="创作问题回答"
+              disabled={disabled}
+              value={answer}
+              onValueChange={setAnswer}
+            >
+              {question.options.map((option) => (
+                <ToggleGroupItem key={option} value={option}>
+                  {option}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          ) : (
+            <Textarea
+              id={`answer-${run.id}-${operation.loop_id}`}
+              value={answer}
+              disabled={disabled}
+              maxLength={1000}
+              required
+              onChange={(e) => setAnswer(e.target.value)}
+            />
+          )}
+        </Field>
+        <div className="flex flex-wrap gap-2">
+          <Button type="submit" disabled={disabled || !answer.trim()}>
+            提交回答并继续
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={disabled}
+            onClick={() => void submit("STOP")}
+          >
+            停止本次创作
+          </Button>
+        </div>
+      </FieldGroup>
+    </form>
+  );
+}

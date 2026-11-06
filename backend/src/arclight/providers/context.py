@@ -28,7 +28,7 @@ def provider_call[T](
             safe_metadata(result.model_dump(mode="json"))
         return result
     except DomainError as exc:
-        if exc.code.startswith(("GATEWAY_", "BUDGET_")):
+        if exc.code.startswith(("GATEWAY_", "BUDGET_", "AGENT_")):
             raise
         raise DomainError("TEXT_PROVIDER_FAILED", "文本模型调用失败", 502) from None
     except Exception:

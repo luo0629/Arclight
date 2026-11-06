@@ -20,6 +20,9 @@ from arclight.storage.objects import ObjectStorage, initialize
 
 
 def main():
+    from e2e_screenwriter import install
+
+    install()
     folder = Path(tempfile.mkdtemp(prefix="arclight-e2e-"))
     settings = Settings(
         _env_file=None,

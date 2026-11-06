@@ -66,7 +66,10 @@ def checked_loop(db: Session, loop_id: UUID, *, actor: str | None = None) -> Age
     control = db.get(AgentRunLimit, run.id)
     assert control is not None
     usage = action_usage(db, control.root_run_id)
-    if usage["actual_cost"] + usage["pending_estimate"] > limits.maximum_cost:
+    if limits.maximum_cost is not None and (
+        usage["unknown_cost"]
+        or usage["actual_cost"] + usage["pending_estimate"] > limits.maximum_cost
+    ):
         raise DomainError("AGENT_COST_LIMIT", "恢复时已有用量超过运行总预算", 409)
     return loop
 

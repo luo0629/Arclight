@@ -19,6 +19,14 @@ from arclight.domain.generation_prompts import (
     PROMPT_COMPOSER_VERSION,
 )
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
+from arclight.domain.screenwriter_creation import (
+    FRAGMENT_PROMPT,
+    FRAGMENT_VERSION,
+    SCREENWRITER_OUTLINE_VERSION,
+    SCREENWRITER_VERSION,
+    ScriptFragment,
+)
+from arclight.domain.screenwriter_planning import PLAN_VERSION, PLANNING_PROMPT, ScreenwriterPlan
 from arclight.domain.versions import VersionRegistration, digest
 from arclight.persistence.models import (
     DependencyManifest,
@@ -124,6 +132,54 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    if workflow_version in {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION} and stage in {
+        "script",
+        "outline",
+    }:
+        return [
+            (
+                "AGENT",
+                workflow_version,
+                {
+                    "operation": stage,
+                    "workflow_version": workflow_version,
+                    "runtime": "persistent-agent/1",
+                    "planning_agent_version": "screenwriter-planning/1",
+                    "planning_prompt_version": "screenwriter-planning/1",
+                    "plan_max_tokens": 16000,
+                    **(
+                        {"fragment_version": FRAGMENT_VERSION, "fragment_max_tokens": 6000}
+                        if stage == "script"
+                        else {}
+                    ),
+                },
+            ),
+            (
+                "PROMPT",
+                workflow_version,
+                {
+                    "planning": PLANNING_PROMPT,
+                    **({"fragment": FRAGMENT_PROMPT} if stage == "script" else {}),
+                },
+            ),
+            (
+                "SCHEMA",
+                workflow_version,
+                {
+                    "planning_version": PLAN_VERSION,
+                    "planning": ScreenwriterPlan.model_json_schema(),
+                    **(
+                        {
+                            "fragment_version": FRAGMENT_VERSION,
+                            "fragment": ScriptFragment.model_json_schema(),
+                        }
+                        if stage == "script"
+                        else {}
+                    ),
+                    "candidate": SCHEMAS[stage].model_json_schema(),
+                },
+            ),
+        ]
     schema_field = SCHEMAS[stage].model_fields.get("schema_version")
     schema_version = str(schema_field.default) if schema_field is not None else "1"
     return [

@@ -17,6 +17,7 @@ import { runErrorMessage } from "@/lib/run-errors";
 import type { Run } from "@/types/api";
 import CharacterMatching from "@/features/story/components/character-matching";
 import ImpactButton from "@/features/dependencies/components/impact-button";
+import ScreenwriterProgress from "@/features/tasks/components/screenwriter-progress";
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 export default function Tasks({
@@ -97,6 +98,17 @@ export default function Tasks({
                 {run.revision}
               </p>
               <code className="task-id text-muted-foreground">{run.id}</code>
+              {["screenwriter/1.0", "screenwriter-outline/1.0"].includes(
+                run.workflow_version ?? "",
+              ) && (
+                <ScreenwriterProgress
+                  run={run}
+                  writable={writable}
+                  busy={busy}
+                  act={act}
+                  reload={reload}
+                />
+              )}
               {run.error_code && (
                 <Notice tone="error" className="error" role="alert">
                   {runErrorMessage(run.error_code)}

@@ -17,6 +17,7 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
+from arclight.domain.screenwriter_creation import SCREENWRITER_OUTLINE_VERSION
 from arclight.persistence.models import (
     AuditEvent,
     Episode,
@@ -64,6 +65,10 @@ def start_outline(
     request_id: str,
     settings: Settings,
 ) -> WorkflowRun:
+    if payload.get("professional"):
+        from arclight.application.model_gateway import lock_gate
+
+        lock_gate(db)
     episode = require_episode(db, episode_id, actor, write=True)
     db.refresh(episode, with_for_update={"key_share": True})
     if episode.status == "ARCHIVED":
@@ -135,13 +140,17 @@ def start_outline(
     service = text_snapshot(db, actor)
     if service:
         inputs["_text_service"] = service
+    if payload.get("professional"):
+        inputs["screenwriter"] = {"agent_limits": payload["agent_limits"]}
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=digest,
         workflow_type="story_outline",
-        workflow_version=OUTLINE_VERSION,
+        workflow_version=SCREENWRITER_OUTLINE_VERSION
+        if payload.get("professional")
+        else OUTLINE_VERSION,
         input_json=inputs,
     )
     db.add(run)
@@ -152,6 +161,10 @@ def start_outline(
     from arclight.application.production_versions import capture_text
 
     capture_text(db, episode.project_id, run, settings, actor=actor)
+    if payload.get("professional"):
+        from arclight.application.screenwriter_creation import authorize_screenwriter
+
+        authorize_screenwriter(db, run, actor, settings)
     bind_source(db, run, source.id)
     db.add(
         AuditEvent(
@@ -195,33 +208,41 @@ def generate_outline(
         )
     content = StoryOutlineContent.model_validate(provider.outline(source))
     with factory.begin() as db:
-        db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
-        from arclight.application.gateway_text import validate_publication
+        return save_outline_candidate(db, run, content)
 
-        validate_publication(db, run.id)
-        existing = db.scalar(select(StoryOutline).where(StoryOutline.run_id == run.id))
-        if existing:
-            return str(existing.id), existing.version_no
-        if (
-            content.target_episode_count != source["target_episode_count"]
-            or content.episode_duration_ms != source["episode_duration_ms"]
-        ):
-            raise DomainError("OUTLINE_PLAN_MISMATCH", "大纲与请求的目标集数或时长不一致", 422)
-        row = StoryOutline(
-            project_id=project_id,
-            episode_id=run.episode_id,
-            run_id=run.id,
-            version_no=next_version(db, project_id),
-            source_snapshot=source,
-            content_json=content.model_dump(mode="json"),
-            created_by=run.input_json["created_by"],
-        )
-        db.add(row)
-        db.flush()
-        from arclight.application.production_versions import bind_output
 
-        bind_output(db, project_id, "WORKFLOW", run.id, "OUTLINE", row.id)
-        return str(row.id), row.version_no
+def save_outline_candidate(
+    db: Session, run: WorkflowRun, content: StoryOutlineContent
+) -> tuple[str, int]:
+    project_id = UUID(run.input_json["project_id"])
+    source = run.input_json["source_snapshot"]
+    db.execute(select(Project.id).where(Project.id == project_id).with_for_update())
+    from arclight.application.gateway_text import validate_publication
+
+    validate_publication(db, run.id)
+    existing = db.scalar(select(StoryOutline).where(StoryOutline.run_id == run.id))
+    if existing:
+        return str(existing.id), existing.version_no
+    if (
+        content.target_episode_count != source["target_episode_count"]
+        or content.episode_duration_ms != source["episode_duration_ms"]
+    ):
+        raise DomainError("OUTLINE_PLAN_MISMATCH", "大纲与请求的目标集数或时长不一致", 422)
+    row = StoryOutline(
+        project_id=project_id,
+        episode_id=run.episode_id,
+        run_id=run.id,
+        version_no=next_version(db, project_id),
+        source_snapshot=source,
+        content_json=content.model_dump(mode="json"),
+        created_by=run.input_json["created_by"],
+    )
+    db.add(row)
+    db.flush()
+    from arclight.application.production_versions import bind_output
+
+    bind_output(db, project_id, "WORKFLOW", run.id, "OUTLINE", row.id)
+    return str(row.id), row.version_no
 
 
 def save_outline(

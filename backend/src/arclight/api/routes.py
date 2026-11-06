@@ -145,6 +145,8 @@ def create_script_run(
         settings=request.app.state.settings,
         outline_version_id=payload.outline_version_id,
         source_id=payload.source_id,
+        professional=payload.professional,
+        agent_limits=payload.agent_limits,
     )
     return AcceptedRun(
         run_id=run.id,

@@ -198,6 +198,7 @@ def action_usage(db: Session, root_run_id: UUID) -> dict:
     """Internal projection of authoritative receipts; no second monetary ledger."""
     actions = list(db.scalars(select(AgentAction).where(AgentAction.root_run_id == root_run_id)))
     actual = pending = Decimal("0")
+    unknown_cost = False
     for action in actions:
         if action.gateway_call_id is None:
             continue
@@ -217,8 +218,13 @@ def action_usage(db: Session, root_run_id: UUID) -> dict:
         elif call.maximum_cost is not None:
             pending += call.maximum_cost
         else:
-            raise DomainError("AGENT_LIMITS_INVALID", "受限调用缺少预算来源", 409)
-    return {"actions": actions, "actual_cost": actual, "pending_estimate": pending}
+            unknown_cost = True
+    return {
+        "actions": actions,
+        "actual_cost": actual,
+        "pending_estimate": pending,
+        "unknown_cost": unknown_cost,
+    }
 
 
 def _check_action(
@@ -229,6 +235,8 @@ def _check_action(
         raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 调用尚未建立运行限制", 409)
     limits = _active_chain(db, control, context.stage)
     usage = action_usage(db, control.root_run_id)
+    if limits.maximum_cost is not None and usage["unknown_cost"]:
+        raise DomainError("AGENT_LIMITS_INVALID", "受限调用缺少预算来源", 409)
     actions: list[AgentAction] = usage["actions"]
     steps = {(row.run_id, row.step_key) for row in actions}
     kind_count = sum(row.kind == context.kind for row in actions)
@@ -250,7 +258,8 @@ def _check_action(
     if (context.run_id, context.step_key) not in steps and len(steps) >= limits.max_steps:
         raise DomainError("AGENT_STEP_LIMIT", "Agent 决策步骤已达上限", 409)
     if (
-        amount > 0
+        limits.maximum_cost is not None
+        and amount > 0
         and usage["actual_cost"] + usage["pending_estimate"] + amount > limits.maximum_cost
     ):
         raise DomainError("AGENT_BUDGET_EXCEEDED", "Agent 共享预算不足，已停止付费调用", 409)
@@ -317,9 +326,14 @@ def check_gateway_action(db: Session, request: GatewayRequest, route: GatewayRou
             raise DomainError("GATEWAY_IDEMPOTENCY_CONFLICT", "重试不能更换执行器行动标识", 409)
     if context is None:
         return
-    if route.maximum_cost is None or route.pricing_version == "unconfigured":
+    control = db.get(AgentRunLimit, context.run_id)
+    if control is None:
+        raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 调用尚未建立运行限制", 409)
+    if _policy(control).maximum_cost is not None and (
+        route.maximum_cost is None or route.pricing_version == "unconfigured"
+    ):
         raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "受限 Agent 调用缺少可信报价", 409)
-    control = _check_action(db, context, route.maximum_cost)
+    control = _check_action(db, context, route.maximum_cost or Decimal("0"))
     if control.project_id != request.project_id or control.actor_id != request.actor:
         raise DomainError("AGENT_SCOPE_INVALID", "Agent 调用者或项目不匹配", 409)
     if context.kind == "MODEL" and request.task != context.stage:
