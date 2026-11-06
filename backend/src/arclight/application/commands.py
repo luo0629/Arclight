@@ -276,6 +276,12 @@ def resume_run(
         artifact = db.get(Storyboard, review.version_id)
     if artifact is None or artifact.run_id != run.id:
         raise DomainError("STALE_REVIEW", "待审核版本不存在或不属于本次工作流")
+    from arclight.application.human_reviews import record_resume
+    from arclight.application.text_reviews import prepare_text_decision
+
+    review_request, review_decision = prepare_text_decision(
+        db, artifact, actor, review.decision, review.comment, review.impact_digest
+    )
     if review.decision == "APPROVE":
         episode = require_episode(db, run.episode_id, actor)
         if isinstance(artifact, Script):
@@ -315,6 +321,18 @@ def resume_run(
     run.revision += 1
     db.add(OutboxEvent(run_id=run.id, revision=run.revision))
     emit(db, run, "review.submitted", review.model_dump(mode="json"))
+    record_resume(
+        db,
+        review_request,
+        review_decision,
+        actor,
+        {
+            "run_id": str(run.id),
+            "revision": run.revision,
+            "thread_id": str(run.id),
+            "status": "QUEUED",
+        },
+    )
     return run
 
 

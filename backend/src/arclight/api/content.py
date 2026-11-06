@@ -15,7 +15,6 @@ from arclight.application.commands import require_episode
 from arclight.application.content_dependencies import (
     approval_changes,
     register_content,
-    review_registry,
 )
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
@@ -24,6 +23,7 @@ from arclight.application.content_references import (
 )
 from arclight.application.episode_copy import copy_episode
 from arclight.application.invalidation import impact_preview
+from arclight.application.text_reviews import complete_manual_review, pause_for_content
 from arclight.core.errors import DomainError
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 
@@ -103,6 +103,7 @@ def save_script(
     db.add(version)
     db.flush()
     register_content(db, version, actor)
+    pause_for_content(db, version, actor)
     audit(
         db,
         episode.project_id,
@@ -165,6 +166,7 @@ def save_storyboard(
             )
         )
     register_content(db, version, actor)
+    pause_for_content(db, version, actor)
     audit(
         db,
         episode.project_id,
@@ -203,7 +205,7 @@ def review_content(
     db: Database,
     actor: Actor,
 ) -> dict:
-    episode = require_episode(db, episode_id, actor, write=True, owner=True)
+    require_episode(db, episode_id, actor, write=True, owner=True)
     if resource_type not in ("scripts", "storyboards"):
         raise DomainError("NOT_FOUND", "内容类型不存在", 404)
     model = Script if resource_type == "scripts" else Storyboard
@@ -217,32 +219,12 @@ def review_content(
         raise DomainError("WORKFLOW_REVIEW_REQUIRED", "工作流产物必须通过任务审核入口处理", 409)
     if version.status != "READY_FOR_REVIEW":
         raise DomainError("ALREADY_REVIEWED", "该版本已审核；修改请创建新版本", 409)
-    if payload.decision == "APPROVE":
-        if isinstance(version, Script):
-            validate_script_assets(
-                db, episode.project_id, ScriptContent.model_validate(version.content_json)
-            )
-        else:
-            source = db.get(Script, version.script_version_id)
-            if source is None or source.episode_id != episode_id or source.status != "APPROVED":
-                raise DomainError("SCRIPT_NOT_APPROVED", "请先批准本剧集的来源剧本版本", 409)
-            validate_storyboard_assets(
-                db, episode.project_id, StoryboardContent.model_validate(version.content_json)
-            )
-        parsed = (
-            ScriptContent if isinstance(version, Script) else StoryboardContent
-        ).model_validate(version.content_json)
-        validate_duration(
-            parsed,
-            episode.target_duration_ms,
-            request.app.state.settings.text_duration_tolerance_percent,
-        )
-    version.status = "APPROVED" if payload.decision == "APPROVE" else "REJECTED"
-    if isinstance(version, Storyboard):
-        for shot in db.scalars(select(Shot).where(Shot.storyboard_id == version.id)):
-            shot.status = version.status
-    review_registry(db, version, actor, payload.impact_digest)
-    audit(
-        db, episode.project_id, actor, f"{resource_type}.reviewed", version.id, payload.model_dump()
+    return complete_manual_review(
+        db,
+        version,
+        actor,
+        request.app.state.settings,
+        decision=payload.decision,
+        comment=payload.comment,
+        impact_digest=payload.impact_digest,
     )
-    return {"version_id": str(version_id), "status": version.status}

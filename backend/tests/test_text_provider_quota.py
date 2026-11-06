@@ -77,8 +77,9 @@ def test_no_quote_or_project_cap_required_and_missing_money_stays_unknown(
     assert summary["projected_cost"] is None
     with client.app.state.session_factory.begin() as db:
         db.get(WorkflowRun, UUID(run_id)).agent_state_json = None
-    # The new append-only stage history is now the first downgrade guard.
-    with pytest.raises(RuntimeError, match="Production event history exists"):
+    # The newest immutable journal must reject the whole destructive downgrade.
+    # The explicit pre-0048 test below still exercises the original pricing guard.
+    with pytest.raises(RuntimeError, match="Human review history exists"):
         command.downgrade(migrated, "0041")
     # The rejected downgrade rolls back. The same unknown quote and guards survive.
     with client.app.state.session_factory() as db:
@@ -111,6 +112,10 @@ def test_pre_stage_schema_still_protects_unpriced_text_history(
     command.downgrade(migrated, "0047")
     monkeypatch.setattr(commands, "OutboxEvent", LegacyOutboxEvent)
     monkeypatch.setattr(production_events, "enqueue_text", lambda db, run: None)
+    from arclight.application import text_reviews
+
+    # Explicit pre-0048 schema has no unified review journal either.
+    monkeypatch.setattr(text_reviews, "pause_for_run", lambda db, run: None)
     text_service(script_response)
     with TestClient(create_app(settings)) as client:
         client.headers["Authorization"] = "Bearer test-token"

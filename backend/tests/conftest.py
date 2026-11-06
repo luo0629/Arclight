@@ -127,6 +127,46 @@ def historical_content_registry(request, monkeypatch):
     # Historical seeds predate stage notifications; current-schema tests never skip them.
     monkeypatch.setattr(production_events, "enqueue_text", current_stage_events)
 
+    from arclight.application import human_reviews, text_reviews
+
+    def current_reviews(function, *, missing=None):
+        def wrapped(db, *args, **kwargs):
+            if inspect(db.get_bind()).has_table("human_review_requests"):
+                return function(db, *args, **kwargs)
+            return missing
+
+        return wrapped
+
+    # Explicit 0018 seeds have no unified journal. Ordinary/current-schema tests
+    # always execute the real request/decision/resume services.
+    for module, name in (
+        (text_reviews, "pause_for_run"),
+        (text_reviews, "pause_for_content"),
+        (human_reviews, "record_resume"),
+        (text_reviews, "record_resume"),
+        (content, "pause_for_content"),
+    ):
+        monkeypatch.setattr(module, name, current_reviews(getattr(module, name)))
+    original_prepare = text_reviews.prepare_text_decision
+
+    def historical_decision(db, artifact, actor, decision, comment, impact_digest):
+        if inspect(db.get_bind()).has_table("human_review_requests"):
+            return original_prepare(db, artifact, actor, decision, comment, impact_digest)
+        from types import SimpleNamespace
+
+        # Only explicit pre-journal fixtures use this unpersisted contract adapter.
+        return None, SimpleNamespace(
+            decision_json={
+                "version_id": str(artifact.id),
+                "request_sha256": "0" * 64,
+                "decision": decision,
+                "comment": comment,
+                "impact_digest": impact_digest,
+            }
+        )
+
+    monkeypatch.setattr(text_reviews, "prepare_text_decision", historical_decision)
+
     def current_versions(function):
         def wrapped(db, *args, **kwargs):
             if function.__name__ == "capture_text" and not inspect(db.get_bind()).has_table(
@@ -223,7 +263,7 @@ def historical_content_registry(request, monkeypatch):
 
     for module, name in (
         (content, "register_content"),
-        (content, "review_registry"),
+        (text_reviews, "review_registry"),
         (artifacts, "register_content"),
         (content_dependencies, "review_registry"),
     ):

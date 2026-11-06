@@ -270,6 +270,9 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 if snapshot.interrupts:
                     run.status = RunStatus.WAITING_REVIEW
                     run.pending_review = snapshot.interrupts[0].value
+                    from arclight.application.text_reviews import pause_for_run
+
+                    pause_for_run(db, run)
                     emit(db, run, "workflow.waiting_review", run.pending_review)
                 else:
                     approved = snapshot.values.get(

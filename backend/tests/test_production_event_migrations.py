@@ -9,8 +9,8 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import delete, inspect, select, text, update
 from sqlalchemy.exc import DBAPIError
-from test_api_workflow import advance, start
-from test_production_events import consume, latest, media
+from test_api_workflow import start
+from test_production_events import consume, media
 
 from arclight.persistence.models import OutboxEvent
 from arclight.persistence.production_events import ProductionEvent, ProductionEventReceipt
@@ -33,14 +33,16 @@ def test_0048_roundtrip_retains_old_workflow_outbox(client, episode, migrated):
 
 
 def test_0048_with_history_refuses_destructive_downgrade(client, episode, settings, migrated):
-    run_id = start(client, episode).json()["run_id"]
-    advance(client, settings, run_id)
-    identity = latest(client, run_id)
+    # Use a real media notification so the 0048 guard itself is exercised,
+    # independently of the newer human-review history guard.
+    _, identity = media(client, episode)
     result = consume(client, identity)
+    with client.app.state.engine.connect() as connection:
+        original_head = connection.scalar(text("SELECT version_num FROM alembic_version"))
     with pytest.raises(RuntimeError, match="history exists"):
         command.downgrade(migrated, "0047")
     with client.app.state.engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "0048"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == original_head
     assert consume(client, identity) == result
 
 

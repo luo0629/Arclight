@@ -26,6 +26,7 @@ from arclight.api.files import router as files_router
 from arclight.api.generation import router as generation_router
 from arclight.api.generation_budget import router as generation_budget_router
 from arclight.api.generation_candidates import router as generation_candidates_router
+from arclight.api.human_reviews import router as human_reviews_router
 from arclight.api.model_gateway import router as model_gateway_router
 from arclight.api.model_services import router as model_services_router
 from arclight.api.production_state import router as production_state_router
@@ -153,6 +154,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(files_router)
     app.include_router(generation_router)
     app.include_router(generation_candidates_router)
+    app.include_router(human_reviews_router)
     app.include_router(generation_budget_router)
     app.include_router(costs_router)
     app.include_router(production_versions_router)

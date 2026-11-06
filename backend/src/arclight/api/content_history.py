@@ -163,7 +163,9 @@ def snapshot(db: Session, row: Script | Storyboard, project_id: UUID) -> Version
         id=row.id,
         version_no=row.version_no,
         status=row.status,
-        created_at=row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=UTC),
+        created_at=row.created_at.astimezone(UTC)
+        if row.created_at.tzinfo
+        else row.created_at.replace(tzinfo=UTC),
         content_json=read_content(row.content_json),
         origin="generated" if row.run_id else "manual" if author else "unknown",
         author=author,

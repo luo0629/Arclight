@@ -1,7 +1,8 @@
 from copy import deepcopy
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+import pytest
+from sqlalchemy import event, func, select
 from test_collaboration import create_episode, create_project, register
 
 from arclight.application.runtime import execute_run
@@ -62,6 +63,40 @@ def test_comparison_exact_author_creation_source_and_immutable_reads(client):
     approved = comparison(client, prefix, first).json()["target"]
     assert approved["created_at"] == created_at
     assert approved["status"] == "APPROVED"
+
+
+@pytest.mark.parametrize("timezone", ["Asia/Shanghai", "America/New_York"])
+def test_comparison_creation_time_stays_utc_across_review_in_non_utc_database(
+    client, episode, timezone
+):
+    engine = client.app.state.engine
+    if engine.dialect.name != "postgresql":
+        pytest.skip("Requires PostgreSQL session timezone conversion")
+
+    def set_timezone(connection, _record):
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT set_config('TimeZone', %s, false)", (timezone,))
+
+    engine.dispose()
+    event.listen(engine, "connect", set_timezone)
+    try:
+        prefix = f"/api/v1/episodes/{episode['id']}"
+        first = save_script(client, prefix, 0)
+        second = save_script(client, prefix, 1, first["id"])
+        before = comparison(client, prefix, second).json()
+        assert before["base"]["created_at"].endswith("Z")
+        assert before["target"]["created_at"].endswith("Z")
+        approved = client.post(
+            prefix + f"/scripts/{second['id']}/review", json={"decision": "APPROVE"}
+        )
+        assert approved.status_code == 200, approved.text
+        after = comparison(client, prefix, second).json()
+        assert after["target"]["status"] == "APPROVED"
+        assert after["target"]["created_at"] == before["target"]["created_at"]
+        assert after["base"] == before["base"]
+    finally:
+        event.remove(engine, "connect", set_timezone)
+        engine.dispose()
 
 
 def test_comparison_authorization_episode_type_and_base_validation(client):

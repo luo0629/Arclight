@@ -25,6 +25,7 @@ from arclight.persistence.generation import GenerationJob as GenerationJob
 from arclight.persistence.generation_candidates import GenerationCandidate as GenerationCandidate
 from arclight.persistence.generation_queues import GenerationLane as GenerationLane
 from arclight.persistence.generation_scheduling import GenerationSchedule as GenerationSchedule
+from arclight.persistence.human_reviews import HumanReviewRequest as HumanReviewRequest
 from arclight.persistence.model_gateway import GatewayCall as GatewayCall
 from arclight.persistence.production_events import ProductionEvent as ProductionEvent
 from arclight.persistence.production_events import ProductionEventReceipt as ProductionEventReceipt
