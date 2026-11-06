@@ -436,6 +436,8 @@ def test_neighbors_use_exact_approved_scripts_and_keep_bound_version(client, epi
     assert reviewed.status_code == 200, reviewed.text
     same = research(client, run_id, registry, query)
     assert same["materials"] == first["materials"]
+    narrowed = research(client, run_id, registry, {"path": "neighbors", "offsets": [1]})
+    assert narrowed["materials"] == first["materials"]
     fresh = research(client, run_id, registry, query, refresh=True)
     assert fresh["materials"][0]["source_id"] == new["id"]
     assert trace(client, run_id)["evidence"][0]["investigation"]["materials"] == first["materials"]

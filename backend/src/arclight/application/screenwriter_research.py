@@ -217,6 +217,13 @@ class _ResearchReader:
         assert isinstance(query, NeighborQuery)
         current = self.db.get(Episode, self.run.episode_id)
         assert current is not None
+        bound_scripts = {}
+        if not self.parameters.refresh:
+            for material in _bindings(self.root, self.rounds):
+                if material["source_kind"] == "SCRIPT":
+                    bound = self.db.get(Script, UUID(material["source_id"]))
+                    if bound is not None:
+                        bound_scripts[bound.episode_id] = bound
         selected, missing = [], []
         for offset in query.offsets:
             selector = {"path": "neighbors", "offset": offset}
@@ -231,7 +238,7 @@ class _ResearchReader:
                     self.missing(selector, "NOT_FOUND" if episode is None else "ARCHIVED")
                 )
                 continue
-            script = self.db.scalar(
+            script = bound_scripts.get(episode.id) or self.db.scalar(
                 select(Script)
                 .where(Script.episode_id == episode.id, Script.status == "APPROVED")
                 .order_by(Script.version_no.desc())
