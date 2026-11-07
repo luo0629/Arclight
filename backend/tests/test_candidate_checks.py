@@ -242,6 +242,21 @@ def test_reference_updates_keep_original_check_and_exact_bound_version(client, e
         )
 
 
+def test_new_candidate_advances_live_revision_and_keeps_old_history(client, episode):
+    project_id = episode["project_id"]
+    asset = create(client, project_id)
+    job, attempt = generate(client, project_id, asset)
+    assert ingest(client, attempt) == 1
+    source = candidates(client, project_id, job)[0]
+    _, next_attempt = generate(client, project_id, current(client, asset))
+    assert ingest(client, next_attempt) == 1
+    stored_source = candidates(client, project_id, job)[0]
+    assert stored_source["asset_revision"] == source["asset_revision"] + 1
+    assert stored_source | {"asset_revision": source["asset_revision"]} == source
+    assert len(client.get(versions(asset)).json()) == 2
+    assert current(client, asset)["current_version_id"] is None
+
+
 def test_upload_replacement_gets_a_new_exact_check_and_keeps_the_original(client, transfer_setup):
     _, root = transfer_setup
     project_id = root.rsplit("/", 1)[1]
@@ -264,7 +279,13 @@ def test_upload_replacement_gets_a_new_exact_check_and_keeps_the_original(client
     assert replacement["media_check"]["image"]["checksum"] == hashlib.sha256(data).hexdigest()
     assert replacement["media_check"]["image"]["width"] == 24
     assert client.post(endpoint, json=body).json() == replacement
-    assert next(r for r in candidates(client, project_id, job) if r["id"] == source["id"]) == source
+    stored_source = next(r for r in candidates(client, project_id, job) if r["id"] == source["id"])
+    assert (
+        stored_source["asset_revision"]
+        == replacement["asset_revision"]
+        == source["asset_revision"] + 1
+    )
+    assert stored_source | {"asset_revision": source["asset_revision"]} == source
     assert len(client.get(versions(asset)).json()) == 2
     assert state(client, asset, replacement["version"], "READY_FOR_REVIEW").status_code == 409
 
