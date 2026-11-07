@@ -625,4 +625,11 @@ test("AART-03: lost receipt restores the frozen concept plan with the same logic
   expect(
     await (await page.request.get(prefix + "/runs", { headers })).json(),
   ).toHaveLength(1);
+  // End the synthetic wait before later files reuse the same browser server.
+  await progress(page)
+    .getByRole("button", { name: "取消美术生成", exact: true })
+    .click();
+  await expect(
+    current(page).locator("> div").getByText("已取消", { exact: true }),
+  ).toBeVisible();
 });
