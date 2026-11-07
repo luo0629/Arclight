@@ -35,10 +35,20 @@ def test_any_art_history_refuses_downgrade_without_discarding_existing_rows(
     client, episode, migrated
 ):
     saved, _ = save(client, episode)
+    with client.app.state.engine.connect() as db:
+        revision_before = db.scalar(text("SELECT version_num FROM alembic_version"))
+    candidate_columns_before = {
+        column["name"]
+        for column in inspect(client.app.state.engine).get_columns("generation_candidates")
+    }
     with pytest.raises(RuntimeError, match="Art proposal history exists"):
         command.downgrade(migrated, "0048")
     with client.app.state.engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0050"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == revision_before
+    assert {
+        column["name"]
+        for column in inspect(client.app.state.engine).get_columns("generation_candidates")
+    } == candidate_columns_before
     assert (
         client.get(f"/api/v1/projects/{episode['project_id']}/art-proposals/{saved['id']}").json()
         == saved
