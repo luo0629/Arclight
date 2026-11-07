@@ -111,7 +111,7 @@ def director_check_tool(settings: Settings) -> AgentToolDefinition:
         # Resuming keeps the last durable status until the next outcome. The live
         # fenced lease distinguishes execution from an unanswered or abandoned pause.
         if (
-            loop.status not in {"RUNNING", "WAITING_HUMAN", "RECOVERY_REQUIRED"}
+            loop.status not in {"RUNNING", "WAITING_HUMAN", "WAITING_EXTERNAL", "RECOVERY_REQUIRED"}
             or loop.lease_token is None
             or loop.lease_expires_at is None
             or utc(loop.lease_expires_at) <= clock(context.db)

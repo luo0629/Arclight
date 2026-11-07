@@ -571,6 +571,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         from arclight.application.art_research import investigate_art
         from arclight.application.context_evidence import append_evidence, read_trace
         from arclight.application.director_checks import director_check_tool
+        from arclight.application.director_collaboration import collaboration_tools
         from arclight.application.director_research import investigate_production
         from arclight.application.screenwriter_patch import patch_tool
         from arclight.application.screenwriter_research import investigate_story
@@ -589,6 +590,8 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         registry.register(comparison_tool(settings))
         registry.register(patch_tool(settings))
         registry.register(director_check_tool(settings))
+        for tool in collaboration_tools(settings):
+            registry.register(tool)
 
         def investigate_visuals(context: AgentToolContext, parameters: AgentToolContract) -> dict:
             assert isinstance(parameters, InvestigateArtParameters)

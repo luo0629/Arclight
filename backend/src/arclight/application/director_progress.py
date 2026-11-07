@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.application.commands import require_run
-from arclight.application.screenwriter_creation import creation_loops, operation, waiting_for_answer
+from arclight.application.screenwriter_creation import operation, waiting_for_answer
 from arclight.core.errors import DomainError
 from arclight.domain.director_creation import DIRECTOR_VERSIONS, FRAGMENT_VERSION
 from arclight.domain.director_revision import (
@@ -23,7 +23,10 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
     if run.workflow_version not in DIRECTOR_VERSIONS:
         raise DomainError("NOT_FOUND", "此运行没有专业导演工作稿", 404)
     values = []
-    for loop in creation_loops(db, run.id, "director"):
+    from arclight.application.agent_workflows import workflow_agent_loops
+    from arclight.application.director_collaboration import requested_opinion
+
+    for loop in workflow_agent_loops(db, run, "director"):
         key = operation(loop)
         fragment = any(
             key.startswith(version + ":scene:") for version in (FRAGMENT_VERSION, WORKING_VERSION)
@@ -81,7 +84,13 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
         values.append(
             {
                 "loop_id": str(loop.id),
-                "kind": "scene" if fragment else "director_check" if revision else "plan",
+                "kind": "art_opinion"
+                if loop.seed_json.get("agent_name") == "art_director"
+                else "scene"
+                if fragment
+                else "director_check"
+                if revision
+                else "plan",
                 "scene_no": int(key.split(":scene:")[1].split(":")[0]) if fragment else None,
                 "status": loop.status,
                 "result": outcome.get("result"),
@@ -100,5 +109,8 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
         "run_id": str(run.id),
         "workflow_version": run.workflow_version,
         "operations": values,
+        "art_opinion_request": (
+            saved.model_dump(mode="json") if (saved := requested_opinion(db, run.id)) else None
+        ),
         "can_cancel": waiting_for_answer(db, run, "director"),
     }

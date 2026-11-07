@@ -141,6 +141,36 @@ def propose_art(
 
         concept = run.input_json.get("art_direction", {}).get("concept")
         direction_version = CONCEPT_DIRECTION_VERSION if concept else DIRECTION_VERSION
+        from arclight.application.director_collaboration import opinion_scope, requested_opinion
+        from arclight.domain.director_collaboration import (
+            OPINION_PROMPT,
+            OPINION_VERSION,
+            RequestArtOpinion,
+        )
+        from arclight.domain.director_creation import COLLABORATIVE_DIRECTOR_VERSIONS
+
+        opinion = (
+            requested_opinion(db, run.id)
+            if run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS
+            else None
+        )
+        if run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS:
+            if opinion is None or opinion.task != task:
+                raise DomainError("ART_OPINION_NOT_FOUND", "须先保存原精确导演意见委派", 409)
+            opinion_scope(
+                db,
+                run,
+                RequestArtOpinion.model_validate(
+                    opinion.model_dump(include={"operation_key", "source_sha256", "task"})
+                ),
+                settings,
+            )
+            if (
+                opinion.script_version_id != script.id
+                or opinion.script_sha256 != seed.script_sha256
+            ):
+                raise DomainError("ART_OPINION_STALE", "意见不能更换原精确批准剧本", 409)
+            direction_version = OPINION_VERSION
         request = AgentModelRequest(
             run_id=run.id,
             agent_name="art_director",
@@ -149,16 +179,23 @@ def propose_art(
             agent_version=direction_version,
             prompt_version=direction_version,
             result_schema_version=DIRECTION_VERSION,
-            system_instruction=DIRECTION_PROMPT + (CONCEPT_PROMPT if concept else ""),
+            system_instruction=DIRECTION_PROMPT
+            + (CONCEPT_PROMPT if concept else "")
+            + (OPINION_PROMPT if opinion is not None else ""),
             max_tokens=16000,
             messages=[
                 AgentUserMessage(data=seed.model_dump(mode="json")),
                 *([AgentUserMessage(data={"concept_plan": concept})] if concept else []),
+                *(
+                    [AgentUserMessage(data={"director_opinion": opinion.model_dump(mode="json")})]
+                    if opinion is not None
+                    else []
+                ),
             ],
         )
         if previous:
             saved = AgentModelRequest.model_validate(previous.seed_json)
-            if saved.messages[0] != request.messages[0]:
+            if saved.messages != request.messages:
                 raise DomainError("ART_TASK_CONFLICT", "同一美术决策不能更换冻结目标或输入", 409)
             request = saved
     return run_persistent_agent_loop(

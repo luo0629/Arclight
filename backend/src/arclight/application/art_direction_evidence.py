@@ -35,11 +35,19 @@ def operation_sha256(run_id: UUID, *, db: Session | None = None) -> str:
 
     run = db.get(WorkflowRun, run_id) if db is not None else None
     concept = run is not None and run.input_json.get("art_direction", {}).get("concept") is not None
+    from arclight.domain.director_collaboration import OPINION_VERSION
+    from arclight.domain.director_creation import COLLABORATIVE_DIRECTOR_VERSIONS
+
+    opinion = run is not None and run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS
     return digest(
         {
             "run": str(run_id),
             "stage": "storyboard",
-            "operation": CONCEPT_DIRECTION_VERSION if concept else DIRECTION_VERSION,
+            "operation": OPINION_VERSION
+            if opinion
+            else CONCEPT_DIRECTION_VERSION
+            if concept
+            else DIRECTION_VERSION,
         }
     )
 

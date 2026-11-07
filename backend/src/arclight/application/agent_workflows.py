@@ -148,12 +148,27 @@ def creation_loops(db: Session, run_id: UUID, agent_name: str = "screenwriter") 
     )
 
 
+def workflow_agent_loops(db: Session, run: WorkflowRun, agent_name: str) -> list[AgentLoop]:
+    """Include only the server-owned art consultation in a collaborative director's work."""
+    from arclight.domain.director_collaboration import OPINION_VERSION
+    from arclight.domain.director_creation import COLLABORATIVE_DIRECTOR_VERSIONS
+
+    loops = creation_loops(db, run.id, agent_name)
+    if agent_name == "director" and run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS:
+        loops.extend(
+            loop
+            for loop in creation_loops(db, run.id, "art_director")
+            if loop.seed_json.get("operation_key") == OPINION_VERSION
+        )
+    return sorted(loops, key=lambda loop: (loop.created_at, str(loop.id)))
+
+
 def waiting_for_answer(db: Session, run: WorkflowRun, agent_name: str = "screenwriter") -> bool:
     """Cancellation needs no model admission, but cannot interrupt an answered question."""
     versions = versions_for_agent(agent_name)
     if run.workflow_version not in versions or run.status != "RUNNING":
         return False
-    for loop in creation_loops(db, run.id, agent_name):
+    for loop in workflow_agent_loops(db, run, agent_name):
         identity = (loop.outcome_json or {}).get("question_id")
         if loop.status != "WAITING_HUMAN" or identity is None:
             continue
@@ -193,7 +208,7 @@ def queue_answer(
         run.workflow_version not in versions
         or loop is None
         or loop.run_id != run.id
-        or loop.seed_json.get("agent_name") != agent_name
+        or loop not in workflow_agent_loops(db, run, agent_name)
         or question is None
         or question.loop_id != loop.id
     ):

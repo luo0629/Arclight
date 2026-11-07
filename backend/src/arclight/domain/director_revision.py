@@ -39,11 +39,18 @@ COMPLETE只提出检查决定；完整候选仍由原领域服务保存并交原
 
 class DirectorRevisionOptions(ScreenwriterOptions):
     director_revision_rounds: int | None = Field(default=None, strict=True, ge=0, le=8)
+    director_art_collaboration: bool = Field(default=False, strict=True)
 
     @model_validator(mode="after")
     def professional_director_revision(self):
         if self.director_revision_rounds is not None and not self.professional:
             raise ValueError("Director revision requires professional creation")
+        if self.director_art_collaboration and (
+            not self.professional or self.director_revision_rounds is None
+        ):
+            raise ValueError(
+                "Art collaboration requires the professional director revision workflow"
+            )
         return self
 
 

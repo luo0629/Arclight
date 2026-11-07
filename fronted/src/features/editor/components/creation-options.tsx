@@ -16,6 +16,7 @@ export type CreationOptions = {
   professional: boolean;
   professionalDirector?: boolean;
   directorReview?: boolean;
+  artCollaboration?: boolean;
   directorRevisionRounds?: string;
   review: boolean;
   revisionRounds: string;
@@ -27,6 +28,7 @@ export const initialCreationOptions: CreationOptions = {
   professional: false,
   professionalDirector: false,
   directorReview: false,
+  artCollaboration: false,
   directorRevisionRounds: "3",
   review: false,
   revisionRounds: "3",
@@ -62,6 +64,12 @@ export function creationPayload(value: CreationOptions, directorOnly = false) {
     ? {
         professional: true,
         ...(value.professionalDirector ? { professional_director: true } : {}),
+        ...((directorOnly
+          ? value.review
+          : value.professionalDirector && value.directorReview) &&
+        value.artCollaboration
+          ? { director_art_collaboration: true }
+          : {}),
         ...(value.review
           ? directorOnly
             ? { director_revision_rounds: Number(value.revisionRounds) }
@@ -90,6 +98,8 @@ export function isCreationOptions(value: unknown): value is CreationOptions {
     typeof row.professional === "boolean" &&
     (row.professionalDirector === undefined ||
       typeof row.professionalDirector === "boolean") &&
+    (row.artCollaboration === undefined ||
+      typeof row.artCollaboration === "boolean") &&
     (row.directorReview === undefined ||
       typeof row.directorReview === "boolean") &&
     (row.directorRevisionRounds === undefined ||
@@ -241,6 +251,37 @@ export default function CreationOptionsFields({
                   </FieldDescription>
                 </Field>
               )}
+            {((directorOnly && value.review) ||
+              (allowDirector &&
+                value.professionalDirector &&
+                value.directorReview)) && (
+              <Field>
+                <FieldLabel>美术意见</FieldLabel>
+                <ToggleGroup
+                  type="single"
+                  variant="outline"
+                  aria-label="美术意见"
+                  value={value.artCollaboration ? "consult" : "independent"}
+                  onValueChange={(mode) => {
+                    if (mode)
+                      onChange({
+                        ...value,
+                        artCollaboration: mode === "consult",
+                      });
+                  }}
+                >
+                  <ToggleGroupItem value="independent">
+                    导演独立完成
+                  </ToggleGroupItem>
+                  <ToggleGroupItem value="consult">
+                    按需征询美术
+                  </ToggleGroupItem>
+                </ToggleGroup>
+                <FieldDescription>
+                  可基于已批准剧本和工作中镜头征询一次视觉意见，共用本次费用与调用限制；正式变更仍须人工批准。
+                </FieldDescription>
+              </Field>
+            )}
             {value.review && (
               <Field>
                 <FieldLabel htmlFor={id + "-rounds"}>

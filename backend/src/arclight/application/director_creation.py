@@ -19,7 +19,9 @@ from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.agent_tools import AgentToolGrantRequest
+from arclight.domain.director_collaboration import OBSERVE_OPINION, REQUEST_OPINION
 from arclight.domain.director_creation import (
+    COLLABORATIVE_DIRECTOR_VERSIONS,
     DIRECTOR_VERSION,
     FRAGMENT_PROMPT,
     FRAGMENT_VERSION,
@@ -40,11 +42,27 @@ def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Sett
             run_id=run.id,
             agent_name="director",
             allowed_tools=[RESEARCH_TOOL]
-            + ([CHECK_TOOL] if run.workflow_version in ITERATIVE_DIRECTOR_VERSIONS else []),
+            + ([CHECK_TOOL] if run.workflow_version in ITERATIVE_DIRECTOR_VERSIONS else [])
+            + (
+                [REQUEST_OPINION, OBSERVE_OPINION]
+                if run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS
+                else []
+            ),
         ),
         actor,
         build_agent_tool_registry(settings=settings),
     )
+    if run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS:
+        grant_agent_tools(
+            db,
+            AgentToolGrantRequest(
+                run_id=run.id,
+                agent_name="art_director",
+                allowed_tools=["investigate_art", "compare_art_options"],
+            ),
+            actor,
+            build_agent_tool_registry(settings=settings),
+        )
 
 
 def creation_attempt(run: WorkflowRun) -> int:

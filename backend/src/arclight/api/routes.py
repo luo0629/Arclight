@@ -150,6 +150,7 @@ def create_script_run(
         revision_rounds=payload.revision_rounds,
         professional_director=payload.professional_director,
         director_revision_rounds=payload.director_revision_rounds,
+        director_art_collaboration=payload.director_art_collaboration,
     )
     return AcceptedRun(
         run_id=run.id,
@@ -180,6 +181,7 @@ def create_storyboard_run(
         rebuild_from_version_id=payload.rebuild_from_version_id,
         professional_director=payload.professional,
         director_revision_rounds=payload.director_revision_rounds,
+        director_art_collaboration=payload.director_art_collaboration,
         agent_limits=payload.agent_limits,
     )
     return AcceptedRun(

@@ -15,6 +15,7 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_state import restore_agent_state, transition_agent_step
 from arclight.domain.director_creation import (
+    COLLABORATIVE_DIRECTOR_VERSION,
     DIRECTOR_VERSION,
     ITERATIVE_DIRECTOR_VERSION,
     ITERATIVE_DIRECTOR_VERSIONS,
@@ -95,6 +96,7 @@ def execute_director(
     with factory() as db:
         run = db.get(WorkflowRun, run_id)
         if run is None or run.workflow_version not in {
+            COLLABORATIVE_DIRECTOR_VERSION,
             DIRECTOR_VERSION,
             ITERATIVE_DIRECTOR_VERSION,
         }:

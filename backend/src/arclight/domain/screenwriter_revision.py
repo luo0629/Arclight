@@ -9,6 +9,7 @@ from arclight.agents.contracts import ScriptContent
 from arclight.agents.script_rewrite import RewriteInstructions, RewriteResult, RewriteTarget
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.director_creation import (
+    REVISED_COLLABORATIVE_PRODUCTION_VERSION,
     REVISED_ITERATIVE_PRODUCTION_VERSION,
     REVISED_PRODUCTION_VERSION,
 )
@@ -22,6 +23,7 @@ REVISION_WORKFLOWS = {
     REWRITE_SCREENWRITER_VERSION,
     REVISED_PRODUCTION_VERSION,
     REVISED_ITERATIVE_PRODUCTION_VERSION,
+    REVISED_COLLABORATIVE_PRODUCTION_VERSION,
 }
 REVISION_VERSION = "screenwriter-revision/1"
 PATCH_TOOL = "check_screenwriter_patch"

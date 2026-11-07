@@ -239,6 +239,38 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
                     "check_result": director_revision.DirectorCheckResult.model_json_schema(),
                 }
             result.append((kind, workflow_version, definition))
+        if workflow_version in director_creation.COLLABORATIVE_DIRECTOR_VERSIONS:
+            from arclight.domain import director_collaboration as collaboration
+            from arclight.domain.art_direction import DIRECTION_PROMPT, ArtDirectionResult
+
+            for kind, _, definition in result:
+                if kind == "AGENT":
+                    definition["art_opinion"] = {
+                        "version": collaboration.OPINION_VERSION,
+                        "maximum_delegations": 1,
+                        "budget": "same-root-run",
+                        "publication": "advice-only",
+                    }
+                elif kind == "PROMPT":
+                    definition["revision"] += collaboration.COLLABORATION_PROMPT
+                    definition["art_opinion"] = DIRECTION_PROMPT + collaboration.OPINION_PROMPT
+                else:
+                    definition["revision"] = (
+                        collaboration.CollaborativeDirectorDecision.model_json_schema()
+                    )
+                    definition["art_opinion"] = ArtDirectionResult.model_json_schema()
+                    definition["opinion_request"] = (
+                        collaboration.RequestArtOpinion.model_json_schema()
+                    )
+                    definition["opinion_requested"] = (
+                        collaboration.ArtOpinionRequested.model_json_schema()
+                    )
+                    definition["opinion_observe"] = (
+                        collaboration.ObserveArtOpinion.model_json_schema()
+                    )
+                    definition["opinion_observed"] = (
+                        collaboration.ArtOpinionObserved.model_json_schema()
+                    )
         return result
     if workflow_version in director_creation.DIRECTOR_VERSIONS and stage == "storyboard":
         return [
@@ -281,6 +313,7 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
             in {
                 director_creation.REVISED_PRODUCTION_VERSION,
                 director_creation.REVISED_ITERATIVE_PRODUCTION_VERSION,
+                director_creation.REVISED_COLLABORATIVE_PRODUCTION_VERSION,
             }
             else SCREENWRITER_VERSION
         )

@@ -302,7 +302,10 @@ def install():
                         supplier="custom",
                         model="offline-professional",
                         tools=True,
-                        max_input_images=4 if run.workflow_type == "art_proposal" else 0,
+                        max_input_images=4
+                        if run.workflow_type == "art_proposal"
+                        or run.input_json.get("director", {}).get("art_collaboration")
+                        else 0,
                         response_formats=frozenset({"json_schema", "json_object"}),
                     ),
                     "model_gateway_policy": GatewayPolicy(

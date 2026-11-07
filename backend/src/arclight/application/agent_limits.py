@@ -118,6 +118,24 @@ def validate_agent_execution(db: Session, run_id: UUID, stage: str) -> AgentRunL
     return _active_chain(db, control, stage)
 
 
+def delegation_count(db: Session, root_run_id: UUID) -> int:
+    """Count physical children and committed logical specialist delegations together."""
+    from arclight.domain.director_collaboration import REQUEST_OPINION
+
+    runs = list(
+        db.scalars(select(AgentRunLimit.run_id).where(AgentRunLimit.root_run_id == root_run_id))
+    )
+    receipts = db.scalars(
+        select(AgentToolInvocation).where(
+            AgentToolInvocation.run_id.in_(runs),
+            AgentToolInvocation.tool_name == REQUEST_OPINION,
+            AgentToolInvocation.status == "SUCCEEDED",
+        )
+    )
+    logical = {(row.feedback_json or {})["result"]["delegation_id"] for row in receipts}
+    return max(0, len(runs) - 1) + len(logical)
+
+
 def configure_agent_run(
     db: Session,
     run_id: UUID,
@@ -171,12 +189,9 @@ def configure_agent_run(
     if parent is not None:
         _active_chain(db, parent)
         root_id, depth, deadline = parent.root_run_id, parent.depth + 1, parent.deadline_at
-        delegates = list(
-            db.scalars(select(AgentRunLimit).where(AgentRunLimit.root_run_id == root_id))
-        )
         if depth > limits.max_delegation_depth:
             raise DomainError("AGENT_DELEGATION_DEPTH", "Agent 委派深度已达上限", 409)
-        if len(delegates) - 1 >= limits.max_delegations:
+        if delegation_count(db, root_id) >= limits.max_delegations:
             raise DomainError("AGENT_DELEGATION_LIMIT", "Agent 委派次数已达上限", 409)
     row = AgentRunLimit(
         run_id=run.id,

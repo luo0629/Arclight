@@ -36,6 +36,19 @@ type Working = {
   }[];
   decision?: "ACCEPT" | "REVISE" | "ESCALATE";
   reason?: string;
+  opinion_decision?: { decision: "ADOPT" | "DECLINE"; reason: string };
+  draft?: {
+    proposal: {
+      visual_goal: string;
+      unresolved_questions: string[];
+      options: {
+        option_id: string;
+        title: string;
+        rationale: string;
+        prompts: { fragment_id: string; text: string }[];
+      }[];
+    };
+  };
   checks?: string[];
   issues?: Issue[];
   objective?: string;
@@ -102,7 +115,7 @@ type Operation = {
     };
   }[];
   loop_id: string;
-  kind: "plan" | "scene" | "critique" | "director_check";
+  kind: "plan" | "scene" | "critique" | "director_check" | "art_opinion";
   revision?: Revision;
   director_revision?: DirectorRevision;
   scene_no: number | null;
@@ -114,7 +127,15 @@ type Operation = {
   input_sha256: string;
   human_request: { question: string; reason: string; options: string[] } | null;
 };
-type Progress = { operations: Operation[]; can_cancel: boolean };
+type Progress = {
+  operations: Operation[];
+  can_cancel: boolean;
+  art_opinion_request?: {
+    storyboard_status: string;
+    script_version_id: string;
+    source_sha256: string;
+  } | null;
+};
 
 export default function ScreenwriterProgress({
   run,
@@ -164,6 +185,11 @@ export default function ScreenwriterProgress({
       <p className="text-sm text-muted-foreground">
         工作片段会逐段保存；完整候选通过校验后进入下方审核。
       </p>
+      {data?.art_opinion_request && (
+        <Notice>
+          美术意见基于工作中镜头方案和精确批准剧本。该方案尚未批准；意见及采纳决定保留在本任务中。
+        </Notice>
+      )}
       {error && (
         <Notice tone="error" role="alert">
           {error}
@@ -187,7 +213,9 @@ export default function ScreenwriterProgress({
                 ? `评价与修订 ${(operation.revision?.round ?? 0) + 1}`
                 : operation.kind === "director_check"
                   ? `导演检查与修订 ${(operation.director_revision?.round ?? 0) + 1}`
-                  : `场景 ${operation.scene_no}`}{" "}
+                  : operation.kind === "art_opinion"
+                    ? "美术意见（工作中镜头）"
+                    : `场景 ${operation.scene_no}`}{" "}
             ·{" "}
             {operation.status === "COMPLETED"
               ? "已保存"
@@ -217,6 +245,31 @@ export default function ScreenwriterProgress({
                   )
                   .map((item) => item.feedback.result as DirectorCheck)}
               />
+            )}
+            {operation.result?.opinion_decision && (
+              <p>
+                美术意见：
+                {operation.result.opinion_decision.decision === "ADOPT"
+                  ? "采纳"
+                  : "未采纳"}
+                。{operation.result.opinion_decision.reason}
+              </p>
+            )}
+            {operation.result?.draft && (
+              <>
+                <p>{operation.result.draft.proposal.visual_goal}</p>
+                <ul className="list-disc pl-5">
+                  {operation.result.draft.proposal.options.map((option) => (
+                    <li key={option.option_id}>
+                      <strong>{option.title}</strong>
+                      <p>{option.rationale}</p>
+                      {option.prompts.map((prompt) => (
+                        <p key={prompt.fragment_id}>{prompt.text}</p>
+                      ))}
+                    </li>
+                  ))}
+                </ul>
+              </>
             )}
             {operation.result?.objective && <p>{operation.result.objective}</p>}
             {operation.result?.scenes && (

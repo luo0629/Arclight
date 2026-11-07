@@ -27,11 +27,14 @@ from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.art_concepts import ArtConceptPlan
 from arclight.domain.art_direction import ArtDirectionTask
 from arclight.domain.director_creation import (
+    COLLABORATIVE_DIRECTOR_VERSION,
+    COLLABORATIVE_PRODUCTION_VERSION,
     DIRECTOR_VERSION,
     DIRECTOR_VERSIONS,
     ITERATIVE_DIRECTOR_VERSION,
     ITERATIVE_PRODUCTION_VERSION,
     PRODUCTION_VERSION,
+    REVISED_COLLABORATIVE_PRODUCTION_VERSION,
     REVISED_ITERATIVE_PRODUCTION_VERSION,
     REVISED_PRODUCTION_VERSION,
 )
@@ -144,6 +147,7 @@ def start_run(
     revision_rounds: int | None = None,
     professional_director: bool = False,
     director_revision_rounds: int | None = None,
+    director_art_collaboration: bool = False,
     art_task: ArtDirectionTask | None = None,
     art_concept_plan: ArtConceptPlan | None = None,
 ) -> WorkflowRun:
@@ -153,7 +157,9 @@ def start_run(
         revision_rounds=revision_rounds,
     )
     DirectorRevisionOptions(
-        professional=professional_director, director_revision_rounds=director_revision_rounds
+        professional=professional_director,
+        director_revision_rounds=director_revision_rounds,
+        director_art_collaboration=director_art_collaboration,
     )
     if art_concept_plan is not None and art_task is None:
         raise DomainError("ART_TASK_INVALID", "概念图须属于独立美术任务", 422)
@@ -206,6 +212,8 @@ def start_run(
         }
         if director_revision_rounds is not None:
             payload["director_revision_rounds"] = director_revision_rounds
+        if director_art_collaboration:
+            payload["director_art_collaboration"] = True
     if art_task is not None:
         payload |= {
             "art_task": art_task.model_dump(mode="json"),
@@ -309,6 +317,8 @@ def start_run(
         inputs["director"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
         if director_revision_rounds is not None:
             inputs["director"]["revision_rounds"] = director_revision_rounds
+        if director_art_collaboration:
+            inputs["director"]["art_collaboration"] = True
     if art_task is not None:
         from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
 
@@ -340,6 +350,14 @@ def start_run(
                 else REVISED_ITERATIVE_PRODUCTION_VERSION
                 if revision_rounds is not None
                 else ITERATIVE_PRODUCTION_VERSION
+            )
+        if director_art_collaboration:
+            version = (
+                COLLABORATIVE_DIRECTOR_VERSION
+                if script_version_id is not None
+                else REVISED_COLLABORATIVE_PRODUCTION_VERSION
+                if revision_rounds is not None
+                else COLLABORATIVE_PRODUCTION_VERSION
             )
     elif professional:
         version = (

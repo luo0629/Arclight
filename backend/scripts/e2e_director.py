@@ -13,7 +13,12 @@ def respond(payload):
 
     seed = json.loads(payload["messages"][1]["content"])["data"]
     if seed["phase"] == "CHECK_DIRECTOR":
-        from e2e_director_revision import respond as revise
+        if any(
+            tool["function"]["name"] == "request_art_opinion" for tool in payload.get("tools", [])
+        ):
+            from e2e_director_collaboration import respond as revise
+        else:
+            from e2e_director_revision import respond as revise
 
         return httpx.Response(200, json=revise(seed, payload))
     answered = any("human_decision" in str(item.get("content")) for item in payload["messages"])

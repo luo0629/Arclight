@@ -66,6 +66,8 @@ class RunCreate(Input, ScreenwriterRevisionOptions, DirectorRevisionOptions):
     def one_source(self) -> "RunCreate":
         if self.professional_director and not self.professional:
             raise ValueError("专业双审核须选择专业编剧；独立导演使用storyboard-runs入口")
+        if self.director_art_collaboration and not self.professional_director:
+            raise ValueError("美术协作须选择专业导演")
         if self.director_revision_rounds is not None and not self.professional_director:
             raise ValueError("导演修订须选择专业导演")
         if (

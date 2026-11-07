@@ -110,6 +110,8 @@ export default function Tasks({
                 "production/2.0",
                 "production/3.0",
                 "production/4.0",
+                "production/5.0",
+                "production/6.0",
               ].includes(run.workflow_version ?? "") && (
                 <ScreenwriterProgress
                   run={run}
@@ -122,10 +124,13 @@ export default function Tasks({
               {[
                 "director/1.0",
                 "director/2.0",
+                "director/3.0",
                 "production/1.0",
                 "production/2.0",
                 "production/3.0",
                 "production/4.0",
+                "production/5.0",
+                "production/6.0",
               ].includes(run.workflow_version ?? "") && (
                 <ScreenwriterProgress
                   agent="director"

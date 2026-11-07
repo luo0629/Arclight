@@ -19,6 +19,13 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentLoopResult, HumanDecisionRequest
+from arclight.domain.director_collaboration import (
+    COLLABORATION_PROMPT,
+    OBSERVE_OPINION,
+    REQUEST_OPINION,
+    CollaborativeDirectorDecision,
+)
+from arclight.domain.director_creation import COLLABORATIVE_DIRECTOR_VERSIONS
 from arclight.domain.director_planning import RESEARCH_TOOL, DirectorPlan
 from arclight.domain.director_revision import (
     CHECK_TOOL,
@@ -35,9 +42,12 @@ from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import WorkflowRun
 
 
-def _registry(settings: Settings) -> AgentToolRegistry:
+def _registry(settings: Settings, collaborative: bool = False) -> AgentToolRegistry:
     catalog = build_agent_tool_registry(settings=settings)
-    tools = [catalog.get(name) for name in (RESEARCH_TOOL, CHECK_TOOL)]
+    names = [RESEARCH_TOOL, CHECK_TOOL] + (
+        [REQUEST_OPINION, OBSERVE_OPINION] if collaborative else []
+    )
+    tools = [catalog.get(name) for name in names]
     assert all(tool is not None for tool in tools)
     return AgentToolRegistry(tool for tool in tools if tool is not None)
 
@@ -73,6 +83,9 @@ def _validate(
     run = db.get(WorkflowRun, run_id)
     assert run is not None
     loop, seed = check_seed(db, run, key)
+    from arclight.application.director_collaboration import validate_opinion_decision
+
+    validate_opinion_decision(db, loop.id, report, settings)
     if report.source_sha256 != seed.source_sha256:
         raise DomainError("DIRECTOR_REVISION_SCOPE", "决定不能更换精确工作稿", 422)
     parameters, checked = checked_receipt(db, loop, report.check_sha256)
@@ -106,6 +119,7 @@ def _round(
         run = db.get(WorkflowRun, run_id)
         assert run is not None
         script = revision_input(db, run, plan, settings)
+        collaborative = run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS
         prefix = f"{REVISION_VERSION}:round:{round_no}:" + ("human:" if human else "check:")
         key = prefix + f"attempt:{creation_attempt(run)}"
         candidates = [
@@ -147,7 +161,8 @@ def _round(
                 agent_version=run.workflow_version,
                 prompt_version=REVISION_VERSION,
                 result_schema_version=REVISION_VERSION,
-                system_instruction=REVISION_PROMPT,
+                system_instruction=REVISION_PROMPT
+                + (COLLABORATION_PROMPT if collaborative else ""),
                 messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
                 max_tokens=8000,
             )
@@ -164,14 +179,24 @@ def _round(
                         )[:1000],
                     ),
                 )
-    return run_persistent_agent_loop(
-        factory,
-        settings,
-        request,
-        _registry(settings),
-        DirectorRevisionDecision,
-        validate_result=lambda db, report: _validate(db, run_id, key, report, settings, human),
+    from arclight.application.director_collaboration import drive_opinion
+
+    result_model: type[DirectorRevisionDecision] = (
+        CollaborativeDirectorDecision if collaborative else DirectorRevisionDecision
     )
+    for _ in range(2):
+        outcome = run_persistent_agent_loop(
+            factory,
+            settings,
+            request,
+            _registry(settings, collaborative),
+            result_model,
+            validate_result=lambda db, report: _validate(db, run_id, key, report, settings, human),
+        )
+        driven = drive_opinion(factory, settings, run_id, outcome) if collaborative else outcome
+        if driven is not None:
+            return driven
+    raise DomainError("ART_OPINION_PENDING", "美术意见等待恢复", 409)
 
 
 def revise_storyboard(
