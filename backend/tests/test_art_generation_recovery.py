@@ -186,6 +186,11 @@ def test_postgres_concurrent_publication_creates_one_candidate_review_and_receip
     factory = client.app.state.session_factory
     completed = propose_art(factory, settings, run_id, actor, task)
     assert completed.status == "COMPLETED" and not errors
+    with factory() as db:
+        original_reviews = {
+            row.id: (row.handler, deepcopy(row.snapshot_json), row.request_sha256)
+            for row in db.scalars(select(HumanReviewRequest))
+        }
     barrier = Barrier(2)
 
     def deliver():
@@ -197,8 +202,15 @@ def test_postgres_concurrent_publication_creates_one_candidate_review_and_receip
         results = [item.result(timeout=30) for item in pending]
     assert results[0] == results[1] and len(sent) == 4
     with factory() as db:
-        for table in (ArtProposalRecord, ArtProposalVersion, ArtProposalReview, HumanReviewRequest):
+        for table in (ArtProposalRecord, ArtProposalVersion, ArtProposalReview):
             assert db.scalar(select(func.count()).select_from(table)) == 1
+        current_reviews = {
+            row.id: (row.handler, row.snapshot_json, row.request_sha256)
+            for row in db.scalars(select(HumanReviewRequest))
+        }
+        assert set(current_reviews) - set(original_reviews) == {results[0].review_request_id}
+        assert {key: current_reviews[key] for key in original_reviews} == original_reviews
+        assert current_reviews[results[0].review_request_id][0] == "ART_PROPOSAL"
         assert (
             db.scalar(
                 select(func.count())
