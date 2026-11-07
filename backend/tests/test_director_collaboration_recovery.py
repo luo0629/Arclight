@@ -1,7 +1,7 @@
 """Exercise specialist delegation failures and durable recovery through the real workflow."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
+from datetime import UTC, timedelta
 from threading import Event
 from uuid import UUID, uuid4
 
@@ -21,6 +21,7 @@ from test_director_creation import progress
 from test_director_revision import answer_body
 from test_screenwriter_creation import approve, run_once
 
+from arclight.application.agent_external_waits import queue_ready_external
 from arclight.application.agent_limits import delegation_count
 from arclight.application.runtime import execute_run
 from arclight.application.screenwriter_execution import ScreenwriterExecutionDeferred
@@ -100,6 +101,102 @@ def test_missing_evidence_stays_human_and_answer_cannot_invent_references(
     assert current["question_id"] != waiting["question_id"]
     assert current["status"] == "WAITING_HUMAN" and len(art_sent) == 3
     assert facts(client) == before and not any(errors), errors
+
+
+def test_external_scan_preserves_art_question_and_answer_resumes_original_run(
+    client, episode, settings, model_service, monkeypatch
+):
+    reference_set(client, episode)
+    director_sent, art_sent, *errors = install_collaboration(
+        model_service, monkeypatch, settings, art_human=True
+    )
+    run_id, _ = begin(client, episode)
+    run = run_once(client, settings, run_id)
+    assert run["status"] == "RUNNING"
+    waiting = opinion_operations(client, run_id)[0]
+    assert waiting["status"] == "WAITING_HUMAN"
+    original_calls = len(director_sent), len(art_sent)
+    factory = client.app.state.session_factory
+    with factory() as db:
+        outbox_count = db.scalar(
+            select(func.count()).select_from(OutboxEvent).where(OutboxEvent.run_id == run_id)
+        )
+    with TestClient(create_app(settings)) as restarted:
+        restarted.headers.update(client.headers)
+        restarted.cookies.update(client.cookies)
+        for _ in range(3):
+            assert queue_ready_external(restarted.app.state.session_factory, settings) == 0
+        current = restarted.get(f"/api/v1/runs/{run_id}").json()
+        assert (current["status"], current["revision"]) == ("RUNNING", run["revision"])
+        assert opinion_operations(restarted, run_id)[0] == waiting
+        assert (len(director_sent), len(art_sent)) == original_calls
+        with factory() as db:
+            assert (
+                db.scalar(
+                    select(func.count())
+                    .select_from(OutboxEvent)
+                    .where(OutboxEvent.run_id == run_id)
+                )
+                == outbox_count
+            )
+        endpoint = f"/api/v1/runs/{run_id}/director/{waiting['loop_id']}/answers"
+        body = answer_body(waiting) | {"answer": waiting["human_request"]["options"][0]}
+        accepted = restarted.post(endpoint, json=body)
+        assert accepted.status_code == 202, accepted.text
+        repeated = restarted.post(endpoint, json=body)
+        assert repeated.status_code == 202 and repeated.json() == accepted.json()
+        assert queue_ready_external(restarted.app.state.session_factory, settings) == 0
+        result = run_once(restarted, settings, run_id)
+        assert result["status"] == "WAITING_REVIEW", (result, errors)
+        completed = opinion_operations(restarted, run_id)
+        assert len(completed) == 1
+        assert completed[0]["loop_id"] == waiting["loop_id"]
+        assert completed[0]["status"] == "COMPLETED"
+    assert not any(errors), errors
+    with factory() as db:
+        assert delegation_count(db, run_id) == 1
+        assert db.scalar(select(func.count()).select_from(AgentLoopDecision)) == 1
+        assert (
+            db.scalar(
+                select(func.count()).select_from(OutboxEvent).where(OutboxEvent.run_id == run_id)
+            )
+            == outbox_count + 1
+        )
+
+
+@pytest.mark.parametrize("mutation", ["revoked", "deadline"])
+def test_external_opinion_scan_routes_invalid_authority_to_executor_without_model_io(
+    client, episode, settings, model_service, monkeypatch, mutation
+):
+    reference_set(client, episode)
+    director_sent, art_sent, *errors = install_collaboration(
+        model_service, monkeypatch, settings, art_human=True
+    )
+    run_id, _ = begin(client, episode)
+    assert run_once(client, settings, run_id)["status"] == "RUNNING"
+    original_calls = len(director_sent), len(art_sent)
+    factory = client.app.state.session_factory
+    with factory.begin() as db:
+        if mutation == "revoked":
+            db.get(Project, UUID(episode["project_id"])).owner_id = "other-owner"
+        else:
+            deadline = db.get(AgentRunLimit, run_id).deadline_at
+    if mutation == "deadline":
+        monkeypatch.setattr(
+            "arclight.application.agent_limits.utcnow",
+            lambda: deadline.replace(tzinfo=UTC) + timedelta(seconds=1),
+        )
+    assert queue_ready_external(factory, settings) == 1
+    assert queue_ready_external(factory, settings) == 0
+    with factory() as db:
+        revision = db.get(WorkflowRun, run_id).revision
+    execute_run(factory, settings, run_id, revision)
+    with factory() as db:
+        assert db.get(WorkflowRun, run_id).status == "FAILED"
+        assert db.scalar(select(func.count()).select_from(Storyboard)) == 0
+        assert db.scalar(select(func.count()).select_from(AgentLoopDecision)) == 0
+    assert (len(director_sent), len(art_sent)) == original_calls
+    assert not any(errors), errors
 
 
 def test_unknown_art_http_result_keeps_receipt_and_never_replays_blindly(
@@ -270,6 +367,10 @@ def test_worker_crash_preserves_original_delegation_and_committed_art_calls(
     count = len(art_sent)
     assert count == (0 if crash_at == "request" else 4)
     monkeypatch.setattr(target, name, original)
+    assert queue_ready_external(client.app.state.session_factory, settings) == (
+        1 if crash_at == "art_complete" else 0
+    )
+    assert queue_ready_external(client.app.state.session_factory, settings) == 0
     with TestClient(create_app(settings)) as restarted:
         restarted.headers.update(client.headers)
         run = run_once(restarted, settings, run_id)

@@ -6,11 +6,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_loop_store import checked_loop
-from arclight.application.agent_tools import agent_tool_is_pending
+from arclight.application.agent_tools import agent_tool_is_pending, build_agent_tool_registry
 from arclight.application.commands import emit
 from arclight.application.model_gateway import lock_gate
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_model import AgentModelRequest
 from arclight.domain.agent_tools import AgentToolCall
 from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
 from arclight.persistence.agent_loops import AgentLoop
@@ -34,7 +35,7 @@ def waiting_for_external(db: Session, run: WorkflowRun) -> bool:
 def queue_ready_external(
     factory: sessionmaker[Session], settings: Settings, limit: int = 100
 ) -> int:
-    from arclight.application.art_direction import art_direction_registry
+    from arclight.application.art_concepts import concept_tools
     from arclight.application.generation_leases import utc
 
     with factory() as db:
@@ -47,7 +48,9 @@ def queue_ready_external(
                 .limit(limit)
             )
         )
-    registry = art_direction_registry(settings)
+    registry = build_agent_tool_registry(settings=settings)
+    for tool in concept_tools(settings):
+        registry.register(tool)
     queued = 0
     for identity in ids:
         with factory.begin() as db:
@@ -75,9 +78,11 @@ def queue_ready_external(
                 continue
             try:
                 checked_loop(db, loop.id)
+                seed = AgentModelRequest.model_validate(loop.seed_json)
                 request = AgentToolCall.model_validate((loop.outcome_json or {})["waiting_for"])
+                # A director awaiting art must use its own admitted readiness rule.
                 pending = agent_tool_is_pending(
-                    db, registry, "art_director", request, loop.actor_id, "storyboard"
+                    db, registry, seed.agent_name, request, loop.actor_id, seed.stage
                 )
             except (DomainError, ValueError, KeyError):
                 pending = False  # Original executor records revocation, stale inputs or expiry.
