@@ -1,7 +1,7 @@
 """Project-scoped candidate history and explicit upload-backed replacements."""
 
 from datetime import UTC, datetime
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Request, Response
 from pydantic import Field, field_validator
@@ -14,12 +14,14 @@ from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
 from arclight.application.asset_objects import read_object
 from arclight.application.audit import audit
+from arclight.application.candidate_checks import check_candidate_media
 from arclight.application.commands import require_project
 from arclight.application.generation_candidates import append_candidate_version
 from arclight.application.generation_state import find_job
 from arclight.application.production_versions import digest
 from arclight.application.uploads import validated_image
 from arclight.core.errors import DomainError
+from arclight.domain.candidate_checks import CandidateMediaCheck
 from arclight.persistence.models import (
     AssetVersion,
     FileRegistration,
@@ -46,6 +48,7 @@ class CandidateRead(Resource):
     required_review: str = "CONTINUITY"
     version: VersionRead | None = None
     asset_revision: int | None = None
+    media_check: CandidateMediaCheck | None = None
 
     @field_validator("created_at", "updated_at")
     @classmethod
@@ -68,8 +71,11 @@ def find_candidate(db: Database, project_id: UUID, candidate_id: UUID) -> Genera
 
 def read_candidate(db: Database, row: GenerationCandidate) -> CandidateRead:
     result = CandidateRead.model_validate(row)
+    if row.media_check_json is not None:
+        result.media_check = CandidateMediaCheck.model_validate(row.media_check_json)
     version = db.get(AssetVersion, row.asset_version_id) if row.asset_version_id else None
     if version is not None:
+        result.required_review = version.metadata_json.get("required_review", "CONTINUITY")
         result.version = read_version(version)
         result.version.created_at = CandidateRead.utc_timestamp(result.version.created_at)
         result.version.updated_at = CandidateRead.utc_timestamp(result.version.updated_at)
@@ -163,6 +169,10 @@ def replace_candidate(
         raise DomainError("VERSION_CONFLICT", "候选资产已变化，请刷新后重试", 409)
     file = find_file(db, project_id, payload.file_id)
     image = validated_image(request.app.state.settings, file)
+    candidate_id = uuid4()
+    check = check_candidate_media(db, job, attempt, candidate_id, image)
+    if check.status != "PASSED":
+        raise DomainError(check.error_code or "INVALID_CANDIDATE", "候选图片的精确输入无效", 409)
     output = append_candidate_version(
         db,
         request.app.state.settings,
@@ -180,6 +190,8 @@ def replace_candidate(
         replaces_version_id=source.asset_version_id,
     )
     row = GenerationCandidate(
+        id=candidate_id,
+        media_check_json=check.model_dump(mode="json"),
         project_id=project_id,
         job_id=job.id,
         attempt_id=attempt.id,

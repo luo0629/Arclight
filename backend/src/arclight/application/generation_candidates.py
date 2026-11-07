@@ -13,6 +13,10 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.application.art_concept_jobs import concept_origin
 from arclight.application.asset_objects import object_key, write_object
 from arclight.application.audit import audit
+from arclight.application.candidate_checks import (
+    check_candidate_media,
+    require_candidate_media_check,
+)
 from arclight.application.dependencies import attach_output, lock_dependency_graph
 from arclight.application.files import record_asset_file
 from arclight.application.production_versions import bind_output, digest
@@ -43,6 +47,16 @@ def require_candidate_review(version: AssetVersion, db: Session | None = None) -
             concept_candidate,
         )
 
+        if db is not None:
+            candidate = db.scalar(
+                select(GenerationCandidate).where(
+                    GenerationCandidate.asset_version_id == version.id
+                )
+            )
+            # Preserve pre-QA-01 ART approvals; they still use the original exact
+            # concept/rights approval checks below. Shot review never accepts NULL.
+            if candidate is not None and candidate.media_check_json is not None:
+                require_candidate_media_check(db, candidate.project_id, candidate.id)
         if db is None or not approved_concept_reference(db, version):
             raise DomainError(
                 "ART_REFERENCE_APPROVAL_REQUIRED", "概念图须经美术提案精确人工批准及授权确认", 409
@@ -237,6 +251,9 @@ def import_attempt(
             job = db.get(GenerationJob, attempt.job_id)
             assert job is not None
             key = uuid5(attempt_id, f"image:{ordinal}")
+            candidate_id = uuid4()
+            check = check_candidate_media(db, job, attempt, candidate_id, image, error)
+            error = check.error_code
             version = (
                 append_candidate_version(
                     db,
@@ -254,10 +271,12 @@ def import_attempt(
                         "rights_confirmed": False,
                     },
                 )
-                if image
+                if image and check.status == "PASSED"
                 else None
             )
             row = GenerationCandidate(
+                id=candidate_id,
+                media_check_json=check.model_dump(mode="json"),
                 project_id=project_id,
                 job_id=job.id,
                 attempt_id=attempt.id,

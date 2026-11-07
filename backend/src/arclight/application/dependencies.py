@@ -164,6 +164,27 @@ def capture_manifest(
     return row, True
 
 
+def validate_manifest_inputs(
+    db: Session, project_id: UUID, manifest: DependencyManifest, target_type: str
+) -> list[UUID]:
+    """Reuse exact identity and type validation at output and review admission."""
+    if manifest.project_id != project_id:
+        raise DomainError("NOT_FOUND", "输入清单不存在", 404)
+    source_ids = []
+    for item in manifest.snapshot_json["inputs"]:
+        version, source = exact_version(db, project_id, UUID(item["source_asset_version_id"]))
+        if (
+            item["asset_id"] != str(source.id)
+            or item["asset_type"] != source.asset_type
+            or item["version_no"] != version.version_no
+            or item["checksum"] != version.checksum
+        ):
+            raise DomainError("INVALID_DEPENDENCY_INPUT", "输入清单与精确版本身份不匹配", 409)
+        validate_dependency_type(source.asset_type, target_type, item["dependency_type"])
+        source_ids.append(version.id)
+    return source_ids
+
+
 def attach_output(
     db: Session, project_id: UUID, manifest_id: UUID, output: AssetVersion
 ) -> list[AssetDependency]:
@@ -198,18 +219,7 @@ def attach_output(
                 select(AssetDependency).where(AssetDependency.target_asset_version_id == output.id)
             )
         )
-    source_ids = []
-    for item in manifest.snapshot_json["inputs"]:
-        version, source = exact_version(db, project_id, UUID(item["source_asset_version_id"]))
-        if (
-            item["asset_id"] != str(source.id)
-            or item["asset_type"] != source.asset_type
-            or item["version_no"] != version.version_no
-            or item["checksum"] != version.checksum
-        ):
-            raise DomainError("INVALID_DEPENDENCY_INPUT", "输入清单与精确版本身份不匹配", 409)
-        validate_dependency_type(source.asset_type, target.asset_type, item["dependency_type"])
-        source_ids.append(version.id)
+    source_ids = validate_manifest_inputs(db, project_id, manifest, target.asset_type)
     reject_dependency_cycle(db, project_id, output.id, source_ids)
     rows = [
         AssetDependency(

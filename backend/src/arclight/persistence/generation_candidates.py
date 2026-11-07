@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from arclight.persistence.base import Base, Entity
+from arclight.persistence.base import JSON_TYPE, Base, Entity
 
 
 class GenerationImageImport(Entity, Base):
@@ -34,6 +34,7 @@ class GenerationCandidate(Entity, Base):
     creation_key: Mapped[UUID]
     request_fingerprint: Mapped[str] = mapped_column(String(64))
     error_code: Mapped[str | None] = mapped_column(String(64))
+    media_check_json: Mapped[dict | None] = mapped_column(JSON_TYPE, nullable=True)
     created_by: Mapped[str] = mapped_column(String(100))
     __table_args__ = (
         UniqueConstraint("attempt_id", "ordinal", name="uq_generation_candidate_output"),
