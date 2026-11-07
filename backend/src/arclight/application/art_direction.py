@@ -74,7 +74,9 @@ def _registry(settings: Settings) -> AgentToolRegistry:
     return AgentToolRegistry([investigate, compare])
 
 
-def _validate(db: Session, settings: Settings, run_id: UUID, result: ArtDirectionResult) -> None:
+def validate_art_direction(
+    db: Session, settings: Settings, run_id: UUID, result: ArtDirectionResult
+) -> None:
     run = db.get(WorkflowRun, run_id)
     assert run is not None
     validate_publication(db, run.id)
@@ -154,7 +156,7 @@ def propose_art(
         _registry(settings),
         ArtDirectionResult,
         limits=limits,
-        validate_result=lambda db, result: _validate(db, settings, run_id, result),
+        validate_result=lambda db, result: validate_art_direction(db, settings, run_id, result),
     )
 
 
@@ -179,5 +181,5 @@ def resume_art_direction(
         _registry(settings),
         ArtDirectionResult,
         decision=decision,
-        validate_result=lambda db, result: _validate(db, settings, run_id, result),
+        validate_result=lambda db, result: validate_art_direction(db, settings, run_id, result),
     )
