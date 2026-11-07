@@ -521,7 +521,12 @@ test("AART-03: cancellation during external waiting keeps the original job and n
     .getByRole("button", { name: "取消美术生成", exact: true })
     .click();
   await expect(
-    current(page).getByText("已取消", { exact: true }),
+    current(page).locator("> div").getByText("已取消", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    progress(page)
+      .getByRole("article", { name: "第 1 轮概念图", exact: true })
+      .getByText("已取消", { exact: true }),
   ).toBeVisible();
   const runs = await (
     await page.request.get(prefix + "/runs", { headers })
