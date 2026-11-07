@@ -1,5 +1,6 @@
 """Persistent execution of the shared Agent graph, including native human interrupts."""
 
+import json
 from collections.abc import Callable
 from typing import cast
 from uuid import UUID, uuid4
@@ -36,6 +37,7 @@ from arclight.domain.agent_runtime import (
     HumanDecisionRequest,
 )
 from arclight.domain.agent_tools import AgentToolCall, AgentToolFeedback
+from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.workflows.agent import AgentLoopState, build_agent_graph
@@ -122,10 +124,18 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
             definitions = available_agent_tools(
                 db, self.registry, request.run_id, request.agent_name, actor, request.stage
             )
-            declarations = [
-                {"name": tool.name, "parameters": tool.parameters_model.model_json_schema()}
-                for tool in definitions
-            ]
+            declarations = []
+            for tool in definitions:
+                schema = tool.parameters_model.model_json_schema()
+                parameters: dict | str = schema
+                try:
+                    safe_metadata(schema)
+                except ValueError:
+                    # Trusted schemas may name data such as an authorization query.
+                    # Encode their grammar, never relax credential checks on values.
+                    # Keep the original shape for already-persisted safe declarations.
+                    parameters = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+                declarations.append({"name": tool.name, "parameters": parameters})
         key = self._execution(turn).step_key
         action_id, saved = self.store.plan(
             key, "MODEL", {"request": request.model_dump(mode="json"), "tools": declarations}

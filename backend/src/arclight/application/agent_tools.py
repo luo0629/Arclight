@@ -534,6 +534,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         ]
     )
     if settings is not None:
+        from arclight.application.art_direction import comparison_tool
         from arclight.application.art_research import investigate_art
         from arclight.application.context_evidence import append_evidence, read_trace
         from arclight.application.director_checks import director_check_tool
@@ -552,6 +553,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
             InvestigateStoryResult,
         )
 
+        registry.register(comparison_tool(settings))
         registry.register(patch_tool(settings))
         registry.register(director_check_tool(settings))
 
