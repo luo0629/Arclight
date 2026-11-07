@@ -68,6 +68,7 @@ class AgentToolDefinition:
     scope_validator: Callable[[AgentToolContext, AgentToolContract], None]
     handler: Callable[[AgentToolContext, AgentToolContract], Any]
     requires_write: bool = False
+    is_ready: Callable[[AgentToolContext, AgentToolContract], bool] | None = None
 
 
 class AgentToolRegistry:
@@ -136,6 +137,38 @@ def available_agent_tools(
         and agent_name in tool.allowed_agents
         and stage in tool.allowed_steps
     )
+
+
+def agent_tool_is_pending(
+    db: Session,
+    registry: AgentToolRegistry,
+    agent_name: AgentName,
+    request: AgentToolCall,
+    actor: str,
+    stage: str,
+) -> bool:
+    """Check a registered read-only readiness rule without executing or charging the tool.
+
+    Invalid or unauthorized calls proceed to the original executor for its durable error
+    receipt. A callback may only inspect the external inputs of an already admitted run.
+    """
+    available = available_agent_tools(db, registry, request.run_id, agent_name, actor, stage)
+    tool = next((item for item in available if item.name == request.tool_name), None)
+    if tool is None or tool.is_ready is None:
+        return False
+    run = db.get(WorkflowRun, request.run_id)
+    assert run is not None
+    episode = db.get(Episode, run.episode_id)
+    assert episode is not None
+    context = AgentToolContext(
+        db, request.run_id, episode.project_id, episode.id, actor, agent_name
+    )
+    try:
+        parameters = tool.parameters_model.model_validate(request.arguments)
+        tool.scope_validator(context, parameters)
+        return not tool.is_ready(context, parameters)
+    except (DomainError, ValidationError):
+        return False
 
 
 def _locked_run(db: Session, run_id: UUID) -> tuple[WorkflowRun, Episode]:

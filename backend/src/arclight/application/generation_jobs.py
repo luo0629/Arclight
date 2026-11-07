@@ -91,6 +91,7 @@ def create_job(
     *,
     execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
     frozen_prompt_composition: dict | None = None,
+    art_concept_origin: dict | None = None,
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
@@ -105,6 +106,12 @@ def create_job(
     if existing is not None:
         if existing.request_fingerprint != fingerprint:
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一幂等键不能用于不同媒体请求", 409)
+        manifest = db.get(DependencyManifest, existing.input_manifest_id)
+        if (
+            manifest is None
+            or manifest.snapshot_json["context"].get("art_concept") != art_concept_origin
+        ):
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一任务不能更换受控美术来源", 409)
         return existing
     asset = validate_target(db, project_id, payload)
     budget_quote = quote_job(db, project_id, payload)
@@ -247,6 +254,7 @@ def create_job(
                     else {}
                 ),
                 "origin": "generation_request",
+                **({"art_concept": deepcopy(art_concept_origin)} if art_concept_origin else {}),
                 "provider_capabilities": capabilities.model_dump(mode="json"),
                 "budget_quote": budget_quote.model_dump(mode="json"),
                 "budget_batch_id": str(payload.batch_id) if payload.batch_id else None,
@@ -306,7 +314,14 @@ def create_job(
         inputs,
         prompt_composition=prompt_composition,
     )
-    schedule_for(db, job, execution_policy)
+    parent_deadline = None
+    if art_concept_origin is not None:
+        from arclight.persistence.agent_limits import AgentRunLimit
+
+        root = db.get(AgentRunLimit, UUID(art_concept_origin["root_run_id"]))
+        assert root is not None
+        parent_deadline = root.deadline_at
+    schedule_for(db, job, execution_policy, parent_deadline=parent_deadline)
     from arclight.application.generation_queues import classify
 
     classify(db, job, payload)

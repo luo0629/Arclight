@@ -24,6 +24,7 @@ from arclight.application.story_sources import (
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
+from arclight.domain.art_concepts import ArtConceptPlan
 from arclight.domain.art_direction import ArtDirectionTask
 from arclight.domain.director_creation import (
     DIRECTOR_VERSION,
@@ -144,6 +145,7 @@ def start_run(
     professional_director: bool = False,
     director_revision_rounds: int | None = None,
     art_task: ArtDirectionTask | None = None,
+    art_concept_plan: ArtConceptPlan | None = None,
 ) -> WorkflowRun:
     options = ScreenwriterRevisionOptions(
         professional=professional or professional_director or art_task is not None,
@@ -153,6 +155,8 @@ def start_run(
     DirectorRevisionOptions(
         professional=professional_director, director_revision_rounds=director_revision_rounds
     )
+    if art_concept_plan is not None and art_task is None:
+        raise DomainError("ART_TASK_INVALID", "概念图须属于独立美术任务", 422)
     if art_task is not None and (
         script_version_id is None
         or professional
@@ -207,6 +211,8 @@ def start_run(
             "art_task": art_task.model_dump(mode="json"),
             "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
+    if art_concept_plan is not None:
+        payload["art_concept_plan"] = art_concept_plan.model_dump(mode="json")
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -311,6 +317,14 @@ def start_run(
             "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
         version = ART_WORKFLOW_VERSION
+        if art_concept_plan is not None:
+            from arclight.application.art_concepts import freeze_concept_plan
+            from arclight.domain.art_concepts import CONCEPT_WORKFLOW_VERSION
+
+            inputs["art_direction"]["concept"] = freeze_concept_plan(
+                db, project.id, episode.id, art_concept_plan
+            )
+            version = CONCEPT_WORKFLOW_VERSION
     elif professional_director:
         version = (
             DIRECTOR_VERSION
@@ -461,10 +475,12 @@ def resume_run(
 
 
 def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
+    from arclight.application.agent_external_waits import cancel_concepts, waiting_for_external
     from arclight.application.screenwriter_creation import waiting_for_answer
 
     if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW] and not (
-        waiting_for_answer(db, run)
+        waiting_for_external(db, run)
+        or waiting_for_answer(db, run)
         or waiting_for_answer(db, run, "director")
         or waiting_for_answer(db, run, "art_director")
     ):
@@ -498,6 +514,7 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
                 "AGENT_STATE_INVALID", "运行状态不可安全取消，请联系管理员", 409
             ) from exc
         agent_state = state.model_dump(mode="json")
+    cancel_concepts(db, run.id)
     run.status = RunStatus.CANCELLED
     run.pending_review = None
     if agent_state is not None:
@@ -510,9 +527,9 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
 def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     if run.status != RunStatus.FAILED:
         raise DomainError("NOT_RETRYABLE", "只有失败的工作流可以显式重试")
-    from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
+    from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
 
-    if run.workflow_version == ART_WORKFLOW_VERSION:
+    if run.workflow_version in ART_WORKFLOW_VERSIONS:
         from arclight.application.agent_workflows import creation_loops
 
         if any(loop.status == "STOPPED" for loop in creation_loops(db, run.id, "art_director")):

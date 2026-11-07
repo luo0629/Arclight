@@ -6,8 +6,15 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arclight.domain.agent_state import AgentStepId
-from arclight.domain.agent_tools import AgentName
+from arclight.domain.agent_tools import AgentName, AgentToolCall, AgentToolContract
 from arclight.domain.generation_requests import safe_metadata
+
+
+class AgentToolWait(AgentToolContract):
+    """Server-created interrupt for a durable tool whose external inputs are not ready."""
+
+    resource_type: Literal["agent_tool_wait"] = "agent_tool_wait"
+    request: AgentToolCall
 
 
 class HumanDecisionRequest(BaseModel):
@@ -57,13 +64,14 @@ class AgentLoopResult[T: BaseModel](BaseModel):
     project_id: UUID
     agent_name: AgentName
     stage: AgentStepId
-    status: Literal["COMPLETED", "HUMAN_REVIEW", "STOPPED"]
+    status: Literal["COMPLETED", "HUMAN_REVIEW", "WAITING_EXTERNAL", "STOPPED"]
     model_turns: int = Field(strict=True, ge=0, le=4096)
     loop_id: UUID | None = None
     question_id: UUID | None = None
     input_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     result: T | None = None
     human_request: HumanDecisionRequest | None = None
+    waiting_for: AgentToolCall | None = None
     stop_code: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,63}$")
 
     @model_validator(mode="after")
@@ -76,6 +84,8 @@ class AgentLoopResult[T: BaseModel](BaseModel):
             (self.result is not None) != (self.status == "COMPLETED")
             or (self.human_request is not None) != (self.status == "HUMAN_REVIEW")
             or (self.stop_code is not None) != (self.status == "STOPPED")
+            or (self.waiting_for is not None) != (self.status == "WAITING_EXTERNAL")
+            or (self.waiting_for is not None and self.waiting_for.run_id != self.run_id)
         ):
             raise ValueError("Loop status and outcome must agree")
         safe_metadata(self.model_dump(mode="json"))

@@ -1,6 +1,6 @@
 """Database-serialized admission and persistent, bounded retry decisions."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -26,7 +26,11 @@ from arclight.persistence.generation_scheduling import (
 
 
 def schedule_for(
-    db: Session, job: GenerationJob, policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY
+    db: Session,
+    job: GenerationJob,
+    policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+    *,
+    parent_deadline: datetime | None = None,
 ) -> GenerationSchedule:
     row = db.scalar(select(GenerationSchedule).where(GenerationSchedule.job_id == job.id))
     if row is None:
@@ -36,10 +40,13 @@ def schedule_for(
                 str(job.project_id), policy.project_concurrency
             )
         }
+        deadline = leases.utc(job.created_at) + timedelta(seconds=policy.max_elapsed_seconds)
+        if parent_deadline is not None:
+            deadline = min(deadline, leases.utc(parent_deadline))
         row = GenerationSchedule(
             job_id=job.id,
             policy_json=snapshot,
-            deadline_at=leases.utc(job.created_at) + timedelta(seconds=policy.max_elapsed_seconds),
+            deadline_at=deadline,
             next_attempt_at=leases.clock(db),
         )
         db.add(row)

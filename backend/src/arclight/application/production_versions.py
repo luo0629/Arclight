@@ -142,8 +142,42 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    from arclight.domain.art_concepts import (
+        CONCEPT_DIRECTION_VERSION,
+        CONCEPT_PROMPT,
+        CONCEPT_WORKFLOW_VERSION,
+        ArtConceptPlan,
+        ObserveArtConcepts,
+        RequestArtConcepts,
+    )
     from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
 
+    if workflow_version == CONCEPT_WORKFLOW_VERSION:
+        definitions = []
+        for kind, _, original in text_definitions(stage, ART_WORKFLOW_VERSION):
+            definition = deepcopy(original)
+            if kind == "AGENT":
+                definition |= {
+                    "workflow_version": workflow_version,
+                    "direction_version": CONCEPT_DIRECTION_VERSION,
+                    "external_wait": "native-tool-interrupt/1",
+                }
+            elif kind == "PROMPT":
+                definition["direction"] += CONCEPT_PROMPT
+            elif kind == "SCHEMA":
+                definition |= {
+                    "concept_plan": ArtConceptPlan.model_json_schema(),
+                    "request_concepts": RequestArtConcepts.model_json_schema(),
+                    "observe_concepts": ObserveArtConcepts.model_json_schema(),
+                }
+            definitions.append(
+                (
+                    kind,
+                    workflow_version if kind == "AGENT" else CONCEPT_DIRECTION_VERSION,
+                    definition,
+                )
+            )
+        return definitions
     if workflow_version == ART_WORKFLOW_VERSION:
         from arclight.domain.art_direction import (
             DIRECTION_PROMPT,

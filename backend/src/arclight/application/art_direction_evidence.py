@@ -30,15 +30,25 @@ from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import VisualBibleVersion, WorkflowRun
 
 
-def operation_sha256(run_id: UUID) -> str:
-    return digest({"run": str(run_id), "stage": "storyboard", "operation": DIRECTION_VERSION})
+def operation_sha256(run_id: UUID, *, db: Session | None = None) -> str:
+    from arclight.domain.art_concepts import CONCEPT_DIRECTION_VERSION
+
+    run = db.get(WorkflowRun, run_id) if db is not None else None
+    concept = run is not None and run.input_json.get("art_direction", {}).get("concept") is not None
+    return digest(
+        {
+            "run": str(run_id),
+            "stage": "storyboard",
+            "operation": CONCEPT_DIRECTION_VERSION if concept else DIRECTION_VERSION,
+        }
+    )
 
 
 def direction_loop(db: Session, run_id: UUID) -> tuple[AgentLoop, ArtDirectionSeed]:
     loop = db.scalar(
         select(AgentLoop).where(
             AgentLoop.run_id == run_id,
-            AgentLoop.operation_sha256 == operation_sha256(run_id),
+            AgentLoop.operation_sha256 == operation_sha256(run_id, db=db),
         )
     )
     if loop is None:
@@ -60,10 +70,17 @@ def _materials(actions: list[AgentLoopAction]) -> tuple[dict[str, dict], set[UUI
             seen_images.update(request.image_ids())
         elif (
             action.kind == "TOOL"
-            and action.request_json.get("tool_name") == "investigate_art"
+            and action.request_json.get("tool_name") in {"investigate_art", "observe_art_concepts"}
             and action.result_json.get("status") == "SUCCEEDED"
         ):
-            result = InvestigateArtResult.model_validate(action.result_json["result"])
+            from arclight.domain.art_concepts import ArtConceptObserved
+
+            model = (
+                ArtConceptObserved
+                if action.request_json["tool_name"] == "observe_art_concepts"
+                else InvestigateArtResult
+            )
+            result = model.model_validate(action.result_json["result"])
             for material in result.materials:
                 evidence = ArtEvidence.model_validate(material.model_dump(exclude={"content"}))
                 observed[evidence.model_dump_json()] = material.content
@@ -155,6 +172,19 @@ def validate_draft(
     limits = ContextLimits.model_validate(trace["task_context"]["limits"])
     for reference in proposal.references:
         reference_content = materials.get(reference.asset.asset_version_id)
+        if reference.usage == "COMPARISON" and run.input_json.get("art_direction", {}).get(
+            "concept"
+        ):
+            from arclight.application.art_concept_assets import read_concept_reference
+
+            if (
+                reference_content is None
+                or reference_content["asset_id"] != str(reference.asset.asset_id)
+                or UUID(reference_content["image"]["file_id"]) not in seen_images
+            ):
+                raise DomainError("ART_EVIDENCE_REQUIRED", "概念图比较须实际查看本轮原图", 422)
+            read_concept_reference(db, settings, run.id, reference.asset.asset_version_id)
+            continue
         if (
             reference_content is None
             or reference.usage != "APPROVED_REFERENCE"
@@ -188,6 +218,10 @@ def validate_delivery(
     db: Session, settings: Settings, run: WorkflowRun, actor: str, result: ArtDirectionResult
 ) -> None:
     comparison = validate_draft(db, settings, run, actor, result.draft)
+    if run.input_json.get("art_direction", {}).get("concept"):
+        from arclight.application.art_concepts import validate_concept_delivery
+
+        validate_concept_delivery(db, run.id, result.draft)
     loop, _ = direction_loop(db, run.id)
     for action in db.scalars(select(AgentLoopAction).where(AgentLoopAction.loop_id == loop.id)):
         if (

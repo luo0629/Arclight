@@ -353,7 +353,7 @@ def select_version(
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
-    require_candidate_review(row)
+    require_candidate_review(row, db)
     if row.status != "APPROVED" or row.stale:
         raise DomainError("ASSET_NOT_USABLE", "只能选用已批准且有效的精确版本", 409)
     read_object(
@@ -454,7 +454,7 @@ def change_lock(
         raise DomainError("ASSET_SELECTION_CONFLICT", "只能锁定或解锁当前选用的精确版本", 409)
     before = asset.status
     if locked:
-        require_candidate_review(version)
+        require_candidate_review(version, db)
         if (
             before == "LOCKED"
             or record is not None
@@ -671,7 +671,7 @@ def update_version_state(
     if payload.status in {"REJECTED", "STALE"} and not payload.comment:
         raise DomainError("REVIEW_COMMENT_REQUIRED", "拒绝或标记失效必须说明原因", 422)
     if target in {"READY_FOR_REVIEW", "APPROVED"}:
-        require_candidate_review(row)
+        require_candidate_review(row, db)
         if row.creation_key is None or row.metadata_json.get("storage_backend") not in {
             "LOCAL",
             "S3",

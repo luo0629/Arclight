@@ -35,6 +35,7 @@ def create(
         settings=request.app.state.settings,
         script_version_id=payload.script_version_id,
         art_task=payload.task,
+        art_concept_plan=payload.concept_plan,
         agent_limits=payload.agent_limits,
     )
     return accepted(run)

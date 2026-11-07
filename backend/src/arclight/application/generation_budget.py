@@ -149,6 +149,10 @@ def check_execution(
     db: Session, job: GenerationJob, spec: GenerationSpec, *, lock: bool = True
 ) -> None:
     """Shared budget rules; lock=False is advisory scheduler reading, never reservation."""
+    if lock:
+        from arclight.application.art_concept_jobs import validate_concept_execution
+
+        validate_concept_execution(db, job)
     captured = db.scalar(
         select(GenerationBudgetQuote).where(GenerationBudgetQuote.job_id == job.id)
     )

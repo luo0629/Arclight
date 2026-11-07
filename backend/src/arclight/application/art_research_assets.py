@@ -136,7 +136,16 @@ def read_reference(
     ):
         invalid_reference()
     media = version.metadata_json.get("media", {})
-    confirmed = bool(stored and stored.rights_confirmed and media.get("rights_confirmed") is True)
+    from arclight.application.art_concept_assets import approved_concept_reference
+
+    confirmed = bool(
+        stored
+        and (
+            stored.rights_confirmed
+            and media.get("rights_confirmed") is True
+            or approved_concept_reference(db, version)
+        )
+    )
     content = {
         "asset_id": str(asset.id),
         "asset_version_id": str(version.id),

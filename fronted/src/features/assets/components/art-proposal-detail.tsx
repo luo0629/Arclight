@@ -8,6 +8,7 @@ import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Notice } from "@/components/ui-kit";
 import ListPagination from "@/components/shared/list-pagination";
+import VersionImage from "./version-image";
 import usePagedList from "@/hooks/use-paged-list";
 import {
   artKinds,
@@ -166,10 +167,18 @@ export default function ArtProposalDetail({
           </p>
         ))}
         {proposal.references?.map((reference) => (
-          <p key={reference.reference_id} className="text-sm">
-            参考用途：{reference.purpose} · 精确版本{" "}
-            {reference.asset.asset_version_id}
-          </p>
+          <div
+            key={reference.reference_id}
+            className="flex min-w-0 flex-col gap-2"
+          >
+            <p className="break-words text-sm">
+              参考用途：{reference.purpose} · 精确版本{" "}
+              {reference.asset.asset_version_id}
+            </p>
+            <VersionImage
+              path={`/projects/${row.project_id}/assets/${reference.asset.asset_id}/versions/${reference.asset.asset_version_id}/image`}
+            />
+          </div>
         ))}
       </section>
       {proposal.questions?.map((question) => (

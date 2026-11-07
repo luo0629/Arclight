@@ -49,7 +49,7 @@ def main():
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
     config.attributes["database_url"] = settings.database_url
     command.upgrade(config, "head")
-    factory = session_factory(build_engine(settings))
+    factory = session_factory(build_engine(settings), settings)
     stop = threading.Event()
 
     def worker():
@@ -63,6 +63,9 @@ def main():
                 ]
             for run_id, revision in jobs:
                 execute_run(factory, settings, run_id, revision)
+            from e2e_art import advance_concepts
+
+            advance_concepts(factory, settings)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()

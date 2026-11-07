@@ -56,10 +56,25 @@ def load_context_images(
     if episode is None:
         raise DomainError("CONTEXT_REFERENCE_INVALID", "上下文作用范围缺失", 409)
     candidate = trace["task_context"]["scope"].get("candidate_version_id")
+    ordinary_versions = set()
+    for item in selected:
+        version = db.get(AssetVersion, UUID(item["asset_version_id"]))
+        if (
+            version is not None
+            and version.status not in {"APPROVED", "LOCKED"}
+            and version.metadata_json.get("required_review") == "ART_PROPOSAL"
+        ):
+            from arclight.application.art_concept_assets import read_concept_reference
+
+            fresh = read_concept_reference(db, settings, run.id, version.id)
+            if fresh["image"] != item:
+                raise DomainError("CONTEXT_REFERENCE_INVALID", "概念图与原取证原图不一致", 409)
+        else:
+            ordinary_versions.add(item["asset_version_id"])
     resolve_assets(
         db,
         episode.project_id,
-        {item["asset_version_id"] for item in selected},
+        ordinary_versions,
         ContextLimits.model_validate(trace["task_context"]["limits"]),
         candidate=UUID(candidate) if candidate else None,
         follow_profile_references=False,

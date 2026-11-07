@@ -23,13 +23,13 @@ logger = logging.getLogger(__name__)
 
 def versions_for_agent(agent_name: str) -> set[str]:
     from arclight.application.screenwriter_creation import PROFESSIONAL_VERSIONS
-    from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
+    from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
     from arclight.domain.director_creation import DIRECTOR_VERSIONS
 
     return {
         "screenwriter": PROFESSIONAL_VERSIONS,
         "director": DIRECTOR_VERSIONS,
-        "art_director": {ART_WORKFLOW_VERSION},
+        "art_director": set(ART_WORKFLOW_VERSIONS),
     }.get(agent_name, set())
 
 
@@ -60,6 +60,27 @@ def wait_for_agent(
     with factory.begin() as db:
         run = active_workflow(db, run_id, revision)
         run.pending_review = None
+        if outcome.status == "WAITING_EXTERNAL":
+            assert outcome.waiting_for is not None
+            key = outcome.waiting_for.idempotency_key
+            prior = db.scalars(
+                select(WorkflowEvent).where(
+                    WorkflowEvent.run_id == run.id,
+                    WorkflowEvent.event_type == f"{agent_name}.external_wait",
+                )
+            )
+            if not any(event.payload_json.get("action_key") == key for event in prior):
+                emit(
+                    db,
+                    run,
+                    f"{agent_name}.external_wait",
+                    {
+                        "loop_id": str(outcome.loop_id),
+                        "action_key": key,
+                        "waiting_for": outcome.waiting_for.model_dump(mode="json"),
+                    },
+                )
+            return True
         previous = db.scalars(
             select(WorkflowEvent).where(
                 WorkflowEvent.run_id == run.id, WorkflowEvent.event_type == f"{agent_name}.question"

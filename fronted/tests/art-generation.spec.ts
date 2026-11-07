@@ -105,6 +105,13 @@ async function fill(page: Page, goal: string, minimum = 0) {
   await page.getByLabel("最少参考图片", { exact: true }).fill(String(minimum));
 }
 
+async function concepts(page: Page, goal: string) {
+  await fill(page, goal, 2);
+  await page.getByLabel("生成概念图并比较修订", { exact: true }).check();
+  await page.getByLabel("概念图宽度（像素）", { exact: true }).fill("8");
+  await page.getByLabel("概念图高度（像素）", { exact: true }).fill("12");
+}
+
 const current = (page: Page) =>
   page.getByLabel("当前美术生成任务", { exact: true });
 const progress = (page: Page) =>
@@ -399,4 +406,218 @@ test("ART-05: viewer reads saved art history without generation, answers or appr
     },
   });
   expect(denied.status()).toBe(403);
+});
+
+test("AART-03: two actual concept rounds survive refresh and exact images require owner approval", async ({
+  page,
+}, info) => {
+  const { headers, project, prefix } = await setup(page);
+  await concepts(page, "概念图比较雨夜轮廓并修订");
+  await page.getByRole("button", { name: "开始美术生成", exact: true }).click();
+  await expect(
+    progress(page).getByRole("button", { name: "查看生成提案", exact: true }),
+  ).toBeVisible({ timeout: 30000 });
+  const runs = await (
+    await page.request.get(prefix + "/runs", { headers })
+  ).json();
+  expect(runs).toHaveLength(1);
+  expect(runs[0].workflow_version).toBe("art-proposal/2.0");
+  const saved = await (
+    await page.request.get(`/api/v1/runs/${runs[0].id}/art`, { headers })
+  ).json();
+  expect(saved.concept_rounds).toHaveLength(2);
+  expect(
+    saved.concept_rounds.every(
+      (round: { candidates: unknown[] }) => round.candidates.length === 2,
+    ),
+  ).toBe(true);
+  await expect(
+    progress(page).getByRole("img", { name: "精确资产版本原图" }),
+  ).toHaveCount(4);
+  await expect
+    .poll(async () =>
+      progress(page)
+        .getByRole("img")
+        .evaluateAll((images) =>
+          images.every(
+            (image) => (image as HTMLImageElement).naturalWidth === 8,
+          ),
+        ),
+    )
+    .toBe(true);
+  await page.reload();
+  await open(page);
+  await expect(
+    progress(page).getByText("第 2 轮概念图", { exact: true }),
+  ).toBeVisible();
+  const after = await (
+    await page.request.get(`/api/v1/runs/${runs[0].id}/art`, { headers })
+  ).json();
+  expect(after.operations[0].loop_id).toBe(saved.operations[0].loop_id);
+  expect(after.delivery).toEqual(saved.delivery);
+  await progress(page)
+    .getByRole("button", { name: "查看生成提案", exact: true })
+    .click();
+  const detail = page.getByLabel("美术提案详情", { exact: true });
+  await expect(
+    detail.getByRole("img", { name: "精确资产版本原图" }),
+  ).toHaveCount(4);
+  await expect(
+    detail.getByRole("checkbox", { name: /批准精确候选并确认使用授权/ }),
+  ).toHaveCount(4);
+  const approve = detail.getByRole("button", {
+    name: "批准并生成正式版本",
+    exact: true,
+  });
+  await expect(approve).toBeDisabled();
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  await page.screenshot({
+    path: info.outputPath("concept-rounds-mobile.png"),
+    fullPage: true,
+  });
+  const exactReference = detail
+    .getByRole("checkbox", { name: /批准精确候选并确认使用授权/ })
+    .first();
+  await exactReference.scrollIntoViewIfNeeded();
+  await expect(exactReference).toBeInViewport();
+  await page.screenshot({
+    path: info.outputPath("concept-review-mobile.png"),
+    fullPage: true,
+  });
+  for (const checkbox of await detail.getByRole("checkbox").all())
+    await checkbox.check();
+  await approve.click();
+  await expect(detail.getByText("已批准", { exact: true })).toBeVisible();
+  for (const round of after.concept_rounds) {
+    for (const candidate of round.candidates) {
+      const asset = await (
+        await page.request.get(
+          `/api/v1/projects/${project.id}/assets/${candidate.asset_id}/versions/${candidate.asset_version_id}`,
+          { headers },
+        )
+      ).json();
+      expect(asset.status).toBe("APPROVED");
+    }
+  }
+});
+
+test("AART-03: cancellation during external waiting keeps the original job and no media attempt", async ({
+  page,
+}) => {
+  const { headers, project, prefix } = await setup(page);
+  await concepts(page, "取消概念图等待任务");
+  await page.getByRole("button", { name: "开始美术生成", exact: true }).click();
+  await expect(
+    progress(page).getByText(/等待概念图生成与媒体检查/),
+  ).toBeVisible({ timeout: 20000 });
+  await page.reload();
+  await open(page);
+  await progress(page)
+    .getByRole("button", { name: "取消美术生成", exact: true })
+    .click();
+  await expect(
+    current(page).getByText("已取消", { exact: true }),
+  ).toBeVisible();
+  const runs = await (
+    await page.request.get(prefix + "/runs", { headers })
+  ).json();
+  const saved = await (
+    await page.request.get(`/api/v1/runs/${runs[0].id}/art`, { headers })
+  ).json();
+  expect(saved.delivery).toBeNull();
+  expect(saved.concept_rounds).toHaveLength(1);
+  const job = await (
+    await page.request.get(
+      `/api/v1/projects/${project.id}/generation-jobs/${saved.concept_rounds[0].job_id}`,
+      { headers },
+    )
+  ).json();
+  expect(job.status).toBe("CANCELLED");
+  expect(job.attempt_count).toBe(0);
+});
+
+test("AART-03: unknown concept result is visible after refresh and never starts another attempt", async ({
+  page,
+}) => {
+  const { headers, project, prefix } = await setup(page);
+  await concepts(page, "未知概念图结果需要核验");
+  await page.getByRole("button", { name: "开始美术生成", exact: true }).click();
+  await expect(
+    progress(page).getByText("原概念图任务需要核验，请先处理原结果。", {
+      exact: true,
+    }),
+  ).toBeVisible({ timeout: 20000 });
+  await expect(progress(page).getByText(/实际费用：未知/)).toBeVisible();
+  const runs = await (
+    await page.request.get(prefix + "/runs", { headers })
+  ).json();
+  await page.reload();
+  await open(page);
+  await expect(
+    progress(page).getByText("原概念图任务需要核验，请先处理原结果。", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  const saved = await (
+    await page.request.get(`/api/v1/runs/${runs[0].id}/art`, { headers })
+  ).json();
+  expect(saved.concept_rounds).toHaveLength(1);
+  expect(saved.concept_rounds[0].actual_cost).toBeNull();
+  const attempts = await (
+    await page.request.get(
+      `/api/v1/projects/${project.id}/generation-jobs/${saved.concept_rounds[0].job_id}/attempts`,
+      { headers },
+    )
+  ).json();
+  expect(attempts).toHaveLength(1);
+  expect(saved.delivery).toBeNull();
+});
+
+test("AART-03: lost receipt restores the frozen concept plan with the same logical key", async ({
+  page,
+}) => {
+  const { headers, prefix } = await setup(page);
+  await concepts(page, "取消概念图回执恢复");
+  await page.getByLabel("概念图总预算（USD）", { exact: true }).fill("3");
+  const keys: string[] = [];
+  let dropped = false;
+  await page.route(new RegExp(prefix + "/art-runs$"), async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    keys.push(route.request().headers()["idempotency-key"]);
+    if (!dropped) {
+      dropped = true;
+      await route.fetch();
+      await route.abort("failed");
+    } else await route.continue();
+  });
+  await page.getByRole("button", { name: "开始美术生成", exact: true }).click();
+  await expect(
+    page.getByLabel("生成美术提案", { exact: true }).getByRole("alert"),
+  ).toBeVisible();
+  await page.reload();
+  await open(page);
+  await selectEpisode(page);
+  await expect(
+    page.getByLabel("生成概念图并比较修订", { exact: true }),
+  ).toBeChecked();
+  await expect(
+    page.getByLabel("概念图总预算（USD）", { exact: true }),
+  ).toHaveValue("3");
+  await expect(
+    page.getByLabel("概念图宽度（像素）", { exact: true }),
+  ).toHaveValue("8");
+  await page.getByRole("button", { name: "开始美术生成", exact: true }).click();
+  await expect(
+    progress(page).getByText(/等待概念图生成与媒体检查/),
+  ).toBeVisible({ timeout: 20000 });
+  expect(keys).toHaveLength(2);
+  expect(keys[0]).toBe(keys[1]);
+  expect(
+    await (await page.request.get(prefix + "/runs", { headers })).json(),
+  ).toHaveLength(1);
 });

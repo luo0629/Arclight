@@ -7,6 +7,7 @@ import { api, json, message } from "@/lib/api/client";
 import { runErrorMessage } from "@/lib/run-errors";
 import type { Run } from "@/types/api";
 import AgentAnswer, { type HumanOperation } from "./agent-answer";
+import ArtConceptRounds, { type ConceptRound } from "./art-concept-rounds";
 
 export type ArtDelivery = {
   proposal_id: string;
@@ -28,6 +29,15 @@ type Operation = HumanOperation & {
   } | null;
 };
 type Progress = {
+  project_id: string;
+  concept_plan?: {
+    plan: {
+      maximum_rounds: number;
+      maximum_candidates: number;
+      maximum_cost: string;
+    };
+  } | null;
+  concept_rounds?: ConceptRound[];
   operations: Operation[];
   delivery: ArtDelivery | null;
   can_cancel: boolean;
@@ -107,9 +117,13 @@ export default function ArtProgress({
                 ? run.status === "CANCELLED"
                   ? "创作已停止"
                   : "等待补充信息"
-                : operation.status === "STOPPED"
-                  ? "决策已停止"
-                  : "正在调查与比较"}{" "}
+                : operation.status === "WAITING_EXTERNAL"
+                  ? run.status === "CANCELLED"
+                    ? "创作已停止"
+                    : "等待概念图生成与媒体检查"
+                  : operation.status === "STOPPED"
+                    ? "决策已停止"
+                    : "正在调查与比较"}{" "}
             · 已完成 {operation.model_turns} 轮模型交流
           </p>
           {operation.stop_code && (
@@ -148,6 +162,19 @@ export default function ArtProgress({
           )}
         </div>
       ))}
+      {data?.concept_plan && (
+        <>
+          <p className="text-sm text-muted-foreground">
+            冻结计划：最多 {data.concept_plan.plan.maximum_rounds} 轮 /{" "}
+            {data.concept_plan.plan.maximum_candidates} 张 · 总预算 USD{" "}
+            {data.concept_plan.plan.maximum_cost}
+          </p>
+          <ArtConceptRounds
+            projectId={data.project_id}
+            rounds={data.concept_rounds ?? []}
+          />
+        </>
+      )}
       {data?.delivery &&
         (onView ? (
           <Button variant="outline" onClick={() => onView(data.delivery!)}>
@@ -174,16 +201,18 @@ export default function ArtProgress({
         >
           刷新美术进度
         </Button>
-        {writable && ["QUEUED", "WAITING_REVIEW"].includes(run.status) && (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => void command("cancel")}
-          >
-            取消美术生成
-          </Button>
-        )}
+        {writable &&
+          (["QUEUED", "WAITING_REVIEW"].includes(run.status) ||
+            (run.status === "RUNNING" && data?.can_cancel)) && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => void command("cancel")}
+            >
+              取消美术生成
+            </Button>
+          )}
         {writable &&
           run.status === "FAILED" &&
           !data?.operations.some((op) => op.status === "STOPPED") && (

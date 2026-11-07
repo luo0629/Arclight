@@ -107,7 +107,7 @@ def publish_art_direction(
             actor != loop.actor_id
             or actor != execution_actor(db, run)
             or episode.project_id != loop.project_id
-            or loop.operation_sha256 != operation_sha256(run.id)
+            or loop.operation_sha256 != operation_sha256(run.id, db=db)
         ):
             raise DomainError("ART_DIRECTION_SCOPE", "只能交付原操作者和范围内的美术决策", 403)
         prior = db.scalar(
@@ -226,7 +226,7 @@ def generate_art_proposal(
         loop = db.scalar(
             select(AgentLoop).where(
                 AgentLoop.run_id == run.id,
-                AgentLoop.operation_sha256 == operation_sha256(run.id),
+                AgentLoop.operation_sha256 == operation_sha256(run.id, db=db),
             )
         )
         prior = (

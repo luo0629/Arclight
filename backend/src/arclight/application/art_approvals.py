@@ -23,6 +23,9 @@ def apply_option(
     proposal = ArtProposal.model_validate(version.proposal_json)
     require_art_confirmation(db, proposal, actor, confirmation)
     option = next(item for item in proposal.options if item.option_id == confirmation.option_id)
+    from arclight.application.art_concept_assets import approve_references
+
+    approve_references(db, version, proposal, option, actor)
     changed_designs = {change.design_id for change in confirmation.confirmed_changes}
     project = db.get(Project, proposal.project_id, populate_existing=True)
     assert project is not None

@@ -15,7 +15,7 @@ from arclight.domain.agent_tools import AgentToolGrantRequest
 from arclight.domain.art_direction import COMPARISON_TOOL
 from arclight.domain.art_generation import DELIVERY_KEY, ArtDelivery
 from arclight.domain.art_research import RESEARCH_TOOL
-from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
+from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
 from arclight.domain.human_reviews import HumanDecision
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.art_proposals import ArtProposalRecord, ArtProposalVersion
@@ -24,7 +24,7 @@ from arclight.persistence.human_reviews import (
     HumanReviewRequest,
     HumanReviewResume,
 )
-from arclight.persistence.models import OutboxEvent, WorkflowRun
+from arclight.persistence.models import Episode, OutboxEvent, WorkflowRun
 
 
 def authorize_art(db: Session, run: WorkflowRun, actor: str, settings: Settings) -> None:
@@ -33,7 +33,12 @@ def authorize_art(db: Session, run: WorkflowRun, actor: str, settings: Settings)
         AgentToolGrantRequest(
             run_id=run.id,
             agent_name="art_director",
-            allowed_tools=[RESEARCH_TOOL, COMPARISON_TOOL],
+            allowed_tools=[RESEARCH_TOOL, COMPARISON_TOOL]
+            + (
+                ["request_art_concepts", "observe_art_concepts"]
+                if run.input_json["art_direction"].get("concept")
+                else []
+            ),
         ),
         actor,
         art_direction_registry(settings),
@@ -47,7 +52,7 @@ def proposal_run(
         return None
     loop = db.get(AgentLoop, proposal.creation_key)
     run = db.get(WorkflowRun, loop.run_id) if loop else None
-    return run if run and run.workflow_version == ART_WORKFLOW_VERSION else None
+    return run if run and run.workflow_version in ART_WORKFLOW_VERSIONS else None
 
 
 def delivered(db: Session, run_id: UUID) -> ArtDelivery | None:
@@ -71,7 +76,7 @@ def queue_art_review(
     if request.run_id is None:
         return
     run = db.get(WorkflowRun, request.run_id, populate_existing=True, with_for_update=True)
-    if run is None or run.workflow_version != ART_WORKFLOW_VERSION:
+    if run is None or run.workflow_version not in ART_WORKFLOW_VERSIONS:
         raise DomainError("ART_REVIEW_SCOPE", "美术审核不属于原生成运行", 409)
     delivery = delivered(db, run.id)
     if (
@@ -127,7 +132,7 @@ def saved_review(db: Session, delivery: ArtDelivery, resume: dict) -> bool:
 
 def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
     run = require_run(db, run_id, actor)
-    if run.workflow_version != ART_WORKFLOW_VERSION:
+    if run.workflow_version not in ART_WORKFLOW_VERSIONS:
         raise DomainError("NOT_FOUND", "此运行没有美术提案任务", 404)
     operations = []
     for loop in creation_loops(db, run.id, "art_director"):
@@ -142,15 +147,26 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
                 "human_request": outcome.get("human_request")
                 if loop.status == "WAITING_HUMAN"
                 else None,
+                "waiting_for": outcome.get("waiting_for")
+                if loop.status == "WAITING_EXTERNAL"
+                else None,
                 "stop_code": outcome.get("stop_code"),
                 "result": outcome.get("result"),
             }
         )
+    from arclight.application.agent_external_waits import waiting_for_external
+    from arclight.application.art_concept_jobs import concept_jobs, concept_round
+
     delivery = delivered(db, run.id)
+    episode = db.get(Episode, run.episode_id)
+    assert episode is not None
     return {
         "run_id": str(run.id),
+        "project_id": str(episode.project_id),
         "task": run.input_json["art_direction"]["task"],
         "operations": operations,
         "delivery": delivery.model_dump(mode="json") if delivery else None,
-        "can_cancel": waiting_for_answer(db, run, "art_director"),
+        "concept_plan": run.input_json["art_direction"].get("concept"),
+        "concept_rounds": [concept_round(db, job) for job in concept_jobs(db, run_id=run.id)],
+        "can_cancel": waiting_for_answer(db, run, "art_director") or waiting_for_external(db, run),
     }

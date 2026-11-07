@@ -10,6 +10,7 @@ from uuid import UUID, uuid4, uuid5
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from arclight.application.art_concept_jobs import concept_origin
 from arclight.application.asset_objects import object_key, write_object
 from arclight.application.audit import audit
 from arclight.application.dependencies import attach_output, lock_dependency_graph
@@ -32,11 +33,21 @@ from arclight.providers.media_outputs import MediaOutputProvider
 from arclight.providers.media_submission import MediaSubmission
 
 
-def require_candidate_review(version: AssetVersion) -> None:
-    # QA will write exact-version evidence through its own service. Until then,
-    # these candidates fail closed; client metadata cannot declare a review pass.
-    if version.metadata_json.get("required_review") == "CONTINUITY":
+def require_candidate_review(version: AssetVersion, db: Session | None = None) -> None:
+    gate = version.metadata_json.get("required_review")
+    if gate == "CONTINUITY":
         raise DomainError("CONTINUITY_REVIEW_REQUIRED", "候选图片须先完成必需的连续性审查", 409)
+    if gate == "ART_PROPOSAL":
+        from arclight.application.art_concept_assets import (
+            approved_concept_reference,
+            concept_candidate,
+        )
+
+        if db is None or not approved_concept_reference(db, version):
+            raise DomainError(
+                "ART_REFERENCE_APPROVAL_REQUIRED", "概念图须经美术提案精确人工批准及授权确认", 409
+            )
+        concept_candidate(db, None, version.id)
 
 
 def candidate_asset(db: Session, job: GenerationJob) -> VisualAsset:
@@ -108,7 +119,7 @@ def append_candidate_version(
             "dependency_manifest_id": str(job.input_manifest_id),
             "generation_job_id": str(job.id),
             "generation_attempt_id": str(attempt.id),
-            "required_review": "CONTINUITY",
+            "required_review": "ART_PROPOSAL" if concept_origin(db, job) else "CONTINUITY",
             "target_changed_since_submission": changed_target,
             "replaces_version_id": str(replaces_version_id) if replaces_version_id else None,
             "asset_snapshot": {

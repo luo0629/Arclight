@@ -198,6 +198,7 @@ def action_usage(db: Session, root_run_id: UUID) -> dict:
     """Internal projection of authoritative receipts; no second monetary ledger."""
     actions = list(db.scalars(select(AgentAction).where(AgentAction.root_run_id == root_run_id)))
     actual = pending = Decimal("0")
+    represented_media_jobs: set[UUID] = set()
     unknown_cost = False
     for action in actions:
         if action.gateway_call_id is None:
@@ -205,6 +206,12 @@ def action_usage(db: Session, root_run_id: UUID) -> dict:
         call = db.get(GatewayCall, action.gateway_call_id)
         assert call is not None
         outcome = media_outcome(db, call) if call.generation_attempt_id else None
+        if call.generation_attempt_id:
+            from arclight.persistence.generation import GenerationAttempt
+
+            attempt = db.get(GenerationAttempt, call.generation_attempt_id)
+            if attempt:
+                represented_media_jobs.add(attempt.job_id)
         receipt = latest_receipt(db, call.id)
         cost = (
             outcome["usage"]["actual_cost"]
@@ -219,6 +226,13 @@ def action_usage(db: Session, root_run_id: UUID) -> dict:
             pending += call.maximum_cost
         else:
             unknown_cost = True
+    from arclight.application.art_concept_jobs import concept_costs
+
+    concept_actual, concept_pending = concept_costs(
+        db, root_run_id, exclude_jobs=represented_media_jobs
+    )
+    actual += concept_actual
+    pending += concept_pending
     return {
         "actions": actions,
         "actual_cost": actual,

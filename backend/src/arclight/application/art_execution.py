@@ -25,10 +25,15 @@ from arclight.application.production_versions import text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
-from arclight.domain.agent_state import AgentStepStatus, restore_agent_state, transition_agent_step
+from arclight.domain.agent_state import (
+    AgentStateError,
+    AgentStepStatus,
+    restore_agent_state,
+    transition_agent_step,
+)
 from arclight.domain.art_direction import ArtDirectionTask
 from arclight.domain.art_generation import ArtDelivery
-from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
+from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import Episode, WorkflowRun
 from arclight.workflows.art import build_art_graph
@@ -159,7 +164,7 @@ def execute_art(
 ) -> bool:
     with factory() as db:
         run = db.get(WorkflowRun, run_id)
-        if run is None or run.workflow_version != ART_WORKFLOW_VERSION:
+        if run is None or run.workflow_version not in ART_WORKFLOW_VERSIONS:
             return False
     try:
         with factory.begin() as db:
@@ -212,6 +217,8 @@ def execute_art(
         if error.code == "SCREENWRITER_DELIVERY_STALE":
             return True
         fail_workflow(factory, run_id, revision, error.code)
+    except AgentStateError:
+        fail_workflow(factory, run_id, revision, "RUN_STATE_INVALID")
     except Exception as error:
         logger.error("art_failed run_id=%s error_type=%s", run_id, type(error).__name__)
         fail_workflow(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")

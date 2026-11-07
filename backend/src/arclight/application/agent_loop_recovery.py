@@ -21,6 +21,7 @@ from arclight.application.agent_runtime import _AgentRuntime
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import (
     AgentToolRegistry,
+    agent_tool_is_pending,
     available_agent_tools,
     execute_agent_tool,
 )
@@ -34,6 +35,7 @@ from arclight.domain.agent_runtime import (
     AgentDecision,
     AgentHumanDecision,
     AgentLoopResult,
+    AgentToolWait,
     HumanDecisionRequest,
 )
 from arclight.domain.agent_tools import AgentToolCall, AgentToolFeedback
@@ -159,9 +161,28 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
         action_id, saved = self.store.plan(
             request.idempotency_key, "TOOL", request.model_dump(mode="json")
         )
+        wait_key = "wait-" + digest({"tool_action": request.idempotency_key})
+        with self.factory.begin() as db:
+            _, _, actor = self._context(db)
+            waited = (
+                db.scalar(
+                    select(AgentLoopAction.id).where(
+                        AgentLoopAction.loop_id == self.store.loop_id,
+                        AgentLoopAction.action_key == wait_key,
+                    )
+                )
+                is not None
+            )
+            pending = saved is None and agent_tool_is_pending(
+                db, self.registry, self.seed.agent_name, request, actor, self.seed.stage
+            )
+        if waited or pending:
+            # Keep every previous interrupt in order when a batched tool node replays.
+            # A separate immutable intent preserves the wait after the receipt is saved.
+            self.store.plan(wait_key, "WAIT", request.model_dump(mode="json"))
+            interrupt(AgentToolWait(request=request).model_dump(mode="json"))
         with self.factory.begin() as db:
             self._context(db)
-            # The existing executor rechecks current grants even when replaying a receipt.
             feedback = execute_agent_tool(
                 db, self.registry, self.seed.agent_name, request, step_key=step_key
             )
@@ -222,6 +243,32 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
         return self._stamped(state, {"request": updated.model_dump(mode="json"), "outcome": None})
 
 
+def _external_wait(snapshot) -> AgentToolCall | None:
+    for paused in snapshot.interrupts:
+        value = paused.value
+        if isinstance(value, dict) and value.get("resource_type") == "agent_tool_wait":
+            return AgentToolWait.model_validate(value).request
+    return None
+
+
+def _waiting_outcome(runtime: _PersistentRuntime, snapshot, request: AgentToolCall) -> dict:
+    with runtime.factory.begin() as db:
+        runtime._context(db)
+        runtime.store.verify(db, snapshot.values)
+        intent = db.scalar(
+            select(AgentLoopAction).where(
+                AgentLoopAction.loop_id == runtime.store.loop_id,
+                AgentLoopAction.action_key == request.idempotency_key,
+                AgentLoopAction.kind == "TOOL",
+            )
+        )
+        if intent is None or intent.request_json != request.model_dump(mode="json"):
+            raise DomainError("AGENT_ACTION_CONFLICT", "外部等待与持久行动不一致", 409)
+    return runtime._outcome(
+        snapshot.values, status="WAITING_EXTERNAL", waiting_for=request.model_dump(mode="json")
+    )
+
+
 def _execute[T: BaseModel](
     runtime: _AgentRuntime[T],
     loop_id: UUID,
@@ -268,12 +315,30 @@ def _execute[T: BaseModel](
                 store.verify(db, snapshot.values)
             value = None
             if snapshot.interrupts:
-                waiting = snapshot.values["outcome"]
-                stored = store.decision(UUID(waiting["question_id"]))
-                if stored is None:
-                    store.finish("WAITING_HUMAN", waiting)
-                    return persistent.outcome_model.model_validate(waiting)
-                value = Command(resume=str(stored[0]))
+                external = _external_wait(snapshot)
+                if external is not None:
+                    waiting = _waiting_outcome(persistent, snapshot, external)
+                    with runtime.factory.begin() as db:
+                        _, _, current_actor = persistent._context(db)
+                        pending = agent_tool_is_pending(
+                            db,
+                            runtime.registry,
+                            runtime.seed.agent_name,
+                            external,
+                            current_actor,
+                            runtime.seed.stage,
+                        )
+                    if pending:
+                        store.finish("WAITING_EXTERNAL", waiting)
+                        return persistent.outcome_model.model_validate(waiting)
+                    value = Command(resume="external-ready")
+                else:
+                    waiting = snapshot.values["outcome"]
+                    stored = store.decision(UUID(waiting["question_id"]))
+                    if stored is None:
+                        store.finish("WAITING_HUMAN", waiting)
+                        return persistent.outcome_model.model_validate(waiting)
+                    value = Command(resume=str(stored[0]))
         else:
             value = AgentLoopState(
                 request=runtime.seed.model_dump(mode="json"), observed_round=-1, model_turns=0
@@ -289,6 +354,12 @@ def _execute[T: BaseModel](
             store.stamp({}, dict(value))
         try:
             state = graph.invoke(value, config, durability="sync")
+            snapshot = graph.get_state(config)
+            external = _external_wait(snapshot)
+            if external is not None:
+                outcome = _waiting_outcome(persistent, snapshot, external)
+                store.finish("WAITING_EXTERNAL", outcome)
+                return persistent.outcome_model.model_validate(outcome)
             outcome = state["outcome"]
             assert outcome is not None
             status = "WAITING_HUMAN" if outcome["status"] == "HUMAN_REVIEW" else outcome["status"]

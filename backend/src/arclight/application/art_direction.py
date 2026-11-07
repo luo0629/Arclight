@@ -71,7 +71,9 @@ def art_direction_registry(settings: Settings) -> AgentToolRegistry:
     registry = build_agent_tool_registry(settings=settings)
     investigate, compare = registry.get("investigate_art"), registry.get(COMPARISON_TOOL)
     assert investigate is not None and compare is not None
-    return AgentToolRegistry([investigate, compare])
+    from arclight.application.art_concepts import concept_tools
+
+    return AgentToolRegistry([investigate, compare, *concept_tools(settings)])
 
 
 def validate_art_direction(
@@ -84,7 +86,10 @@ def validate_art_direction(
     permitted = available_agent_tools(
         db, art_direction_registry(settings), run.id, "art_director", actor, "storyboard"
     )
-    if {tool.name for tool in permitted} != {"investigate_art", COMPARISON_TOOL}:
+    required = {"investigate_art", COMPARISON_TOOL}
+    if run.input_json.get("art_direction", {}).get("concept"):
+        required |= {"request_art_concepts", "observe_art_concepts"}
+    if {tool.name for tool in permitted} != required:
         raise DomainError("USER_NOT_AUTHORIZED", "美术决策工具授权已撤销", 403)
     validate_delivery(db, settings, run, actor, result)
 
@@ -129,20 +134,27 @@ def propose_art(
         previous = db.scalar(
             select(AgentLoop).where(
                 AgentLoop.run_id == run.id,
-                AgentLoop.operation_sha256 == operation_sha256(run.id),
+                AgentLoop.operation_sha256 == operation_sha256(run.id, db=db),
             )
         )
+        from arclight.domain.art_concepts import CONCEPT_DIRECTION_VERSION, CONCEPT_PROMPT
+
+        concept = run.input_json.get("art_direction", {}).get("concept")
+        direction_version = CONCEPT_DIRECTION_VERSION if concept else DIRECTION_VERSION
         request = AgentModelRequest(
             run_id=run.id,
             agent_name="art_director",
             stage="storyboard",
-            operation_key=DIRECTION_VERSION,
-            agent_version=DIRECTION_VERSION,
-            prompt_version=DIRECTION_VERSION,
+            operation_key=direction_version,
+            agent_version=direction_version,
+            prompt_version=direction_version,
             result_schema_version=DIRECTION_VERSION,
-            system_instruction=DIRECTION_PROMPT,
+            system_instruction=DIRECTION_PROMPT + (CONCEPT_PROMPT if concept else ""),
             max_tokens=16000,
-            messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
+            messages=[
+                AgentUserMessage(data=seed.model_dump(mode="json")),
+                *([AgentUserMessage(data={"concept_plan": concept})] if concept else []),
+            ],
         )
         if previous:
             saved = AgentModelRequest.model_validate(previous.seed_json)
@@ -171,7 +183,7 @@ def resume_art_direction(
     with factory.begin() as db:
         loop = checked_loop(db, loop_id, actor=actor)
         run_id = loop.run_id
-        if loop.operation_sha256 != operation_sha256(run_id):
+        if loop.operation_sha256 != operation_sha256(run_id, db=db):
             raise DomainError("ART_DIRECTION_INVALID", "只能恢复原美术决策循环", 409)
     return resume_agent_loop(
         factory,

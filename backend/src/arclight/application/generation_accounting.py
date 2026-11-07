@@ -47,6 +47,9 @@ def reserve_next(db: Session, job: GenerationJob, amount: Decimal) -> Generation
             return row
     else:
         sequence = 1
+    from arclight.application.art_concept_jobs import enforce_concept_reservation
+
+    enforce_concept_reservation(db, job, amount)
     row = GenerationBudgetReservation(
         job_id=job.id,
         attempt_no=job.attempt_count + 1,

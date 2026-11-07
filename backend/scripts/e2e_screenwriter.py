@@ -289,7 +289,7 @@ def install():
         if run.workflow_version in {
             SCREENWRITER_VERSION,
             SCREENWRITER_OUTLINE_VERSION,
-        } | REVISION_WORKFLOWS | DIRECTOR_VERSIONS | {"art-proposal/1.0"}:
+        } | REVISION_WORKFLOWS | DIRECTOR_VERSIONS | {"art-proposal/1.0", "art-proposal/2.0"}:
             settings = settings.model_copy(
                 update={
                     "provider": "openai_compatible",

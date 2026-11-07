@@ -187,6 +187,9 @@ def compare_art_proposal(db: Session, proposal: ArtProposal, actor: str) -> ArtC
         changes = [
             change for design in option.designs for change in _design_changes(db, project, design)
         ]
+        from arclight.application.art_concept_assets import reference_changes
+
+        changes.extend(reference_changes(db, proposal, option))
         if len(changes) > 512:
             raise DomainError("ART_COMPARISON_TOO_LARGE", "比较字段过多，请缩小提案范围", 422)
         options.append(ArtOptionComparison(option_id=option.option_id, changes=changes))

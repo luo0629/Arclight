@@ -153,6 +153,9 @@ def dispatch_outbox() -> None:
     settings = get_settings()
     engine = build_engine(settings)
     try:
+        from arclight.application.agent_external_waits import queue_ready_external
+
+        queue_ready_external(session_factory(engine, settings), settings)
         with session_factory(engine, settings).begin() as db:
             # QUEUED 是业务事实；即使 Broker 丢失已发布消息，也会周期性重新投递。
             # 重复投递由 revision + 状态 + 运行行锁消除，不能宣称外部模型 exactly-once。

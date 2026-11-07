@@ -12,6 +12,7 @@ import usePagedList from "@/hooks/use-paged-list";
 import { useAuth } from "@/features/auth/auth-context";
 import { api, json, message } from "@/lib/api/client";
 import type { Episode, ContentVersion, Run } from "@/types/api";
+import ArtConceptFields, { type ConceptPlan } from "./art-concept-fields";
 import ArtProgress, {
   type ArtDelivery,
 } from "@/features/tasks/components/art-progress";
@@ -139,6 +140,7 @@ export default function ArtGeneration({
         <EpisodeGeneration
           key={episodeId}
           episodeId={episodeId}
+          projectId={projectId}
           storageKey={storageKey}
           writable={writable}
           busy={busy}
@@ -175,6 +177,7 @@ export default function ArtGeneration({
 
 function EpisodeGeneration({
   episodeId,
+  projectId,
   storageKey,
   writable,
   busy,
@@ -182,6 +185,7 @@ function EpisodeGeneration({
   onRun,
 }: {
   episodeId: string;
+  projectId: string;
   storageKey: string;
   writable: boolean;
   busy: boolean;
@@ -196,6 +200,7 @@ function EpisodeGeneration({
   const [goal, setGoal] = useState("");
   const [constraints, setConstraints] = useState("");
   const [minimum, setMinimum] = useState(2);
+  const [conceptPlan, setConceptPlan] = useState<ConceptPlan | null>(null);
   const [notice, setNotice] = useState("");
   const pending = useRef<{ key: string; fingerprint: string } | null>(null);
   useEffect(() => {
@@ -213,6 +218,7 @@ function EpisodeGeneration({
         setGoal(value.body.task.visual_goal);
         setConstraints(value.body.task.constraints.join("\n"));
         setMinimum(value.body.task.minimum_reference_images);
+        setConceptPlan(value.body.concept_plan ?? null);
         pending.current = {
           key: value.key,
           fingerprint: JSON.stringify(value.body),
@@ -242,6 +248,7 @@ function EpisodeGeneration({
           ],
           minimum_reference_images: minimum,
         },
+        ...(conceptPlan ? { concept_plan: conceptPlan } : {}),
       };
       const fingerprint = JSON.stringify(body);
       if (pending.current?.fingerprint !== fingerprint)
@@ -348,6 +355,12 @@ function EpisodeGeneration({
                 范围 0–8。文字视觉方案可设为 0；必要参考不足时会请求补充。
               </p>
             </Field>
+            <ArtConceptFields
+              projectId={projectId}
+              value={conceptPlan}
+              onChange={setConceptPlan}
+              disabled={busy}
+            />
             <Button type="submit" disabled={busy || !scriptId || !goal.trim()}>
               开始美术生成
             </Button>

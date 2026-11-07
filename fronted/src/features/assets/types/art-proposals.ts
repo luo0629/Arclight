@@ -185,6 +185,8 @@ export function artStatus(row: ArtRecord) {
 
 export function changeLabel(change: ArtChange) {
   const labels: Record<string, string> = {
+    reference: "概念图参考",
+    approval_and_rights: "批准精确候选并确认使用授权",
     asset: "新建设定",
     name: "名称",
     metadata: "资料",
@@ -211,6 +213,14 @@ export function valueText(value: unknown): string {
   if (value === null || value === undefined) return "无";
   if (typeof value !== "object") return String(value) || "空白";
   if (Array.isArray(value)) return value.map(valueText).join("、") || "无";
+  if ("asset_version_id" in value && "rights_confirmed" in value) {
+    const reference = value as {
+      asset_version_id: string;
+      rights_confirmed: boolean;
+      status: string;
+    };
+    return `精确候选 ${reference.asset_version_id}；${reference.rights_confirmed ? "批准作为正式参考并确认使用授权" : "尚未批准作为正式参考，使用授权待确认"}`;
+  }
   const labels: Record<string, string> = {
     name: "名称",
     metadata: "资料",
