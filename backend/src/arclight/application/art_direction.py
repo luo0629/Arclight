@@ -67,7 +67,7 @@ def comparison_tool(settings: Settings) -> AgentToolDefinition:
     )
 
 
-def _registry(settings: Settings) -> AgentToolRegistry:
+def art_direction_registry(settings: Settings) -> AgentToolRegistry:
     registry = build_agent_tool_registry(settings=settings)
     investigate, compare = registry.get("investigate_art"), registry.get(COMPARISON_TOOL)
     assert investigate is not None and compare is not None
@@ -82,7 +82,7 @@ def validate_art_direction(
     validate_publication(db, run.id)
     actor = execution_actor(db, run)
     permitted = available_agent_tools(
-        db, _registry(settings), run.id, "art_director", actor, "storyboard"
+        db, art_direction_registry(settings), run.id, "art_director", actor, "storyboard"
     )
     if {tool.name for tool in permitted} != {"investigate_art", COMPARISON_TOOL}:
         raise DomainError("USER_NOT_AUTHORIZED", "美术决策工具授权已撤销", 403)
@@ -153,7 +153,7 @@ def propose_art(
         factory,
         settings,
         request,
-        _registry(settings),
+        art_direction_registry(settings),
         ArtDirectionResult,
         limits=limits,
         validate_result=lambda db, result: validate_art_direction(db, settings, run_id, result),
@@ -178,7 +178,7 @@ def resume_art_direction(
         settings,
         loop_id,
         actor,
-        _registry(settings),
+        art_direction_registry(settings),
         ArtDirectionResult,
         decision=decision,
         validate_result=lambda db, result: validate_art_direction(db, settings, run_id, result),

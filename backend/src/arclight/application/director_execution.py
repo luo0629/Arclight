@@ -33,13 +33,13 @@ class DirectorWaiting(RuntimeError):
 def generate_storyboard(
     factory: sessionmaker[Session], settings: Settings, run_id: UUID, revision: int
 ) -> dict:
-    from arclight.application.screenwriter_execution import _active, _waiting
+    from arclight.application.agent_workflows import active_workflow, wait_for_agent
 
     with factory.begin() as db:
-        run = _active(db, run_id, revision)
+        run = active_workflow(db, run_id, revision)
         actor = execution_actor(db, run)
     outcome = create_plan(factory, settings, run_id, actor)
-    if _waiting(factory, run_id, revision, outcome, "director"):
+    if wait_for_agent(factory, run_id, revision, outcome, "director"):
         raise DirectorWaiting
     assert outcome.result is not None and outcome.loop_id is not None
     with factory() as db:
@@ -55,7 +55,7 @@ def generate_storyboard(
             part = create_working_fragment(
                 factory, settings, run_id, outcome.loop_id, outcome.result, scene_no, working
             )
-            if _waiting(factory, run_id, revision, part, "director"):
+            if wait_for_agent(factory, run_id, revision, part, "director"):
                 raise DirectorWaiting
             assert part.result is not None
             working.append(part.result)
@@ -66,7 +66,7 @@ def generate_storyboard(
             outcome.result,
             assemble_working(outcome.loop_id, outcome.result, working),
         )
-        if _waiting(factory, run_id, revision, checked, "director"):
+        if wait_for_agent(factory, run_id, revision, checked, "director"):
             raise DirectorWaiting
         assert content is not None
         return content.model_dump(mode="json")
@@ -75,7 +75,7 @@ def generate_storyboard(
         fragment = create_fragment(
             factory, settings, run_id, outcome.loop_id, outcome.result, scene_no, fragments
         )
-        if _waiting(factory, run_id, revision, fragment, "director"):
+        if wait_for_agent(factory, run_id, revision, fragment, "director"):
             raise DirectorWaiting
         assert fragment.result is not None
         fragments.append(fragment.result)
@@ -85,12 +85,12 @@ def generate_storyboard(
 def execute_director(
     factory: sessionmaker[Session], settings: Settings, run_id: UUID, revision: int
 ) -> bool:
-    from arclight.application.screenwriter_execution import (
-        ScreenwriterExecutionDeferred,
-        _fail,
-        _review_graph,
-        _waiting,
+    from arclight.application.agent_workflows import (
+        WorkflowExecutionDeferred,
+        fail_workflow,
+        wait_for_agent,
     )
+    from arclight.application.screenwriter_execution import _review_graph
 
     with factory() as db:
         run = db.get(WorkflowRun, run_id)
@@ -135,16 +135,16 @@ def execute_director(
         # persistent Runtime protects planning I/O before that lease exists.
         if candidate is None:
             outcome = create_plan(factory, settings, run_id, actor)
-            if _waiting(factory, run_id, revision, outcome, "director"):
+            if wait_for_agent(factory, run_id, revision, outcome, "director"):
                 return True
         _review_graph(factory, settings, run_id, revision)
     except DomainError as exc:
         if exc.code in {"AGENT_LOOP_BUSY", "AGENT_EXECUTION_LOST"}:
-            raise ScreenwriterExecutionDeferred(exc.code) from None
+            raise WorkflowExecutionDeferred(exc.code) from None
         if exc.code == "SCREENWRITER_DELIVERY_STALE":
             return True
-        _fail(factory, run_id, revision, exc.code)
+        fail_workflow(factory, run_id, revision, exc.code)
     except Exception as exc:
         logger.error("director_failed run_id=%s error_type=%s", run_id, type(exc).__name__)
-        _fail(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")
+        fail_workflow(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")
     return True

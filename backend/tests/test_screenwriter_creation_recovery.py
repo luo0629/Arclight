@@ -68,7 +68,7 @@ def test_answer_and_outbox_roll_back_together(
     run_id = start(client, episode)
     run_once(client, settings, run_id)
     question = progress(client, run_id)[-1]
-    import arclight.application.screenwriter_progress as service
+    import arclight.application.agent_workflows as service
 
     def die(*args):
         raise RuntimeError("isolated enqueue failure")

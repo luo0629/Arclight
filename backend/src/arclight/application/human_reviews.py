@@ -50,6 +50,10 @@ def _authority(db: Session, row: HumanReviewRequest, actor: str, *, owner: bool)
     from arclight.application.production_events import begin_serialized
 
     begin_serialized(db)
+    if row.handler == "ART_PROPOSAL":
+        from arclight.application.model_gateway import lock_gate
+
+        lock_gate(db)
     snapshot = ReviewSnapshot.model_validate(row.snapshot_json)
     if snapshot.loop_id is not None:
         from arclight.application.agent_loop_store import checked_loop

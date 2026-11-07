@@ -185,7 +185,8 @@ export type Run = {
   status: string;
   revision: number;
   pending_review: {
-    resource_type: "script" | "storyboard";
+    resource_type: "script" | "storyboard" | "art_proposal";
+    review_request_id?: string;
     version_id: string;
   } | null;
   error_code: string | null;

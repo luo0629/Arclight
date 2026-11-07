@@ -13,6 +13,12 @@ from arclight.application.agent_tools import (
     build_agent_tool_registry,
     grant_agent_tools,
 )
+from arclight.application.agent_workflows import (
+    creation_loops as creation_loops,
+)
+from arclight.application.agent_workflows import (
+    waiting_for_answer as waiting_for_answer,
+)
 from arclight.application.commands import require_run
 from arclight.application.content_references import validate_script_assets
 from arclight.core.config import Settings
@@ -32,7 +38,7 @@ from arclight.domain.screenwriter_creation import (
 )
 from arclight.domain.screenwriter_planning import PLAN_VERSION, EpisodePlan, ScreenwriterPlan
 from arclight.domain.screenwriter_revision import PATCH_TOOL, REVISION_WORKFLOWS
-from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision, AgentLoopQuestion
+from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import Episode, WorkflowRun
 
 PROFESSIONAL_VERSIONS = (
@@ -62,42 +68,6 @@ def creation_attempt(run: WorkflowRun) -> int:
         .get("screenwriter.creation", {})
         .get("attempt", 0)
     )
-
-
-def creation_loops(db: Session, run_id: UUID, agent_name: str = "screenwriter") -> list[AgentLoop]:
-    return list(
-        db.scalars(
-            select(AgentLoop)
-            .where(
-                AgentLoop.run_id == run_id,
-                AgentLoop.seed_json["agent_name"].as_string() == agent_name,
-            )
-            .order_by(AgentLoop.created_at, AgentLoop.id)
-        )
-    )
-
-
-def waiting_for_answer(db: Session, run: WorkflowRun, agent_name: str = "screenwriter") -> bool:
-    """Cancellation needs no model admission, but cannot interrupt an answered question."""
-    from arclight.domain.director_creation import DIRECTOR_VERSIONS
-
-    versions = DIRECTOR_VERSIONS if agent_name == "director" else PROFESSIONAL_VERSIONS
-    if run.workflow_version not in versions or run.status != "RUNNING":
-        return False
-    for loop in creation_loops(db, run.id, agent_name):
-        identity = (loop.outcome_json or {}).get("question_id")
-        if loop.status != "WAITING_HUMAN" or identity is None:
-            continue
-        question = db.get(AgentLoopQuestion, UUID(identity))
-        if (
-            question is not None
-            and question.loop_id == loop.id
-            and not db.scalar(
-                select(AgentLoopDecision.id).where(AgentLoopDecision.question_id == question.id)
-            )
-        ):
-            return True
-    return False
 
 
 def operation(loop: AgentLoop) -> str:

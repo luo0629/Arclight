@@ -24,6 +24,7 @@ from arclight.application.story_sources import (
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
+from arclight.domain.art_direction import ArtDirectionTask
 from arclight.domain.director_creation import (
     DIRECTOR_VERSION,
     DIRECTOR_VERSIONS,
@@ -142,18 +143,28 @@ def start_run(
     revision_rounds: int | None = None,
     professional_director: bool = False,
     director_revision_rounds: int | None = None,
+    art_task: ArtDirectionTask | None = None,
 ) -> WorkflowRun:
     options = ScreenwriterRevisionOptions(
-        professional=professional or professional_director,
+        professional=professional or professional_director or art_task is not None,
         agent_limits=agent_limits,
         revision_rounds=revision_rounds,
     )
     DirectorRevisionOptions(
         professional=professional_director, director_revision_rounds=director_revision_rounds
     )
+    if art_task is not None and (
+        script_version_id is None
+        or professional
+        or professional_director
+        or revision_rounds is not None
+        or director_revision_rounds is not None
+        or rebuild_from_version_id is not None
+    ):
+        raise DomainError("ART_TASK_INVALID", "美术任务须从精确批准剧本独立发起", 422)
     if professional_director and script_version_id is None and not professional:
         raise DomainError("DIRECTOR_TASK_INVALID", "专业双审核须选择专业编剧", 422)
-    if professional or professional_director:
+    if professional or professional_director or art_task is not None:
         from arclight.application.model_gateway import lock_gate
 
         lock_gate(db)
@@ -191,6 +202,11 @@ def start_run(
         }
         if director_revision_rounds is not None:
             payload["director_revision_rounds"] = director_revision_rounds
+    if art_task is not None:
+        payload |= {
+            "art_task": art_task.model_dump(mode="json"),
+            "agent_limits": options.frozen_limits().model_dump(mode="json"),
+        }
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -234,7 +250,12 @@ def start_run(
         if script is None or script.episode_id != episode_id:
             raise DomainError("NOT_FOUND", "指定剧本版本不存在", 404)
         if script.status != AssetStatus.APPROVED:
-            raise DomainError("SCRIPT_NOT_APPROVED", "只能从已批准的剧本版本生成分镜")
+            raise DomainError(
+                "SCRIPT_NOT_APPROVED",
+                "只能从已批准的剧本版本生成美术提案"
+                if art_task is not None
+                else "只能从已批准的剧本版本生成分镜",
+            )
         source = ScriptContent.model_validate(script.content_json)
         validate_script_assets(db, project.id, source)
         validate_duration(
@@ -282,7 +303,15 @@ def start_run(
         inputs["director"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
         if director_revision_rounds is not None:
             inputs["director"]["revision_rounds"] = director_revision_rounds
-    if professional_director:
+    if art_task is not None:
+        from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
+
+        inputs["art_direction"] = {
+            "task": art_task.model_dump(mode="json"),
+            "agent_limits": options.frozen_limits().model_dump(mode="json"),
+        }
+        version = ART_WORKFLOW_VERSION
+    elif professional_director:
         version = (
             DIRECTOR_VERSION
             if script_version_id is not None
@@ -309,7 +338,11 @@ def start_run(
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=fingerprint,
-        workflow_type="script_storyboard" if script_version_id is None else "storyboard",
+        workflow_type="art_proposal"
+        if art_task is not None
+        else "script_storyboard"
+        if script_version_id is None
+        else "storyboard",
         workflow_version=version,
         input_json=inputs,
     )
@@ -329,6 +362,10 @@ def start_run(
         from arclight.application.director_creation import authorize_director
 
         authorize_director(db, run, actor, settings)
+    if art_task is not None:
+        from arclight.application.art_workflow import authorize_art
+
+        authorize_art(db, run, actor, settings)
     if story_source is not None:
         bind_source(db, run, story_source.id)
     db.add(
@@ -427,7 +464,9 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     from arclight.application.screenwriter_creation import waiting_for_answer
 
     if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW] and not (
-        waiting_for_answer(db, run) or waiting_for_answer(db, run, "director")
+        waiting_for_answer(db, run)
+        or waiting_for_answer(db, run, "director")
+        or waiting_for_answer(db, run, "art_director")
     ):
         raise DomainError("NOT_CANCELLABLE", "仅排队、等待审核或等待创作回答的工作流可以取消")
     agent_state = None
@@ -471,6 +510,13 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
 def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     if run.status != RunStatus.FAILED:
         raise DomainError("NOT_RETRYABLE", "只有失败的工作流可以显式重试")
+    from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
+
+    if run.workflow_version == ART_WORKFLOW_VERSION:
+        from arclight.application.agent_workflows import creation_loops
+
+        if any(loop.status == "STOPPED" for loop in creation_loops(db, run.id, "art_director")):
+            raise DomainError("ART_TASK_STOPPED", "美术决策已停止，请修正目标后新建任务", 409)
     db.execute(select(Episode).where(Episode.id == run.episode_id).with_for_update(key_share=True))
     active = db.scalar(
         select(WorkflowRun).where(

@@ -9,6 +9,12 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_loop_store import AgentLoopStore, claim_loop, keep_loop_alive
 from arclight.application.agent_runtime_state import scope_for_run
+from arclight.application.agent_workflows import (
+    WorkflowExecutionDeferred,
+    active_workflow,
+    fail_workflow,
+    wait_for_agent,
+)
 from arclight.application.artifacts import ArtifactStore, save_script_candidate
 from arclight.application.commands import emit
 from arclight.application.context_consumption import consume_context
@@ -28,20 +34,17 @@ from arclight.application.screenwriter_creation import (
 from arclight.application.story_outline import save_outline_candidate
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.agent_state import (
     AgentRunState,
-    AgentStateError,
     AgentStepId,
     restore_agent_state,
-    terminate_agent_state,
     transition_agent_step,
 )
 from arclight.domain.screenwriter_creation import SCREENWRITER_OUTLINE_VERSION, ScriptFragment
 from arclight.domain.screenwriter_planning import EpisodePlan, SeasonPlan
 from arclight.domain.screenwriter_revision import REVISION_WORKFLOWS
 from arclight.persistence.agent_loops import AgentLoop
-from arclight.persistence.models import Episode, Script, WorkflowEvent, WorkflowRun
+from arclight.persistence.models import Episode, Script, WorkflowRun
 from arclight.providers.context import bind_contexts
 from arclight.providers.text import build_provider
 from arclight.workflows.checkpoints import open_checkpointer
@@ -49,59 +52,14 @@ from arclight.workflows.production import build_graph
 
 logger = logging.getLogger(__name__)
 
-
-class ScreenwriterExecutionDeferred(RuntimeError):
-    """Keep a broker delivery recoverable while an existing worker lease is alive."""
-
-
-def _active(db: Session, run_id: UUID, revision: int) -> WorkflowRun:
-    lock_gate(db)
-    run = db.get(WorkflowRun, run_id, populate_existing=True, with_for_update=True)
-    if run is None or run.status != "RUNNING" or run.revision != revision:
-        raise DomainError("SCREENWRITER_DELIVERY_STALE", "此执行投递已失效", 409)
-    validate_publication(db, run_id)
-    return run
-
-
-def _waiting(
-    factory: sessionmaker[Session],
-    run_id: UUID,
-    revision: int,
-    outcome: AgentLoopResult,
-    agent_name: str = "screenwriter",
-) -> bool:
-    if outcome.status == "COMPLETED":
-        return False
-    if outcome.status == "STOPPED":
-        raise DomainError(
-            outcome.stop_code or f"{agent_name.upper()}_STOPPED",
-            "专业创作已停止，请查看问题或显式重试",
-            409,
-        )
-    with factory.begin() as db:
-        run = _active(db, run_id, revision)
-        run.pending_review = None
-        previous = db.scalars(
-            select(WorkflowEvent).where(
-                WorkflowEvent.run_id == run.id, WorkflowEvent.event_type == f"{agent_name}.question"
-            )
-        )
-        if not any(
-            event.payload_json.get("question_id") == str(outcome.question_id) for event in previous
-        ):
-            emit(
-                db,
-                run,
-                f"{agent_name}.question",
-                {"loop_id": str(outcome.loop_id), "question_id": str(outcome.question_id)},
-            )
-    return True
+# Preserve the existing import while all workflows share the same exception type.
+ScreenwriterExecutionDeferred = WorkflowExecutionDeferred
 
 
 def _finish_outline(factory: sessionmaker[Session], run_id: UUID, revision: int, outcome) -> None:
     assert outcome.result is not None and isinstance(outcome.result.plan, SeasonPlan)
     with factory.begin() as db:
-        run = _active(db, run_id, revision)
+        run = active_workflow(db, run_id, revision)
         artifact_id, version = save_outline_candidate(db, run, outcome.result.plan.outline)
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
@@ -132,7 +90,7 @@ def _review_graph(
     # The completed plan journal supplies a fenced lease for the original review graph.
     # No transaction or row lock spans graph execution / provider I/O.
     with factory.begin() as db:
-        run = _active(db, run_id, revision)
+        run = active_workflow(db, run_id, revision)
         assert run.agent_state_json is not None
         plan_ref = run.agent_state_json["extensions"][
             "director.planning" if run.workflow_type == "storyboard" else "screenwriter.planning"
@@ -156,7 +114,7 @@ def _review_graph(
         def save_state(updated: AgentRunState) -> None:
             with factory.begin() as db:
                 store.guard(db, execution=False)
-                current = _active(db, run_id, revision)
+                current = active_workflow(db, run_id, revision)
                 saved = restore_agent_state(current.agent_state_json, None, scope)
                 if updated != saved and updated.revision != saved.revision + 1:
                     raise DomainError(
@@ -167,7 +125,7 @@ def _review_graph(
         def current_state() -> AgentRunState:
             with factory.begin() as db:
                 store.guard(db, execution=False)
-                current = _active(db, run_id, revision)
+                current = active_workflow(db, run_id, revision)
                 return restore_agent_state(current.agent_state_json, None, scope)
 
         artifacts = ArtifactStore(
@@ -221,7 +179,7 @@ def _review_graph(
             and ("director" in snapshot.next or (resume and resume.get("decision") == "APPROVE"))
         ):
             with factory.begin() as db:
-                current = _active(db, run_id, revision)
+                current = active_workflow(db, run_id, revision)
                 selected = consume_context(db, project_id, current, "storyboard", settings)
                 contexts["storyboard"] = selected["storyboard"]
         value: dict | Command | None = None
@@ -244,7 +202,7 @@ def _review_graph(
         snapshot = graph.get_state(config)
         with factory.begin() as db:
             store.guard(db, execution=False)
-            current = _active(db, run_id, revision)
+            current = active_workflow(db, run_id, revision)
             current.agent_state_json = restore_agent_state(
                 current.agent_state_json, snapshot.values, scope
             ).model_dump(mode="json")
@@ -314,7 +272,7 @@ def execute_screenwriter(
             )
         if candidate is None:
             outcome = create_plan(factory, settings, run_id, actor)
-            if _waiting(factory, run_id, revision, outcome):
+            if wait_for_agent(factory, run_id, revision, outcome):
                 return True
             if stage == "outline":
                 _finish_outline(factory, run_id, revision, outcome)
@@ -339,7 +297,7 @@ def execute_screenwriter(
                         scene_no,
                         fragments,
                     )
-                    if _waiting(factory, run_id, revision, fragment):
+                    if wait_for_agent(factory, run_id, revision, fragment):
                         return True
                     assert fragment.result is not None
                     fragments.append(fragment.result)
@@ -350,12 +308,12 @@ def execute_screenwriter(
                 evaluated, final_content = revise_script(
                     factory, settings, run_id, outcome.result, content
                 )
-                if _waiting(factory, run_id, revision, evaluated):
+                if wait_for_agent(factory, run_id, revision, evaluated):
                     return True
                 assert final_content is not None
                 content = final_content
             with factory.begin() as db:
-                run = _active(db, run_id, revision)
+                run = active_workflow(db, run_id, revision)
                 lock_dependency_graph(db, scope.project_id)
                 existing = db.scalar(select(Script.id).where(Script.run_id == run.id))
                 if existing is None:
@@ -370,7 +328,7 @@ def execute_screenwriter(
         _review_graph(factory, settings, run_id, revision)
     except DomainError as exc:
         if exc.code in {"AGENT_LOOP_BUSY", "AGENT_EXECUTION_LOST"}:
-            raise ScreenwriterExecutionDeferred(exc.code) from None
+            raise WorkflowExecutionDeferred(exc.code) from None
         if exc.code == "SCREENWRITER_DELIVERY_STALE":
             return True
         if exc.code == "AGENT_NOT_ACTIVE":
@@ -378,41 +336,8 @@ def execute_screenwriter(
                 # Another delivery may have handed the completed script to review.
                 if db.scalar(select(Script.id).where(Script.run_id == run_id)) is not None:
                     return True
-        _fail(factory, run_id, revision, exc.code)
+        fail_workflow(factory, run_id, revision, exc.code)
     except Exception as exc:
         logger.error("screenwriter_failed run_id=%s error_type=%s", run_id, type(exc).__name__)
-        _fail(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")
+        fail_workflow(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")
     return True
-
-
-def _fail(factory: sessionmaker[Session], run_id: UUID, revision: int, code: str) -> None:
-    with factory.begin() as db:
-        lock_gate(db)
-        run = db.get(WorkflowRun, run_id, populate_existing=True, with_for_update=True)
-        if run is None or run.status not in {"QUEUED", "RUNNING"} or run.revision != revision:
-            return
-        episode = db.get(Episode, run.episode_id)
-        assert episode is not None
-        stopped = code == "AGENT_HUMAN_STOPPED"
-        if run.agent_state_json is not None:
-            try:
-                state = AgentRunState.model_validate(run.agent_state_json)
-                failed_step = next(
-                    (
-                        step.step_id
-                        for step in state.steps
-                        if step.status in {"RUNNING", "WAITING_REVIEW"}
-                    ),
-                    None,
-                )
-                run.agent_state_json = terminate_agent_state(
-                    state,
-                    scope_for_run(run, episode.project_id),
-                    reason="CANCELLED" if stopped else "EXECUTION_FAILED",
-                    step_id=failed_step,
-                ).model_dump(mode="json")
-            except AgentStateError:
-                logger.error("screenwriter_state_invalid run_id=%s", run_id)
-        run.status, run.error_code = ("CANCELLED", None) if stopped else ("FAILED", code)
-        run.revision += 1
-        emit(db, run, "workflow.cancelled" if stopped else "workflow.failed", {"code": code})

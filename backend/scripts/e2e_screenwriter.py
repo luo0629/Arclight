@@ -140,6 +140,10 @@ def _respond(request):
             ),
         )
     seed = data["data"]
+    if seed.get("schema_version") == "art-direction/1":
+        from e2e_art import respond
+
+        return respond(payload)
     if seed["phase"] in {
         "DIRECT_SCENE_ONLY",
         "DIRECT_WORKING_SCENE",
@@ -282,12 +286,10 @@ def install():
     original_capture = production_versions.capture_text
 
     def capture(db, project_id, run, settings, *, actor=None):
-        if (
-            run.workflow_version
-            in {SCREENWRITER_VERSION, SCREENWRITER_OUTLINE_VERSION}
-            | REVISION_WORKFLOWS
-            | DIRECTOR_VERSIONS
-        ):
+        if run.workflow_version in {
+            SCREENWRITER_VERSION,
+            SCREENWRITER_OUTLINE_VERSION,
+        } | REVISION_WORKFLOWS | DIRECTOR_VERSIONS | {"art-proposal/1.0"}:
             settings = settings.model_copy(
                 update={
                     "provider": "openai_compatible",
@@ -300,6 +302,7 @@ def install():
                         supplier="custom",
                         model="offline-professional",
                         tools=True,
+                        max_input_images=4 if run.workflow_type == "art_proposal" else 0,
                         response_formats=frozenset({"json_schema", "json_object"}),
                     ),
                     "model_gateway_policy": GatewayPolicy(

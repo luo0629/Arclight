@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from arclight.api.art_direction import router as art_direction_router
 from arclight.api.art_proposals import router as art_proposals_router
 from arclight.api.asset_usage import router as asset_usage_router
 from arclight.api.asset_versions import router as asset_versions_router
@@ -155,6 +156,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth_router)
     app.include_router(assets_router)
     app.include_router(art_proposals_router)
+    app.include_router(art_direction_router)
     app.include_router(files_router)
     app.include_router(generation_router)
     app.include_router(generation_candidates_router)

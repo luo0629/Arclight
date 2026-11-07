@@ -14,6 +14,7 @@ import {
 } from "@/features/assets/types/art-proposals";
 import ArtProposalEditor from "./art-proposal-editor";
 import ArtProposalDetail from "./art-proposal-detail";
+import ArtGeneration from "./art-generation";
 
 export default function ArtProposals({
   projectId,
@@ -140,6 +141,15 @@ export default function ArtProposals({
           <Button onClick={() => setEditor({})}>新建美术提案</Button>
         )}
       </header>
+      <ArtGeneration
+        key={projectId}
+        projectId={projectId}
+        writable={writable}
+        onView={(delivery) => {
+          void load(delivery.proposal_id, delivery.version_id);
+          void list.reload().catch(() => {});
+        }}
+      />
       {error && (
         <Notice tone="error" role="alert">
           {error}

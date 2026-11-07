@@ -59,11 +59,14 @@ def art_snapshot(
     if comparison.model_dump(mode="json") != version.comparison_json:
         raise DomainError("REVIEW_INPUT_CHANGED", "提案精确输入或锁定状态已经变化", 409)
     confirmation = selection(db, version.id)
+    from arclight.application.art_workflow import proposal_run
+
+    run = proposal_run(db, row, version)
     return ReviewSnapshot(
         project_id=row.project_id,
         episode_id=proposal.episode_id,
-        run_id=None,
-        thread_id="art:" + str(version.id),
+        run_id=run.id if run else None,
+        thread_id=str(run.id) if run else "art:" + str(version.id),
         kind="VISUAL_SPEC"
         if any(
             design.kind == "VISUAL_BIBLE"
@@ -156,6 +159,9 @@ def check_decision(
 def apply_art(
     db: Session, request: HumanReviewRequest, decision: HumanReviewDecision, actor: str
 ) -> dict:
+    from arclight.application.art_workflow import queue_art_review
+
+    queue_art_review(db, request, decision)
     value = HumanDecision.model_validate(decision.decision_json)
     check_decision(db, request, value, actor)
     if value.decision == "APPROVE":

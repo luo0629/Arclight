@@ -38,7 +38,7 @@ from arclight.persistence.human_reviews import HumanReviewRequest
 from arclight.persistence.models import Episode
 
 
-def _saved_delivery(db: Session, loop: AgentLoop, action: AgentLoopAction) -> ArtDelivery:
+def saved_art_delivery(db: Session, loop: AgentLoop, action: AgentLoopAction) -> ArtDelivery:
     try:
         delivery = ArtDelivery.model_validate(action.result_json)
         provenance = ArtDeliveryInput.model_validate(action.request_json)
@@ -116,7 +116,7 @@ def publish_art_direction(
             )
         )
         if prior is not None:
-            return _saved_delivery(db, loop, prior)
+            return saved_art_delivery(db, loop, prior)
         if loop.status != "COMPLETED" or loop.outcome_json is None:
             raise DomainError("ART_DELIVERY_NOT_READY", "美术决策尚未完整交付，不能创建候选", 409)
         loop = checked_loop(db, loop.id, actor=actor)
@@ -239,7 +239,7 @@ def generate_art_proposal(
             else None
         )
         if loop is not None and prior is not None:
-            replayed = _saved_delivery(db, loop, prior)
+            replayed = saved_art_delivery(db, loop, prior)
             _, seed = direction_loop(db, run.id)
             if actor != loop.actor_id or seed.task != task:
                 raise DomainError("ART_TASK_CONFLICT", "同一美术交付不能更换操作者或冻结目标", 409)

@@ -40,6 +40,9 @@ def require_proposal(
 ) -> ArtProposalRecord:
     if write:
         begin_serialized(db)
+        from arclight.application.model_gateway import lock_gate
+
+        lock_gate(db)
     require_project(db, project_id, actor, write=write)
     row = db.get(ArtProposalRecord, proposal_id, populate_existing=True)
     if row is None or row.project_id != project_id:
@@ -76,6 +79,9 @@ def save_proposal(
 ) -> tuple[ArtProposalRecord, ArtProposalVersion, bool]:
     payload = ArtSave.model_validate(payload.model_dump(mode="json"))
     begin_serialized(db)
+    from arclight.application.model_gateway import lock_gate
+
+    lock_gate(db)
     project = require_project(db, project_id, actor, write=True)
     if payload.proposal.project_id != project_id:
         raise DomainError("ART_SCOPE_INVALID", "提案项目与请求路径不一致", 422)

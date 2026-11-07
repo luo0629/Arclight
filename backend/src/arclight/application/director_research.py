@@ -33,7 +33,7 @@ def approved_input(
     db: Session, run: WorkflowRun, actor: str, settings: Settings
 ) -> tuple[Script, dict]:
     """Resolve the selected script, including a deferred output of the original dual-review run."""
-    if run.workflow_type not in {"storyboard", "script_storyboard"}:
+    if run.workflow_type not in {"storyboard", "script_storyboard", "art_proposal"}:
         raise DomainError("DIRECTOR_TASK_INVALID", "此任务没有导演规划阶段", 422)
     episode = db.get(Episode, run.episode_id)
     assert episode is not None

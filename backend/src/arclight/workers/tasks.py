@@ -2,6 +2,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from arclight.application.agent_workflows import WorkflowExecutionDeferred
 from arclight.application.generation_candidates import import_attempt, pending_attempts
 from arclight.application.generation_delivery import consume_dispatch
 from arclight.application.generation_events import publish_dispatches
@@ -11,7 +12,6 @@ from arclight.application.generation_recovery import recover_job, recovery_candi
 from arclight.application.production_events import consume_stage_event, publish_stage_events
 from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
-from arclight.application.screenwriter_execution import ScreenwriterExecutionDeferred
 from arclight.core.config import Settings, get_settings
 from arclight.domain.enums import RunStatus
 from arclight.persistence.base import utcnow
@@ -32,7 +32,7 @@ from arclight.workers.celery_app import celery_app
 
 @celery_app.task(
     name="arclight.execute_workflow",
-    autoretry_for=(ScreenwriterExecutionDeferred,),
+    autoretry_for=(WorkflowExecutionDeferred,),
     max_retries=None,
     retry_kwargs={"countdown": 10},
 )

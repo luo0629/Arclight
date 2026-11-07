@@ -48,6 +48,23 @@ def _binding(db: Session, project_id: UUID, run_id: UUID) -> VersionBinding | No
 
 
 def _result(db: Session, run: WorkflowRun, project_id: UUID) -> WorkflowResult | None:
+    if run.workflow_type == "art_proposal":
+        from arclight.application.art_workflow import delivered
+
+        delivery = delivered(db, run.id)
+        if delivery is None:
+            return None
+        return WorkflowResult(
+            result_id=uuid5(run.id, "art-workflow-result:" + str(delivery.version_id)),
+            project_id=project_id,
+            episode_id=run.episode_id,
+            agent_name="art_director",
+            status=RunStatus(run.status),
+            summary="已登记美术提案，正式变更经人工批准",
+            artifact_ids=[delivery.version_id],
+            warnings=[run.error_code] if run.error_code else [],
+            requires_human_review=run.status == "WAITING_REVIEW",
+        )
     artifacts: list[UUID] = []
     labels: list[str] = []
     needs_review = run.status == RunStatus.WAITING_REVIEW

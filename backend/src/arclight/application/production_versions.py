@@ -48,6 +48,7 @@ from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 TEXT_STAGES = {
     "script_storyboard": ("script", "storyboard"),
     "storyboard": ("storyboard",),
+    "art_proposal": ("storyboard",),
     "script_rewrite": ("rewrite",),
     "story_analysis": ("analyze",),
     "story_outline": ("outline",),
@@ -141,6 +142,39 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
+
+    if workflow_version == ART_WORKFLOW_VERSION:
+        from arclight.domain.art_direction import (
+            DIRECTION_PROMPT,
+            DIRECTION_VERSION,
+            ArtDirectionResult,
+        )
+        from arclight.domain.art_generation import DELIVERY_KEY, ArtDeliveryInput
+
+        return [
+            (
+                "AGENT",
+                workflow_version,
+                {
+                    "operation": stage,
+                    "workflow_version": workflow_version,
+                    "runtime": "persistent-agent/1",
+                    "direction_version": DIRECTION_VERSION,
+                    "delivery_key": DELIVERY_KEY,
+                    "max_tokens": 16000,
+                },
+            ),
+            ("PROMPT", DIRECTION_VERSION, {"direction": DIRECTION_PROMPT}),
+            (
+                "SCHEMA",
+                DIRECTION_VERSION,
+                {
+                    "direction": ArtDirectionResult.model_json_schema(),
+                    "delivery": ArtDeliveryInput.model_json_schema(),
+                },
+            ),
+        ]
     if workflow_version in director_creation.ITERATIVE_DIRECTOR_VERSIONS and stage == "storyboard":
         result = []
         for kind, _, original in text_definitions(stage, director_creation.DIRECTOR_VERSION):
@@ -363,11 +397,29 @@ def capture_text(
         "gateway_policy": settings.model_gateway_policy.model_dump(mode="json"),
     }
     entries = [
-        component(db, project_id, "TEXT", kind, stage, version, definition)
+        component(
+            db,
+            project_id,
+            "ART" if run.workflow_type == "art_proposal" else "TEXT",
+            kind,
+            stage,
+            version,
+            definition,
+        )
         for stage in TEXT_STAGES[run.workflow_type]
         for kind, version, definition in text_definitions(stage, run.workflow_version)
     ]
-    entries.append(component(db, project_id, "TEXT", "MODEL", "text-model", digest(model), model))
+    entries.append(
+        component(
+            db,
+            project_id,
+            "ART" if run.workflow_type == "art_proposal" else "TEXT",
+            "MODEL",
+            "text-model",
+            digest(model),
+            model,
+        )
+    )
     bind(
         db,
         project_id,

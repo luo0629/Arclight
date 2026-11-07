@@ -18,6 +18,7 @@ import type { Run } from "@/types/api";
 import CharacterMatching from "@/features/story/components/character-matching";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import ScreenwriterProgress from "@/features/tasks/components/screenwriter-progress";
+import ArtProgress from "./art-progress";
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 export default function Tasks({
@@ -81,15 +82,17 @@ export default function Tasks({
             >
               <div className="task-heading flex flex-wrap items-center justify-between gap-2">
                 <strong>
-                  {run.workflow_type === "script_rewrite"
-                    ? "剧本局部改写"
-                    : run.workflow_type === "story_outline"
-                      ? "分集大纲"
-                      : run.workflow_type === "story_analysis"
-                        ? "故事提炼"
-                        : run.workflow_type === "storyboard"
-                          ? "分镜创作"
-                          : "剧本与分镜创作"}
+                  {run.workflow_type === "art_proposal"
+                    ? "美术提案生成"
+                    : run.workflow_type === "script_rewrite"
+                      ? "剧本局部改写"
+                      : run.workflow_type === "story_outline"
+                        ? "分集大纲"
+                        : run.workflow_type === "story_analysis"
+                          ? "故事提炼"
+                          : run.workflow_type === "storyboard"
+                            ? "分镜创作"
+                            : "剧本与分镜创作"}
                 </strong>
                 <StatusBadge status={run.status} />
               </div>
@@ -133,55 +136,68 @@ export default function Tasks({
                   reload={reload}
                 />
               )}
-              {run.error_code && (
+              {run.workflow_type === "art_proposal" && (
+                <ArtProgress
+                  run={run}
+                  writable={writable}
+                  busy={busy}
+                  act={act}
+                  reload={reload}
+                />
+              )}
+              {run.error_code && run.workflow_type !== "art_proposal" && (
                 <Notice tone="error" className="error" role="alert">
                   {runErrorMessage(run.error_code)}
                 </Notice>
               )}
-              {run.pending_review && (
-                <p>
-                  等待审核：
-                  {run.pending_review.resource_type === "script"
-                    ? "剧本"
-                    : "分镜"}
-                  版本 <code>{run.pending_review.version_id}</code>
-                </p>
-              )}
-              {owner && writable && run.pending_review && (
-                <>
-                  <FormLabel>
-                    审核意见
-                    <Textarea
-                      value={comment}
-                      onChange={(event) => setComment(event.target.value)}
-                      maxLength={2000}
-                      placeholder="记录这次创作决定的原因"
-                    />
-                  </FormLabel>
-                  <div className="button-row flex flex-wrap items-center gap-2">
-                    <ImpactButton
-                      variant="default"
-                      size="lg"
-                      className=""
-                      disabled={busy}
-                      endpoint={`/episodes/${run.episode_id}/${run.pending_review.resource_type}s/${run.pending_review.version_id}/dependency-impact`}
-                      onConfirm={(digest) =>
-                        action(run, "resume", "APPROVE", digest)
-                      }
-                    >
-                      批准并继续
-                    </ImpactButton>
-                    <Button
-                      variant="outline"
-                      size="lg"
-                      disabled={busy}
-                      onClick={() => void action(run, "resume", "REJECT")}
-                    >
-                      驳回该版本
-                    </Button>
-                  </div>
-                </>
-              )}
+              {run.pending_review &&
+                run.pending_review.resource_type !== "art_proposal" && (
+                  <p>
+                    等待审核：
+                    {run.pending_review.resource_type === "script"
+                      ? "剧本"
+                      : "分镜"}
+                    版本 <code>{run.pending_review.version_id}</code>
+                  </p>
+                )}
+              {owner &&
+                writable &&
+                run.pending_review &&
+                run.pending_review.resource_type !== "art_proposal" && (
+                  <>
+                    <FormLabel>
+                      审核意见
+                      <Textarea
+                        value={comment}
+                        onChange={(event) => setComment(event.target.value)}
+                        maxLength={2000}
+                        placeholder="记录这次创作决定的原因"
+                      />
+                    </FormLabel>
+                    <div className="button-row flex flex-wrap items-center gap-2">
+                      <ImpactButton
+                        variant="default"
+                        size="lg"
+                        className=""
+                        disabled={busy}
+                        endpoint={`/episodes/${run.episode_id}/${run.pending_review.resource_type}s/${run.pending_review.version_id}/dependency-impact`}
+                        onConfirm={(digest) =>
+                          action(run, "resume", "APPROVE", digest)
+                        }
+                      >
+                        批准并继续
+                      </ImpactButton>
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        disabled={busy}
+                        onClick={() => void action(run, "resume", "REJECT")}
+                      >
+                        驳回该版本
+                      </Button>
+                    </div>
+                  </>
+                )}
               {run.pending_review?.resource_type === "script" && (
                 <CharacterMatching
                   episodeId={run.episode_id}
@@ -206,16 +222,18 @@ export default function Tasks({
                       取消任务
                     </Button>
                   )}
-                {writable && run.status === "FAILED" && (
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    disabled={busy}
-                    onClick={() => void action(run, "retry")}
-                  >
-                    重试任务
-                  </Button>
-                )}
+                {writable &&
+                  run.status === "FAILED" &&
+                  run.workflow_type !== "art_proposal" && (
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      disabled={busy}
+                      onClick={() => void action(run, "retry")}
+                    >
+                      重试任务
+                    </Button>
+                  )}
                 <Button
                   variant="outline"
                   size="lg"
