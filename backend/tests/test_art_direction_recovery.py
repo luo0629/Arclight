@@ -8,7 +8,7 @@ from uuid import UUID
 import pytest
 from art_direction_support import install_direction_model, prepare_direction, reference_set
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError
 from test_agent_loop_recovery import answer
 from test_agent_model import model_service as model_service
 from test_agent_runtime import tool_feedback
@@ -191,9 +191,12 @@ def test_reentry_rejects_changed_task_and_database_rejects_frozen_seed_mutation(
             factory, settings, run_id, actor, task.model_copy(update={"visual_goal": "换任务"})
         )
     assert conflict.value.code == "ART_TASK_CONFLICT"
-    with pytest.raises(IntegrityError, match="IMMUTABLE_HISTORY"), factory.begin() as db:
+    with pytest.raises(DBAPIError, match="IMMUTABLE_HISTORY"), factory.begin() as db:
         loop = db.get(AgentLoop, waiting.loop_id)
+        original_seed = loop.seed_json
         loop.seed_json = loop.seed_json | {"operation_key": "another-art-task"}
+    with factory() as db:
+        assert db.get(AgentLoop, waiting.loop_id).seed_json == original_seed
     assert not errors and len(sent) == 2
 
 
