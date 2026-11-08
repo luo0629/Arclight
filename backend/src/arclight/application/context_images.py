@@ -56,6 +56,13 @@ def load_context_images(
     if episode is None:
         raise DomainError("CONTEXT_REFERENCE_INVALID", "上下文作用范围缺失", 409)
     candidate = trace["task_context"]["scope"].get("candidate_version_id")
+    review_candidates = {
+        item["continuity_investigation"]["result"]["target"]["asset_version_id"]: item[
+            "continuity_investigation"
+        ]
+        for item in trace["evidence"]
+        if item.get("continuity_investigation")
+    }
     ordinary_versions = set()
     for item in selected:
         version = db.get(AssetVersion, UUID(item["asset_version_id"]))
@@ -69,6 +76,20 @@ def load_context_images(
             fresh = read_concept_reference(db, settings, run.id, version.id)
             if fresh["image"] != item:
                 raise DomainError("CONTEXT_REFERENCE_INVALID", "概念图与原取证原图不一致", 409)
+        elif item["asset_version_id"] in review_candidates:
+            from arclight.application.continuity_research import require_evidence_candidate
+
+            identity = require_evidence_candidate(
+                db, run, episode.project_id, actor, review_candidates[item["asset_version_id"]]
+            )
+            resolve_assets(
+                db,
+                episode.project_id,
+                {str(identity)},
+                ContextLimits.model_validate(trace["task_context"]["limits"]),
+                candidate=identity,
+                follow_profile_references=False,
+            )
         else:
             ordinary_versions.add(item["asset_version_id"])
     resolve_assets(

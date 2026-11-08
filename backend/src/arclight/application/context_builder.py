@@ -120,6 +120,15 @@ def load_local(db: Session, project_id: UUID, request: ContextRequest) -> tuple[
                 if scene["scene_no"] in scene_numbers
             ]
             versions.update(reference_ids(content["scenes"]))
+            local_characters = set(content["shot"].get("characters", []))
+            for neighbor in content["neighbors"]:
+                local_characters.update(neighbor.get("characters", []))
+            content["character_assets"] = [
+                deepcopy(item)
+                for item in script.content_json.get("character_assets", [])
+                if item["character"] in local_characters
+            ]
+            versions.update(reference_ids(content["character_assets"]))
         # Exact text references are already part of the common asset version registry.
         versions.add(str(script.id))
     return content, versions

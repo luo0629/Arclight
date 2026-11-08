@@ -275,7 +275,18 @@ def append_resolved_evidence(
     }
     from arclight.application.agent_memory_sources import capture_memory_sources
 
-    value["context"].update(capture_memory_sources(db, root.project_id, sources))
+    value["context"].update(
+        capture_memory_sources(
+            db,
+            root.project_id,
+            sources,
+            candidate_ids={
+                UUID(item["asset_version_id"])
+                for item in collected.get("assets", [])
+                if item.get("purpose") == "REVIEW_CANDIDATE"
+            },
+        )
+    )
     row = DependencyManifest(
         id=round_key(root.id, number),
         project_id=root.project_id,

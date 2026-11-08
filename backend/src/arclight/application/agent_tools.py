@@ -570,6 +570,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         from arclight.application.art_direction import comparison_tool
         from arclight.application.art_research import investigate_art
         from arclight.application.context_evidence import append_evidence, read_trace
+        from arclight.application.continuity_research import investigate_continuity
         from arclight.application.director_checks import director_check_tool
         from arclight.application.director_collaboration import collaboration_tools
         from arclight.application.director_research import investigate_production
@@ -577,6 +578,10 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         from arclight.application.screenwriter_research import investigate_story
         from arclight.domain.art_research import InvestigateArtParameters, InvestigateArtResult
         from arclight.domain.context_trace import EvidenceRequest
+        from arclight.domain.continuity_research import (
+            InvestigateContinuityParameters,
+            InvestigateContinuityResult,
+        )
         from arclight.domain.director_planning import (
             RESEARCH_TOOL,
             InvestigateProductionParameters,
@@ -587,6 +592,24 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
             InvestigateStoryResult,
         )
 
+        def investigate_review(context: AgentToolContext, parameters: AgentToolContract) -> dict:
+            assert isinstance(parameters, InvestigateContinuityParameters)
+            run = context.db.get(WorkflowRun, context.run_id)
+            assert run is not None
+            return investigate_continuity(context.db, settings, run, context.actor_id, parameters)
+
+        registry.register(
+            AgentToolDefinition(
+                name="investigate_continuity",
+                allowed_agents=frozenset({"continuity_reviewer"}),
+                allowed_steps=frozenset({"storyboard"}),
+                parameters_model=InvestigateContinuityParameters,
+                result_model=InvestigateContinuityResult,
+                scope_validator=lambda context, parameters: None,
+                handler=investigate_review,
+                requires_write=True,
+            )
+        )
         registry.register(comparison_tool(settings))
         registry.register(patch_tool(settings))
         registry.register(director_check_tool(settings))
