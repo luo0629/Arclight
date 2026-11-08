@@ -342,13 +342,18 @@ def issue_permits(
     factory: sessionmaker[Session], live: ExecutionPolicy = DEFAULT_EXECUTION_POLICY
 ) -> int:
     expire_waiting(factory)
+    # Commit reclamation before reissuing the same permit. A second UPDATE in one
+    # PostgreSQL transaction rechecks its business-row foreign keys, which can wait
+    # on a consumer holding those rows while waiting for this scheduling gate.
+    with factory.begin() as db:
+        lock_gate(db)
+        _reclaim(db)
     issued = 0
     with factory.begin() as db:
         lock_gate(db)
         state = db.get(GenerationQueueState, "global", populate_existing=True)
         assert state is not None
         state.heartbeat_at = leases.clock(db)
-        _reclaim(db)
         pending_count = (
             db.scalar(
                 select(func.count())

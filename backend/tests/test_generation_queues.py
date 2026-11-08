@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from threading import Barrier
+from threading import Barrier, Event
 from uuid import UUID
 
 import pytest
@@ -665,3 +665,84 @@ def test_postgres_expiry_cancel_and_old_message_preserve_money(
     assert len(ledger(client, episode["project_id"])) == 2
     assert fresh(client, remaining)["attempt_count"] == 0
     assert permits(client, cancelled)[0]["state"] == "REVOKED"
+
+
+def test_postgres_reissue_expired_permit_while_old_consumer_holds_business_locks(
+    client, episode, settings, monkeypatch
+):
+    require_postgres(settings)
+    from test_generation_accounting import ledger, usage
+    from test_generation_budget import priced, set_policy
+
+    from arclight.application import generation_queues, generation_scheduling
+
+    set_policy(client, episode["project_id"], "2")
+    priced(monkeypatch)
+    job = new(client, episode["project_id"])
+    old_message = messages(client)[0]
+    advance(monkeypatch, 31)
+    factory = client.app.state.session_factory
+    reclaimed, consumer_locked = Event(), Event()
+    original_record = generation_queues.record
+    original_admit = generation_scheduling.admit
+
+    def observe_reclaim(db, permit, action, reason=None):
+        original_record(db, permit, action, reason)
+        if action == "EXPIRED":
+            reclaimed.set()
+            assert consumer_locked.wait(timeout=15)
+
+    def observe_admit(*args, **kwargs):
+        # consume_dispatch already holds project/job/dispatch locks at this point.
+        consumer_locked.set()
+        return original_admit(*args, **kwargs)
+
+    monkeypatch.setattr(generation_queues, "record", observe_reclaim)
+    monkeypatch.setattr(generation_scheduling, "admit", observe_admit)
+    provider = Provider()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        scheduler = pool.submit(issue_permits, factory)
+        assert reclaimed.wait(timeout=15)
+        consumer = pool.submit(send, client, old_message, provider)
+        assert scheduler.result(timeout=30) == 1
+        assert consumer.result(timeout=30) == "CREATED"
+
+    current = permits(client, job)[0]
+    assert current["state"] == "ISSUED" and current["epoch"] == old_message[3] + 1
+    assert fresh(client, job)["attempt_count"] == 0
+    assert not provider.requests
+    assert usage(client, episode["project_id"]) == (0, 2)
+    assert len(ledger(client, episode["project_id"])) == 1
+
+
+def test_expired_permit_reclamation_survives_failed_reissue(client, episode, monkeypatch):
+    from test_generation_accounting import ledger, usage
+    from test_generation_budget import priced, set_policy
+
+    from arclight.application import generation_queues
+
+    set_policy(client, episode["project_id"], "2")
+    priced(monkeypatch)
+    job = new(client, episode["project_id"])
+    old_message = messages(client)[0]
+    advance(monkeypatch, 31)
+    factory = client.app.state.session_factory
+
+    def interrupted(*args, **kwargs):
+        raise RuntimeError("reissue interrupted")
+
+    with monkeypatch.context() as phase:
+        phase.setattr(generation_queues, "_candidate_page", interrupted)
+        with pytest.raises(RuntimeError, match="reissue interrupted"):
+            issue_permits(factory)
+
+    reclaimed = permits(client, job)[0]
+    assert reclaimed["state"] == "WAITING" and reclaimed["epoch"] == old_message[3]
+    assert issue_permits(factory) == 1
+    reissued = permits(client, job)[0]
+    assert reissued["state"] == "ISSUED" and reissued["epoch"] == old_message[3] + 1
+    provider = Provider()
+    assert send(client, old_message, provider) == "CREATED"
+    assert not provider.requests and fresh(client, job)["attempt_count"] == 0
+    assert usage(client, episode["project_id"]) == (0, 2)
+    assert len(ledger(client, episode["project_id"])) == 1

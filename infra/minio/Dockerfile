@@ -1,6 +1,13 @@
 FROM golang:1.25-alpine AS build
 # Official upstream release source; independent of discontinued binary images.
-ADD https://github.com/minio/minio/archive/refs/tags/RELEASE.2025-10-15T17-29-55Z.tar.gz /tmp/minio.tar.gz
+# Bound transient upstream retries and verify the exact release before building.
+RUN apk add --no-cache ca-certificates curl
+RUN curl --fail --location --silent --show-error \
+        --retry 3 --retry-delay 2 --retry-max-time 180 \
+        --connect-timeout 15 --max-time 90 --proto '=https' --proto-redir '=https' \
+        --output /tmp/minio.tar.gz \
+        https://github.com/minio/minio/archive/refs/tags/RELEASE.2025-10-15T17-29-55Z.tar.gz \
+    && echo 'be6d0bd3696c3a13a35f02d3a0280b64319c67918b4501c5c3d87f96d000085c  /tmp/minio.tar.gz' | sha256sum -c -
 WORKDIR /src
 RUN tar -xzf /tmp/minio.tar.gz --strip-components=1 -C /src
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/minio .
