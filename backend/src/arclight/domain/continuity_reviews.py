@@ -14,6 +14,7 @@ from arclight.domain.versions import VersionRegistration, digest
 from arclight.domain.workflow_contracts import ProductionComponent, WorkflowResult
 
 REVIEW_VERSION: Literal["continuity-review/1"] = "continuity-review/1"
+REVIEW_SCHEMA_VERSION = "continuity-review/1.1"
 Checksum = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 Brief = Annotated[str, Field(min_length=1, max_length=500, pattern=r"\S")]
 Unit = Annotated[float, Field(strict=True, ge=0, le=1)]
@@ -41,7 +42,15 @@ class ReviewReference(ProductionContract):
     asset_id: UUID | None = None
     asset_type: (
         Literal[
-            "CHARACTER", "SCENE", "PROP", "STYLE", "IMAGE", "SHOT_IMAGE", "SCRIPT", "STORYBOARD"
+            "CHARACTER",
+            "COSTUME",
+            "SCENE",
+            "PROP",
+            "STYLE",
+            "IMAGE",
+            "SHOT_IMAGE",
+            "SCRIPT",
+            "STORYBOARD",
         ]
         | None
     ) = None
@@ -171,7 +180,7 @@ class ContinuityReview(ProductionContract):
             if item.region is not None and not (
                 ref.role == "CANDIDATE"
                 or ref.role == "REFERENCE"
-                and ref.asset_type in {"IMAGE", "SHOT_IMAGE"}
+                and ref.asset_type in {"IMAGE", "SHOT_IMAGE", "COSTUME"}
             ):
                 raise ValueError("Regions can only locate evidence in a declared image")
         if not any(refs[item.reference_id].role == "CANDIDATE" for item in self.evidence):
@@ -221,13 +230,20 @@ class ContinuityReview(ProductionContract):
         return self
 
 
-def review_schema_registration() -> VersionRegistration:
+def review_schema_registration(*, costume: bool = False) -> VersionRegistration:
+    schema = ContinuityReview.model_json_schema()
+    if not costume:
+        # Reconstruct the exact original definition; saved /1 digests remain valid.
+        asset_types = schema["$defs"]["ReviewReference"]["properties"]["asset_type"]["anyOf"][0][
+            "enum"
+        ]
+        asset_types.remove("COSTUME")
     return VersionRegistration(
         family="REVIEW",
         kind="SCHEMA",
         name="continuity.review",
-        version=REVIEW_VERSION,
-        definition={"schema": ContinuityReview.model_json_schema(), "authority": "advisory-only/1"},
+        version=REVIEW_SCHEMA_VERSION if costume else REVIEW_VERSION,
+        definition={"schema": schema, "authority": "advisory-only/1"},
     )
 
 

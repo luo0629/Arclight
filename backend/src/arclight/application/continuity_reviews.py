@@ -12,6 +12,8 @@ from arclight.application.content_references import require_asset
 from arclight.application.dependencies import exact_version, require_manifest
 from arclight.core.errors import DomainError
 from arclight.domain.continuity_reviews import (
+    REVIEW_SCHEMA_VERSION,
+    REVIEW_VERSION,
     ContinuityReview,
     ReviewTarget,
     review_schema_registration,
@@ -43,8 +45,14 @@ def shot_sha256(shot: Shot) -> str:
 
 
 def validate_review_versions(db: Session, review: ContinuityReview) -> None:
-    schema = review_schema_registration()
     for entry in review.versions:
+        schema = review_schema_registration(costume=entry.version == REVIEW_SCHEMA_VERSION)
+        if (
+            entry.kind == "SCHEMA"
+            and entry.version == REVIEW_VERSION
+            and any(ref.asset_type == "COSTUME" for ref in review.references)
+        ):
+            raise DomainError("REVIEW_VERSION_INVALID", "服装参考须显式使用兼容扩展Schema版本", 409)
         row = db.get(ProductionVersion, entry.id)
         if (
             row is None
