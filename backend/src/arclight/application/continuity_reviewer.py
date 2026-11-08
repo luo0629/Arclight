@@ -25,6 +25,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
+from arclight.domain.continuity_escalations import LIMIT_STOP_CODES
 from arclight.domain.continuity_research import RESEARCH_TOOL
 from arclight.domain.continuity_reviewer import (
     REVIEWER_PROMPT,
@@ -183,8 +184,6 @@ def review_candidate(
     with factory.begin() as db:
         lock_gate(db)
         run = require_run(db, run_id, actor, lock=True)
-        episode = authorize_reviewer(db, settings, run, actor)
-        require_review_target(db, episode.project_id, episode.id, target, actor)
         operation = review_operation(target)
         previous = db.scalar(
             select(AgentLoop).where(
@@ -200,7 +199,28 @@ def review_candidate(
             seed = ReviewLoopSeed.model_validate(first.data)
             if seed.target != target or seed.rerun != rerun:
                 raise DomainError("REVIEW_TASK_CONFLICT", "重入不能更换原审查目标或重跑链", 409)
-        else:
+            stopped = (
+                AgentLoopResult[ContinuityReview].model_validate(previous.outcome_json)
+                if (previous.status == "STOPPED")
+                else None
+            )
+            if stopped is not None and stopped.stop_code in LIMIT_STOP_CODES:
+                from arclight.application.continuity_escalations import request_escalation
+                from arclight.persistence.agent_limits import AgentRunLimit
+
+                control = db.get(AgentRunLimit, run_id)
+                if limits is not None and (
+                    control is None or AgentRunLimits.model_validate(control.limits_json) != limits
+                ):
+                    raise DomainError("AGENT_LIMITS_CONFLICT", "重入不能更换原审查运行限制", 409)
+
+                # Repair a committed stop's missing human wait after a crash, even
+                # after its execution deadline. This authorizes no new execution.
+                request_escalation(db, run_id, actor, seed.target)
+                return stopped
+        episode = authorize_reviewer(db, settings, run, actor)
+        require_review_target(db, episode.project_id, episode.id, target, actor)
+        if previous is None:
             seed = reviewer_seed(db, settings, run, actor, target, rerun)
             request = AgentModelRequest(
                 run_id=run.id,
@@ -214,7 +234,7 @@ def review_candidate(
                 max_tokens=16000,
                 messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
             )
-    return run_persistent_agent_loop(
+    outcome = run_persistent_agent_loop(
         factory,
         settings,
         request,
@@ -223,6 +243,12 @@ def review_candidate(
         limits=limits,
         validate_result=lambda db, result: validate_reviewer_result(db, settings, run_id, result),
     )
+    if outcome.status == "STOPPED" and outcome.stop_code in LIMIT_STOP_CODES:
+        from arclight.application.continuity_escalations import request_escalation
+
+        with factory.begin() as db:
+            request_escalation(db, run_id, actor, seed.target)
+    return outcome
 
 
 def validate_reviewer_result(
@@ -257,7 +283,8 @@ def resume_reviewer(
         episode = authorize_reviewer(db, settings, run, loop.actor_id)
         require_review_target(db, episode.project_id, episode.id, seed.target, loop.actor_id)
         run_id = loop.run_id
-    return resume_agent_loop(
+        initiator = loop.actor_id
+    outcome = resume_agent_loop(
         factory,
         settings,
         loop_id,
@@ -267,3 +294,9 @@ def resume_reviewer(
         decision=decision,
         validate_result=lambda db, result: validate_reviewer_result(db, settings, run_id, result),
     )
+    if outcome.status == "STOPPED" and outcome.stop_code in LIMIT_STOP_CODES:
+        from arclight.application.continuity_escalations import request_escalation
+
+        with factory.begin() as db:
+            request_escalation(db, run_id, initiator, seed.target)
+    return outcome

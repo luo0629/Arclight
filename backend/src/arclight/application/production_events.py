@@ -34,8 +34,9 @@ def begin_serialized(db: Session) -> None:
 def source_lock(db: Session, kind: str, source_id: UUID) -> StageSource:
     begin_serialized(db)
     source = read_source(db, kind, source_id)
-    # Follow each existing writer's lock order: text run -> project; media project -> job.
-    if kind == "TEXT":
+    # Shared human handling locks the text/reviewer run before the project.
+    # Media writers retain project -> job; no handler may reverse these orders.
+    if kind in {"TEXT", "REVIEW"}:
         source = read_source(db, kind, source_id, lock=True)
     db.get(Project, source.project_id, populate_existing=True, with_for_update=True)
     return read_source(db, kind, source_id, lock=True) if kind == "MEDIA" else source

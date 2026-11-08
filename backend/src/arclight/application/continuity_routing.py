@@ -119,6 +119,9 @@ def read_routed_review(db: Session, review_id: UUID) -> tuple[ReviewContractReco
         snapshot = checked_snapshot(db, binding)
         route = ReviewRoute.model_validate(snapshot["review_route"])
         admission = ReviewAdmission.model_validate(snapshot["review_admission"])
+        # Domain human handling also locks this run before the shared project gate.
+        # Acquire it before any record/permission read can take that gate.
+        db.get(WorkflowRun, route.run_id, populate_existing=True, with_for_update=True)
         record = require_review_record(db, binding.project_id, review_id, route.routed_by)
         require_project(db, binding.project_id, route.routed_by, write=True)
         review = record.review

@@ -150,6 +150,12 @@ class ReviewStageHandler:
     def advance(
         self, db: Session, event: StageEvent, plan: StagePlan, state: EpisodeProductionState
     ) -> None:
+        if plan.action == "HUMAN_REVIEW":
+            from arclight.application.continuity_escalations import request_escalation
+            from arclight.application.continuity_routing import read_routed_review
+
+            record, route = read_routed_review(db, event.source_id)
+            request_escalation(db, route.run_id, route.routed_by, record.review.target)
         db.add(
             AuditEvent(
                 project_id=event.project_id,

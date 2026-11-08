@@ -12,6 +12,7 @@ from arclight.application.continuity_review_store import REVIEW_RESOURCE, requir
 from arclight.application.continuity_reviews import validate_review_contract
 from arclight.application.production_versions import checked_snapshot, find_binding
 from arclight.core.errors import DomainError
+from arclight.domain.continuity_escalations import ESCALATION_RESOURCE, ContinuityEscalation
 from arclight.domain.continuity_reviews import ReviewContractRecord
 from arclight.domain.continuity_selection import (
     ADMISSION_RESOURCE,
@@ -20,7 +21,11 @@ from arclight.domain.continuity_selection import (
 )
 from arclight.domain.human_reviews import HumanDecision, ReviewSnapshot
 from arclight.domain.versions import digest
-from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
+from arclight.persistence.human_reviews import (
+    HumanReviewDecision,
+    HumanReviewRequest,
+    HumanReviewResume,
+)
 from arclight.persistence.models import (
     AssetVersion,
     GenerationCandidate,
@@ -90,6 +95,21 @@ def require_human_acceptance(
         from arclight.application.human_reviews import require_review_actor
 
         require_review_actor(db, request.project_id, decision.actor_id, owner=True)
+        escalation = find_binding(db, review.project_id, ESCALATION_RESOURCE, review.result_id)
+        if escalation is not None:
+            pause = ContinuityEscalation.model_validate(
+                checked_snapshot(db, escalation)["continuity_escalation"]
+            )
+            require_review_actor(db, request.project_id, pause.requested_by, owner=False)
+            resumed = db.scalar(
+                select(HumanReviewResume).where(HumanReviewResume.request_id == request.id)
+            )
+            if (
+                resumed is None
+                or resumed.decision_id != decision.id
+                or resumed.result_json.get("status") != "APPROVED"
+            ):
+                raise ValueError("The exact production exception must have a committed handoff")
     except (ValidationError, ValueError, TypeError) as exc:
         raise DomainError(
             "HUMAN_DECISION_REQUIRED", "候选须有绑定本次精确审查的人工批准及处理依据", 409
@@ -147,6 +167,9 @@ def require_shot_review(db: Session, version: AssetVersion) -> ReviewContractRec
     ):
         raise DomainError("REVIEW_TARGET_AMBIGUOUS", "同一候选存在不一致的精确镜头审查目标", 409)
     validate_review_contract(db, review, project.owner_id)
+    from arclight.application.continuity_escalations import require_completed_after_escalation
+
+    require_completed_after_escalation(db, record)
     if review.target.asset_version_id != version.id or review.target.asset_id != asset.id:
         raise DomainError("REVIEW_TARGET_INVALID", "审查与选用的精确图片不匹配", 409)
     binding = find_binding(db, project.id, ADMISSION_RESOURCE, review.result_id)

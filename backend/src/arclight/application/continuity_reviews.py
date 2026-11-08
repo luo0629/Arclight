@@ -15,6 +15,7 @@ from arclight.domain.continuity_reviews import (
     REVIEW_SCHEMA_VERSION,
     REVIEW_VERSION,
     ContinuityReview,
+    ReviewReference,
     ReviewTarget,
     review_schema_registration,
 )
@@ -122,14 +123,17 @@ def require_review_target(
     return version, board, shot
 
 
-def validate_review_contract(db: Session, review: ContinuityReview, actor: str) -> None:
-    """Read-only validation; a valid contract grants neither review completion nor selection."""
-    review = ContinuityReview.model_validate(review.model_dump(mode="json"))
-    target = review.target
-    version, board, shot = require_review_target(
-        db, review.project_id, review.episode_id, target, actor
-    )
-    for ref in review.references:
+def validate_review_references(
+    db: Session,
+    project_id: UUID,
+    episode_id: UUID,
+    target: ReviewTarget,
+    references: list[ReviewReference],
+    actor: str,
+) -> None:
+    """Check exact evidence independently of whether a review has completed."""
+    version, board, shot = require_review_target(db, project_id, episode_id, target, actor)
+    for ref in references:
         if ref.role == "CANDIDATE":
             checksum = version.checksum
         elif ref.role == "TARGET_SHOT":
@@ -147,26 +151,34 @@ def validate_review_contract(db: Session, review: ContinuityReview, actor: str) 
             checksum = shot_sha256(adjacent)
         elif ref.role == "VISUAL_BIBLE":
             bible = db.get(VisualBibleVersion, ref.resource_id)
-            if bible is None or bible.project_id != review.project_id:
+            if bible is None or bible.project_id != project_id:
                 raise DomainError("REVIEW_REFERENCE_INVALID", "视觉规范不属于当前项目", 422)
             checksum = visual_version_sha256(bible)
         else:
             assert ref.asset_id is not None and ref.asset_type is not None
             require_asset(
                 db,
-                review.project_id,
+                project_id,
                 AssetReference(asset_id=str(ref.asset_id), asset_version_id=str(ref.resource_id)),
                 {ref.asset_type},
             )
-            source, _ = exact_version(db, review.project_id, ref.resource_id)
+            source, _ = exact_version(db, project_id, ref.resource_id)
             checksum = source.checksum
         if checksum != ref.content_sha256:
             raise DomainError("REVIEW_REFERENCE_CHANGED", "审查引用摘要与精确版本不一致", 409)
-    manifest = require_manifest(db, review.project_id, target.input_manifest_id)
+    manifest = require_manifest(db, project_id, target.input_manifest_id)
     declared = {
-        str(ref.resource_id) for ref in review.references if ref.role in {"REFERENCE", "STORYBOARD"}
+        str(ref.resource_id) for ref in references if ref.role in {"REFERENCE", "STORYBOARD"}
     }
     required = {item["source_asset_version_id"] for item in manifest.snapshot_json["inputs"]}
     if not required <= declared:
         raise DomainError("REVIEW_REFERENCE_MISSING", "审查不能省略候选生成清单的精确参考", 422)
+
+
+def validate_review_contract(db: Session, review: ContinuityReview, actor: str) -> None:
+    """Read-only validation; a valid contract grants neither review completion nor selection."""
+    review = ContinuityReview.model_validate(review.model_dump(mode="json"))
+    validate_review_references(
+        db, review.project_id, review.episode_id, review.target, review.references, actor
+    )
     validate_review_versions(db, review)
