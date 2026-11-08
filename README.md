@@ -26,7 +26,7 @@ Arclight 先把文本创作与审核链路做实，再逐步向完整的漫剧�
 `gpt-image-2.5-flare-2026-09-08` 与 `gpt-image-2.5-sunburst`。服务默认关闭；本地 `.env` 或 Compose 共用的
 `ARCLIGHT_IMAGE_SERVICE` JSON 配置 `enabled`、`base_url`、`model`、`api_key_file`、
 `maximum_cost_per_image`（USD）与 `pricing_version`。Secret 文件须由部署侧只读挂载；
-不要将密钥写入任务、版本、请求正文或仓库。账号设置中的图片预设不会自动启用该服务。
+不要将密钥写入任务、版本、生成请求正文或仓库。此项控制服务器默认图片服务；账号原生图片配置见下方“账号模型服务配置”。
 
 `base_url` 默认 `https://api.openai.com/v1`，可填写第三方公网 HTTPS/443 地址；
 只填域名根地址时自动补 `/v1`，显式路径保持不变。请求追加 `/images/generations`，
@@ -280,11 +280,17 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 
 ## 账号模型服务配置
 
-顶栏“模型服务配置”的文字服务可直接选择 OpenAI、DeepSeek、智谱，自动填入官方地址、默认模型和输出格式，再填写自己的 API Key 即可保存。也可选择“自定义供应商”，填写名称、公网 HTTPS Base URL、模型及 JSON Schema／JSON 对象输出格式，无需管理员域名白名单。模型 ID 可按账号实际权限修改；预设不代表已完成真实付费联调。
+顶栏“模型服务配置”按文字、图片、视频和语音提供 19 项预设。指定服务商只填写自己的 **API Key 和模型 ID**，系统使用官方地址和对应协议，不默认推荐模型。选择“自定义服务商”时，额外填写公网 HTTPS **Base URL**，并选择兼容的 API 协议；文字服务还可选择 JSON Schema／JSON 对象输出格式。模型 ID 是供应商 API 接受的精确标识符，不是展示名称。
 
-文字服务默认继承服务器配置，选用账号服务后仅影响新任务。图片、视频、语音当前仅保存预设，不支持生成。
+文字支持 OpenAI Chat Completions、Gemini 和 DashScope 原生文字／多模态。图片支持 OpenAI、CogView、Seedream、SiliconFlow、Gemini；视频支持 Seedance、CogVideo、Wan、Gemini Omni、xAI；语音支持 Qwen、SiliconFlow、OpenAI TTS。自定义还可选择 Veo。目录与协议合同经过离线验收，真实收费服务及具体模型仍须按实际账号权限和模型文档验证；当前媒体适配器单次生成一张／条，不支持参考图、seed 或远程取消，不把供应商名称视作全部模型能力的保证。
 
-- 部署新版前先备份数据库和独立保管的主密钥，再按既有流程执行 `alembic upgrade head`。迁移 `0041` 增加供应商、独立凭证及审计表，保留旧密文和不可变任务输入；有凭证或审计历史时拒绝有损降级。开发代理需保持 `/api/v1` 同源。
+部署侧通过 `ARCLIGHT_SERVICE_MODEL_POLICIES` 按精确 `(kind, supplier, base_url, model, protocol)` 登记 Agent 能力与媒体 `maximum_cost_per_output`／`pricing_version`，示例见 `.env.example`，API 与全部 Worker 使用相同配置。基础文字不强制应用费用报价；专业工具／多图需要匹配的 Agent 能力声明，收费媒体缺少可信报价时拒绝创建任务。服务器文字原生协议使用 `ARCLIGHT_LLM_PROTOCOL`。
+
+新媒体任务和概念图沿账号凭证快照执行，可通过 `GET /api/v1/projects/{project_id}/generation-jobs/services/{image|video|speech}/configuration` 读取当前脱敏配置。后续轮次、查询和授权重放保留原 Key；更改账号配置仅影响新任务。媒体结果保存在私有存储，图片继续经过连续性与人工选用门禁，音频／视频经完整解码后通过任务的 `/artifacts` 列表和鉴权下载读取，不自动确认使用权。
+
+失败任务的“重试任务”保留原配置；“使用当前配置重新发起”复用原业务输入并创建新任务。API 为带 `Idempotency-Key` 的 `POST /api/v1/runs/{id}/restart`，原调用结果未知时须先核验。旧任务、产物和凭证绑定保持不变。完整台词生产、音色库和成片流程仍按各自任务推进。
+
+- 部署新版前先备份数据库和独立保管的主密钥，再按既有流程执行 `alembic upgrade head`。迁移 `0041` 增加供应商、独立凭证及审计表；`0052` 增加协议字段、不可变媒体凭证绑定和结果登记。有相关历史时拒绝有损降级，旧运行不会自动切换协议。开发代理需保持 `/api/v1` 同源。代码更新不等于已执行业务库迁移。
 - API、初始化进程和全部 Worker 使用相同的 Fernet 主密钥。开发可设置 `ARCLIGHT_SERVICE_ENCRYPTION_KEY`；生产建议使用 `ARCLIGHT_SERVICE_ENCRYPTION_KEY_FILE` 指向容器内只读 Secret 文件，两者二选一。文件只含 `Fernet.generate_key()` 生成的主密钥，挂载由部署环境提供；路径变量不会自动创建或挂载 Secret。生产模式缺失或无效时拒绝启动，开发未配置时仍可保存无密钥预设。
 - 轮换前将数据库与密钥版本分别安全备份，并暂停凭证写入或先部署兼容读密钥。将新密钥设为主密钥，旧密钥通过 `ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS`（JSON 数组）或对应 `_FILE` 注入。在 `backend/` 执行 `uv run python -m arclight.workers.service_keys check`，再执行 `uv run python -m arclight.workers.service_keys rotate --apply --actor <运维身份>`；完成后重启全部进程，以移除旧密钥的配置再次运行 `check`，通过后才撤下旧密钥。轮换原子重加密独立凭证，不改写旧任务输入；旧主密钥进程禁止继续写入。历史备份仍须保留其对应密钥。
 - 自定义地址允许任意合规公网域名，要求 HTTPS／443，禁止 IP 字面量、内网地址、URL 凭证及查询参数。执行时校验全部 DNS 结果并固定连接 IP，保留原域名的 Host／TLS 校验，拒绝重定向及环境代理。部署网络还须阻断内网、云元数据及私网 NAT／代理路由，应用校验不能替代出站防火墙。

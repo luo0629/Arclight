@@ -100,12 +100,15 @@ def resolve_public(host: str, timeout: float) -> str:
 
 
 class PublicHTTPTransport(httpx.BaseTransport):
-    def __init__(self, dns_timeout: float = 5):
+    def __init__(self, dns_timeout: float = 5, *, allow_query: bool = False):
         self.dns_timeout = dns_timeout
+        self.allow_query = allow_query
         self.inner = httpx.HTTPTransport(trust_env=False, retries=0)
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
-        validate_endpoint(str(request.url))
+        validate_endpoint(
+            str(request.url.copy_with(query=None)) if self.allow_query else str(request.url)
+        )
         hostname = request.url.host
         address = resolve_public(hostname, self.dns_timeout)
         # HTTPcore uses this hostname for TLS verification as well as SNI. The TCP

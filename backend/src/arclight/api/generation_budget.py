@@ -317,7 +317,7 @@ def estimate_job(
 
     validate_target(db, project_id, payload)
     try:
-        quote = quote_job(db, project_id, payload)
+        quote = quote_job(db, project_id, payload, actor=actor)
     except DomainError as exc:
         if exc.code != "BUDGET_QUOTE_UNAVAILABLE":
             raise

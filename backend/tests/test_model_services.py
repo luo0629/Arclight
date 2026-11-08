@@ -8,7 +8,7 @@ from sqlalchemy.engine import make_url
 
 from arclight.application.model_services import run_settings
 from arclight.application.runtime import execute_run
-from arclight.domain.model_suppliers import SUPPLIERS
+from arclight.domain.model_suppliers import LEGACY_MODELS, SUPPLIERS
 from arclight.persistence.models import ModelService, ServiceCredential, WorkflowRun
 from arclight.providers.text import MockTextProvider
 
@@ -190,12 +190,19 @@ def test_service_config_requires_personal_session(client):
     assert client.get("/api/v1/me/model-services").status_code == 401
 
 
-@pytest.mark.parametrize("preset", SUPPLIERS, ids=lambda preset: preset.id)
+@pytest.mark.parametrize(
+    "preset",
+    [p for p in SUPPLIERS if p.kind == "text" and p.id in LEGACY_MODELS],
+    ids=lambda preset: preset.id,
+)
 def test_official_supplier_only_needs_selection_and_key(client, settings, preset):
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     account(client)
     catalog = client.get("/api/v1/me/model-services").json()
-    assert preset.model_dump() in catalog["suppliers"]
+    assert {
+        **preset.model_dump(exclude={"kind", "group", "description", "protocol"}),
+        "model": LEGACY_MODELS[preset.id],
+    } in catalog["suppliers"]
     saved = client.put(
         "/api/v1/me/model-services/text",
         json={
@@ -207,7 +214,7 @@ def test_official_supplier_only_needs_selection_and_key(client, settings, preset
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["base_url"] == preset.base_url
-    assert saved.json()["model"] == preset.model
+    assert saved.json()["model"] == LEGACY_MODELS[preset.id]
     assert saved.json()["response_format"] == preset.response_format
     assert saved.json()["supplier_name"] == preset.name
     assert client.get("/api/v1/me/model-services").json()["services"][0]["key_status"] == "READY"

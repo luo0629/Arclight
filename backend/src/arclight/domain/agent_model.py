@@ -48,6 +48,16 @@ class ModelToolCall(AgentModelValue):
     call_id: CallId
     tool_name: ToolName
     arguments: dict[str, JsonValue] = Field(default_factory=dict, repr=False)
+    provider_signature: str | None = Field(
+        default=None, max_length=16384, repr=False, exclude_if=lambda value: value is None
+    )
+    provider_call_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=256,
+        repr=False,
+        exclude_if=lambda value: value is None,
+    )
 
     def tool_request(self, run_id: UUID) -> AgentToolCall:
         return AgentToolCall(

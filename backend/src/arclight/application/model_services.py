@@ -26,6 +26,7 @@ def text_snapshot(db: Session, actor: str) -> dict | None:
         "supplier": row.supplier,
         "supplier_name": row.supplier_name,
         "response_format": row.response_format,
+        "protocol": row.protocol or "openai_chat",
         **credential_snapshot(row),
     }
 
@@ -43,5 +44,28 @@ def run_settings(settings: Settings, snapshot: dict | None, db: Session | None =
             "llm_api_key": SecretStr(secret),
             "llm_supplier": snapshot.get("supplier", "custom"),
             "llm_response_format": snapshot.get("response_format", "json_schema"),
+            "llm_protocol": snapshot.get("protocol", "openai_chat"),
         }
     )
+
+
+def agent_capabilities(settings: Settings, service: dict | None):
+    if not service:
+        return settings.llm_agent_capabilities
+    from arclight.domain.service_models import matching_policy
+
+    policy = matching_policy(settings.service_model_policies, {"kind": "text", **service})
+    if policy is not None:
+        return policy.agent_capabilities
+    # Reuse the existing declaration only for exactly the same destination and model.
+    if all(
+        service.get(field, default) == value
+        for field, default, value in (
+            ("supplier", "custom", settings.llm_supplier),
+            ("model", "", settings.llm_model),
+            ("base_url", "", settings.llm_base_url),
+            ("protocol", "openai_chat", settings.llm_protocol),
+        )
+    ):
+        return settings.llm_agent_capabilities
+    return None

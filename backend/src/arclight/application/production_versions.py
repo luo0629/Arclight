@@ -451,12 +451,16 @@ def capture_text(
         "model": service["model"] if service else settings.llm_model,
         "base_url": service["base_url"] if service else settings.llm_base_url,
         "supplier": service.get("supplier", "custom") if service else settings.llm_supplier,
+        "protocol": service.get("protocol", "openai_chat") if service else settings.llm_protocol,
         "response_format": service.get("response_format", "json_schema")
         if service
         else settings.llm_response_format,
     }
-    if settings.llm_agent_capabilities is not None:
-        model["agent_capabilities"] = settings.llm_agent_capabilities.model_dump(mode="json")
+    from arclight.application.model_services import agent_capabilities
+
+    capabilities = agent_capabilities(settings, service)
+    if capabilities is not None:
+        model["agent_capabilities"] = capabilities.model_dump(mode="json")
     parameters = {
         "max_tokens": TEXT_MAX_TOKENS,
         "timeout_seconds": settings.llm_timeout_seconds,
@@ -553,6 +557,7 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
             "llm_model": model["model"],
             "llm_base_url": model["base_url"],
             "llm_supplier": model.get("supplier", "custom"),
+            "llm_protocol": model.get("protocol", "openai_chat"),
             "llm_response_format": model.get("response_format", "json_schema"),
             "llm_agent_capabilities": AgentModelCapabilities.model_validate(
                 model["agent_capabilities"]

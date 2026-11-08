@@ -35,7 +35,7 @@ def test_authorized_deepseek_text_workflow(client, episode, settings, monkeypatc
     assert key, "The explicitly supplied local DeepSeek key file is empty"
     settings.provider = "openai_compatible"
     settings.llm_base_url = supplier.base_url
-    settings.llm_model = supplier.model
+    settings.llm_model = os.environ["ARCLIGHT_LIVE_TEXT_MODEL_ID"]
     settings.llm_supplier = supplier.id
     settings.llm_response_format = supplier.response_format
     settings.llm_api_key = SecretStr(key)
@@ -53,7 +53,7 @@ def test_authorized_deepseek_text_workflow(client, episode, settings, monkeypatc
     assert not evidence_file.exists(), "Review the existing live evidence before another paid run"
     evidence = {
         "provider": supplier.id,
-        "model": supplier.model,
+        "model": settings.llm_model,
         "story": story,
         "story_sha256": digest(story),
         "application_cost_cap": None,

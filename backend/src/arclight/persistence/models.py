@@ -34,6 +34,12 @@ from arclight.persistence.model_gateway import GatewayCall as GatewayCall
 from arclight.persistence.production_events import ProductionEvent as ProductionEvent
 from arclight.persistence.production_events import ProductionEventReceipt as ProductionEventReceipt
 from arclight.persistence.rendering import RenderExecution as RenderExecution
+from arclight.persistence.service_bindings import (
+    GenerationMediaArtifact as GenerationMediaArtifact,
+)
+from arclight.persistence.service_bindings import (
+    GenerationServiceBinding as GenerationServiceBinding,
+)
 from arclight.persistence.versions import ProductionVersion as ProductionVersion
 from arclight.persistence.versions import VersionBinding as VersionBinding
 
@@ -646,6 +652,7 @@ class ModelService(Entity, Base):
     supplier: Mapped[str] = mapped_column(String(40), default="custom")
     supplier_name: Mapped[str] = mapped_column(String(100), default="")
     response_format: Mapped[str] = mapped_column(String(20), default="json_schema")
+    protocol: Mapped[str] = mapped_column(String(40), default="", server_default="")
     credential_id: Mapped[UUID | None] = mapped_column(ForeignKey("service_credentials.id"))
     encrypted_key: Mapped[str | None] = mapped_column(String(8192), nullable=True)
     revision: Mapped[int] = mapped_column(default=1)

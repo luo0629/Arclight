@@ -20,7 +20,7 @@ from arclight.application.gateway_accounting import reconcile
 from arclight.application.model_gateway import invoke
 from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayPolicy, GatewayUsage
-from arclight.domain.model_suppliers import supplier_by_id
+from arclight.domain.model_suppliers import LEGACY_MODELS, supplier_by_id
 from arclight.persistence.model_gateway import GatewayCall
 from arclight.persistence.models import WorkflowRun
 from arclight.providers.text import MockTextProvider
@@ -31,7 +31,7 @@ def text_service(settings, monkeypatch):
     supplier = supplier_by_id("deepseek")
     settings.provider = "openai_compatible"
     settings.llm_base_url = supplier.base_url
-    settings.llm_model = supplier.model
+    settings.llm_model = LEGACY_MODELS[supplier.id]
     settings.llm_supplier = supplier.id
     settings.llm_response_format = supplier.response_format
     settings.llm_api_key = SecretStr("private-text-test-key")

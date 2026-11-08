@@ -1,5 +1,6 @@
 """Durable query facts with short transactions on either side of provider I/O."""
 
+from copy import deepcopy
 from time import monotonic
 from uuid import UUID
 
@@ -35,6 +36,7 @@ from arclight.providers.media_query import (
     ProviderQueryError,
     QueryReceipt,
 )
+from arclight.providers.media_submission import MediaSubmission
 
 
 class ManualResolution(MediaInput):
@@ -177,7 +179,18 @@ def reconcile(
         db.flush()
         fact_id = fact.id
         lookup = (
-            ProviderLookup(attempt.provider, attempt.model, attempt.provider_request_id)
+            ProviderLookup(
+                attempt.provider,
+                attempt.model,
+                attempt.provider_request_id,
+                MediaSubmission(
+                    job.id,
+                    attempt.id,
+                    attempt.input_manifest_id,
+                    deepcopy(attempt.input_snapshot_json),
+                    None,
+                ),
+            )
             if attempt.provider_request_id
             else None
         )

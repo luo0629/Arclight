@@ -87,8 +87,14 @@ class MockMediaSubmissionProvider:
 
 
 def get_media_submission_provider(
-    provider: str = "mock", settings: Settings | None = None
+    provider: str = "mock", settings: Settings | None = None, *, connection=None
 ) -> MediaSubmissionProvider:
+    if connection is not None and settings is not None:
+        from arclight.providers.native_media import NativeMediaProvider
+
+        if connection.configuration["provider"] != provider:
+            raise ValueError("Media provider binding mismatch")
+        return NativeMediaProvider(settings, connection)
     if provider == "openai" and settings is not None:
         from arclight.providers.openai_images import OpenAIImageProvider
 

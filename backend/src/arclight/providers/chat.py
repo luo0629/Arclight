@@ -50,6 +50,9 @@ def raise_for_provider_status(response: httpx.Response, body: dict | None = None
         "billing_hard_limit_reached",
         "credit_balance_too_low",
         "1113",
+        "arrearage",
+        "accountoverdueerror",
+        "prepaidquotaexhausted",
     }
     status = response.status_code
     usage = response_usage(body)

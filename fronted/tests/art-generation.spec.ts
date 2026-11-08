@@ -120,6 +120,43 @@ const progress = (page: Page) =>
     exact: true,
   });
 
+test("账号图片配置用于概念图，原生数量限制与模型保持一致", async ({ page }) => {
+  const { project } = await setup(page);
+  await fill(page, "查看账号原生图片配置", 1);
+  await page.getByLabel("生成概念图并比较修订", { exact: true }).check();
+  let configurationReads = 0;
+  await page.route(
+    `**/api/v1/projects/${project.id}/generation-jobs/services/image/configuration`,
+    async (route) => {
+      configurationReads += 1;
+      await route.fulfill({
+        json: {
+          provider: "cogview",
+          enabled: true,
+          model: "selected-cogview-id",
+          configuration_version: "account-media-config:1",
+          capabilities: { max_batch_size: 1 },
+        },
+      });
+    },
+  );
+  await page.getByRole("combobox", { name: "概念图服务", exact: true }).click();
+  await page
+    .getByRole("option", { name: "我的图片服务（或服务器默认）", exact: true })
+    .click();
+  await expect(page.getByLabel("概念图模型", { exact: true })).toHaveValue(
+    "selected-cogview-id",
+  );
+  await expect(page.getByLabel("概念图模型", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("每轮候选数量", { exact: true })).toHaveValue(
+    "1",
+  );
+  await expect(
+    page.getByLabel("每轮候选数量", { exact: true }),
+  ).toHaveAttribute("max", "1");
+  expect(configurationReads).toBe(1);
+});
+
 for (const verdict of ["approve", "reject"] as const) {
   test(`ART-05: clarification survives refresh and ${verdict} resumes the exact saved art run`, async ({
     page,

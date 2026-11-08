@@ -16,7 +16,7 @@ import { api, message } from "@/lib/api/client";
 export type ConceptPlan = {
   target_type: "CHARACTER" | "SCENE" | "PROP" | "STYLE";
   spec: {
-    provider: "mock" | "openai";
+    provider: string;
     model: string;
     model_config_version: string;
     prompt: string;
@@ -60,10 +60,16 @@ export default function ArtConceptFields({
 }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [maxBatch, setMaxBatch] = useState(
+    value?.spec.provider && !["mock", "openai"].includes(value.spec.provider)
+      ? 1
+      : 4,
+  );
   async function chooseProvider(provider: string) {
     if (!value) return;
     setError("");
     if (provider === "mock") {
+      setMaxBatch(4);
       onChange({
         ...value,
         spec: {
@@ -78,22 +84,30 @@ export default function ArtConceptFields({
     setLoading(true);
     try {
       const config = await api<{
+        provider: string;
         enabled: boolean;
+        message?: string;
+        capabilities?: { max_batch_size: number };
         model: string;
         configuration_version: string;
-      }>(
-        `/projects/${projectId}/generation-jobs/providers/openai/configuration`,
-      );
+      }>(`/projects/${projectId}/generation-jobs/services/image/configuration`);
       if (!config.enabled)
-        throw new Error("图像服务尚未启用，请先配置图像服务与可信报价。");
+        throw new Error(
+          config.message || "图像服务尚未启用，请先配置图像服务与可信报价。",
+        );
+      const maximum = config.capabilities?.max_batch_size ?? 4;
+      const batch = Math.min(maximum, value.spec.batch_size);
+      setMaxBatch(maximum);
       onChange({
         ...value,
         spec: {
           ...value.spec,
-          provider: "openai",
+          provider: config.provider,
+          batch_size: batch,
           model: config.model,
           model_config_version: config.configuration_version,
         },
+        maximum_candidates: batch * value.maximum_rounds,
       });
     } catch (error) {
       setError(message(error));
@@ -137,12 +151,12 @@ export default function ArtConceptFields({
             <FieldLabel htmlFor="art-concept-provider">概念图服务</FieldLabel>
             <ChoiceSelect
               id="art-concept-provider"
-              value={value.spec.provider}
+              value={value.spec.provider === "mock" ? "mock" : "configured"}
               disabled={disabled}
               onValueChange={(provider) => void chooseProvider(provider)}
               options={[
                 { value: "mock", label: "本地 Mock（合成图片）" },
-                { value: "openai", label: "已配置的 OpenAI 图像服务" },
+                { value: "configured", label: "我的图片服务（或服务器默认）" },
               ]}
             />
           </Field>
@@ -153,7 +167,7 @@ export default function ArtConceptFields({
               required
               maxLength={160}
               value={value.spec.model}
-              disabled={disabled}
+              disabled={disabled || value.spec.provider !== "mock"}
               onChange={(event) =>
                 onChange({
                   ...value,
@@ -188,13 +202,13 @@ export default function ArtConceptFields({
               id="art-concept-count"
               type="number"
               min={1}
-              max={4}
+              max={maxBatch}
               required
               value={value.spec.batch_size}
               disabled={disabled}
               onChange={(event) => {
                 const count = Number(event.target.value);
-                if (count >= 1 && count <= 4)
+                if (count >= 1 && count <= maxBatch)
                   quantity(count, value.maximum_rounds);
               }}
             />

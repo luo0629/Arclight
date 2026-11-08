@@ -19,7 +19,7 @@ from arclight.application.service_credentials import (
 )
 from arclight.core.errors import DomainError
 from arclight.core.service_keys import keyring
-from arclight.domain.model_suppliers import SUPPLIERS, supplier_by_id
+from arclight.domain.model_suppliers import LEGACY_MODELS, PROTOCOLS, SUPPLIERS, supplier_by_id
 from arclight.persistence.models import ModelService, ServiceAudit
 
 Kind = Literal["text", "image", "video", "speech"]
@@ -27,12 +27,14 @@ router = APIRouter(prefix="/api/v1/me/model-services", tags=["model-services"])
 
 
 class ServiceInput(Input):
+    contract_version: Literal[1, 2] = 1
     mode: Literal["server", "custom"] = "server"
     base_url: str = Field(default="", max_length=500)
     model: str = Field(default="", max_length=160)
     supplier: str = Field(default="custom", max_length=40)
     supplier_name: str = Field(default="", max_length=100)
     response_format: Literal["json_schema", "json_object"] = "json_schema"
+    protocol: str = Field(default="", max_length=40)
     api_key: SecretStr | None = Field(default=None, max_length=2000)
     clear_key: bool = False
     expected_revision: int = Field(ge=0)
@@ -53,13 +55,20 @@ def public(row: ModelService) -> dict:
         "supplier": row.supplier,
         "supplier_name": row.supplier_name,
         "response_format": row.response_format,
+        "protocol": row.protocol,
         "has_key": bool(row.encrypted_key or row.credential_id),
         "revision": row.revision,
     }
 
 
 @router.get("")
-def list_services(db: Database, actor: Actor, request: Request, response: Response) -> dict:
+def list_services(
+    db: Database,
+    actor: Actor,
+    request: Request,
+    response: Response,
+    catalog_version: Annotated[int, Query(ge=1, le=2)] = 1,
+) -> dict:
     rows = list(db.scalars(select(ModelService).where(ModelService.user_id == user_id(actor))))
     settings = request.app.state.settings
     response.headers["Cache-Control"] = "no-store"
@@ -80,7 +89,18 @@ def list_services(db: Database, actor: Actor, request: Request, response: Respon
         "can_store_keys": status["code"] == "READY",
         "key_storage": status,
         "text_runtime": "mock" if settings.provider == "mock" else "服务器文字服务",
-        "suppliers": [row.model_dump() for row in SUPPLIERS],
+        "catalog_version": catalog_version,
+        "protocols": PROTOCOLS,
+        "suppliers": [
+            row.model_dump()
+            if catalog_version == 2
+            else {
+                **row.model_dump(exclude={"kind", "group", "description", "protocol"}),
+                "model": LEGACY_MODELS[row.id],
+            }
+            for row in SUPPLIERS
+            if catalog_version == 2 or (row.kind == "text" and row.id in LEGACY_MODELS)
+        ],
     }
 
 
@@ -139,11 +159,19 @@ def save_service(
     if payload.expected_revision != (row.revision if row else 0):
         raise DomainError("SERVICE_CONFLICT", "配置已在其他页面更新，请重新打开后再保存", 409)
     settings = request.app.state.settings
-    if kind != "text" and payload.mode == "custom":
+    if payload.contract_version == 1 and kind != "text" and payload.mode == "custom":
         raise DomainError("SERVICE_NOT_READY", "此服务生成链路尚未开放，只能保存预设", 422)
-    preset = supplier_by_id(payload.supplier)
-    if payload.supplier != "custom" and (preset is None or kind != "text"):
-        raise DomainError("INVALID_SUPPLIER", "请选择可用的文字供应商或自定义供应商", 422)
+    preset = supplier_by_id(payload.supplier, kind)
+    if payload.supplier != "custom" and (
+        preset is None
+        or (payload.contract_version == 1 and (kind != "text" or preset.id not in LEGACY_MODELS))
+    ):
+        raise DomainError("INVALID_SUPPLIER", "请选择当前类型的服务商或自定义", 422)
+    protocol = preset.protocol if preset else (payload.protocol or PROTOCOLS[kind][0])
+    if protocol not in PROTOCOLS[kind] or (
+        preset and payload.protocol and protocol != payload.protocol
+    ):
+        raise DomainError("INVALID_PROTOCOL", "协议与服务类型或预设不匹配", 422)
     base = payload.base_url.strip() or (preset.base_url if preset else "")
     if base:
         base = validate_endpoint(base)
@@ -155,11 +183,22 @@ def save_service(
     if preset and (base != preset.base_url or response_format != preset.response_format):
         raise DomainError("SUPPLIER_MISMATCH", "预设地址或输出格式已变化，请切换自定义供应商", 422)
     name = preset.name if preset else payload.supplier_name.strip()
-    model = payload.model.strip() or (preset.model if preset else "")
+    model = payload.model.strip()
+    if not model and preset and payload.contract_version == 1:
+        model = LEGACY_MODELS[preset.id]
+    if payload.contract_version == 2 and payload.mode == "custom" and not model:
+        raise DomainError("SERVICE_MODEL_REQUIRED", "请填写服务商文档中的模型 ID", 422)
     has_new_key = bool(payload.api_key and payload.api_key.get_secret_value())
     if payload.clear_key and has_new_key:
         raise DomainError("INVALID_KEY_CHANGE", "清除和替换密钥不能同时进行", 422)
-    destination_changed = bool(row and (row.base_url != base or row.supplier != payload.supplier))
+    destination_changed = bool(
+        row
+        and (
+            row.base_url != base
+            or row.supplier != payload.supplier
+            or (row.protocol and row.protocol != protocol)
+        )
+    )
     if (
         row
         and (row.credential_id or row.encrypted_key)
@@ -183,7 +222,9 @@ def save_service(
         credential_id = store_credential(db, settings, payload.api_key.get_secret_value()).id
         encrypted = None
     if payload.mode == "custom" and (not base or not model or not (encrypted or credential_id)):
-        raise DomainError("SERVICE_INCOMPLETE", "启用文字服务需要地址、模型和已保存密钥", 422)
+        raise DomainError(
+            "SERVICE_INCOMPLETE", "请填写 API Key 和模型 ID；自定义服务还需 Base URL", 422
+        )
     if payload.mode == "custom":
         read_credential(
             db,
@@ -199,6 +240,7 @@ def save_service(
         supplier=payload.supplier,
         supplier_name=name,
         response_format=response_format,
+        protocol=protocol,
         credential_id=credential_id,
         encrypted_key=encrypted,
         revision=payload.expected_revision + 1,

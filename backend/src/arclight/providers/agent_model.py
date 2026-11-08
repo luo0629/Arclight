@@ -100,6 +100,16 @@ def wire_messages(request: AgentModelRequest, images: dict[UUID, ContextImage]) 
                         {
                             "id": call.call_id,
                             "type": "function",
+                            **(
+                                {"provider_signature": call.provider_signature}
+                                if call.provider_signature
+                                else {}
+                            ),
+                            **(
+                                {"provider_call_id": call.provider_call_id}
+                                if call.provider_call_id
+                                else {}
+                            ),
                             "function": {
                                 "name": call.tool_name,
                                 "arguments": json.dumps(
@@ -175,6 +185,16 @@ class OpenAICompatibleAgentProvider:
             ]
             payload["tool_choice"] = "auto"
         try:
+            if self.settings.llm_protocol != "openai_chat":
+                from arclight.providers.native_text import native_chat
+
+                body = native_chat(self.settings, payload)
+                self.last_usage = response_usage(body)
+                return self._parse(request, tools, result_model, body)
+            for message in messages:
+                for call in message.get("tool_calls", []):
+                    call.pop("provider_signature", None)
+                    call.pop("provider_call_id", None)
             with (
                 httpx.Client(
                     timeout=self.settings.llm_timeout_seconds,
@@ -248,6 +268,8 @@ class OpenAICompatibleAgentProvider:
                         call_id=value["id"],
                         tool_name=function["name"],
                         arguments=json.loads(function["arguments"]),
+                        provider_signature=value.get("provider_signature"),
+                        provider_call_id=value.get("provider_call_id"),
                     )
                     call.tool_request(request.run_id)
                     if call.tool_name not in names or call.call_id in seen:

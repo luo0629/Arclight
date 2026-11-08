@@ -10,6 +10,7 @@ import {
   Settings2,
   X,
   Check,
+  Info,
 } from "lucide-react";
 import Dialog from "@/components/shared/app-dialog";
 import ServiceProviders, {
@@ -20,6 +21,15 @@ import ServiceProviders, {
 import { api, json, message } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import {
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field";
 import { FormLabel, Notice, LoadingState } from "@/components/ui-kit";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ChoiceSelect } from "@/components/choice-select";
@@ -31,6 +41,7 @@ type Profile = {
   supplier: string;
   supplier_name: string;
   response_format: ResponseFormat;
+  protocol: string;
   base_url: string;
   model: string;
   has_key: boolean;
@@ -40,13 +51,8 @@ type Profile = {
 type Draft = Profile & { api_key: string; clear_key: boolean; dirty: boolean };
 type Configuration = {
   services: Profile[];
-  suppliers: {
-    id: string;
-    name: string;
-    base_url: string;
-    model: string;
-    response_format: ResponseFormat;
-  }[];
+  suppliers: ServicePreset[];
+  protocols: Record<Kind, string[]>;
   can_store_keys: boolean;
   text_runtime: string;
   key_storage: { code: string; message: string };
@@ -63,6 +69,7 @@ const empty = (kind: Kind): Draft => ({
   supplier: "custom",
   supplier_name: "",
   response_format: "json_schema",
+  protocol: "",
   base_url: "",
   model: "",
   has_key: false,
@@ -78,6 +85,25 @@ const initialDrafts = (): Record<Kind, Draft> => ({
   speech: empty("speech"),
 });
 const endpoint = (url: string) => url.trim().replace(/\/+$/, "");
+const protocolNames: Record<string, string> = {
+  openai_chat: "OpenAI Chat Completions",
+  gemini: "Google Gemini",
+  qwen_chat: "通义 DashScope",
+  openai_image: "OpenAI 图片",
+  cogview: "智谱 CogView",
+  seedream: "火山 Seedream",
+  siliconflow_image: "硅基流动图片",
+  gemini_image: "Google Gemini 图片",
+  seedance: "火山 Seedance",
+  cogvideo: "智谱 CogVideo",
+  wan: "通义万相",
+  veo: "Google Veo",
+  gemini_video: "Google Gemini 视频",
+  xai_video: "xAI 视频",
+  qwen_tts: "通义语音",
+  siliconflow_tts: "硅基流动语音",
+  openai_tts: "OpenAI 语音",
+};
 
 export default function ServiceSettings({
   onDismiss,
@@ -92,6 +118,8 @@ export default function ServiceSettings({
   const [saved, setSaved] = useState("");
   const [confirmClose, setConfirmClose] = useState(false);
   const confirmation = useRef<HTMLDivElement>(null);
+  const modelInput = useRef<HTMLInputElement>(null);
+  const [modelError, setModelError] = useState("");
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     if (confirmClose) {
@@ -102,12 +130,29 @@ export default function ServiceSettings({
   useEffect(() => {
     let live = true;
     setError("");
-    void api<Configuration>("/me/model-services")
+    void api<Configuration>("/me/model-services?catalog_version=2")
       .then((result) => {
         if (!live) return;
         const next = initialDrafts();
-        for (const profile of result.services)
-          next[profile.kind] = { ...empty(profile.kind), ...profile };
+        for (const profile of result.services) {
+          const official = result.suppliers.find(
+            (item) =>
+              item.kind === profile.kind && item.id === profile.supplier,
+          );
+          const changedEndpoint =
+            official &&
+            endpoint(profile.base_url) !== endpoint(official.base_url);
+          next[profile.kind] = {
+            ...empty(profile.kind),
+            ...profile,
+            ...(changedEndpoint ? { supplier: "custom" } : {}),
+            protocol:
+              profile.protocol ||
+              (profile.kind === "text"
+                ? "openai_chat"
+                : official?.protocol || result.protocols[profile.kind][0]),
+          };
+        }
         setDrafts(next);
         setConfig(result);
       })
@@ -119,24 +164,15 @@ export default function ServiceSettings({
     };
   }, [attempt]);
   const draft = drafts[kind];
-  const presets: ServicePreset[] =
-    kind === "text"
-      ? (config?.suppliers.map((supplier) => ({
-          ...supplier,
-          kind: "text" as const,
-          group: ["deepseek", "zhipu"].includes(supplier.id)
-            ? ("domestic" as const)
-            : ("international" as const),
-          description: supplier.model,
-          models: [supplier.model],
-        })) ?? [])
-      : [];
+  const presets =
+    config?.suppliers.filter((supplier) => supplier.kind === kind) ?? [];
   const preset = presets.find((row) => row.id === draft.supplier);
   const stored = config?.services.find((row) => row.kind === kind);
   const hasStoredKey =
     !!stored?.has_key &&
     stored.supplier === draft.supplier &&
-    endpoint(stored.base_url) === endpoint(draft.base_url);
+    endpoint(stored.base_url) === endpoint(draft.base_url) &&
+    (!stored.protocol || stored.protocol === draft.protocol);
 
   function change(patch: Partial<Draft>) {
     setDrafts((current) => ({
@@ -145,6 +181,7 @@ export default function ServiceSettings({
     }));
     setSaved("");
     setError("");
+    setModelError("");
     setConfirmClose(false);
   }
   function selectProvider(id: string) {
@@ -154,16 +191,21 @@ export default function ServiceSettings({
     }
     const next = presets.find((row) => row.id === id);
     if (id === draft.supplier) {
-      change({ mode: kind === "text" ? "custom" : "server" });
+      change({ mode: "custom" });
       return;
     }
     const previous = stored?.supplier === id ? stored : null;
     change({
       supplier: id,
       supplier_name: next?.name ?? previous?.supplier_name ?? "",
-      mode: kind === "text" ? "custom" : "server",
+      mode: "custom",
+      protocol:
+        next?.protocol ??
+        previous?.protocol ??
+        config?.protocols[kind][0] ??
+        "",
       base_url: next?.base_url ?? previous?.base_url ?? "",
-      model: previous?.model || next?.models[0] || "",
+      model: previous?.model ?? "",
       response_format:
         next?.response_format ?? previous?.response_format ?? "json_schema",
       api_key: "",
@@ -177,6 +219,11 @@ export default function ServiceSettings({
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (busy || !draft.dirty) return;
+    if (draft.mode === "custom" && !draft.model.trim()) {
+      setModelError("请填写供应商提供的模型 ID。");
+      modelInput.current?.focus();
+      return;
+    }
     setBusy(true);
     setError("");
     setSaved("");
@@ -184,11 +231,13 @@ export default function ServiceSettings({
       const profile = await api<Profile>(
         "/me/model-services/" + kind,
         json("PUT", {
+          contract_version: 2,
           mode: draft.mode,
           supplier: draft.supplier,
           supplier_name: draft.supplier_name,
           response_format: draft.response_format,
-          base_url: draft.base_url,
+          protocol: draft.protocol,
+          base_url: preset ? undefined : draft.base_url,
           model: draft.model,
           api_key: draft.api_key || null,
           clear_key: draft.clear_key,
@@ -212,11 +261,9 @@ export default function ServiceSettings({
       );
       setSaved(
         "已保存到当前账号。" +
-          (kind === "text"
-            ? draft.mode === "custom"
-              ? "新建的文字任务将使用此服务。"
-              : "文字任务使用服务器默认服务。"
-            : "生成链路尚未开放，本次只保存预设。"),
+          (draft.mode === "custom"
+            ? "新建的对应任务将使用此配置，已有任务保留原配置。"
+            : "新任务使用服务器默认服务。"),
       );
     } catch (err) {
       setError(message(err));
@@ -229,7 +276,7 @@ export default function ServiceSettings({
       labelledBy="service-settings-title"
       busy={busy}
       onDismiss={dismiss}
-      className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
+      className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-6xl"
     >
       <header className="flex shrink-0 items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
         <div className="flex items-start gap-3">
@@ -239,7 +286,7 @@ export default function ServiceSettings({
               模型与服务
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              选择服务商，填入密钥。配置仅属于你的账号。
+              选择服务商，填写 API Key 和模型 ID。配置仅属于你的账号。
             </p>
           </div>
         </div>
@@ -271,7 +318,7 @@ export default function ServiceSettings({
         </div>
       ) : (
         <div className="flex min-h-0 flex-col overflow-y-auto md:flex-row">
-          <aside className="shrink-0 border-b bg-muted/50 p-3 md:w-44 md:border-r md:border-b-0 md:p-4">
+          <aside className="shrink-0 border-b bg-muted/40 p-3 md:w-52 md:border-r md:border-b-0 md:p-4">
             <ToggleGroup
               type="single"
               value={kind}
@@ -279,6 +326,7 @@ export default function ServiceSettings({
                 if (!value) return;
                 setKind(value as Kind);
                 setError("");
+                setModelError("");
                 setSaved("");
                 setConfirmClose(false);
               }}
@@ -291,16 +339,30 @@ export default function ServiceSettings({
                   key={service.kind}
                   value={service.kind}
                   aria-label={service.label}
-                  className="h-10 w-full justify-start gap-2 rounded-lg px-3 text-sm data-[state=on]:bg-accent/60"
+                  className="h-11 w-full justify-start gap-2 rounded-md border border-border bg-background px-3 text-sm data-[state=on]:border-primary data-[state=on]:bg-primary data-[state=on]:text-primary-foreground"
                 >
-                  <service.icon className="size-4 shrink-0" />
+                  <service.icon
+                    className="size-4 shrink-0"
+                    aria-hidden="true"
+                  />
                   {service.label}
                   {drafts[service.kind].dirty ? (
                     <span
-                      className="ml-auto size-1.5 rounded-full bg-primary"
+                      className="size-1.5 shrink-0 rounded-full bg-current"
                       aria-label="未保存"
                     />
                   ) : null}
+                  <Badge
+                    variant="secondary"
+                    className="ml-auto tabular-nums"
+                    aria-label={`${config.suppliers.filter((row) => row.kind === service.kind).length} 个预设`}
+                  >
+                    {
+                      config.suppliers.filter(
+                        (row) => row.kind === service.kind,
+                      ).length
+                    }
+                  </Badge>
                 </ToggleGroupItem>
               ))}
             </ToggleGroup>
@@ -310,20 +372,18 @@ export default function ServiceSettings({
               创作任务使用发起者的配置。
             </p>
           </aside>
-          <div className="min-w-0 flex-1 space-y-6 p-4 sm:p-6 md:max-h-[calc(90dvh-87px)] md:overflow-y-auto">
-            <div className="rounded-lg border bg-sky/50 px-3 py-2.5 text-xs leading-relaxed text-muted-foreground">
-              {kind === "text"
-                ? "选择预设将自动填入服务地址与推荐模型，只需填写对应密钥即可保存使用。"
-                : "填写服务地址与模型。仅保存预设 · 尚未接入生成，不会调用供应商。"}
-            </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-6 p-4 sm:p-6 md:max-h-[calc(90dvh-87px)] md:overflow-y-auto">
+            <Alert role="note">
+              <Info aria-hidden="true" />
+              <AlertDescription>
+                指定服务商只需填写 API Key 和模型 ID；选择「自定义」还需填写
+                Base URL。
+              </AlertDescription>
+            </Alert>
             <ServiceProviders
               kind={kind}
               presets={presets}
-              value={
-                kind === "text" && draft.mode === "server"
-                  ? "server"
-                  : draft.supplier
-              }
+              value={draft.mode === "server" ? "server" : draft.supplier}
               disabled={busy}
               onSelect={selectProvider}
             />
@@ -333,172 +393,206 @@ export default function ServiceSettings({
             >
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold">
-                  {preset?.name ?? "自定义服务"}配置
+                  {draft.mode === "server"
+                    ? "服务器默认服务"
+                    : (preset?.name ?? "自定义服务") + "配置"}
                 </h3>
                 <span className="text-xs text-muted-foreground">
-                  {kind !== "text"
-                    ? "仅保存预设"
-                    : draft.mode === "server"
-                      ? "个人预设未启用"
-                      : "用于新文字任务"}
+                  {draft.mode === "server" ? "个人配置未启用" : "用于新任务"}
                 </span>
               </div>
-              {kind === "text" && !preset && (
-                <FormLabel>
-                  文字任务服务
-                  <ChoiceSelect
-                    aria-label="文字任务服务"
-                    value={draft.mode}
-                    disabled={busy}
-                    onValueChange={(mode) =>
-                      change({ mode: mode as Profile["mode"] })
-                    }
-                    options={[
-                      { value: "server", label: "使用服务器默认服务" },
-                      { value: "custom", label: "使用我的服务" },
-                    ]}
-                  />
-                </FormLabel>
-              )}
-              {draft.supplier === "custom" && (
-                <FormLabel>
-                  供应商名称（选填）
-                  <Input
-                    aria-label="供应商名称（选填）"
-                    maxLength={100}
-                    placeholder="例如：我的模型服务"
-                    value={draft.supplier_name}
-                    disabled={busy}
-                    onChange={(event) =>
-                      change({ supplier_name: event.target.value })
-                    }
-                  />
-                </FormLabel>
-              )}
-              <FormLabel>
-                API Key
-                <Input
-                  type="password"
-                  autoComplete="new-password"
-                  maxLength={2000}
-                  value={draft.api_key}
-                  disabled={busy || !config.can_store_keys}
-                  placeholder={
-                    hasStoredKey && !draft.clear_key
-                      ? "已保存密钥；留空保持不变"
-                      : "粘贴此服务商的 API Key"
-                  }
-                  onChange={(event) =>
-                    change({ api_key: event.target.value, clear_key: false })
-                  }
-                />
-              </FormLabel>
-              <div className="-mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
-                <span>
-                  {draft.clear_key
-                    ? "保存后将清除密钥"
-                    : hasStoredKey
-                      ? "密钥已加密保存"
-                      : stored?.has_key
-                        ? "服务商或地址已更改，请填写对应密钥"
-                        : "密钥仅加密保存在你的账号下"}
-                </span>
-                {hasStoredKey && (
+              {draft.clear_key && (
+                <Notice tone="info">
+                  保存后清除个人密钥，新任务使用服务器默认服务。
                   <Button
                     type="button"
                     variant="ghost"
                     size="sm"
-                    disabled={busy}
-                    onClick={() =>
-                      change({ clear_key: !draft.clear_key, api_key: "" })
-                    }
+                    onClick={() => change({ clear_key: false, mode: "custom" })}
                   >
-                    {draft.clear_key ? "保留原密钥" : "清除已存密钥"}
+                    保留原密钥
                   </Button>
-                )}
-              </div>
-              <div className="grid min-w-0 gap-4 sm:grid-cols-2">
-                <FormLabel>
-                  服务地址
-                  <Input
-                    aria-label="服务地址"
-                    type="url"
-                    placeholder="https://provider.example/v1"
-                    maxLength={500}
-                    value={draft.base_url}
-                    readOnly={!!preset}
-                    disabled={busy}
-                    onChange={(event) =>
-                      change({
-                        base_url: event.target.value,
-                        api_key: "",
-                        clear_key: false,
-                      })
-                    }
-                  />
-                  <span className="text-xs font-normal text-muted-foreground">
-                    {preset
-                      ? "已按所选服务商填写；其他地址请选择自定义。"
-                      : "填写服务的 API 基础地址，使用公网 HTTPS。"}
-                  </span>
-                </FormLabel>
-                <FormLabel>
-                  模型名称
-                  <Input
-                    aria-label="模型名称"
-                    placeholder="供应商提供的模型 ID"
-                    maxLength={160}
-                    value={draft.model}
-                    disabled={busy}
-                    onChange={(event) => change({ model: event.target.value })}
-                  />
-                  <span className="text-xs font-normal text-muted-foreground">
-                    可按账号权限修改为其他模型 ID。
-                  </span>
-                </FormLabel>
-              </div>
-              {preset && preset.models.length > 1 && (
-                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                  推荐模型
-                  {preset.models.map((model) => (
-                    <Button
-                      key={model}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-7 max-w-full text-xs"
-                      disabled={busy}
-                      onClick={() => change({ model })}
-                    >
-                      <span className="truncate">{model}</span>
-                    </Button>
-                  ))}
-                </div>
+                </Notice>
               )}
-              {kind === "text" && !preset && (
-                <FormLabel>
-                  结构化输出格式
-                  <ChoiceSelect
-                    aria-label="结构化输出格式"
-                    value={draft.response_format}
-                    disabled={busy}
-                    onValueChange={(value) =>
-                      change({ response_format: value as ResponseFormat })
-                    }
-                    options={[
-                      { value: "json_schema", label: "JSON Schema" },
-                      {
-                        value: "json_object",
-                        label: "JSON 对象",
-                      },
-                    ]}
-                  />
-                </FormLabel>
+              {draft.mode === "custom" && (
+                <>
+                  {draft.supplier === "custom" && (
+                    <FormLabel>
+                      供应商名称（选填）
+                      <Input
+                        aria-label="供应商名称（选填）"
+                        maxLength={100}
+                        placeholder="例如：我的模型服务"
+                        value={draft.supplier_name}
+                        disabled={busy}
+                        onChange={(event) =>
+                          change({ supplier_name: event.target.value })
+                        }
+                      />
+                    </FormLabel>
+                  )}
+                  <FormLabel>
+                    API Key
+                    <Input
+                      type="password"
+                      required={!hasStoredKey || draft.clear_key}
+                      autoComplete="new-password"
+                      maxLength={2000}
+                      value={draft.api_key}
+                      disabled={busy || !config.can_store_keys}
+                      placeholder={
+                        hasStoredKey && !draft.clear_key
+                          ? "已保存密钥；留空保持不变"
+                          : "粘贴此服务商的 API Key"
+                      }
+                      onChange={(event) =>
+                        change({
+                          api_key: event.target.value,
+                          clear_key: false,
+                        })
+                      }
+                    />
+                  </FormLabel>
+                  <div className="-mt-2 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                    <span>
+                      {draft.clear_key
+                        ? "保存后将清除密钥"
+                        : hasStoredKey
+                          ? "密钥已加密保存"
+                          : stored?.has_key
+                            ? "服务商或地址已更改，请填写对应密钥"
+                            : "密钥仅加密保存在你的账号下"}
+                    </span>
+                    {hasStoredKey && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() =>
+                          change({
+                            clear_key: true,
+                            api_key: "",
+                            mode: "server",
+                          })
+                        }
+                      >
+                        {draft.clear_key ? "保留原密钥" : "清除已存密钥"}
+                      </Button>
+                    )}
+                  </div>
+                  <FieldGroup className="grid min-w-0 gap-4 sm:grid-cols-2">
+                    {!preset && (
+                      <FormLabel>
+                        Base URL
+                        <Input
+                          aria-label="Base URL"
+                          required
+                          type="url"
+                          placeholder="https://provider.example/v1"
+                          maxLength={500}
+                          value={draft.base_url}
+                          disabled={busy}
+                          onChange={(event) =>
+                            change({
+                              base_url: event.target.value,
+                              api_key: "",
+                              clear_key: false,
+                            })
+                          }
+                        />
+                        <span className="text-xs font-normal text-muted-foreground">
+                          填写服务的 API 基础地址，使用公网 HTTPS。
+                        </span>
+                      </FormLabel>
+                    )}
+                    <Field data-invalid={!!modelError} data-disabled={busy}>
+                      <FieldLabel htmlFor="service-model">
+                        模型 ID
+                        {(preset || draft.mode === "custom") && (
+                          <span className="text-xs font-normal text-muted-foreground">
+                            （必填）
+                          </span>
+                        )}
+                      </FieldLabel>
+                      <Input
+                        id="service-model"
+                        ref={modelInput}
+                        aria-label="模型 ID"
+                        required
+                        aria-required={!!preset || draft.mode === "custom"}
+                        aria-invalid={!!modelError}
+                        aria-describedby={
+                          modelError
+                            ? "service-model-error"
+                            : "service-model-hint"
+                        }
+                        placeholder="供应商提供的模型 ID"
+                        maxLength={160}
+                        value={draft.model}
+                        disabled={busy}
+                        onChange={(event) =>
+                          change({ model: event.target.value })
+                        }
+                      />
+                      <FieldDescription id="service-model-hint">
+                        请手动填写当前服务商支持的模型 ID。
+                      </FieldDescription>
+                      {modelError && (
+                        <FieldError id="service-model-error">
+                          {modelError}
+                        </FieldError>
+                      )}
+                    </Field>
+                  </FieldGroup>
+                  {preset && (
+                    <p className="text-xs text-muted-foreground">
+                      使用 {preset.name} 官方接口，服务地址由系统配置。
+                    </p>
+                  )}
+                  {!preset && (
+                    <FormLabel>
+                      API 协议
+                      <ChoiceSelect
+                        aria-label="API 协议"
+                        value={draft.protocol || config.protocols[kind][0]}
+                        disabled={busy}
+                        onValueChange={(protocol) =>
+                          change({ protocol, api_key: "", clear_key: false })
+                        }
+                        options={config.protocols[kind].map((value) => ({
+                          value,
+                          label: protocolNames[value] ?? value,
+                        }))}
+                      />
+                    </FormLabel>
+                  )}
+                  {kind === "text" && !preset && (
+                    <FormLabel>
+                      结构化输出格式
+                      <ChoiceSelect
+                        aria-label="结构化输出格式"
+                        value={draft.response_format}
+                        disabled={busy}
+                        onValueChange={(value) =>
+                          change({ response_format: value as ResponseFormat })
+                        }
+                        options={[
+                          { value: "json_schema", label: "JSON Schema" },
+                          {
+                            value: "json_object",
+                            label: "JSON 对象",
+                          },
+                        ]}
+                      />
+                    </FormLabel>
+                  )}
+                </>
               )}
               {!config.can_store_keys && (
                 <Notice tone="info">
                   {config.key_storage.message}
-                  。可先保存地址与模型，请联系管理员恢复密钥存储后再填写密钥。
+                  。请联系管理员恢复密钥存储后再保存个人服务。
                 </Notice>
               )}
               {hasStoredKey &&

@@ -329,10 +329,19 @@ def start_run(
         version = ART_WORKFLOW_VERSION
         if art_concept_plan is not None:
             from arclight.application.art_concepts import freeze_concept_plan
+            from arclight.application.media_services import select_for_spec
             from arclight.domain.art_concepts import CONCEPT_WORKFLOW_VERSION
 
+            image_service = select_for_spec(db, actor, art_concept_plan.spec, "IMAGE")
+            if image_service:
+                inputs["_image_service"] = image_service.private_snapshot()
             inputs["art_direction"]["concept"] = freeze_concept_plan(
-                db, project.id, episode.id, art_concept_plan
+                db,
+                project.id,
+                episode.id,
+                art_concept_plan,
+                actor=actor,
+                frozen_service=inputs.get("_image_service"),
             )
             version = CONCEPT_WORKFLOW_VERSION
     elif professional_director:

@@ -179,15 +179,16 @@ test("新版：服务配置真实持久化、切区保留、密钥不回显、�
   await expect(
     dialog.getByRole("heading", { name: "模型与服务" }),
   ).toBeVisible();
-  await dialog
-    .getByLabel("服务地址", { exact: true })
-    .fill("https://api.openai.com/v1");
-  await dialog.getByLabel("模型名称", { exact: true }).fill("forest-writer");
+  await dialog.getByRole("radio", { name: "OpenAI", exact: true }).click();
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("forest-writer");
   await dialog
     .getByLabel("API Key", { exact: true })
     .fill("configuration-only-test-secret");
   await dialog.getByRole("radio", { name: "图片模型" }).click();
-  await dialog.getByLabel("模型名称", { exact: true }).fill("forest-image");
+  await dialog
+    .getByRole("radio", { name: "自定义服务商", exact: true })
+    .click();
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("forest-image");
   await dialog.getByRole("radio", { name: "文字模型" }).click();
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue(
     "configuration-only-test-secret",
@@ -196,21 +197,26 @@ test("新版：服务配置真实持久化、切区保留、密钥不回显、�
   await expect(dialog.getByRole("status")).toContainText("已保存到当前账号");
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
   await dialog.getByRole("radio", { name: "图片模型" }).click();
-  await expect(dialog.getByLabel("模型名称", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
     "forest-image",
   );
   await dialog
-    .getByLabel("服务地址", { exact: true })
+    .getByLabel("Base URL", { exact: true })
     .fill("https://images.example/v1");
+  await dialog
+    .getByLabel("API Key", { exact: true })
+    .fill("image-only-test-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
-  await expect(dialog.getByRole("status")).toContainText("本次只保存预设");
+  await expect(dialog.getByRole("status")).toContainText(
+    "新建的对应任务将使用此配置",
+  );
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("button", { name: "模型服务配置", exact: true }),
   ).toBeFocused();
   await page.reload();
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
-  await expect(dialog.getByLabel("模型名称", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
     "forest-writer",
   );
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
@@ -220,13 +226,13 @@ test("新版：服务配置真实持久化、切区保留、密钥不回显、�
   expect(
     await page.evaluate(() => JSON.stringify([localStorage, sessionStorage])),
   ).not.toContain("configuration-only-test-secret");
-  await dialog.getByLabel("模型名称", { exact: true }).fill("unsaved");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("unsaved");
   await page.keyboard.press("Escape");
   await expect(
     dialog.getByText("有尚未保存的服务配置，要放弃并关闭吗？"),
   ).toBeVisible();
   await dialog.getByRole("button", { name: "继续编辑配置" }).click();
-  await expect(dialog.getByLabel("模型名称", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
     "unsaved",
   );
   await dialog.getByRole("button", { name: "关闭模型配置" }).click();
@@ -234,7 +240,9 @@ test("新版：服务配置真实持久化、切区保留、密钥不回显、�
   expect(outsideCalls).toBe(0);
 });
 
-test("新版：官方供应商只填密钥、自定义地址与目标变更保护", async ({ page }) => {
+test("新版：官方供应商填写密钥与模型 ID、自定义地址与目标变更保护", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await setup(page);
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
@@ -243,17 +251,13 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
     name: "DeepSeek",
     exact: true,
   });
-  const endpoint = dialog.getByLabel("服务地址", { exact: true });
+  const endpoint = dialog.getByLabel("Base URL", { exact: true });
   const key = dialog.getByLabel("API Key", { exact: true });
   await supplier.click();
-  await expect(endpoint).toHaveValue("https://api.deepseek.com");
-  await expect(endpoint).toHaveAttribute("readonly", "");
-  await expect(dialog.getByLabel("模型名称", { exact: true })).not.toHaveValue(
-    "",
-  );
-  await expect(
-    dialog.getByText("用于新文字任务", { exact: true }),
-  ).toBeVisible();
+  await expect(endpoint).toHaveCount(0);
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue("");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("exact-deepseek-id");
+  await expect(dialog.getByText("用于新任务", { exact: true })).toBeVisible();
   await key.fill("official-browser-test-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(
@@ -263,7 +267,7 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
   await page.reload();
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
   await expect(supplier).toBeChecked();
-  await expect(endpoint).toHaveValue("https://api.deepseek.com");
+  await expect(endpoint).toHaveCount(0);
   await key.fill("draft-that-must-be-cleared");
   await dialog
     .getByRole("radio", { name: "自定义服务商", exact: true })
@@ -273,7 +277,7 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
   await dialog
     .getByLabel("供应商名称（选填）", { exact: true })
     .fill("我的供应商");
-  await dialog.getByLabel("模型名称", { exact: true }).fill("my-text-model");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("my-text-model");
   await dialog
     .getByRole("combobox", { name: "结构化输出格式", exact: true })
     .click();
@@ -282,7 +286,11 @@ test("新版：官方供应商只填密钥、自定义地址与目标变更保�
     dialog.getByText("服务商或地址已更改，请填写对应密钥", { exact: true }),
   ).toBeVisible();
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toContainText("请重新填写 API Key");
+  expect(
+    await key.evaluate(
+      (element: HTMLInputElement) => element.validity.valueMissing,
+    ),
+  ).toBeTruthy();
   await key.fill("custom-browser-test-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(
@@ -319,20 +327,31 @@ test("新版：配置保存失败保留输入，读取失败可重试，手机39
     page.getByRole("button", { name: "展开目录", exact: true }),
   ).toBeVisible();
   await noOverflow(page);
-  await page.route("**/api/v1/me/model-services", async (route) =>
-    route.fulfill({
-      status: 503,
-      contentType: "application/json",
-      body: JSON.stringify({ error: { message: "配置读取暂时失败" } }),
-    }),
+  await page.route(
+    "**/api/v1/me/model-services?catalog_version=2",
+    async (route) =>
+      route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({ error: { message: "配置读取暂时失败" } }),
+      }),
   );
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("alert")).toContainText("配置读取暂时失败");
-  await page.unroute("**/api/v1/me/model-services");
+  await page.unroute("**/api/v1/me/model-services?catalog_version=2");
   await dialog.getByRole("button", { name: "重试读取配置" }).click();
   await dialog.getByRole("radio", { name: "视频模型" }).click();
-  await dialog.getByLabel("模型名称", { exact: true }).fill("my-video-model");
+  await dialog
+    .getByRole("radio", { name: "自定义服务商", exact: true })
+    .click();
+  await dialog
+    .getByLabel("Base URL", { exact: true })
+    .fill("https://video.example/v1");
+  await dialog
+    .getByLabel("API Key", { exact: true })
+    .fill("video-only-test-key");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("my-video-model");
   await page.route("**/api/v1/me/model-services/video", (route) =>
     route.fulfill({
       status: 409,
@@ -342,7 +361,7 @@ test("新版：配置保存失败保留输入，读取失败可重试，手机39
   );
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("配置冲突");
-  await expect(dialog.getByLabel("模型名称", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
     "my-video-model",
   );
   await noOverflow(page);
@@ -528,7 +547,7 @@ test("新版页面截图：桌面各功能、专注画布、服务配置与手�
 
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
   await expect(
-    page.getByRole("dialog").getByLabel("模型名称", { exact: true }),
+    page.getByRole("dialog").getByRole("heading", { name: "模型与服务" }),
   ).toBeVisible();
   await shot("service-text-desktop");
   await page.getByRole("radio", { name: "图片模型" }).click();
@@ -592,7 +611,7 @@ test("新版页面截图：桌面各功能、专注画布、服务配置与手�
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
   await expect(
-    page.getByRole("dialog").getByLabel("模型名称", { exact: true }),
+    page.getByRole("dialog").getByRole("heading", { name: "模型与服务" }),
   ).toBeVisible();
   await shot("service-mobile");
   await page.keyboard.press("Escape");

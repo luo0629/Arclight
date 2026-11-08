@@ -25,7 +25,7 @@ async function openSettings(page: Page) {
   return { dialog, headers };
 }
 
-test("预设自动填写、仅输入密钥即可启用，刷新保留且账号独立", async ({
+test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   page,
   browser,
   baseURL,
@@ -34,23 +34,20 @@ test("预设自动填写、仅输入密钥即可启用，刷新保留且账号�
   const crashes: string[] = [];
   page.on("pageerror", (error) => crashes.push(error.message));
   await dialog.getByRole("radio", { name: "DeepSeek", exact: true }).click();
-  await expect(dialog.getByLabel("服务地址", { exact: true })).toHaveValue(
-    "https://api.deepseek.com",
-  );
-  await expect(
-    dialog.getByLabel("服务地址", { exact: true }),
-  ).not.toBeEditable();
-  await expect(dialog.getByLabel("模型名称", { exact: true })).toHaveValue(
-    "deepseek-flash",
-  );
+  await expect(dialog.getByLabel("Base URL", { exact: true })).toHaveCount(0);
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue("");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("exact-deepseek-id");
   await dialog
     .getByLabel("API Key", { exact: true })
     .fill("my-private-deepseek-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(
-    dialog.getByText("已保存到当前账号。新建的文字任务将使用此服务。", {
-      exact: true,
-    }),
+    dialog.getByText(
+      "已保存到当前账号。新建的对应任务将使用此配置，已有任务保留原配置。",
+      {
+        exact: true,
+      },
+    ),
   ).toBeVisible();
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
   const fetched = await page.request.get("/api/v1/me/model-services", {
@@ -59,6 +56,8 @@ test("预设自动填写、仅输入密钥即可启用，刷新保留且账号�
   expect(await fetched.text()).not.toContain("my-private-deepseek-key");
   expect((await fetched.json()).services[0]).toMatchObject({
     supplier: "deepseek",
+    model: "exact-deepseek-id",
+    base_url: "https://api.deepseek.com",
     mode: "custom",
     has_key: true,
   });
@@ -101,6 +100,7 @@ test("预设自动填写、仅输入密钥即可启用，刷新保留且账号�
 test("切换供应商不复用旧密钥，自定义支持手填及兼容协议", async ({ page }) => {
   const { dialog } = await openSettings(page);
   await dialog.getByRole("radio", { name: "OpenAI", exact: true }).click();
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("exact-openai-id");
   await dialog.getByLabel("API Key", { exact: true }).fill("openai-only-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(
@@ -110,19 +110,24 @@ test("切换供应商不复用旧密钥，自定义支持手填及兼容协议",
     .getByRole("radio", { name: "智谱 BigModel", exact: true })
     .click();
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("exact-zhipu-id");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toContainText("请重新填写 API Key");
+  expect(
+    await dialog
+      .getByLabel("API Key", { exact: true })
+      .evaluate((element: HTMLInputElement) => element.validity.valueMissing),
+  ).toBeTruthy();
   await dialog.getByLabel("API Key", { exact: true }).fill("qwen-only-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText("已保存到当前账号");
   await dialog
     .getByRole("radio", { name: "自定义服务商", exact: true })
     .click();
-  await expect(dialog.getByLabel("服务地址", { exact: true })).toBeEditable();
+  await expect(dialog.getByLabel("Base URL", { exact: true })).toBeEditable();
   await dialog
-    .getByLabel("服务地址", { exact: true })
+    .getByLabel("Base URL", { exact: true })
     .fill("https://my-provider.example/v1");
-  await dialog.getByLabel("模型名称", { exact: true }).fill("my-story-model");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("my-story-model");
   await dialog.getByLabel("API Key", { exact: true }).fill("custom-only-key");
   await dialog
     .getByRole("combobox", { name: "结构化输出格式", exact: true })
@@ -135,7 +140,7 @@ test("切换供应商不复用旧密钥，自定义支持手填及兼容协议",
   await expect(
     dialog.getByRole("radio", { name: "自定义服务商", exact: true }),
   ).toBeChecked();
-  await expect(dialog.getByLabel("服务地址", { exact: true })).toHaveValue(
+  await expect(dialog.getByLabel("Base URL", { exact: true })).toHaveValue(
     "https://my-provider.example/v1",
   );
   await expect(
@@ -156,16 +161,16 @@ test("媒体配置单独保存，切分类保留草稿，手机无溢出且关�
   await dialog
     .getByRole("radio", { name: "自定义服务商", exact: true })
     .click();
-  await expect(
-    dialog.getByText("仅保存预设 · 尚未接入生成", { exact: false }),
-  ).toBeVisible();
+  await expect(dialog.getByLabel("Base URL", { exact: true })).toBeEditable();
   await dialog
-    .getByLabel("服务地址", { exact: true })
+    .getByLabel("Base URL", { exact: true })
     .fill("https://video-supplier.example/v1");
-  await dialog.getByLabel("模型名称", { exact: true }).fill("my-video-model");
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("my-video-model");
   await dialog.getByLabel("API Key", { exact: true }).fill("video-key");
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
-  await expect(dialog.getByRole("status")).toContainText("本次只保存预设");
+  await expect(dialog.getByRole("status")).toContainText(
+    "新建的对应任务将使用此配置",
+  );
   await dialog.getByRole("radio", { name: "文字模型", exact: true }).click();
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue(
     "text-draft",
@@ -192,4 +197,49 @@ test("媒体配置单独保存，切分类保留草稿，手机无溢出且关�
     fullPage: true,
     animations: "disabled",
   });
+});
+
+test("清除密钥先保留草稿可撤销，保存后恢复服务器配置", async ({ page }) => {
+  const { dialog, headers } = await openSettings(page);
+  await dialog.getByRole("radio", { name: "DeepSeek", exact: true }).click();
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("configured-model");
+  await dialog
+    .getByLabel("API Key", { exact: true })
+    .fill("removable-test-key");
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText("已保存到当前账号");
+  await dialog.getByRole("button", { name: "清除已存密钥" }).click();
+  await expect(
+    dialog.getByText("保存后清除个人密钥，新任务使用服务器默认服务。"),
+  ).toBeVisible();
+  expect(
+    (
+      await (
+        await page.request.get("/api/v1/me/model-services", { headers })
+      ).json()
+    ).services.find((row: { kind: string }) => row.kind === "text").has_key,
+  ).toBe(true);
+  await dialog.getByRole("button", { name: "保留原密钥" }).click();
+  await expect(
+    dialog.getByRole("radio", { name: "DeepSeek", exact: true }),
+  ).toBeChecked();
+  await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await dialog.getByRole("button", { name: "清除已存密钥" }).click();
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+  await expect(dialog.getByRole("status")).toContainText(
+    "新任务使用服务器默认服务",
+  );
+  await page.reload();
+  await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
+  await expect(
+    dialog.getByRole("radio", { name: "服务器默认服务", exact: true }),
+  ).toBeChecked();
+  const saved = await page.request.get("/api/v1/me/model-services", {
+    headers,
+  });
+  expect(
+    (await saved.json()).services.find(
+      (row: { kind: string }) => row.kind === "text",
+    ),
+  ).toMatchObject({ mode: "server", has_key: false });
 });

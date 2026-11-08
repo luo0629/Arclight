@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from pydantic import Field, model_validator
 
@@ -10,12 +10,16 @@ from arclight.domain.generation_requests import GenerationResult, MediaErrorCode
 from arclight.domain.media_capabilities import MediaCapabilities
 from arclight.providers.media_capabilities import MOCK_CAPABILITIES
 
+if TYPE_CHECKING:
+    from arclight.providers.media_submission import MediaSubmission
+
 
 @dataclass(frozen=True)
 class ProviderLookup:
     provider: str
     model: str
     request_id: str
+    submission: "MediaSubmission | None" = None
 
 
 class QueryReceipt(MediaInput):

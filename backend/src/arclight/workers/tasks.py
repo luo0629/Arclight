@@ -2,6 +2,7 @@ from uuid import UUID
 
 from sqlalchemy import select
 
+from arclight.application import generation_artifacts
 from arclight.application.agent_workflows import WorkflowExecutionDeferred
 from arclight.application.generation_candidates import import_attempt, pending_attempts
 from arclight.application.generation_delivery import consume_dispatch
@@ -9,6 +10,7 @@ from arclight.application.generation_events import publish_dispatches
 from arclight.application.generation_leases import LeasePolicy
 from arclight.application.generation_queues import QUEUES, claim_recovery_scan
 from arclight.application.generation_recovery import recover_job, recovery_candidates
+from arclight.application.media_services import connection_for_job
 from arclight.application.production_events import consume_stage_event, publish_stage_events
 from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
@@ -57,7 +59,12 @@ def execute_generation(
             job = db.get(GenerationJob, UUID(job_id))
             if job is None:
                 return "NOT_FOUND"
-            provider = get_media_submission_provider(job.provider, settings)
+            connection = connection_for_job(db, job, settings)
+            provider = (
+                get_media_submission_provider(job.provider, settings, connection=connection)
+                if connection
+                else get_media_submission_provider(job.provider, settings)
+            )
         return consume_dispatch(
             factory,
             UUID(job_id),
@@ -85,13 +92,27 @@ def recover_generation(job_id: str) -> str:
     settings = get_settings()
     engine = build_engine(settings)
     try:
+        factory = session_factory(engine, settings)
+        with factory() as db:
+            job = db.get(GenerationJob, UUID(job_id))
+            if job is None:
+                return "NOT_FOUND"
+            connection = connection_for_job(db, job, settings)
+        query_provider = get_media_query_provider()
+        cancel_provider = get_media_cancel_provider()
+        if connection is not None:
+            from arclight.providers.native_media import NativeMediaProvider
+
+            native = NativeMediaProvider(settings, connection)
+            query_provider = native
+            cancel_provider = native
         return recover_job(
-            session_factory(engine, settings),
+            factory,
             UUID(job_id),
-            get_media_query_provider(),
+            query_provider,
             policy=media_lease_policy(settings),
             execution_policy=settings.media_execution_policy,
-            cancel_provider=get_media_cancel_provider(),
+            cancel_provider=cancel_provider,
         )
     finally:
         engine.dispose()
@@ -141,9 +162,16 @@ def import_generation_candidates(attempt_id: str) -> int:
             job = db.get(GenerationJob, attempt.job_id) if attempt is not None else None
             if job is None:
                 return 0
-        return import_attempt(
-            factory, settings, UUID(attempt_id), get_media_output_provider(job.provider, settings)
+            connection = connection_for_job(db, job, settings, for_output=True)
+        importer = (
+            import_attempt if job.task_type == "IMAGE" else generation_artifacts.import_attempt
         )
+        provider = (
+            get_media_output_provider(job.provider, settings, connection=connection)
+            if connection
+            else get_media_output_provider(job.provider, settings)
+        )
+        return importer(factory, settings, UUID(attempt_id), provider)
     finally:
         engine.dispose()
 
@@ -178,7 +206,10 @@ def dispatch_outbox() -> None:
             session_factory(engine, settings), publish_generation, settings.media_execution_policy
         )
         publish_stage_events(session_factory(engine, settings), publish_production)
-        for attempt_id in pending_attempts(session_factory(engine, settings)):
+        for attempt_id in [
+            *pending_attempts(session_factory(engine, settings)),
+            *generation_artifacts.pending_attempts(session_factory(engine, settings)),
+        ]:
             import_generation_candidates.apply_async(args=[str(attempt_id)])
         if claim_recovery_scan(session_factory(engine, settings)):
             for job_id in recovery_candidates(

@@ -11,6 +11,7 @@ from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.context import ContextLimits
 from arclight.domain.generation_scheduling import ExecutionPolicy
 from arclight.domain.model_gateway import GatewayPolicy
+from arclight.domain.service_models import ServiceModelPolicy
 
 
 class Settings(BaseSettings):
@@ -30,6 +31,8 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = 60
     llm_dns_timeout_seconds: float = Field(default=5, gt=0, le=30)
     llm_supplier: str = "custom"
+    llm_protocol: Literal["openai_chat", "gemini", "qwen_chat"] = "openai_chat"
+    service_model_policies: list[ServiceModelPolicy] = Field(default_factory=list)
     llm_response_format: Literal["json_schema", "json_object"] = "json_schema"
     llm_agent_capabilities: AgentModelCapabilities | None = None
     service_encryption_key: SecretStr = SecretStr("")

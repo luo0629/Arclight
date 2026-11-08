@@ -2,10 +2,10 @@
 
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request, Response
 from pydantic import Field, field_validator
 from sqlalchemy import select
 
@@ -18,6 +18,7 @@ from arclight.application.generation_jobs import create_job
 from arclight.application.generation_reconciliation import ManualResolution, reconcile
 from arclight.application.generation_replay import ReplayRequest, replay_job
 from arclight.application.generation_state import find_job, request_cancel
+from arclight.application.media_services import connection_for_job, public_configuration
 from arclight.core.errors import DomainError
 from arclight.domain.generation import STATUS_LABELS, GenerationStatus
 from arclight.domain.generation_requests import GenerationCreate
@@ -39,9 +40,18 @@ from arclight.persistence.generation_scheduling import (
     GenerationReplay,
     GenerationSchedule,
 )
-from arclight.persistence.models import GenerationAttempt, GenerationJob
+from arclight.persistence.models import (
+    GenerationAttempt,
+    GenerationJob,
+    GenerationMediaArtifact,
+    StoredFile,
+)
 from arclight.providers.media_capabilities import resolve_capabilities
-from arclight.providers.media_query import MediaQueryProvider, get_media_query_provider
+from arclight.providers.media_query import (
+    MediaQueryProvider,
+    MockMediaQueryProvider,
+    get_media_query_provider,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/generation-jobs", tags=["generation"])
 
@@ -185,6 +195,82 @@ def get_image_configuration(project_id: UUID, db: Database, actor: Actor, reques
     require_project(db, project_id, actor)
     service = request.app.state.settings.image_service
     return {"enabled": service.enabled, **service.public_configuration()}
+
+
+@router.get("/services/{kind}/configuration")
+def get_service_configuration(
+    project_id: UUID, kind: Literal["image", "video", "speech"], db: Database, actor: Actor
+) -> dict:
+    require_project(db, project_id, actor)
+    return public_configuration(
+        db, actor, {"image": "IMAGE", "video": "VIDEO", "speech": "AUDIO"}[kind]
+    )
+
+
+class MediaArtifactRead(Resource):
+    job_id: UUID
+    attempt_id: UUID
+    ordinal: int
+    file_id: UUID | None
+    error_code: str | None
+    media_json: dict
+
+
+@router.get("/{job_id}/artifacts")
+def list_media_artifacts(
+    project_id: UUID, job_id: UUID, db: Database, actor: Actor
+) -> list[MediaArtifactRead]:
+    scoped_job(db, project_id, job_id, actor)
+    return [
+        MediaArtifactRead.model_validate(row)
+        for row in db.scalars(
+            select(GenerationMediaArtifact)
+            .where(GenerationMediaArtifact.job_id == job_id)
+            .order_by(GenerationMediaArtifact.created_at, GenerationMediaArtifact.ordinal)
+        )
+    ]
+
+
+@router.get("/{job_id}/artifacts/{artifact_id}/content")
+def read_media_artifact(
+    project_id: UUID, job_id: UUID, artifact_id: UUID, request: Request, db: Database, actor: Actor
+) -> Response:
+    scoped_job(db, project_id, job_id, actor)
+    artifact = db.get(GenerationMediaArtifact, artifact_id)
+    if artifact is None or artifact.job_id != job_id or artifact.file_id is None:
+        raise DomainError("NOT_FOUND", "媒体结果不存在或未通过校验", 404)
+    file = db.get(StoredFile, artifact.file_id)
+    if file is None or file.project_id != project_id:
+        raise DomainError("NOT_FOUND", "媒体文件不存在", 404)
+    from arclight.storage.objects import ObjectStorage
+
+    settings = request.app.state.settings.model_copy(
+        update={
+            "object_storage_backend": file.storage_backend.lower(),
+            "s3_bucket": file.bucket or request.app.state.settings.s3_bucket,
+        }
+    )
+    data = ObjectStorage(settings).read(file.object_key, file.byte_size, file.checksum)
+    return Response(
+        data,
+        media_type=file.media_type,
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": f'attachment; filename="{file.original_name}"',
+        },
+    )
+
+
+def bound_query_provider(db, job, settings, provider: MediaQueryProvider) -> MediaQueryProvider:
+    # Preserve explicit dependency overrides used by deployments and contract tests.
+    if type(provider) is MockMediaQueryProvider:
+        connection = connection_for_job(db, job, settings)
+        if connection is not None:
+            from arclight.providers.native_media import NativeMediaProvider
+
+            return NativeMediaProvider(settings, connection)
+    return provider
 
 
 @router.get("/queue")
@@ -464,7 +550,8 @@ def reconcile_job(
     actor: Actor,
     provider: Annotated[MediaQueryProvider, Depends(get_media_query_provider)],
 ) -> GenerationRead:
-    scoped_job(db, project_id, job_id, actor, write=True)
+    job = scoped_job(db, project_id, job_id, actor, write=True)
+    provider = bound_query_provider(db, job, request.app.state.settings, provider)
     db.commit()  # End dependency/auth transaction before any provider query.
     return read_job(
         reconcile(

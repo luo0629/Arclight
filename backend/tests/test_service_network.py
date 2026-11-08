@@ -16,7 +16,7 @@ from cryptography.x509.oid import NameOID
 from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayFailure
-from arclight.domain.model_suppliers import SUPPLIERS
+from arclight.domain.model_suppliers import LEGACY_MODELS, SUPPLIERS
 from arclight.providers import network
 from arclight.providers.text import OpenAICompatibleTextProvider
 
@@ -59,6 +59,41 @@ def test_custom_endpoint_normalization_has_no_supplier_allowlist():
         network.validate_endpoint("https://ANY-SUPPLIER.Example.:443/api/v1/")
         == "https://any-supplier.example/api/v1"
     )
+
+
+def test_signed_download_query_is_opt_in_and_keeps_dns_pinning(monkeypatch):
+    sent = []
+    monkeypatch.setattr(network, "resolve_public", lambda *_: "8.8.8.8")
+    url = "https://cdn.example/result?signature=download-only"
+    for allowed in (False, True):
+        transport = network.PublicHTTPTransport(allow_query=allowed)
+        transport.inner.close()
+        transport.inner = httpx.MockTransport(
+            lambda request: sent.append(request) or httpx.Response(200, content=b"result")
+        )
+        with httpx.Client(transport=transport) as client:
+            if not allowed:
+                with pytest.raises(DomainError, match="服务地址"):
+                    client.get(url)
+            else:
+                assert client.get(url).content == b"result"
+    assert len(sent) == 1 and sent[0].url.host == "8.8.8.8"
+    assert sent[0].url.query == b"signature=download-only"
+    assert sent[0].headers["host"] == "cdn.example"
+    assert sent[0].extensions["sni_hostname"] == "cdn.example"
+
+
+def test_signed_download_still_blocks_private_dns_and_redirects(monkeypatch):
+    monkeypatch.setattr(
+        socket,
+        "getaddrinfo",
+        lambda *_a, **_k: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 443))],
+    )
+    with (
+        httpx.Client(transport=network.PublicHTTPTransport(allow_query=True)) as client,
+        pytest.raises(DomainError, match="非公网"),
+    ):
+        client.get("https://cdn.example/result?signature=test")
 
 
 @pytest.mark.parametrize(
@@ -246,7 +281,16 @@ def test_real_tls_validates_original_hostname_with_pinned_ip(monkeypatch, tmp_pa
         assert b"Host: api.example\r\n" in requests[0]
 
 
-@pytest.mark.parametrize("supplier", SUPPLIERS, ids=lambda preset: preset.id)
+@pytest.mark.parametrize("supplier", SUPPLIERS, ids=lambda preset: preset.kind + ":" + preset.id)
+def test_all_official_presets_obey_the_same_public_https_policy(supplier):
+    assert network.validate_endpoint(supplier.base_url) == supplier.base_url
+
+
+@pytest.mark.parametrize(
+    "supplier",
+    [p for p in SUPPLIERS if p.kind == "text" and p.protocol == "openai_chat"],
+    ids=lambda preset: preset.id,
+)
 def test_official_request_contract_and_invalid_json_rejection(monkeypatch, settings, supplier):
     sent = []
     valid = StoryAnalysisContent(
@@ -275,7 +319,7 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
         update={
             "llm_supplier": supplier.id,
             "llm_response_format": supplier.response_format,
-            "llm_model": supplier.model,
+            "llm_model": LEGACY_MODELS.get(supplier.id, "selected-model-id"),
             "llm_base_url": supplier.base_url,
         }
     )
@@ -283,7 +327,7 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
     assert provider.analyze("story") == valid
     body = sent[0]
     assert body["response_format"]["type"] == supplier.response_format
-    assert body["model"] == supplier.model
+    assert body["model"] == configuration.llm_model
     if supplier.id == "openai":
         assert "max_completion_tokens" in body and "max_tokens" not in body
         assert (

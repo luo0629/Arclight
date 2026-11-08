@@ -13,6 +13,7 @@ from arclight.application.commands import require_project
 from arclight.application.dependencies import lock_dependency_graph
 from arclight.application.generation_jobs import create_job
 from arclight.application.generation_state import check_revision, find_job
+from arclight.application.media_services import selection_for_job
 from arclight.application.production_versions import check_media
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationCreate, MediaInput, safe_metadata
@@ -97,6 +98,7 @@ def replay_job(
             ],
         }
     )
+    service = selection_for_job(db, source)
     job = create_job(
         db,
         project_id,
@@ -105,6 +107,7 @@ def replay_job(
         request,
         execution_policy=policy,
         frozen_prompt_composition=snapshot["context"].get("prompt_composition"),
+        frozen_service=service.private_snapshot() if service else None,
     )
     row = GenerationReplay(
         project_id=project_id,

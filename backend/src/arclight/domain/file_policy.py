@@ -14,6 +14,8 @@ class FilePolicy:
 
 
 POLICIES = {
+    "video/mp4": FilePolicy(frozenset({"GENERATED_VIDEO"}), frozenset({".mp4"}), 64 * 1024**2),
+    "audio/flac": FilePolicy(frozenset({"GENERATED_AUDIO"}), frozenset({".flac"}), 32 * 1024**2),
     "image/png": FilePolicy(frozenset({"REFERENCE_IMAGE"}), frozenset({".png"}), 1024**2),
     "image/jpeg": FilePolicy(frozenset({"REFERENCE_IMAGE"}), frozenset({".jpg", ".jpeg"}), 1024**2),
     "text/plain": FilePolicy(frozenset({"STORY"}), frozenset({".txt"}), 256 * 1024),

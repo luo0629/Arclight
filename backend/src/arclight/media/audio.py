@@ -130,8 +130,20 @@ def check_ogg(data: bytes) -> None:
 def inspect_audio(data: bytes, media_type: str) -> dict:
     import av
 
-    formats = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg"}
-    {"audio/wav": check_wave, "audio/mpeg": check_mp3, "audio/ogg": check_ogg}[media_type](data)
+    formats = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac"}
+    expected_samples = None
+    if media_type == "audio/flac":
+        if (
+            len(data) < 42
+            or data[:5] not in {b"fLaC\x00", b"fLaC\x80"}
+            or data[5:8] != b"\x00\x00\x22"
+        ):
+            raise ValueError("Invalid FLAC STREAMINFO")
+        expected_samples = int.from_bytes(data[18:26], "big") & ((1 << 36) - 1)
+        if not 0 < expected_samples <= 48000 * MAX_AUDIO_SECONDS:
+            raise ValueError("Unknown or excessive FLAC sample count")
+    else:
+        {"audio/wav": check_wave, "audio/mpeg": check_mp3, "audio/ogg": check_ogg}[media_type](data)
 
     def refuse_external(*_args, **_kwargs):
         raise ValueError("External resources are forbidden")
@@ -151,6 +163,7 @@ def inspect_audio(data: bytes, media_type: str) -> dict:
             "audio/wav": {"pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"},
             "audio/mpeg": {"mp3", "mp3float"},
             "audio/ogg": {"vorbis", "opus"},
+            "audio/flac": {"flac"},
         }
         if stream.codec_context.name not in allowed[media_type]:
             raise ValueError("Unsupported audio codec")
@@ -167,6 +180,8 @@ def inspect_audio(data: bytes, media_type: str) -> dict:
                 raise ValueError("Audio exceeds decoding limit")
         if samples == 0:
             raise ValueError("No decoded audio")
+        if expected_samples is not None and samples != expected_samples:
+            raise ValueError("Incomplete FLAC samples")
     return {
         "media_type": media_type,
         "duration_ms": int(elapsed * 1000),

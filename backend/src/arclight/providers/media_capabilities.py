@@ -45,6 +45,10 @@ OPENAI_IMAGE_CAPABILITIES = MediaCapabilities(
 
 
 def resolve_capabilities(provider: str, model: str) -> MediaCapabilities:
+    from arclight.providers.native_media_protocols import KINDS, capabilities
+
+    if provider in KINDS:
+        return capabilities(provider)
     if provider == "openai" and model in OPENAI_IMAGE_MODELS:
         return OPENAI_IMAGE_CAPABILITIES
     # Mock models are symbolic; real adapters must resolve their own model-specific profile.
@@ -56,6 +60,10 @@ def resolve_capabilities(provider: str, model: str) -> MediaCapabilities:
 def resolve_parameters(provider: str, model: str) -> frozenset[str]:
     """The installed adapter declares its options; a request cannot advertise support."""
     resolve_capabilities(provider, model)
+    from arclight.providers.native_media_protocols import PARAMETERS
+
+    if provider in PARAMETERS:
+        return PARAMETERS[provider]
     if provider == "openai":
         return frozenset({"quality"})
     return frozenset({"steps"})

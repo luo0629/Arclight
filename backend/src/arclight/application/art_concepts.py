@@ -16,6 +16,7 @@ from arclight.application.dependencies import exact_version
 from arclight.application.generation_accounting import costs
 from arclight.application.generation_budget import quote_job
 from arclight.application.generation_jobs import create_job
+from arclight.application.media_services import select_for_spec
 from arclight.application.visual_bible import snapshot as visual_snapshot
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -45,7 +46,13 @@ UNCERTAIN = frozenset({"RESULT_UNKNOWN", "RECONCILING", "MANUAL_REVIEW"})
 
 
 def freeze_concept_plan(
-    db: Session, project_id: UUID, episode_id: UUID, plan: ArtConceptPlan
+    db: Session,
+    project_id: UUID,
+    episode_id: UUID,
+    plan: ArtConceptPlan,
+    *,
+    actor: str | None = None,
+    frozen_service: dict | None = None,
 ) -> dict:
     capabilities = resolve_capabilities(plan.spec.provider, plan.spec.model)
     inputs = []
@@ -75,7 +82,8 @@ def freeze_concept_plan(
         inputs=plan.inputs,
         spec=plan.spec,
     )
-    quote = quote_job(db, project_id, payload)
+    service = select_for_spec(db, actor or "service-owner", plan.spec, "IMAGE", frozen_service)
+    quote = quote_job(db, project_id, payload, actor=actor, frozen_service=frozen_service)
     if quote.maximum_cost > plan.maximum_cost:
         raise DomainError("ART_CONCEPT_BUDGET", "单轮可信报价已超过概念图总预算", 409)
     settings = db.info["settings"]
@@ -87,8 +95,10 @@ def freeze_concept_plan(
         "capabilities": capabilities.model_dump(mode="json")
         | {"task_types": sorted(capabilities.task_types)},
         "visual_bible": visual_snapshot(db, project),
-        "provider_configuration": settings.image_service.public_configuration()
-        if plan.spec.provider == "openai"
+        "provider_configuration": service.configuration
+        if service
+        else settings.image_service.public_configuration()
+        if service or plan.spec.provider == "openai"
         else None,
         "initial_quote": quote.model_dump(mode="json"),
     }
@@ -205,7 +215,15 @@ def request_concepts(context: AgentToolContext, parameters: RequestArtConcepts) 
         previous_invocation_id = _previous_comparison(db, run.id, parameters, jobs[-1])
     elif parameters.previous_comparison_sha256 is not None:
         raise DomainError("ART_CONCEPT_COMPARISON_REQUIRED", "首轮不能声明不存在的概念图比较", 422)
-    fresh = freeze_concept_plan(db, context.project_id, context.episode_id, plan)
+    private_service = run.input_json.get("_image_service")
+    fresh = freeze_concept_plan(
+        db,
+        context.project_id,
+        context.episode_id,
+        plan,
+        actor=context.actor_id,
+        frozen_service=private_service,
+    )
     if {key: value for key, value in frozen.items() if key != "initial_quote"} != {
         key: value for key, value in fresh.items() if key != "initial_quote"
     }:
@@ -233,7 +251,9 @@ def request_concepts(context: AgentToolContext, parameters: RequestArtConcepts) 
         inputs=plan.inputs,
         spec=spec,
     )
-    quote = quote_job(db, context.project_id, payload)
+    quote = quote_job(
+        db, context.project_id, payload, actor=context.actor_id, frozen_service=private_service
+    )
     spent = sum((sum(costs(db, context.project_id, job_id=item.id)) for item in jobs), Decimal("0"))
     if spent + quote.maximum_cost > plan.maximum_cost:
         raise DomainError("ART_CONCEPT_BUDGET", "概念图已用及预留费用将超过冻结预算", 409)
@@ -265,6 +285,7 @@ def request_concepts(context: AgentToolContext, parameters: RequestArtConcepts) 
         f"art-concept:{run.id}:{parameters.round_no}",
         payload,
         art_concept_origin=origin,
+        frozen_service=private_service,
     )
     return ArtConceptRequested.model_validate(
         {"job_id": job.id, "input_manifest_id": job.input_manifest_id, **receipt}

@@ -37,21 +37,52 @@ def policy_for(db: Session, project_id: UUID, *, lock: bool = False) -> Generati
     return row
 
 
-def provider_quote(db: Session, spec: GenerationSpec, task_type: str) -> CostQuote | None:
+def provider_quote(
+    db: Session,
+    spec: GenerationSpec,
+    task_type: str,
+    *,
+    actor: str | None = None,
+    job: GenerationJob | None = None,
+    frozen_service: dict | None = None,
+) -> CostQuote | None:
+    from arclight.application.media_services import (
+        quote_selection,
+        select_for_spec,
+        selection_for_job,
+    )
+    from arclight.providers.native_media_protocols import KINDS
+
+    if spec.provider in KINDS:
+        selection = (
+            selection_for_job(db, job)
+            if job
+            else select_for_spec(db, actor or "service-owner", spec, task_type, frozen_service)
+        )
+        return quote_selection(db, selection, spec) if selection else None
     if spec.provider == "mock":
         return media_pricing.quote(spec, task_type)
     settings = db.info.get("settings")
     return media_pricing.quote(spec, task_type, settings.image_service if settings else None)
 
 
-def quote_job(db: Session, project_id: UUID, payload: GenerationCreate) -> CostQuote:
+def quote_job(
+    db: Session,
+    project_id: UUID,
+    payload: GenerationCreate,
+    *,
+    actor: str | None = None,
+    frozen_service: dict | None = None,
+) -> CostQuote:
     if payload.batch_id is not None:
         batch = db.get(GenerationBudgetBatch, payload.batch_id)
         if batch is None or batch.project_id != project_id:
             raise DomainError("BUDGET_BATCH_NOT_FOUND", "预算批次不存在", 404)
         if payload.episode_id != batch.episode_id:
             raise DomainError("BUDGET_BATCH_MISMATCH", "预算批次与剧集不匹配", 422)
-    result = provider_quote(db, payload.spec, payload.task_type)
+    result = provider_quote(
+        db, payload.spec, payload.task_type, actor=actor, frozen_service=frozen_service
+    )
     if result is None:
         raise DomainError(
             "BUDGET_QUOTE_UNAVAILABLE", "收费 Provider 未提供可信报价，已拒绝创建任务", 422
@@ -157,7 +188,7 @@ def check_execution(
         select(GenerationBudgetQuote).where(GenerationBudgetQuote.job_id == job.id)
     )
     # Do not fabricate historical quotes. Only provably free legacy jobs may proceed.
-    live = provider_quote(db, spec, job.task_type)
+    live = provider_quote(db, spec, job.task_type, job=job)
     if live is None or (captured is None and live.maximum_cost != 0):
         raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "执行前缺少可信冻结报价", 409)
     live = CostQuote.model_validate(live.model_dump(mode="json"))

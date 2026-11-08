@@ -92,6 +92,7 @@ def create_job(
     execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
     frozen_prompt_composition: dict | None = None,
     art_concept_origin: dict | None = None,
+    frozen_service: dict | None = None,
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
@@ -114,7 +115,12 @@ def create_job(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一任务不能更换受控美术来源", 409)
         return existing
     asset = validate_target(db, project_id, payload)
-    budget_quote = quote_job(db, project_id, payload)
+    from arclight.application.media_services import bind_selection, select_for_spec
+
+    service = select_for_spec(db, actor, payload.spec, payload.task_type, frozen_service)
+    if service is not None:
+        require_project(db, project_id, service.created_by, write=True)
+    budget_quote = quote_job(db, project_id, payload, actor=actor, frozen_service=frozen_service)
     enforce_budget(db, project_id, payload, budget_quote.maximum_cost)
     require_available_target(db, payload.target_asset_id)
     inputs = []
@@ -250,9 +256,10 @@ def create_job(
                             "settings"
                         ].image_service.public_configuration()
                     }
-                    if effective_spec.provider == "openai"
+                    if effective_spec.provider == "openai" and service is None
                     else {}
                 ),
+                **({"provider_configuration": service.configuration} if service else {}),
                 "origin": "generation_request",
                 **({"art_concept": deepcopy(art_concept_origin)} if art_concept_origin else {}),
                 "provider_capabilities": capabilities.model_dump(mode="json"),
@@ -286,6 +293,7 @@ def create_job(
     )
     db.add(job)
     db.flush()
+    bind_selection(db, job, service)
     from arclight.persistence.generation_budget import GenerationBudgetQuote
 
     db.add(

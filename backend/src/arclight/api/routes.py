@@ -323,3 +323,18 @@ def retry(run_id: UUID, db: Database, actor: Actor) -> RunRead:
     run = retry_run(db, require_run(db, run_id, actor, lock=True))
     db.flush()
     return RunRead.model_validate(serialize_run(db, run))
+
+
+@router.post("/runs/{run_id}/restart", tags=["workflows"], status_code=202)
+def restart(
+    run_id: UUID,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+) -> RunRead:
+    from arclight.application.workflow_restart import restart_run
+
+    run = restart_run(db, run_id, actor, key, request.state.request_id, request.app.state.settings)
+    db.flush()
+    return RunRead.model_validate(serialize_run(db, run))

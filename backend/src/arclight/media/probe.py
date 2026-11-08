@@ -103,17 +103,22 @@ def inspect_text(data: bytes, media_type: str) -> dict:
 def main() -> None:
     restrict_process()
     media_type = sys.argv[1]
-    data = sys.stdin.buffer.read(32 * 1024**2 + 1)
-    if not 0 < len(data) <= 32 * 1024**2:
+    maximum = 64 * 1024**2 if media_type == "video/mp4" else 32 * 1024**2
+    data = sys.stdin.buffer.read(maximum + 1)
+    if not 0 < len(data) <= maximum:
         raise ValueError("Invalid input size")
     if media_type in {"image/png", "image/jpeg"}:
         result = inspect_image(data, media_type)
     elif media_type in {"text/plain", "text/markdown"}:
         result = inspect_text(data, media_type)
-    elif media_type in {"audio/wav", "audio/mpeg", "audio/ogg"}:
+    elif media_type in {"audio/wav", "audio/mpeg", "audio/ogg", "audio/flac"}:
         from arclight.media.audio import inspect_audio
 
         result = inspect_audio(data, media_type)
+    elif media_type == "video/mp4":
+        from arclight.media.video import inspect_video
+
+        result = inspect_video(data)
     elif media_type in {"font/ttf", "font/otf"}:
         from arclight.media.fonts import inspect_font
 

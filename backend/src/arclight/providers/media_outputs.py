@@ -52,8 +52,12 @@ class MockMediaOutputProvider:
 
 
 def get_media_output_provider(
-    provider: str = "mock", settings: Settings | None = None
+    provider: str = "mock", settings: Settings | None = None, *, connection=None
 ) -> MediaOutputProvider:
+    if connection is not None and settings is not None:
+        from arclight.providers.native_media import NativeMediaProvider
+
+        return NativeMediaProvider(settings, connection)
     if provider == "openai" and settings is not None:
         from arclight.providers.openai_images import OpenAIImageProvider
 

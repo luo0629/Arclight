@@ -181,6 +181,31 @@ class OpenAICompatibleTextProvider:
         token_parameter = (
             "max_completion_tokens" if self.settings.llm_supplier == "openai" else "max_tokens"
         )
+        if self.settings.llm_protocol != "openai_chat":
+            from arclight.providers.native_text import native_chat
+
+            body = native_chat(
+                self.settings,
+                {
+                    "model": self.settings.llm_model,
+                    token_parameter: TEXT_MAX_TOKENS,
+                    "messages": [
+                        {"role": "system", "content": instruction},
+                        {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
+                    ],
+                    "response_format": response_format,
+                },
+            )
+            self.last_usage = response_usage(body)
+            message, reason = completed_message(body)
+            try:
+                if reason != "stop" or message.get("tool_calls"):
+                    raise ValueError("Unexpected tool selection")
+                return contract.model_validate_json(message["content"])
+            except (KeyError, TypeError, ValueError):
+                raise GatewayFailure(
+                    "INVALID_RESPONSE", completed=True, usage=self.last_usage
+                ) from None
         with httpx.Client(
             timeout=self.settings.llm_timeout_seconds,
             transport=PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),

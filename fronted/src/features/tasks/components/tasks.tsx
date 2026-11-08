@@ -57,7 +57,12 @@ export default function Tasks({
           }
         : undefined;
     return act(async () => {
-      await api(`/runs/${run.id}/${command}`, json("POST", payload));
+      await api(`/runs/${run.id}/${command}`, {
+        ...json("POST", payload),
+        ...(command === "restart"
+          ? { headers: { "Idempotency-Key": crypto.randomUUID() } }
+          : {}),
+      });
       await reload();
       setComment("");
     });
@@ -239,6 +244,16 @@ export default function Tasks({
                       重试任务
                     </Button>
                   )}
+                {writable && run.status === "FAILED" && (
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    disabled={busy}
+                    onClick={() => void action(run, "restart")}
+                  >
+                    使用当前配置重新发起
+                  </Button>
+                )}
                 <Button
                   variant="outline"
                   size="lg"
@@ -248,6 +263,11 @@ export default function Tasks({
                   查看执行记录
                 </Button>
               </div>
+              {writable && run.status === "FAILED" && (
+                <p className="text-xs text-muted-foreground">
+                  重试沿用原配置；重新发起会保留原业务输入，使用当前账号配置创建新任务。原调用结果未知时须先核验。
+                </p>
+              )}
             </article>
           ))}
         </div>

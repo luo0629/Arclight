@@ -45,11 +45,18 @@ def submit(
             select(GenerationBudgetQuote).where(GenerationBudgetQuote.job_id == job.id)
         )
         spec = request.snapshot["context"]["generation"]
+        from arclight.application.media_services import selection_for_job
+
+        account_service = selection_for_job(db, job)
         route = GatewayRoute(
             provider=job.provider,
             model=job.model,
             config_version=spec["model_config_version"],
-            credential_source="NONE" if job.provider == "mock" else "SERVER",
+            credential_source="NONE"
+            if job.provider == "mock"
+            else "ACCOUNT_SNAPSHOT"
+            if account_service
+            else "SERVER",
             capabilities=GatewayCapabilities(
                 version=provider.capabilities.version,
                 tasks=frozenset(provider.capabilities.task_types),
@@ -123,6 +130,18 @@ def submit(
             "AGENT_DEADLINE_EXCEEDED",
         }:
             rejection: MediaErrorCode = "BUDGET_EXCEEDED"
+        elif exc.code in {
+            "GATEWAY_QUOTA_EXHAUSTED",
+            "GATEWAY_PROVIDER_AUTHENTICATION_FAILED",
+            "GATEWAY_PROVIDER_ACCESS_DENIED",
+            "GATEWAY_PROVIDER_RATE_LIMITED",
+            "GATEWAY_INVALID_RESPONSE",
+            "GATEWAY_MODEL_REFUSED",
+            "GATEWAY_MODEL_TRUNCATED",
+        }:
+            rejection = "PROVIDER_REJECTED"
+        elif exc.code == "GATEWAY_PROVIDER_FAILED":
+            rejection = "PROVIDER_FAILED"
         elif exc.code.startswith("AGENT_") or (
             execution is not None
             and exc.code
@@ -142,8 +161,23 @@ def submit(
             rejection = "INPUT_INVALID"
         else:
             rejection = "PROVIDER_UNAVAILABLE"
+        # A completed provider response may have unknown billing. Preserve the
+        # authoritative gateway receipt instead of treating every error as free.
+        cost: Decimal | None = Decimal("0")
+        with factory() as db:
+            from arclight.application.gateway_accounting import latest_receipt
+            from arclight.persistence.model_gateway import GatewayCall
+
+            last_call = db.scalar(
+                select(GatewayCall)
+                .where(GatewayCall.generation_attempt_id == request.attempt_id)
+                .order_by(GatewayCall.sequence.desc())
+            )
+            receipt = latest_receipt(db, last_call.id) if last_call else None
+            if receipt is not None and receipt.status != "NOT_ACCEPTED":
+                cost = receipt.actual_cost
         return SubmissionReceipt(
             status="FAILED",
             error_code=rejection,
-            cost=Decimal("0"),
+            cost=cost,
         )
