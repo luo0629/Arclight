@@ -124,3 +124,66 @@ def test_event_consumer_interruption_replays_without_repeating_effect_or_model_c
     assert receipt.disposition == "APPLIED" and receipt.action == "READY_FOR_REVIEW"
     assert consume_stage_event(factory, routed.event_id) == receipt
     assert len(sent) == outcome.model_turns
+
+
+def test_reserved_human_identity_can_use_shared_service_without_rewriting_admission(
+    client, settings, model_service, reviewer_case
+):
+    from copy import deepcopy
+    from uuid import UUID
+
+    from arclight.application.continuity_routing import read_routed_review
+    from arclight.application.continuity_selection import require_shot_review
+    from arclight.application.human_reviews import ReviewHandler, request_review
+    from arclight.domain.continuity_routing import human_review_key
+    from arclight.domain.continuity_selection import ADMISSION_RESOURCE, HUMAN_REVIEW_HANDLER
+    from arclight.domain.human_reviews import ReviewSnapshot
+    from arclight.persistence.models import AssetVersion, VersionBinding
+
+    install_reviewer_model(model_service, dynamic=False, difference=("STATE", "HIGH"))
+    outcome = run_review(client, settings, reviewer_case)
+    assert outcome.status == "COMPLETED"
+    routed, _ = route(client, settings, reviewer_case)
+    with client.app.state.session_factory.begin() as db:
+        record, _ = read_routed_review(db, routed.review_id)
+        binding = db.scalar(
+            select(VersionBinding).where(
+                VersionBinding.resource_type == ADMISSION_RESOURCE,
+                VersionBinding.resource_id == routed.review_id,
+            )
+        )
+        original = deepcopy(binding.snapshot_json)
+        version = db.get(AssetVersion, UUID(reviewer_case["target"]["asset_version_id"]))
+        # Only the shared request contract is tested here. The production pause,
+        # Owner decisions and recovery handler remain QA-06 responsibilities.
+        registry = {
+            HUMAN_REVIEW_HANDLER: ReviewHandler(
+                read=lambda _db, snapshot: snapshot, apply=lambda *_: {}
+            )
+        }
+        request = request_review(
+            db,
+            reviewer_case["actor"],
+            human_review_key(routed.review_id),
+            HUMAN_REVIEW_HANDLER,
+            ReviewSnapshot(
+                project_id=record.review.project_id,
+                episode_id=record.review.episode_id,
+                run_id=None,
+                thread_id=f"qa04-interface:{routed.review_id}",
+                kind="EXCEPTIONAL_SHOT",
+                object_id=routed.review_id,
+                version_id=version.id,
+                content_sha256=version.checksum,
+                input_sha256=routed.record_sha256,
+                source_version_ids=[record.review.target.storyboard_id],
+            ),
+            registry=registry,
+        )
+        assert str(request.id) == original["review_admission"]["human_review_request_id"]
+        db.refresh(binding)
+        assert binding.snapshot_json == original
+        assert read_routed_review(db, routed.review_id) == (record, routed)
+        with pytest.raises(DomainError) as error:
+            require_shot_review(db, version)
+        assert error.value.code == "HUMAN_DECISION_REQUIRED"

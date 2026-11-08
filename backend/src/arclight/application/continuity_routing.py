@@ -27,7 +27,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelResponse
 from arclight.domain.agent_runtime import AgentDecision, AgentLoopResult
 from arclight.domain.continuity_reviews import ContinuityReview, ReviewContractRecord, ReviewTarget
-from arclight.domain.continuity_routing import ReviewRoute
+from arclight.domain.continuity_routing import ReviewRoute, human_review_key
 from arclight.domain.continuity_selection import ADMISSION_RESOURCE, ReviewAdmission
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
@@ -130,6 +130,12 @@ def read_routed_review(db: Session, review_id: UUID) -> tuple[ReviewContractReco
             or admission.review_id != route.review_id
             or admission.record_sha256 != route.record_sha256
             or admission.requires_human_review != (route.conclusion == "HUMAN_REVIEW")
+            or admission.human_review_request_id
+            != (
+                uuid5(review.project_id, "human-review/1:" + human_review_key(review_id))
+                if route.conclusion == "HUMAN_REVIEW"
+                else None
+            )
             or snapshot["components"] != [v.model_dump(mode="json") for v in review.versions]
             or loop is None
             or loop.run_id != route.run_id
@@ -185,6 +191,11 @@ def route_reviewer_result(
         review_id=review.result_id,
         record_sha256=route.record_sha256,
         requires_human_review=review.conclusion == "HUMAN_REVIEW",
+        human_review_request_id=(
+            uuid5(review.project_id, "human-review/1:" + human_review_key(review.result_id))
+            if review.conclusion == "HUMAN_REVIEW"
+            else None
+        ),
     )
     bind(
         db,

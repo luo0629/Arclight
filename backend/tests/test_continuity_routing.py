@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 import pytest
 from continuity_reviewer_support import install_reviewer_model
@@ -24,9 +24,11 @@ from arclight.application.production_events import consume_stage_event, publish_
 from arclight.core.errors import DomainError
 from arclight.domain.agent_tools import AgentToolGrantRequest
 from arclight.domain.continuity_reviews import ReviewRerun, ReviewTarget
+from arclight.domain.continuity_routing import human_review_key
 from arclight.domain.continuity_selection import ADMISSION_RESOURCE
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop
+from arclight.persistence.human_reviews import HumanReviewRequest
 from arclight.persistence.models import (
     AgentToolGrant,
     AssetVersion,
@@ -103,6 +105,18 @@ def test_real_review_routes_all_conclusions_without_selecting(
         record, proof = read_routed_review(db, routed.review_id)
         assert proof == routed and record.review == outcome.result
         assert record.state == "CONTRACT_VALIDATED"
+        admission_row = db.scalar(
+            select(VersionBinding).where(
+                VersionBinding.resource_type == ADMISSION_RESOURCE,
+                VersionBinding.resource_id == routed.review_id,
+            )
+        )
+        human_id = admission_row.snapshot_json["review_admission"]["human_review_request_id"]
+        expected = uuid5(
+            record.review.project_id, "human-review/1:" + human_review_key(routed.review_id)
+        )
+        assert human_id == (str(expected) if conclusion == "HUMAN_REVIEW" else None)
+        assert db.get(HumanReviewRequest, expected) is None  # QA-06 owns creating the actual pause.
         event = db.get(ProductionEvent, routed.event_id)
         assert event.source_kind == "REVIEW" and event.source_id == routed.review_id
         messages = list(

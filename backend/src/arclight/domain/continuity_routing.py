@@ -10,6 +10,11 @@ from arclight.domain.production_state import ProductionContract
 from arclight.domain.workflow_contracts import Checksum
 
 
+def human_review_key(review_id: UUID) -> str:
+    """Reserve the shared human-review identity without creating or deciding a request."""
+    return f"continuity:{review_id}"
+
+
 class ReviewRoute(ProductionContract):
     schema_version: Literal["continuity-route/1"] = "continuity-route/1"
     review_id: UUID
