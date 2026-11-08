@@ -1,6 +1,7 @@
 """AREV-01 exercises the real tool executor, checked candidates and stored images."""
 
 import base64
+import hashlib
 import os
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
@@ -268,6 +269,17 @@ def test_real_multi_image_exact_character_costume_scene_prop_and_model_bounds(
     file_ids = result.result["image_file_ids"]
     loaded = images(client, settings, case, file_ids)
     assert len(loaded) == 5 and len({image.data for image in loaded.values()}) == 5
+    image_materials = {
+        item["content"]["image"]["file_id"]: item
+        for item in result.result["materials"]
+        if item["source_kind"] in {"CANDIDATE", "ASSET"} and item["content"]["image"]
+    }
+    assert set(image_materials) == set(file_ids)
+    for identity, image in loaded.items():
+        material = image_materials[str(identity)]
+        reference = material["content"]["image"]
+        assert reference["asset_version_id"] == material["content"]["asset"]["asset_version_id"]
+        assert reference["checksum"] == hashlib.sha256(image.data).hexdigest()
     stored = trace(client, case)["evidence"][-1]
     assert all(source["checksum"] and source["metadata_sha256"] for source in stored["sources"])
     assert base64.b64encode(next(iter(loaded.values())).data).decode() not in str(stored)

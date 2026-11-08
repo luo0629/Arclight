@@ -189,14 +189,16 @@ def investigate_continuity(
                 absent(selector, "OUT_OF_SCOPE")
                 return
             kind = "CANDIDATE" if candidate else "ASSET"
-            content = material(
-                kind, target.candidate_id if candidate else version_id, {"asset": resolved}
-            )
-            resolved = content["asset"]
             source = (
                 source_bindings.get(str(version_id))
                 or asset_sources(db, root.project_id, [resolved])[0]
             )
+            content = material(
+                kind,
+                target.candidate_id if candidate else version_id,
+                {"asset": resolved, "image": source["object_ref"]},
+            )
+            resolved = content["asset"]
             assets.append(deepcopy(resolved))
             sources.append(deepcopy(source))
             if source["object_ref"] is None and not core:
