@@ -443,7 +443,10 @@ def resume_run(
             )
         else:
             validate_storyboard_assets(
-                db, episode.project_id, StoryboardContent.model_validate(artifact.content_json)
+                db,
+                episode.project_id,
+                StoryboardContent.model_validate(artifact.content_json),
+                episode_id=episode.id,
             )
         parsed = (
             ScriptContent if isinstance(artifact, Script) else StoryboardContent

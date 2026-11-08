@@ -132,7 +132,9 @@ def input_issues(
                     }
                 )
                 checked_content = prerequisites
-                validate_storyboard_assets(db, episode.project_id, prerequisites)
+                validate_storyboard_assets(
+                    db, episode.project_id, prerequisites, episode_id=episode.id
+                )
         except ValidationError:
             issues.append("INVALID_CONTENT")
         except DomainError as error:

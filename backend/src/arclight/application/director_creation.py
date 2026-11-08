@@ -136,7 +136,7 @@ def _validate_fragment(
         ) from None
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
-    validate_storyboard_assets(db, episode.project_id, content)
+    validate_storyboard_assets(db, episode.project_id, content, episode_id=episode.id)
 
 
 def create_fragment(

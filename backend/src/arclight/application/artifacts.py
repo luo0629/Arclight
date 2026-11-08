@@ -94,7 +94,7 @@ class ArtifactStore(Artifacts):
             validate_script_assets(db, episode.project_id, source)
             validate_duration(source, self.target_duration_ms, self.tolerance_percent)
             parsed.validate_against(source)
-            validate_storyboard_assets(db, episode.project_id, parsed)
+            validate_storyboard_assets(db, episode.project_id, parsed, episode_id=episode.id)
             validate_duration(parsed, self.target_duration_ms, self.tolerance_percent)
             content = parsed.model_dump(mode="json")
             version = (

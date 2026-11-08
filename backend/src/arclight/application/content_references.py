@@ -45,7 +45,9 @@ def validate_script_assets(db: Session, project_id: UUID, content: ScriptContent
             require_asset(db, project_id, prop, {"PROP"})
 
 
-def validate_storyboard_assets(db: Session, project_id: UUID, content: StoryboardContent) -> None:
+def validate_storyboard_assets(
+    db: Session, project_id: UUID, content: StoryboardContent, *, episode_id: UUID | None = None
+) -> None:
     for shot in content.shots:
         for item in shot.character_details:
             require_asset(db, project_id, item.asset, {"CHARACTER"})
@@ -55,6 +57,16 @@ def validate_storyboard_assets(db: Session, project_id: UUID, content: Storyboar
         for prop in shot.props:
             require_asset(db, project_id, prop, {"PROP"})
         require_asset(db, project_id, shot.selected_visual_asset, {"IMAGE", "SHOT_IMAGE"})
+        if shot.selected_visual_asset is not None:
+            from arclight.application.generation_candidates import require_candidate_review
+
+            version = db.get(AssetVersion, UUID(shot.selected_visual_asset.asset_version_id))
+            assert version is not None
+            record = require_candidate_review(version, db)
+            if record is not None:
+                from arclight.application.continuity_selection import validate_selected_shot
+
+                validate_selected_shot(db, record, shot, episode_id)
         if shot.quality_review is not None:
             review = db.scalar(
                 select(Review)

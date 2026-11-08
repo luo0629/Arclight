@@ -46,7 +46,18 @@ def require_review(db: Session, request_id: UUID, actor: str) -> HumanReviewRequ
     return row
 
 
-def _authority(db: Session, row: HumanReviewRequest, actor: str, *, owner: bool) -> None:
+def require_review_actor(db: Session, project_id: UUID, actor: str, *, owner: bool) -> None:
+    """Recheck durable approval authority without taking workflow or execution locks."""
+    require_project(db, project_id, actor, write=True, owner=owner)
+    if actor != "service-owner":
+        user = db.get(User, UUID(actor), populate_existing=True)
+        if user is None or user.disabled:
+            raise DomainError("FORBIDDEN", "审核操作者已不可用", 403)
+
+
+def require_review_authority(
+    db: Session, row: HumanReviewRequest, actor: str, *, owner: bool
+) -> None:
     from arclight.application.production_events import begin_serialized
 
     begin_serialized(db)
@@ -68,15 +79,11 @@ def _authority(db: Session, row: HumanReviewRequest, actor: str, *, owner: bool)
         run = require_run(db, row.run_id, actor, lock=True)
         if run.episode_id != row.episode_id:
             raise DomainError("REVIEW_SCOPE_INVALID", "审核运行不属于指定剧集", 409)
-    require_project(db, row.project_id, actor, write=True, owner=owner)
+    require_review_actor(db, row.project_id, actor, owner=owner)
     if row.episode_id is not None:
         episode = require_episode(db, row.episode_id, actor, write=True, owner=owner)
         if episode.project_id != row.project_id:
             raise DomainError("REVIEW_SCOPE_INVALID", "审核不属于指定项目", 409)
-    if actor != "service-owner":
-        user = db.get(User, UUID(actor), populate_existing=True)
-        if user is None or user.disabled:
-            raise DomainError("FORBIDDEN", "审核操作者已不可用", 403)
 
 
 def _handler(row: HumanReviewRequest, registry: Mapping[str, ReviewHandler]) -> ReviewHandler:
@@ -146,7 +153,7 @@ def request_review(
         request_sha256=digest(value),
         snapshot_json=value,
     )
-    _authority(db, row, actor, owner=False)
+    require_review_authority(db, row, actor, owner=False)
     _current(db, row, registry if registry is not None else handlers())
     previous = db.scalar(
         select(HumanReviewRequest).where(
@@ -178,7 +185,7 @@ def submit_decision(
 ) -> HumanReviewDecision:
     decision = HumanDecision.model_validate(decision.model_dump(mode="json"))
     row = require_review(db, request_id, actor)
-    _authority(db, row, actor, owner=True)
+    require_review_authority(db, row, actor, owner=True)
     snapshot = ReviewSnapshot.model_validate(row.snapshot_json)
     if decision.version_id != snapshot.version_id or decision.request_sha256 != row.request_sha256:
         raise DomainError("REVIEW_INPUT_CHANGED", "人工决定不属于当前精确审核对象", 409)
@@ -262,7 +269,7 @@ def resume_review(
 ) -> HumanReviewResume:
     payload = ReviewResume.model_validate(payload.model_dump(mode="json"))
     row = require_review(db, request_id, actor)
-    _authority(db, row, actor, owner=True)
+    require_review_authority(db, row, actor, owner=True)
     decision = db.scalar(
         select(HumanReviewDecision).where(HumanReviewDecision.request_id == row.id)
     )
@@ -274,7 +281,7 @@ def resume_review(
         raise DomainError("REVIEW_DECISION_REQUIRED", "恢复须引用该审核的已保存人工决定", 409)
     # Persisting a decision does not preserve a revoked reviewer's authority.
     # Both the current resumer and the original approver must still be authorized.
-    _authority(db, row, decision.actor_id, owner=True)
+    require_review_authority(db, row, decision.actor_id, owner=True)
     prior = db.scalar(select(HumanReviewResume).where(HumanReviewResume.request_id == row.id))
     if prior is not None:
         return prior

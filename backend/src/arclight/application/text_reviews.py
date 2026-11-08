@@ -167,7 +167,7 @@ def validate_manual_approval(
         if source is None or source.episode_id != episode.id or source.status != "APPROVED":
             raise DomainError("SCRIPT_NOT_APPROVED", "请先批准本剧集的来源剧本版本", 409)
         parsed = StoryboardContent.model_validate(artifact.content_json)
-        validate_storyboard_assets(db, episode.project_id, parsed)
+        validate_storyboard_assets(db, episode.project_id, parsed, episode_id=episode.id)
     validate_duration(parsed, episode.target_duration_ms, settings.text_duration_tolerance_percent)
 
 

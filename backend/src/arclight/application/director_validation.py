@@ -157,7 +157,13 @@ def check_work(
             candidate = StoryboardContent(shots=[strict.model_copy(update={"shot_no": 1})])
             try:
                 candidate.validate_against(script)
-                validate_storyboard_assets(db, episode.project_id, candidate)
+                # Media evidence must retain the reviewed global shot identity.
+                validate_storyboard_assets(
+                    db,
+                    episode.project_id,
+                    candidate.model_copy(update={"shots": [strict]}),
+                    episode_id=episode.id,
+                )
             except (ValueError, DomainError) as exc:
                 issues.append(
                     DirectorIssue(

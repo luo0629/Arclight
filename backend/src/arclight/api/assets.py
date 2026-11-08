@@ -76,7 +76,7 @@ class AssetArchive(Input):
 
 class AssetRead(Resource):
     project_id: UUID
-    asset_type: AssetType
+    asset_type: AssetType | Literal["IMAGE", "SHOT_IMAGE"]
     name: str
     status: str
     current_version_id: UUID | None
@@ -97,9 +97,12 @@ def validate_scope(db: Session, project_id: UUID, metadata: AssetMetadata) -> No
             raise DomainError("INVALID_ASSET_SCOPE", "使用范围只能包含本项目剧集", 422)
 
 
-def find_asset(db: Session, project_id: UUID, asset_id: UUID) -> VisualAsset:
+def find_asset(
+    db: Session, project_id: UUID, asset_id: UUID, *, include_media: bool = False
+) -> VisualAsset:
     row = db.get(VisualAsset, asset_id, populate_existing=True)
-    if row is None or row.project_id != project_id or row.asset_type not in DIRECTORY_TYPES:
+    kinds = (*DIRECTORY_TYPES, "IMAGE", "SHOT_IMAGE") if include_media else DIRECTORY_TYPES
+    if row is None or row.project_id != project_id or row.asset_type not in kinds:
         raise DomainError("NOT_FOUND", "视觉资产不存在", 404)
     return row
 
@@ -135,7 +138,7 @@ def list_assets(
 @router.get("/projects/{project_id}/assets/{asset_id}")
 def get_asset(project_id: UUID, asset_id: UUID, db: Database, actor: Actor) -> AssetRead:
     require_project(db, project_id, actor)
-    return AssetRead.model_validate(find_asset(db, project_id, asset_id))
+    return AssetRead.model_validate(find_asset(db, project_id, asset_id, include_media=True))
 
 
 @router.get("/projects/{project_id}/reference-images")

@@ -125,7 +125,7 @@ def list_versions(
     offset: Offset = 0,
 ) -> list[VersionRead]:
     require_project(db, project_id, actor)
-    find_asset(db, project_id, asset_id)
+    find_asset(db, project_id, asset_id, include_media=True)
     return [
         read_version(row)
         for row in db.scalars(
@@ -147,7 +147,7 @@ def get_version(
     actor: Actor,
 ) -> VersionRead:
     require_project(db, project_id, actor)
-    find_asset(db, project_id, asset_id)
+    find_asset(db, project_id, asset_id, include_media=True)
     return read_version(find_version(db, asset_id, version_id))
 
 
@@ -161,7 +161,7 @@ def get_image(
     actor: Actor,
 ) -> Response:
     require_project(db, project_id, actor)
-    find_asset(db, project_id, asset_id)
+    find_asset(db, project_id, asset_id, include_media=True)
     row = find_version(db, asset_id, version_id)
     if row.creation_key is None or row.metadata_json.get("storage_backend") not in {"LOCAL", "S3"}:
         raise DomainError("ASSET_OBJECT_UNAVAILABLE", "此历史图片尚未接入本机读取", 409)
@@ -194,7 +194,7 @@ def create_version(
     actor: Actor,
 ) -> VersionRead:
     require_project(db, project_id, actor, write=True)
-    asset = find_asset(db, project_id, asset_id)
+    asset = find_asset(db, project_id, asset_id, include_media=True)
     request_values = payload.model_dump(mode="json", exclude={"expected_revision", "creation_key"})
     # Preserve idempotency fingerprints issued before optional DAG manifests existed.
     if payload.dependency_manifest_id is None:
@@ -243,6 +243,11 @@ def create_version(
         status="DRAFT",
         metadata_json={
             "storage_backend": request.app.state.settings.object_storage_backend.upper(),
+            **(
+                {"required_review": "CONTINUITY"}
+                if asset.asset_type in {"IMAGE", "SHOT_IMAGE"}
+                else {}
+            ),
             "dependency_manifest_id": (
                 str(payload.dependency_manifest_id) if payload.dependency_manifest_id else None
             ),
@@ -298,7 +303,7 @@ def get_rebuild_inputs(
     project_id: UUID, asset_id: UUID, version_id: UUID, db: Database, actor: Actor
 ) -> dict:
     require_project(db, project_id, actor)
-    find_asset(db, project_id, asset_id)
+    find_asset(db, project_id, asset_id, include_media=True)
     version = find_version(db, asset_id, version_id)
     manifest = original_manifest(db, project_id, version)
     inputs = []
@@ -329,7 +334,7 @@ def create_rebuild_manifest(
     actor: Actor,
 ) -> dict:
     require_project(db, project_id, actor, write=True)
-    asset = find_asset(db, project_id, asset_id)
+    asset = find_asset(db, project_id, asset_id, include_media=True)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "归档或锁定资产不能创建重建清单", 409)
     row, _ = rebuild_manifest(
@@ -349,7 +354,7 @@ def select_version(
     actor: Actor,
 ) -> AssetRead:
     require_project(db, project_id, actor, write=True)
-    asset = find_asset(db, project_id, asset_id)
+    asset = find_asset(db, project_id, asset_id, include_media=True)
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
@@ -447,7 +452,7 @@ def change_lock(
     locked: bool,
 ) -> AssetRead:
     require_project(db, project_id, actor, write=True, owner=True)
-    asset = find_asset(db, project_id, asset_id)
+    asset = find_asset(db, project_id, asset_id, include_media=True)
     version = find_version(db, asset_id, version_id)
     record = db.scalar(select(AssetSelectionLock).where(AssetSelectionLock.asset_id == asset_id))
     if asset.current_version_id != version.id or asset.status == "ARCHIVED":
@@ -543,7 +548,7 @@ def restore_version_as_new(
     actor: Actor,
 ) -> VersionRead:
     require_project(db, project_id, actor, write=True)
-    asset = find_asset(db, project_id, asset_id)
+    asset = find_asset(db, project_id, asset_id, include_media=True)
     source = find_version(db, asset_id, version_id)
     existing = db.scalar(
         select(AssetVersion).where(
@@ -608,7 +613,11 @@ def restore_version_as_new(
             "media": dict(source.metadata_json["media"]),
             "restored_from_version_id": str(source.id),
             "restoration_note": payload.comment,
-            "required_review": source.metadata_json.get("required_review"),
+            "required_review": (
+                "CONTINUITY"
+                if asset.asset_type == "SHOT_IMAGE"
+                else source.metadata_json.get("required_review")
+            ),
             "provenance": source.metadata_json.get("provenance"),
             "dependency_manifest_id": str(payload.dependency_manifest_id)
             if payload.dependency_manifest_id
@@ -659,7 +668,7 @@ def update_version_state(
     require_project(
         db, project_id, actor, write=True, owner=payload.status in {"APPROVED", "REJECTED", "STALE"}
     )
-    asset = find_asset(db, project_id, asset_id)
+    asset = find_asset(db, project_id, asset_id, include_media=True)
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产只允许查看版本", 409)

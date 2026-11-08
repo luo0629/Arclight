@@ -23,6 +23,7 @@ from arclight.application.production_versions import bind_output, digest
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.asset_versions import MAX_IMAGE_BYTES, ImportedImage, decode_image
+from arclight.domain.continuity_reviews import ReviewContractRecord
 from arclight.persistence.generation_candidates import GenerationImageImport
 from arclight.persistence.models import (
     AssetVersion,
@@ -37,10 +38,26 @@ from arclight.providers.media_outputs import MediaOutputProvider
 from arclight.providers.media_submission import MediaSubmission
 
 
-def require_candidate_review(version: AssetVersion, db: Session | None = None) -> None:
+def require_candidate_review(
+    version: AssetVersion, db: Session | None = None
+) -> ReviewContractRecord | None:
     gate = version.metadata_json.get("required_review")
-    if gate == "CONTINUITY":
-        raise DomainError("CONTINUITY_REVIEW_REQUIRED", "候选图片须先完成必需的连续性审查", 409)
+    asset = db.get(VisualAsset, version.asset_id) if db is not None else None
+    if (
+        gate == "CONTINUITY"
+        or asset is not None
+        and (
+            asset.asset_type == "SHOT_IMAGE"
+            or asset.asset_type == "IMAGE"
+            and version.creation_key is not None
+            and gate != "ART_PROPOSAL"
+        )
+    ):
+        if db is None:
+            raise DomainError("CONTINUITY_REVIEW_REQUIRED", "候选图片须先完成必需的连续性审查", 409)
+        from arclight.application.continuity_selection import require_shot_review
+
+        return require_shot_review(db, version)
     if gate == "ART_PROPOSAL":
         from arclight.application.art_concept_assets import (
             approved_concept_reference,
@@ -62,6 +79,9 @@ def require_candidate_review(version: AssetVersion, db: Session | None = None) -
                 "ART_REFERENCE_APPROVAL_REQUIRED", "概念图须经美术提案精确人工批准及授权确认", 409
             )
         concept_candidate(db, None, version.id)
+    if db is None:
+        raise DomainError("CONTINUITY_REVIEW_REQUIRED", "选用门禁须读取持久化检查和审查凭据", 409)
+    return None
 
 
 def candidate_asset(db: Session, job: GenerationJob) -> VisualAsset:

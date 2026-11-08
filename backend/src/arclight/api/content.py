@@ -138,7 +138,7 @@ def save_storyboard(
         raise DomainError("INVALID_REFERENCES", "分镜引用了无效的场景或角色", 422) from None
     if payload.base_version_id:
         require_version(db, Storyboard, episode_id, payload.base_version_id)
-    validate_storyboard_assets(db, episode.project_id, payload.content)
+    validate_storyboard_assets(db, episode.project_id, payload.content, episode_id=episode.id)
     validate_duration(
         payload.content,
         episode.target_duration_ms,
