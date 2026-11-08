@@ -13,7 +13,7 @@ class StageEvent(ProductionContract):
     event_id: UUID
     project_id: UUID
     episode_id: UUID
-    source_kind: Literal["TEXT", "MEDIA"]
+    source_kind: Literal["TEXT", "MEDIA", "REVIEW"]
     source_id: UUID
     source_revision: int = Field(strict=True, ge=0)
     actor_id: str = Field(min_length=1, max_length=100)
@@ -31,7 +31,15 @@ class StageEvent(ProductionContract):
 
 Disposition = Literal["APPLIED", "STALE", "BLOCKED"]
 StageAction = Literal[
-    "OBSERVED", "CONTINUE_TEXT", "WAIT_REVIEW", "WAIT_MEDIA", "WAIT_RECOVERY", "PARTIAL_FAILURE"
+    "OBSERVED",
+    "CONTINUE_TEXT",
+    "WAIT_REVIEW",
+    "WAIT_MEDIA",
+    "WAIT_RECOVERY",
+    "PARTIAL_FAILURE",
+    "READY_FOR_REVIEW",
+    "REVISION_REQUIRED",
+    "HUMAN_REVIEW",
 ]
 
 

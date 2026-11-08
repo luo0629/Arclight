@@ -21,7 +21,7 @@ class ProductionEvent(Entity, Base):
         UniqueConstraint(
             "source_kind", "source_id", "source_revision", name="uq_production_event_source"
         ),
-        CheckConstraint("source_kind IN ('TEXT', 'MEDIA')", name="production_event_kind"),
+        CheckConstraint("source_kind IN ('TEXT', 'MEDIA', 'REVIEW')", name="production_event_kind"),
         CheckConstraint("source_revision >= 0", name="production_event_revision"),
     )
 

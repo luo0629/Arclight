@@ -132,4 +132,37 @@ class MediaStageHandler:
         )
 
 
-HANDLERS: dict[str, StageHandler] = {"TEXT": TextStageHandler(), "MEDIA": MediaStageHandler()}
+class ReviewStageHandler:
+    """Publish the route destination; domain executors retain their own entry points."""
+
+    def prepare(self, db: Session, event: StageEvent, state: EpisodeProductionState) -> StagePlan:
+        from arclight.application.continuity_routing import read_routed_review
+
+        record, route = read_routed_review(db, event.source_id)
+        if (route.event_id, route.routed_by, record.review.episode_id) != (
+            event.event_id,
+            event.actor_id,
+            event.episode_id,
+        ):
+            raise DomainError("REVIEW_ROUTE_INVALID", "事件不能更换原审查路由或发起者", 409)
+        return StagePlan(route.destination)
+
+    def advance(
+        self, db: Session, event: StageEvent, plan: StagePlan, state: EpisodeProductionState
+    ) -> None:
+        db.add(
+            AuditEvent(
+                project_id=event.project_id,
+                actor_id=event.actor_id,
+                action="production.review_routed",
+                resource_id=event.source_id,
+                details_json={"event_id": str(event.event_id), "destination": plan.action},
+            )
+        )
+
+
+HANDLERS: dict[str, StageHandler] = {
+    "TEXT": TextStageHandler(),
+    "MEDIA": MediaStageHandler(),
+    "REVIEW": ReviewStageHandler(),
+}

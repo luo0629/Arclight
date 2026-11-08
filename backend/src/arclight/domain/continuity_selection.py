@@ -15,8 +15,8 @@ HUMAN_REVIEW_HANDLER = "continuity_shot"
 class ReviewAdmission(ProductionContract):
     """An exact routed receipt, distinct from QA-02's advisory contract artifact.
 
-    QA-04 will issue these through its trusted domain service. There is no HTTP
-    creation endpoint; QA-07 exercises the consumer with persisted contract fixtures.
+    QA-04 issues these through its trusted domain router. There is no HTTP or
+    model-tool creation endpoint; QA-07 also exercises the consumer with fixtures.
     The human request binds the complete review receipt, including its rerun.
     """
 

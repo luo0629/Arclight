@@ -78,6 +78,29 @@ def read_source(db: Session, kind: str, source_id: UUID, *, lock: bool = False) 
             ),
             tuple(sorted(identities)),
         )
+    if kind == "REVIEW":
+        from arclight.application.continuity_routing import read_routed_review
+
+        try:
+            record, route = read_routed_review(db, source_id)
+        except DomainError as error:
+            if error.code == "REVIEW_RESULT_STALE":
+                raise DomainError("STAGE_SOURCE_STALE", "该审查已被新一轮结果取代", 409) from error
+            raise
+        return StageSource(
+            record.review.project_id,
+            record.review.episode_id,
+            1,
+            route.conclusion,
+            digest(
+                {"record": record.model_dump(mode="json"), "route": route.model_dump(mode="json")}
+            ),
+            tuple(
+                sorted(
+                    {ref.resource_id for ref in record.review.references if ref.role == "REFERENCE"}
+                )
+            ),
+        )
     if kind != "MEDIA":
         raise DomainError("STAGE_SOURCE_INVALID", "阶段来源类型不支持", 422)
     job = db.get(
