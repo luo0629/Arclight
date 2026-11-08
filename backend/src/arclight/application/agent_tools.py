@@ -571,6 +571,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         from arclight.application.art_research import investigate_art
         from arclight.application.context_evidence import append_evidence, read_trace
         from arclight.application.continuity_research import investigate_continuity
+        from arclight.application.continuity_rules import continuity_rules_tool
         from arclight.application.director_checks import director_check_tool
         from arclight.application.director_collaboration import collaboration_tools
         from arclight.application.director_research import investigate_production
@@ -610,6 +611,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
                 requires_write=True,
             )
         )
+        registry.register(continuity_rules_tool(settings))
         registry.register(comparison_tool(settings))
         registry.register(patch_tool(settings))
         registry.register(director_check_tool(settings))
