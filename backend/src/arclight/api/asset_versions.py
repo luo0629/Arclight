@@ -358,7 +358,8 @@ def select_version(
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
-    require_candidate_review(row, db)
+    if require_candidate_review(row, db) is not None:
+        require_project(db, project_id, actor, owner=True)
     if row.status != "APPROVED" or row.stale:
         raise DomainError("ASSET_NOT_USABLE", "只能选用已批准且有效的精确版本", 409)
     read_object(

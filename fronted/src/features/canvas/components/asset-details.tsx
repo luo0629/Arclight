@@ -3,6 +3,7 @@
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui-kit";
 import VersionImage from "@/features/assets/components/version-image";
+import ContinuityComparisonButton from "@/features/continuity/components/continuity-comparison";
 import type { Graph, GraphNode } from "@/types/api";
 
 const types: Record<string, string> = {
@@ -81,10 +82,14 @@ export default function AssetDetails({
   node,
   graph,
   onSelect,
+  projectId,
+  onChanged,
 }: {
   node: GraphNode;
   graph: Graph;
   onSelect: (node: GraphNode) => void;
+  projectId: string;
+  onChanged: () => Promise<void>;
 }) {
   return (
     <section
@@ -111,6 +116,18 @@ export default function AssetDetails({
           </span>
         )}
       </div>
+      {node.kind === "asset_version" &&
+        node.asset_id &&
+        node.resource_id &&
+        ["SHOT_IMAGE", "IMAGE"].includes(node.asset_type ?? "") && (
+          <ContinuityComparisonButton
+            key={`${projectId}:${node.asset_id}:${node.resource_id}`}
+            projectId={projectId}
+            assetId={node.asset_id}
+            versionId={node.resource_id}
+            onChanged={onChanged}
+          />
+        )}
       {node.preview_path && (
         <VersionImage key={node.preview_path} path={node.preview_path} />
       )}

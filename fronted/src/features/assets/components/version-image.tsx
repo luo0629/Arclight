@@ -8,9 +8,13 @@ import { apiBlob, message } from "@/lib/api/client";
 export default function VersionImage({
   path,
   compact = false,
+  alt = "精确资产版本原图",
+  onUnavailable,
 }: {
   path: string;
   compact?: boolean;
+  alt?: string;
+  onUnavailable?: (error: unknown) => void;
 }) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
@@ -28,19 +32,22 @@ export default function VersionImage({
         }
       })
       .catch((error) => {
-        if (!controller.signal.aborted) setError(message(error));
+        if (!controller.signal.aborted) {
+          setError(message(error));
+          onUnavailable?.(error);
+        }
       });
     return () => {
       controller.abort();
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, attempt]);
+  }, [path, attempt, onUnavailable]);
   return (
     <div>
       {url && (
         <img
           src={url}
-          alt="精确资产版本原图"
+          alt={alt}
           className={
             compact
               ? "h-24 w-full rounded-lg object-contain"

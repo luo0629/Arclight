@@ -300,7 +300,14 @@ export default function Inspector({
           </p>
         </>
       ) : ["asset", "asset_version"].includes(node.kind) ? (
-        <AssetDetails node={node} graph={graph} onSelect={onSelectNode} />
+        <AssetDetails
+          key={node.id}
+          node={node}
+          graph={graph}
+          onSelect={onSelectNode}
+          projectId={episode.project_id}
+          onChanged={reload}
+        />
       ) : node.kind === "shot" ? (
         <>
           <h2>{node.title}</h2>
