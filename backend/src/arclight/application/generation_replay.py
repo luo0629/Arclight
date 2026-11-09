@@ -51,6 +51,14 @@ def replay_job(
     source = find_job(db, source_id, lock=True)
     if source.project_id != project_id:
         raise DomainError("NOT_FOUND", "Generation job does not exist", 404)
+    from arclight.application.continuity_revision_store import job_revision
+
+    if job_revision(db, source) is not None:
+        raise DomainError(
+            "REVISION_REPLAY_UNSAFE",
+            "审查修订不能通过死信重放重置次数；请处理原任务或重新审查",
+            409,
+        )
     fingerprint = hashlib.sha256(
         json.dumps({"source": str(source_id), "reason": payload.reason}, sort_keys=True).encode()
     ).hexdigest()

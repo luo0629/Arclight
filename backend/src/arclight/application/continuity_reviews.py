@@ -110,6 +110,9 @@ def require_review_target(
         or target.media_check_sha256 != digest(check.model_dump(mode="json"))
     ):
         raise DomainError("REVIEW_TARGET_INVALID", "审查候选与精确检查、资产或剧集不匹配", 409)
+    from arclight.application.continuity_revision_store import require_revision_target
+
+    require_revision_target(db, job, target)
     board = db.get(Storyboard, target.storyboard_id, populate_existing=True)
     shot = db.get(Shot, target.shot_id, populate_existing=True)
     if (

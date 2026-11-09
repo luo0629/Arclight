@@ -21,6 +21,7 @@ from arclight.api.character_matching import router as character_matching_router
 from arclight.api.collaboration import router as collaboration_router
 from arclight.api.content import router as content_router
 from arclight.api.contexts import router as contexts_router
+from arclight.api.continuity_revisions import router as continuity_revisions_router
 from arclight.api.costs import router as costs_router
 from arclight.api.dependencies_graph import router as dependencies_router
 from arclight.api.director import router as director_router
@@ -160,6 +161,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(files_router)
     app.include_router(generation_router)
     app.include_router(generation_candidates_router)
+    app.include_router(continuity_revisions_router)
     app.include_router(human_reviews_router)
     app.include_router(generation_budget_router)
     app.include_router(costs_router)

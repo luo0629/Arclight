@@ -117,8 +117,10 @@ def start_attempt(
             MediaCapabilities.model_validate(captured), spec, row.task_type, references
         )
     validate_capabilities(live, spec, row.task_type, references)
+    from arclight.application.continuity_revision_store import require_revision_execution
     from arclight.application.generation_budget import check_execution
 
+    require_revision_execution(db, row)
     check_execution(db, row, spec)
     attempt = GenerationAttempt(
         job_id=row.id,
@@ -284,6 +286,9 @@ def request_retry(db: Session, job_id: UUID, expected_revision: int, actor: str)
     require_project(db, job.project_id, actor, write=True)
     check_revision(job, expected_revision)
     require_writable_target(db, job)
+    from arclight.application.continuity_revision_store import require_revision_execution
+
+    require_revision_execution(db, job)
     latest = db.scalar(
         select(GenerationAttempt).where(
             GenerationAttempt.job_id == job.id,

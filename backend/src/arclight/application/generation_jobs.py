@@ -93,6 +93,7 @@ def create_job(
     frozen_prompt_composition: dict | None = None,
     art_concept_origin: dict | None = None,
     frozen_service: dict | None = None,
+    continuity_revision_origin: dict | None = None,
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
@@ -111,6 +112,8 @@ def create_job(
         if (
             manifest is None
             or manifest.snapshot_json["context"].get("art_concept") != art_concept_origin
+            or manifest.snapshot_json["context"].get("continuity_revision")
+            != continuity_revision_origin
         ):
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一任务不能更换受控美术来源", 409)
         return existing
@@ -262,6 +265,11 @@ def create_job(
                 **({"provider_configuration": service.configuration} if service else {}),
                 "origin": "generation_request",
                 **({"art_concept": deepcopy(art_concept_origin)} if art_concept_origin else {}),
+                **(
+                    {"continuity_revision": deepcopy(continuity_revision_origin)}
+                    if continuity_revision_origin is not None
+                    else {}
+                ),
                 "provider_capabilities": capabilities.model_dump(mode="json"),
                 "budget_quote": budget_quote.model_dump(mode="json"),
                 "budget_batch_id": str(payload.batch_id) if payload.batch_id else None,
