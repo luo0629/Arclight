@@ -119,7 +119,9 @@ test("QA-08：移动端精确人工决定、刷新恢复、独立批准及 Owner
   const model = env.models[1],
     row = model.human_reviews[0];
   await expect(
-    dialog.getByText("箱盖被遮挡，需要 Owner 核实精确图片。", { exact: true }),
+    dialog.getByText("缺少参考：箱盖被遮挡，需要 Owner 核实精确图片。", {
+      exact: true,
+    }),
   ).toBeVisible();
   const pair = dialog.getByTestId("continuity-image-pair");
   const boxes = await pair.locator(":scope > figure").evaluateAll((elements) =>

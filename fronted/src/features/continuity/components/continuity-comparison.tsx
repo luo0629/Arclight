@@ -165,7 +165,7 @@ function ComparisonBody({
             </p>
             {data.actions.blocker ? (
               <Notice>
-                {data.actions.blocker.message}
+                <p>{data.actions.blocker.message}</p>
                 <span className="break-all text-xs">
                   {data.actions.blocker.code}
                 </span>
