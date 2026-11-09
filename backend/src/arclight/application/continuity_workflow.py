@@ -4,7 +4,7 @@ import logging
 from uuid import UUID, uuid5
 
 from pydantic import ValidationError
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from arclight.application.agent_runtime_state import initialize_run_state
@@ -75,8 +75,9 @@ def freeze_review_binding(db: Session, project_id: UUID, payload: GenerationCrea
         for name in ("storyboard_id", "shot_id")
         if name in payload.spec.context
     }
-    if payload.review_target is None and not legacy:
-        return None  # Historical unbound jobs stay unreviewed until an explicit command.
+    if payload.review_target is None and len(legacy) < 2:
+        # Partial legacy context is generic metadata, never an exact shot binding.
+        return None
     if payload.target_type != "SHOT_IMAGE":
         raise DomainError("REVIEW_TARGET_INVALID", "连续性送审只适用于镜头图片", 422)
     try:
@@ -125,7 +126,7 @@ def start_candidate_review(
     context = manifest.snapshot_json["context"]
     frozen = context.get("continuity_review")
     legacy = context["generation"]["context"]
-    if frozen is None and ("storyboard_id" in legacy or "shot_id" in legacy):
+    if frozen is None and all(name in legacy for name in ("storyboard_id", "shot_id")):
         frozen = {name: legacy.get(name) for name in ("storyboard_id", "shot_id")}
     inherited = (
         read_work(db, project_id, candidate.replaces_candidate_id)
@@ -312,11 +313,18 @@ def queue_pending_reviews(
                         ]["shot_id"]
                         .as_string()
                         .is_not(None),
-                        DependencyManifest.snapshot_json["context"]["generation"]["context"][
-                            "shot_id"
-                        ]
-                        .as_string()
-                        .is_not(None),
+                        and_(
+                            DependencyManifest.snapshot_json["context"]["generation"]["context"][
+                                "storyboard_id"
+                            ]
+                            .as_string()
+                            .is_not(None),
+                            DependencyManifest.snapshot_json["context"]["generation"]["context"][
+                                "shot_id"
+                            ]
+                            .as_string()
+                            .is_not(None),
+                        ),
                         source_work.id.is_not(None),
                     ),
                 )

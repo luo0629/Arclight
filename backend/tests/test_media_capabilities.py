@@ -283,6 +283,8 @@ def test_default_options_preserve_historical_fingerprint_and_idempotent_replay(
     del expected["batch_id"]
     # GEN-16's default classification was also absent from the historical request.
     del expected["scheduling_mode"]
+    # Exact review bindings were absent from historical generic generation requests.
+    del expected["review_target"]
     for field in ("batch_size", "require_query", "require_cancel"):
         del expected["spec"][field]
     old_hash = hashlib.sha256(
@@ -290,10 +292,15 @@ def test_default_options_preserve_historical_fingerprint_and_idempotent_replay(
             expected, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
         ).encode()
     ).hexdigest()
+    assert old_hash == "f7c73161431ee88ce0a5d1ecbb9b2b5382d0e12c60bf292b7eef5f353c31e80b"
     assert generation_jobs.request_fingerprint(GenerationCreate.model_validate(body)) == old_hash
     first = capture(client, episode["project_id"], body, "stable-capture").json()
     use_profile(monkeypatch, supports_seed=False, version="mock:2")
     assert capture(client, episode["project_id"], body, "stable-capture").json() == first
+    explicit_default = body | {"review_target": None}
+    assert (
+        capture(client, episode["project_id"], explicit_default, "stable-capture").json() == first
+    )
     assert manifest(client, first)["context"]["provider_capabilities"]["version"] == "mock:1"
     changed = deepcopy(body)
     changed["spec"]["batch_size"] = 2

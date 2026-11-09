@@ -6,6 +6,7 @@ import pytest
 from continuity_reviewer_support import install_reviewer_model
 from sqlalchemy import select
 from test_agent_model import model_service as model_service
+from test_asset_versions import state
 from test_continuity_reviewer import reviewer_case as reviewer_case
 from test_continuity_rules import FixedImageProvider
 from test_continuity_rules import rules_storage as rules_storage
@@ -14,6 +15,7 @@ from test_generation_candidates import candidates, deliver, ingest
 from test_generation_jobs import capture_ok, payload
 
 from arclight.application.continuity_review_store import REVIEW_RESOURCE
+from arclight.application.continuity_workflow import queue_pending_reviews
 from arclight.application.runtime import execute_run
 from arclight.persistence.models import GenerationAttempt, VersionBinding
 from arclight.providers.media_outputs import MediaOutput
@@ -179,8 +181,7 @@ def test_generation_rejects_inexact_review_binding(client, episode, reviewer_cas
     elif change == "wrong_shot":
         body["review_target"]["shot_id"] = str(uuid4())
     elif change == "partial":
-        body.pop("review_target")
-        body["spec"]["context"]["shot_id"] = reviewer_case["target"]["shot_id"]
+        body["review_target"].pop("shot_id")
     else:
         body["spec"]["context"].update(body["review_target"] | {"shot_id": str(uuid4())})
     response = client.post(
@@ -237,3 +238,46 @@ def test_pending_production_review_cannot_borrow_an_independent_old_pass(
     execute_run(client.app.state.session_factory, settings, UUID(response.json()["run_id"]), 0)
     approve(client, reviewer_case)
     assert not errors, errors
+
+
+@pytest.mark.parametrize("legacy_key", ["shot_id", "storyboard_id"])
+def test_partial_legacy_metadata_stays_unbound_until_an_explicit_validated_review(
+    client, episode, settings, reviewer_case, model_service, legacy_key
+):
+    _, errors, deliveries = install_reviewer_model(model_service, dynamic=False)
+    body = bound_body(episode, reviewer_case)
+    body.pop("review_target")
+    body["spec"]["context"][legacy_key] = str(uuid4())
+    job = capture_ok(client, episode["project_id"], body)
+    assert deliver(client, job, MockMediaSubmissionProvider()) == "SUCCEEDED"
+    factory = client.app.state.session_factory
+    with factory() as db:
+        attempt = db.scalar(
+            select(GenerationAttempt.id).where(GenerationAttempt.job_id == UUID(job["id"]))
+        )
+    assert ingest(client, attempt, BatchImages("match.png")) == 1
+    candidate = candidates(client, episode["project_id"], job)[0]
+    assert queue_pending_reviews(factory, settings) == 0
+    progress = work_for(client, episode["project_id"], candidate)
+    assert progress["status"] == "UNBOUND" and progress["work"] is None
+    case = {
+        "project_id": episode["project_id"],
+        "target": {
+            "asset_id": candidate["version"]["asset_id"],
+            "asset_version_id": candidate["asset_version_id"],
+        },
+    }
+    asset, version = target_rows(client, case)
+    blocked = state(client, asset, version, "READY_FOR_REVIEW")
+    assert blocked.status_code == 409, blocked.text
+    binding = {name: reviewer_case["target"][name] for name in ("storyboard_id", "shot_id")}
+    endpoint = (
+        f"/api/v1/projects/{episode['project_id']}/generation-candidates/{candidate['id']}/review"
+    )
+    response = client.post(endpoint, json=binding)
+    assert response.status_code == 202, response.text
+    execute_run(factory, settings, UUID(response.json()["run_id"]), 0)
+    progress = work_for(client, episode["project_id"], candidate)
+    assert progress["status"] == "WAITING_REVIEW", progress
+    assert len(deliveries) == 1 and not errors
+    assert target_rows(client, case)[1]["status"] == "DRAFT"
