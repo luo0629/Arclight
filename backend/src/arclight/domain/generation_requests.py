@@ -161,6 +161,11 @@ class ExpectedAsset(MediaInput):
     current_version_id: UUID | None
 
 
+class ShotReviewBinding(MediaInput):
+    storyboard_id: UUID
+    shot_id: UUID
+
+
 class GenerationCreate(MediaInput):
     episode_id: UUID | None = None
     batch_id: UUID | None = None
@@ -171,6 +176,7 @@ class GenerationCreate(MediaInput):
     task_type: TaskType
     inputs: list[DependencyInput] = Field(default_factory=list, max_length=64)
     spec: GenerationSpec
+    review_target: ShotReviewBinding | None = None
 
     @model_validator(mode="after")
     def validate_target(self):

@@ -184,6 +184,9 @@ def dispatch_outbox() -> None:
         from arclight.application.agent_external_waits import queue_ready_external
 
         queue_ready_external(session_factory(engine, settings), settings)
+        from arclight.application.continuity_workflow import queue_pending_reviews
+
+        queue_pending_reviews(session_factory(engine, settings), settings)
         with session_factory(engine, settings).begin() as db:
             # QUEUED 是业务事实；即使 Broker 丢失已发布消息，也会周期性重新投递。
             # 重复投递由 revision + 状态 + 运行行锁消除，不能宣称外部模型 exactly-once。
@@ -191,7 +194,14 @@ def dispatch_outbox() -> None:
                 select(OutboxEvent)
                 .join(WorkflowRun, OutboxEvent.run_id == WorkflowRun.id)
                 .where(
-                    WorkflowRun.status == RunStatus.QUEUED,
+                    (
+                        (WorkflowRun.status == RunStatus.QUEUED)
+                        | (
+                            (WorkflowRun.workflow_type == "continuity_review")
+                            & (WorkflowRun.status == RunStatus.RUNNING)
+                            & WorkflowRun.pending_review["resource_type"].as_string().is_(None)
+                        )
+                    ),
                     OutboxEvent.revision == WorkflowRun.revision,
                 )
                 .order_by(OutboxEvent.created_at)

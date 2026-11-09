@@ -24,12 +24,14 @@ logger = logging.getLogger(__name__)
 def versions_for_agent(agent_name: str) -> set[str]:
     from arclight.application.screenwriter_creation import PROFESSIONAL_VERSIONS
     from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
+    from arclight.domain.continuity_workflow import REVIEW_WORKFLOW_VERSION
     from arclight.domain.director_creation import DIRECTOR_VERSIONS
 
     return {
         "screenwriter": PROFESSIONAL_VERSIONS,
         "director": DIRECTOR_VERSIONS,
         "art_director": set(ART_WORKFLOW_VERSIONS),
+        "continuity_reviewer": {REVIEW_WORKFLOW_VERSION},
     }.get(agent_name, set())
 
 

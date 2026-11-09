@@ -51,6 +51,7 @@ WORKFLOW_PLANS: dict[str, tuple[AgentStepId, ...]] = {
     "storyboard": ("storyboard", "storyboard_review"),
     # Art investigation already uses the shared storyboard visual stage and Context.
     "art_proposal": ("storyboard", "storyboard_review"),
+    "continuity_review": ("storyboard",),
     "script_storyboard": ("script", "script_review", "storyboard", "storyboard_review"),
 }
 

@@ -43,11 +43,13 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
 
     with runtime_scope(factory, settings, run_id, revision):
         from arclight.application.art_execution import execute_art
+        from arclight.application.continuity_execution import execute_continuity
         from arclight.application.director_execution import execute_director
         from arclight.application.screenwriter_execution import execute_screenwriter
 
         if (
-            not execute_art(factory, settings, run_id, revision)
+            not execute_continuity(factory, settings, run_id, revision)
+            and not execute_art(factory, settings, run_id, revision)
             and not execute_director(factory, settings, run_id, revision)
             and not execute_screenwriter(factory, settings, run_id, revision)
         ):

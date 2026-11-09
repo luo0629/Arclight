@@ -36,6 +36,8 @@ from arclight.providers.media_capabilities import reference_count, resolve_capab
 
 def request_fingerprint(payload: GenerationCreate) -> str:
     values = payload.model_dump(mode="json")
+    if values["review_target"] is None:
+        del values["review_target"]
     if values["batch_id"] is None:
         del values["batch_id"]
     if values["scheduling_mode"] == "INTERACTIVE":
@@ -118,6 +120,9 @@ def create_job(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一任务不能更换受控美术来源", 409)
         return existing
     asset = validate_target(db, project_id, payload)
+    from arclight.application.continuity_workflow import freeze_review_binding
+
+    review_binding = freeze_review_binding(db, project_id, payload)
     from arclight.application.media_services import bind_selection, select_for_spec
 
     service = select_for_spec(db, actor, payload.spec, payload.task_type, frozen_service)
@@ -264,6 +269,7 @@ def create_job(
                 ),
                 **({"provider_configuration": service.configuration} if service else {}),
                 "origin": "generation_request",
+                **({"continuity_review": review_binding} if review_binding else {}),
                 **({"art_concept": deepcopy(art_concept_origin)} if art_concept_origin else {}),
                 **(
                     {"continuity_revision": deepcopy(continuity_revision_origin)}

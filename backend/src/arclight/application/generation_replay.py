@@ -96,6 +96,7 @@ def replay_job(
             "expected_asset": snapshot["target"]["expected_asset"],
             "task_type": source.task_type,
             "spec": snapshot["context"]["generation"],
+            "review_target": snapshot["context"].get("continuity_review"),
             "inputs": [
                 {
                     "source_asset_version_id": item["source_asset_version_id"],

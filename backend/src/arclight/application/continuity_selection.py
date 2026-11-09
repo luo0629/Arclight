@@ -190,6 +190,19 @@ def require_shot_review(db: Session, version: AssetVersion) -> ReviewContractRec
         raise DomainError(
             "REVIEW_ADMISSION_INVALID", "审查准入记录格式或精确版本不匹配", 409
         ) from exc
+    from arclight.domain.continuity_workflow import REVIEW_WORK_RESOURCE, CandidateReviewWork
+
+    work_binding = find_binding(db, project.id, REVIEW_WORK_RESOURCE, candidate.id)
+    if work_binding is not None:
+        work = CandidateReviewWork.model_validate(
+            checked_snapshot(db, work_binding)["continuity_work"]
+        )
+        if work.target != review.target or snapshot.get("review_route", {}).get("run_id") != str(
+            work.run_id
+        ):
+            raise DomainError(
+                "CONTINUITY_REVIEW_REQUIRED", "当前持久送审尚未完成，历史结论不能替代", 409
+            )
     from arclight.application.continuity_feedback_store import require_feedback_gate
 
     require_feedback_gate(db, project.id, candidate.id, review.result_id)

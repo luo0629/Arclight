@@ -37,6 +37,7 @@ STAGES = {
     "script_storyboard": ("script", "storyboard"),
     "storyboard": ("storyboard",),
     "art_proposal": ("storyboard",),
+    "continuity_review": ("storyboard",),
     "script_rewrite": ("rewrite",),
     "story_analysis": ("analyze",),
     "story_outline": ("outline",),

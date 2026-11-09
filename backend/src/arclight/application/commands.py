@@ -2,7 +2,7 @@ import hashlib
 import json
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import ScriptContent, StoryboardContent
@@ -235,6 +235,7 @@ def start_run(
         select(WorkflowRun).where(
             WorkflowRun.episode_id == episode_id,
             WorkflowRun.status.in_([RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_REVIEW]),
+            WorkflowRun.workflow_type != "continuity_review",
         )
     )
     if active:
@@ -513,6 +514,7 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
         or waiting_for_answer(db, run)
         or waiting_for_answer(db, run, "director")
         or waiting_for_answer(db, run, "art_director")
+        or waiting_for_answer(db, run, "continuity_reviewer")
     ):
         raise DomainError("NOT_CANCELLABLE", "仅排队、等待审核或等待创作回答的工作流可以取消")
     agent_state = None
@@ -569,7 +571,9 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
         select(WorkflowRun).where(
             WorkflowRun.episode_id == run.episode_id,
             WorkflowRun.id != run.id,
+            literal(run.workflow_type != "continuity_review"),
             WorkflowRun.status.in_([RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_REVIEW]),
+            WorkflowRun.workflow_type != "continuity_review",
         )
     )
     if active:
