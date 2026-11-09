@@ -8,8 +8,9 @@ from sqlalchemy import select
 
 from arclight.api.dependencies import Actor, Database
 from arclight.application.commands import require_episode
-from arclight.application.timelines import create_timeline, read_timeline
-from arclight.domain.timelines import TimelineCreate, TimelineRead
+from arclight.application.timeline_store import read_timeline
+from arclight.application.timelines import create_timeline, save_timeline
+from arclight.domain.timelines import TimelineCreate, TimelineRead, TimelineSave
 from arclight.persistence.timelines import Timeline
 
 router = APIRouter(prefix="/api/v1", tags=["timelines"])
@@ -41,3 +42,10 @@ def versions(
 @router.get("/timelines/{timeline_id}")
 def get(timeline_id: UUID, db: Database, actor: Actor) -> TimelineRead:
     return read_timeline(db, timeline_id, actor)
+
+
+@router.patch("/timelines/{timeline_id}", status_code=201)
+def save(
+    timeline_id: UUID, payload: TimelineSave, request: Request, db: Database, actor: Actor
+) -> TimelineRead:
+    return save_timeline(db, request.app.state.settings, timeline_id, actor, payload)

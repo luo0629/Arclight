@@ -109,7 +109,14 @@ class TimelineSnapshot(TimelineContract):
         return self
 
 
+class TimelineSave(TimelineContract):
+    creation_key: UUID
+    expected_version_no: int = Field(strict=True, ge=1)
+    snapshot: TimelineSnapshot
+
+
 class TimelineRead(TimelineContract):
+    based_on_timeline_id: UUID | None = None
     id: UUID
     asset_id: UUID
     version_no: int

@@ -1,106 +1,63 @@
 """Create frozen default timelines through existing selection, QA and dependency gates."""
 
 from copy import deepcopy
-from datetime import UTC
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ShotContent
+from arclight.agents.contracts import ScriptContent, ShotContent
 from arclight.application.asset_objects import read_object
-from arclight.application.audit import audit
 from arclight.application.commands import require_episode
 from arclight.application.continuity_selection import require_shot_review, validate_selected_shot
 from arclight.application.dependencies import (
-    attach_output,
-    capture_manifest,
     exact_version,
     lock_dependency_graph,
 )
+from arclight.application.timeline_store import append_timeline, read_timeline, replay_timeline
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.dependencies import ManifestCreate
 from arclight.domain.timelines import (
     TRACK_KINDS,
     ClipSnapshot,
     TimelineCreate,
     TimelineRead,
+    TimelineSave,
     TimelineSnapshot,
     TrackSnapshot,
 )
 from arclight.domain.versions import digest
 from arclight.persistence.models import (
-    AssetVersion,
     Episode,
     Project,
+    Script,
     Shot,
     Storyboard,
-    VisualAsset,
 )
-from arclight.persistence.timelines import Timeline, TimelineClip, TimelineTrack
+from arclight.persistence.timelines import Timeline
 
 
-def read_timeline(db: Session, timeline_id: UUID, actor: str) -> TimelineRead:
-    row = db.get(Timeline, timeline_id)
-    if row is None or not row.sealed:
-        raise DomainError("NOT_FOUND", "时间轴版本不存在", 404)
-    episode = require_episode(db, row.episode_id, actor)
-    version, asset = exact_version(db, episode.project_id, row.id)
-    tracks = list(
+def write_episode(db: Session, episode_id: UUID, actor: str) -> Episode:
+    episode = require_episode(db, episode_id, actor, write=True)
+    lock_dependency_graph(db, episode.project_id)
+    db.refresh(episode)
+    return require_episode(db, episode_id, actor, write=True)
+
+
+def approved_board(db: Session, episode: Episode, board_id: UUID) -> tuple[Storyboard, list[Shot]]:
+    board = db.get(Storyboard, board_id, populate_existing=True)
+    if board is None or board.episode_id != episode.id:
+        raise DomainError("NOT_FOUND", "本剧集的精确分镜不存在", 404)
+    registry, _ = exact_version(db, episode.project_id, board.id)
+    if board.status != "APPROVED" or registry.status != "APPROVED" or registry.stale:
+        raise DomainError("STORYBOARD_NOT_APPROVED", "时间轴需要已批准且有效的精确分镜", 409)
+    shots = list(
         db.scalars(
-            select(TimelineTrack)
-            .where(TimelineTrack.timeline_id == row.id)
-            .order_by(TimelineTrack.ordinal)
+            select(Shot).where(Shot.storyboard_id == board.id).order_by(Shot.shot_no).limit(64)
         )
     )
-    clips = list(
-        db.scalars(
-            select(TimelineClip)
-            .where(TimelineClip.timeline_id == row.id)
-            .order_by(TimelineClip.ordinal)
-        )
-    )
-    snapshot = TimelineSnapshot(
-        episode_id=row.episode_id,
-        storyboard_id=row.storyboard_id,
-        default_duration_ms=row.default_duration_ms,
-        duration_ms=row.duration_ms,
-        output_profile=deepcopy(row.output_profile_json),
-        tracks=[
-            TrackSnapshot(
-                id=track.id,
-                kind=track.kind,
-                ordinal=track.ordinal,
-                clips=[
-                    ClipSnapshot.model_validate(
-                        {key: getattr(clip, key) for key in ClipSnapshot.model_fields}
-                    )
-                    for clip in clips
-                    if clip.track_id == track.id
-                ],
-            )
-            for track in tracks
-        ],
-    )
-    if digest(snapshot.model_dump(mode="json")) != version.checksum:
-        raise DomainError("TIMELINE_HISTORY_INVALID", "时间轴内容与精确版本摘要不匹配", 409)
-    return TimelineRead(
-        id=row.id,
-        asset_id=asset.id,
-        version_no=row.version_no,
-        status=version.status,
-        stale=version.stale,
-        content_sha256=version.checksum,
-        dependency_manifest_id=UUID(version.metadata_json["dependency_manifest_id"]),
-        created_at=(
-            row.created_at.replace(tzinfo=UTC)
-            if row.created_at.tzinfo is None
-            else row.created_at.astimezone(UTC)
-        ),
-        snapshot=snapshot,
-    )
+    return board, shots
 
 
 def selected_clip(
@@ -155,10 +112,7 @@ def selected_clip(
 def create_timeline(
     db: Session, settings: Settings, episode_id: UUID, actor: str, payload: TimelineCreate
 ) -> TimelineRead:
-    episode = require_episode(db, episode_id, actor, write=True)
-    lock_dependency_graph(db, episode.project_id)
-    db.refresh(episode)
-    require_episode(db, episode_id, actor, write=True)
+    episode = write_episode(db, episode_id, actor)
     request_hash = digest(
         {
             **payload.model_dump(mode="json", exclude={"creation_key", "selected_shots"}),
@@ -168,26 +122,10 @@ def create_timeline(
             ),
         }
     )
-    previous = db.scalar(
-        select(Timeline).where(
-            Timeline.episode_id == episode.id, Timeline.creation_key == payload.creation_key
-        )
-    )
-    if previous:
-        if previous.request_sha256 != request_hash:
-            raise DomainError("IDEMPOTENCY_CONFLICT", "同一创建键不能用于不同时间轴输入", 409)
-        return read_timeline(db, previous.id, actor)
-    board = db.get(Storyboard, payload.storyboard_id, populate_existing=True)
-    if board is None or board.episode_id != episode.id:
-        raise DomainError("NOT_FOUND", "本剧集的精确分镜不存在", 404)
-    registry, _ = exact_version(db, episode.project_id, board.id)
-    if board.status != "APPROVED" or registry.status != "APPROVED" or registry.stale:
-        raise DomainError("STORYBOARD_NOT_APPROVED", "创建时间轴需要已批准且有效的精确分镜", 409)
-    shots = list(
-        db.scalars(
-            select(Shot).where(Shot.storyboard_id == board.id).order_by(Shot.shot_no).limit(64)
-        )
-    )
+    replay = replay_timeline(db, episode.id, payload.creation_key, request_hash, actor)
+    if replay:
+        return replay
+    board, shots = approved_board(db, episode, payload.storyboard_id)
     selections = {item.shot_id: item.asset_version_id for item in payload.selected_shots}
     if len(shots) > 63 or set(selections) != {shot.id for shot in shots}:
         raise DomainError(
@@ -214,93 +152,153 @@ def create_timeline(
             for index, kind in enumerate(TRACK_KINDS)
         ],
     )
-    asset_id = uuid5(episode.id, "dependency:TIMELINE")
-    asset = db.get(VisualAsset, asset_id)
-    if asset is None:
-        asset = VisualAsset(
-            id=asset_id,
-            project_id=episode.project_id,
-            asset_type="TIMELINE",
-            name=f"第{episode.episode_no}集 · 时间轴",
-            created_by=actor,
-            metadata_json={"episode_id": str(episode.id), "timeline_registry": True},
+    return append_timeline(db, episode, actor, payload.creation_key, request_hash, snapshot)
+
+
+def canonical_snapshot(value: TimelineSnapshot) -> TimelineSnapshot:
+    return value.model_copy(
+        update={
+            "tracks": [
+                track.model_copy(
+                    update={"clips": sorted(track.clips, key=lambda clip: clip.ordinal)}
+                )
+                for track in sorted(value.tracks, key=lambda item: item.ordinal)
+            ]
+        }
+    )
+
+
+def require_track_source(
+    db: Session, episode: Episode, identity: UUID, kind: str, checksum: str | None = None
+) -> None:
+    version, asset = exact_version(db, episode.project_id, identity)
+    if (
+        asset.asset_type != kind
+        or asset.status in {"ARCHIVED", "STALE", "REJECTED"}
+        or version.status not in {"APPROVED", "LOCKED"}
+        or version.stale
+        or (checksum is not None and version.checksum != checksum)
+    ):
+        raise DomainError("ASSET_NOT_USABLE", "时间轴轨道需要已批准且有效的精确素材版本", 409)
+
+
+def validate_snapshot(
+    db: Session, settings: Settings, episode: Episode, value: TimelineSnapshot
+) -> None:
+    if value.episode_id != episode.id:
+        raise DomainError("TIMELINE_SCOPE_INVALID", "时间轴内容必须属于当前剧集", 422)
+    board, shots = approved_board(db, episode, value.storyboard_id)
+    video = next(track for track in value.tracks if track.kind == "VIDEO")
+    if (
+        len(shots) > 63
+        or len(video.clips) != len(shots)
+        or {clip.shot_id for clip in video.clips} != {shot.id for shot in shots}
+    ):
+        raise DomainError(
+            "TIMELINE_SHOTS_INCOMPLETE", "时间轴必须保留本分镜全部镜头的精确选用", 422
         )
-        db.add(asset)
-        db.flush()
-    manifest, _ = capture_manifest(
-        db,
-        episode.project_id,
-        actor,
-        ManifestCreate.model_validate(
-            {
-                "creation_key": uuid5(payload.creation_key, "timeline-inputs:" + str(episode.id)),
-                "target_asset_id": asset.id,
-                "inputs": [
-                    {"source_asset_version_id": board.id, "dependency_type": "SEQUENCE_DEPENDENCY"},
-                    *[
-                        {
-                            "source_asset_version_id": identity,
-                            "dependency_type": "RENDER_DEPENDENCY",
-                        }
-                        for identity in sorted(set(selections.values()))
-                    ],
-                ],
-                "context": {"episode_id": str(episode.id), "timeline_schema_version": 1},
-            }
-        ),
-    )
-    number = (
-        db.scalar(select(func.max(Timeline.version_no)).where(Timeline.episode_id == episode.id))
-        or 0
-    ) + 1
-    version = AssetVersion(
-        id=uuid4(),
-        asset_id=asset.id,
-        version_no=number,
-        object_key="database:timeline:" + str(payload.creation_key),
-        checksum=digest(snapshot.model_dump(mode="json")),
-        created_by=actor,
-        creation_key=payload.creation_key,
-        metadata_json={
-            "episode_id": str(episode.id),
-            "timeline_registry": True,
-            "dependency_manifest_id": str(manifest.id),
-        },
-    )
-    db.add(version)
-    db.flush()
-    row = Timeline(
-        id=version.id,
-        episode_id=episode.id,
-        storyboard_id=board.id,
-        version_no=number,
-        default_duration_ms=snapshot.default_duration_ms,
-        duration_ms=snapshot.duration_ms,
-        output_profile_json=snapshot.output_profile,
-        creation_key=payload.creation_key,
-        request_sha256=request_hash,
-        created_by=actor,
-    )
-    db.add(row)
-    db.flush()
-    for track in snapshot.tracks:
-        db.add(
-            TimelineTrack(id=track.id, timeline_id=row.id, kind=track.kind, ordinal=track.ordinal)
-        )
-    db.flush()
-    for track in snapshot.tracks:
+    project = db.get(Project, episode.project_id)
+    assert project is not None
+    if value.output_profile != project.output_profile:
+        raise DomainError("TIMELINE_PROFILE_CONFLICT", "请载入当前项目输出规格后再保存", 409)
+    shots_by_id = {shot.id: shot for shot in shots}
+    script = db.get(Script, board.script_version_id)
+    assert script is not None
+    script_content = ScriptContent.model_validate(script.content_json)
+    line_ids = {line.line_id for scene in script_content.scenes for line in scene.dialogue}
+    for track in value.tracks:
         for clip in track.clips:
-            db.add(TimelineClip(timeline_id=row.id, track_id=track.id, **clip.model_dump()))
-    db.flush()
-    row.sealed = True
-    db.flush()
-    attach_output(db, episode.project_id, manifest.id, version)
-    audit(
-        db,
-        episode.project_id,
-        actor,
-        "timeline.created",
-        row.id,
-        {"episode_id": str(episode.id), "version_no": number, "content_sha256": version.checksum},
+            if clip.shot_id is not None and clip.shot_id not in shots_by_id:
+                raise DomainError("TIMELINE_SCOPE_INVALID", "轨道片段不能引用其他分镜的镜头", 422)
+            if track.kind != "VIDEO" and any(
+                (clip.review_id, clip.review_storyboard_id, clip.review_shot_id)
+            ):
+                raise DomainError(
+                    "TIMELINE_REFERENCE_CONFLICT", "视觉审查身份只用于其精确画面片段", 409
+                )
+            if track.kind == "VIDEO":
+                assert clip.shot_id is not None
+                expected = selected_clip(
+                    db,
+                    settings,
+                    episode,
+                    shots_by_id[clip.shot_id],
+                    clip.source_asset_version_id,
+                    clip.ordinal,
+                    clip.duration_ms,
+                )
+                for name in (
+                    "source_sha256",
+                    "review_id",
+                    "review_storyboard_id",
+                    "review_shot_id",
+                ):
+                    if getattr(clip, name) != getattr(expected, name):
+                        raise DomainError(
+                            "TIMELINE_REFERENCE_CONFLICT", "片段须保留当前精确素材与审查身份", 409
+                        )
+            else:
+                require_track_source(
+                    db,
+                    episode,
+                    clip.source_asset_version_id,
+                    "SUBTITLE" if track.kind == "SUBTITLE" else "AUDIO",
+                    clip.source_sha256,
+                )
+            if clip.line_id is not None and (
+                clip.script_version_id != script.id or clip.line_id not in line_ids
+            ):
+                raise DomainError(
+                    "TIMELINE_LINE_INVALID", "片段须引用本精确分镜剧本中的稳定台词身份", 422
+                )
+            if clip.audio_version_id:
+                require_track_source(db, episode, clip.audio_version_id, "AUDIO")
+
+
+def save_timeline(
+    db: Session, settings: Settings, timeline_id: UUID, actor: str, payload: TimelineSave
+) -> TimelineRead:
+    base = db.get(Timeline, timeline_id)
+    if base is None or not base.sealed:
+        raise DomainError("NOT_FOUND", "时间轴版本不存在", 404)
+    episode = write_episode(db, base.episode_id, actor)
+    snapshot = canonical_snapshot(payload.snapshot)
+    request_hash = digest(
+        {
+            "operation": "SAVE",
+            "based_on_timeline_id": str(base.id),
+            "expected_version_no": payload.expected_version_no,
+            "snapshot": snapshot.model_dump(mode="json"),
+        }
     )
-    return read_timeline(db, row.id, actor)
+    replay = replay_timeline(db, episode.id, payload.creation_key, request_hash, actor)
+    if replay:
+        return replay
+    current = db.scalar(
+        select(Timeline)
+        .where(Timeline.episode_id == episode.id, Timeline.sealed.is_(True))
+        .order_by(Timeline.version_no.desc())
+        .limit(1)
+    )
+    if current is None or current.id != base.id or payload.expected_version_no != base.version_no:
+        raise DomainError(
+            "VERSION_CONFLICT",
+            f"时间轴已变化，请保留草稿并载入当前第{current.version_no if current else 0}版",
+            409,
+        )
+    read_timeline(db, base.id, actor)
+    validate_snapshot(db, settings, episode, snapshot)
+    fresh = snapshot.model_copy(
+        update={
+            "tracks": [
+                track.model_copy(
+                    update={
+                        "id": uuid4(),
+                        "clips": [clip.model_copy(update={"id": uuid4()}) for clip in track.clips],
+                    }
+                )
+                for track in snapshot.tracks
+            ]
+        }
+    )
+    return append_timeline(db, episode, actor, payload.creation_key, request_hash, fresh, base=base)

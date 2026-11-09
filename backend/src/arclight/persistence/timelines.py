@@ -82,3 +82,16 @@ class TimelineClip(Entity, Base):
             "(script_version_id IS NULL) = (line_id IS NULL)", name="timeline_clip_line"
         ),
     )
+
+
+class TimelineRevision(Entity, Base):
+    """One immutable save receipt for each compare-and-append operation."""
+
+    __tablename__ = "timeline_revisions"
+    id: Mapped[UUID] = mapped_column(ForeignKey("timelines.id"), primary_key=True)
+    based_on_timeline_id: Mapped[UUID] = mapped_column(ForeignKey("timelines.id"), unique=True)
+    expected_version_no: Mapped[int]
+    created_by: Mapped[str] = mapped_column(String(100))
+    __table_args__ = (
+        CheckConstraint("expected_version_no > 0", name="timeline_revision_positive"),
+    )
