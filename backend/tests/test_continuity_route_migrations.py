@@ -70,11 +70,15 @@ def test_0053_refuses_downgrade_with_review_event_and_keeps_entire_schema(
             )
         )
     original = snapshot(factory)
+    original_tables = set(inspect(client.app.state.engine).get_table_names())
+    with factory() as db:
+        original_revision = db.scalar(text("SELECT version_num FROM alembic_version"))
     with pytest.raises(RuntimeError, match="routing history"):
         command.downgrade(migrated, "0052")
     assert snapshot(factory) == original
     with factory() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0053"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == original_revision
+    assert set(inspect(client.app.state.engine).get_table_names()) == original_tables
     command.check(migrated)
 
 
