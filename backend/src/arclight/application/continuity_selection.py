@@ -190,6 +190,9 @@ def require_shot_review(db: Session, version: AssetVersion) -> ReviewContractRec
         raise DomainError(
             "REVIEW_ADMISSION_INVALID", "审查准入记录格式或精确版本不匹配", 409
         ) from exc
+    from arclight.application.continuity_feedback_store import require_feedback_gate
+
+    require_feedback_gate(db, project.id, candidate.id, review.result_id)
     if review.conclusion == "REVISION_REQUIRED":
         raise DomainError("CONTINUITY_REVISION_REQUIRED", "候选须修订并对新版本重新审查", 409)
     if (

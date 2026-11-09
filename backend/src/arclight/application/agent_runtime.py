@@ -158,7 +158,18 @@ class _AgentRuntime[T: BaseModel]:
                     ),
                 )
                 run.agent_state_json = updated.model_dump(mode="json")
-                memory = project_agent_memory(run, trace)
+                first = self.seed.messages[0]
+                start = (
+                    first.data.get("context_evidence_start", 0)
+                    if isinstance(first, AgentUserMessage)
+                    else 0
+                )
+                if type(start) is not int or not 0 <= start <= count:
+                    raise DomainError("CONTEXT_REFERENCE_INVALID", "操作证据起点无效", 409)
+                # The immutable global trace and quotas still cover all operations.
+                # A fresh operation consumes its own evidence plus the required
+                # startup facts; its seed carries prior exact results separately.
+                memory = project_agent_memory(run, trace | {"evidence": trace["evidence"][start:]})
                 messages = list(request.messages)
                 if state["observed_round"] < 0:
                     messages.append(AgentUserMessage(data=memory))

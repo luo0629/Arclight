@@ -13,6 +13,7 @@ from arclight.application.agent_tools import (
     build_agent_tool_registry,
 )
 from arclight.application.commands import require_run
+from arclight.application.context_evidence import read_trace
 from arclight.application.continuity_reviewer_evidence import validate_reviewer_delivery
 from arclight.application.continuity_reviews import require_review_target, shot_sha256
 from arclight.application.dependencies import exact_version, require_manifest
@@ -79,7 +80,7 @@ def reviewer_seed(
 ) -> ReviewLoopSeed:
     episode = authorize_reviewer(db, settings, run, actor)
     version, board, shot = require_review_target(db, episode.project_id, episode.id, target, actor)
-    identity = uuid5(run.id, review_operation(target))
+    identity = uuid5(run.id, review_operation(target, rerun))
     references = [
         ReviewReference.model_validate(
             {
@@ -167,6 +168,7 @@ def reviewer_seed(
         versions=[ProductionComponent.model_validate(item) for item in versions],
         required_references=references,
         rerun=rerun,
+        context_evidence_start=len(read_trace(db, run, "storyboard", actor)["evidence"]),
     )
 
 
@@ -184,7 +186,7 @@ def review_candidate(
     with factory.begin() as db:
         lock_gate(db)
         run = require_run(db, run_id, actor, lock=True)
-        operation = review_operation(target)
+        operation = review_operation(target, rerun)
         previous = db.scalar(
             select(AgentLoop).where(
                 AgentLoop.run_id == run.id,
@@ -192,6 +194,28 @@ def review_candidate(
                 == digest({"run": str(run.id), "stage": "storyboard", "operation": operation}),
             )
         )
+        if previous is None and rerun is not None:
+            legacy = db.scalar(
+                select(AgentLoop).where(
+                    AgentLoop.run_id == run.id,
+                    AgentLoop.operation_sha256
+                    == digest(
+                        {
+                            "run": str(run.id),
+                            "stage": "storyboard",
+                            "operation": review_operation(target),
+                        }
+                    ),
+                )
+            )
+            if legacy is not None:
+                legacy_request = AgentModelRequest.model_validate(legacy.seed_json)
+                first = legacy_request.messages[0]
+                if (
+                    isinstance(first, AgentUserMessage)
+                    and ReviewLoopSeed.model_validate(first.data).rerun == rerun
+                ):
+                    previous = legacy
         if previous is not None:
             request = AgentModelRequest.model_validate(previous.seed_json)
             first = request.messages[0]
@@ -276,7 +300,10 @@ def resume_reviewer(
         if request.agent_name != "continuity_reviewer" or not isinstance(first, AgentUserMessage):
             raise DomainError("REVIEW_LOOP_INVALID", "只能恢复原连续性审查循环", 409)
         seed = ReviewLoopSeed.model_validate(first.data)
-        if request.operation_key != review_operation(seed.target):
+        if request.operation_key not in {
+            review_operation(seed.target),
+            review_operation(seed.target, seed.rerun),
+        }:
             raise DomainError("REVIEW_LOOP_INVALID", "审查循环操作身份不匹配", 409)
         run = db.get(WorkflowRun, loop.run_id)
         assert run is not None

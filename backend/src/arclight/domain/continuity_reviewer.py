@@ -6,6 +6,7 @@ from pydantic import Field
 
 from arclight.domain.continuity_reviews import ReviewReference, ReviewRerun, ReviewTarget
 from arclight.domain.production_state import ProductionContract
+from arclight.domain.versions import digest
 from arclight.domain.workflow_contracts import ProductionComponent
 
 REVIEWER_VERSION = "continuity-reviewer/1"
@@ -35,7 +36,15 @@ class ReviewLoopSeed(ProductionContract):
     versions: list[ProductionComponent] = Field(min_length=4, max_length=4)
     required_references: list[ReviewReference] = Field(min_length=3, max_length=64)
     rerun: ReviewRerun | None = None
+    context_evidence_start: int = Field(default=0, strict=True, ge=0, le=32)
 
 
-def review_operation(target: ReviewTarget) -> str:
-    return f"{REVIEWER_VERSION}:{target.candidate_id}:{target.shot_id}"
+def review_operation(target: ReviewTarget, rerun: ReviewRerun | None = None) -> str:
+    original = f"{REVIEWER_VERSION}:{target.candidate_id}:{target.shot_id}"
+    if rerun is None:
+        return original
+    return (
+        REVIEWER_VERSION
+        + ":rerun:"
+        + digest({"target": target.model_dump(mode="json"), "rerun": rerun.model_dump(mode="json")})
+    )

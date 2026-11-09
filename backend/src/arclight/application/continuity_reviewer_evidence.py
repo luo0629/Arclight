@@ -17,7 +17,7 @@ from arclight.domain.continuity_research import (
     ContinuityMaterial,
     InvestigateContinuityResult,
 )
-from arclight.domain.continuity_reviewer import ReviewLoopSeed, review_operation
+from arclight.domain.continuity_reviewer import REVIEWER_VERSION, ReviewLoopSeed, review_operation
 from arclight.domain.continuity_reviews import ContinuityReview, ReviewReference, ReviewTarget
 from arclight.domain.continuity_rules import (
     RULES_TOOL,
@@ -30,24 +30,49 @@ from arclight.persistence.models import VisualBibleVersion, WorkflowRun
 
 
 def reviewer_loop(
-    db: Session, run_id: UUID, target: ReviewTarget
+    db: Session, run_id: UUID, target: ReviewTarget, *, result_id: UUID | None = None
 ) -> tuple[AgentLoop, ReviewLoopSeed]:
-    identity = digest(
-        {"run": str(run_id), "stage": "storyboard", "operation": review_operation(target)}
+    # Feedback rechecks share the original run and its limits. Initial operation
+    # identities remain readable, including legacy reruns saved before this feature.
+    loops = db.scalars(
+        select(AgentLoop)
+        .where(AgentLoop.run_id == run_id)
+        .order_by(AgentLoop.created_at.desc(), AgentLoop.id.desc())
     )
-    loop = db.scalar(
-        select(AgentLoop).where(AgentLoop.run_id == run_id, AgentLoop.operation_sha256 == identity)
-    )
-    if loop is None:
-        raise DomainError("REVIEW_LOOP_INVALID", "审查须属于原持久取证循环", 409)
-    request = AgentModelRequest.model_validate(loop.seed_json)
-    first = request.messages[0]
-    if not isinstance(first, AgentUserMessage):
-        raise DomainError("REVIEW_LOOP_INVALID", "审查缺少冻结目标", 409)
-    seed = ReviewLoopSeed.model_validate(first.data)
-    if request.agent_name != "continuity_reviewer" or seed.target != target:
-        raise DomainError("REVIEW_LOOP_INVALID", "不能替换原审查循环或目标", 409)
-    return loop, seed
+    for loop in loops:
+        request = AgentModelRequest.model_validate(loop.seed_json)
+        if request.agent_name != "continuity_reviewer" or not request.operation_key.startswith(
+            REVIEWER_VERSION + ":"
+        ):
+            continue
+        first = request.messages[0]
+        if not isinstance(first, AgentUserMessage):
+            raise DomainError("REVIEW_LOOP_INVALID", "审查缺少冻结目标", 409)
+        seed = ReviewLoopSeed.model_validate(first.data)
+        if seed.target != target or (result_id is not None and seed.result_id != result_id):
+            continue
+        if request.operation_key not in {
+            review_operation(target),
+            review_operation(target, seed.rerun),
+        }:
+            raise DomainError("REVIEW_LOOP_INVALID", "审查操作与冻结重审身份不匹配", 409)
+        if (
+            seed.result_id != uuid5(run_id, request.operation_key)
+            or request.run_id != run_id
+            or seed.project_id != loop.project_id
+            or digest(loop.seed_json) != loop.request_sha256
+            or loop.operation_sha256
+            != digest(
+                {
+                    "run": str(run_id),
+                    "stage": request.stage,
+                    "operation": request.operation_key,
+                }
+            )
+        ):
+            raise DomainError("REVIEW_LOOP_INVALID", "审查结果与原运行身份不匹配", 409)
+        return loop, seed
+    raise DomainError("REVIEW_LOOP_INVALID", "审查须属于原持久取证循环", 409)
 
 
 def material_reference(
@@ -85,7 +110,7 @@ def material_reference(
 def validate_reviewer_delivery(
     db: Session, settings: Settings, run: WorkflowRun, actor: str, result: ContinuityReview
 ) -> None:
-    loop, seed = reviewer_loop(db, run.id, result.target)
+    loop, seed = reviewer_loop(db, run.id, result.target, result_id=result.result_id)
     if (result.project_id, result.episode_id, result.result_id, result.rerun) != (
         seed.project_id,
         seed.episode_id,

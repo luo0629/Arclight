@@ -90,6 +90,12 @@ def require_revision_execution(db: Session, job: GenerationJob) -> None:
     ):
         raise DomainError("REVISION_SOURCE_INVALID", "修订的原审查或精确输入已不再有效", 409)
 
+    from arclight.application.continuity_feedback_store import require_feedback_gate
+
+    require_feedback_gate(
+        db, record.project_id, record.target.candidate_id, reviewed.review.result_id
+    )
+
 
 def require_revision_target(db: Session, job: GenerationJob, target: ReviewTarget) -> None:
     record = job_revision(db, job)
