@@ -15,7 +15,13 @@ from arclight.domain.dependencies import ManifestCreate
 from arclight.domain.timelines import ClipSnapshot, TimelineRead, TimelineSnapshot, TrackSnapshot
 from arclight.domain.versions import digest
 from arclight.persistence.models import AssetVersion, Episode, VisualAsset
-from arclight.persistence.timelines import Timeline, TimelineClip, TimelineRevision, TimelineTrack
+from arclight.persistence.timelines import (
+    Timeline,
+    TimelineClip,
+    TimelineClipVisual,
+    TimelineRevision,
+    TimelineTrack,
+)
 
 
 def read_timeline(db: Session, timeline_id: UUID, actor: str) -> TimelineRead:
@@ -38,7 +44,14 @@ def read_timeline(db: Session, timeline_id: UUID, actor: str) -> TimelineRead:
             .order_by(TimelineClip.ordinal)
         )
     )
+    visuals = {
+        item.id: item.settings_json
+        for item in db.scalars(
+            select(TimelineClipVisual).where(TimelineClipVisual.timeline_id == row.id)
+        )
+    }
     snapshot = TimelineSnapshot(
+        schema_version=version.metadata_json.get("timeline_schema_version", 1),
         episode_id=row.episode_id,
         storyboard_id=row.storyboard_id,
         default_duration_ms=row.default_duration_ms,
@@ -51,7 +64,14 @@ def read_timeline(db: Session, timeline_id: UUID, actor: str) -> TimelineRead:
                 ordinal=track.ordinal,
                 clips=[
                     ClipSnapshot.model_validate(
-                        {key: getattr(clip, key) for key in ClipSnapshot.model_fields}
+                        {
+                            **{
+                                key: getattr(clip, key)
+                                for key in ClipSnapshot.model_fields
+                                if key != "visual"
+                            },
+                            "visual": visuals.get(clip.id),
+                        }
                     )
                     for clip in clips
                     if clip.track_id == track.id
@@ -148,7 +168,10 @@ def append_timeline(
                         for identity in sorted(sources)
                     ],
                 ],
-                "context": {"episode_id": str(episode.id), "timeline_schema_version": 1},
+                "context": {
+                    "episode_id": str(episode.id),
+                    "timeline_schema_version": snapshot.schema_version,
+                },
             }
         ),
     )
@@ -162,6 +185,7 @@ def append_timeline(
         "episode_id": str(episode.id),
         "timeline_registry": True,
         "dependency_manifest_id": str(manifest.id),
+        "timeline_schema_version": snapshot.schema_version,
     }
     if base:
         metadata["based_on_timeline_id"] = str(base.id)
@@ -198,7 +222,22 @@ def append_timeline(
     db.flush()
     for track in snapshot.tracks:
         for clip in track.clips:
-            db.add(TimelineClip(timeline_id=row.id, track_id=track.id, **clip.model_dump()))
+            db.add(
+                TimelineClip(
+                    timeline_id=row.id, track_id=track.id, **clip.model_dump(exclude={"visual"})
+                )
+            )
+    db.flush()
+    for track in snapshot.tracks:
+        for clip in track.clips:
+            if clip.visual is not None:
+                db.add(
+                    TimelineClipVisual(
+                        id=clip.id,
+                        timeline_id=row.id,
+                        settings_json=clip.visual.model_dump(mode="json"),
+                    )
+                )
     db.flush()
     row.sealed = True
     db.flush()

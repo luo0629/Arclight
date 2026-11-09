@@ -2,6 +2,7 @@
 
 from uuid import UUID
 
+from pydantic import JsonValue
 from sqlalchemy import CheckConstraint, ForeignKey, ForeignKeyConstraint, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -95,3 +96,12 @@ class TimelineRevision(Entity, Base):
     __table_args__ = (
         CheckConstraint("expected_version_no > 0", name="timeline_revision_positive"),
     )
+
+
+class TimelineClipVisual(Entity, Base):
+    """Immutable visual configuration belonging to one precise video clip."""
+
+    __tablename__ = "timeline_clip_visuals"
+    id: Mapped[UUID] = mapped_column(ForeignKey("timeline_clips.id"), primary_key=True)
+    timeline_id: Mapped[UUID] = mapped_column(ForeignKey("timelines.id"), index=True)
+    settings_json: Mapped[dict[str, JsonValue]] = mapped_column(JSON_TYPE)

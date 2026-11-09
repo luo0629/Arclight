@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from arclight.domain.timeline_visuals import ClipVisual, FadeWindow
+
 TrackKind = Literal["VIDEO", "VOICE", "SFX", "MUSIC", "SUBTITLE"]
 TRACK_KINDS: tuple[TrackKind, ...] = ("VIDEO", "VOICE", "SFX", "MUSIC", "SUBTITLE")
 Milliseconds = Annotated[int, Field(strict=True, ge=0, le=3_600_000)]
@@ -48,6 +50,7 @@ class ClipSnapshot(TimelineContract):
     review_id: UUID | None = None
     review_storyboard_id: UUID | None = None
     review_shot_id: UUID | None = None
+    visual: ClipVisual | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def precise_line(self):
@@ -67,6 +70,8 @@ class TrackSnapshot(TimelineContract):
         if len({item.ordinal for item in self.clips}) != len(self.clips):
             raise ValueError("同一轨道的片段序号不能重复")
         for clip in self.clips:
+            if self.kind != "VIDEO" and clip.visual is not None:
+                raise ValueError("视觉配置只能用于画面轨")
             if self.kind == "VIDEO" and clip.shot_id is None:
                 raise ValueError("画面片段必须关联精确镜头")
             if self.kind in {"VOICE", "SUBTITLE"} and clip.line_id is None:
@@ -77,7 +82,7 @@ class TrackSnapshot(TimelineContract):
 
 
 class TimelineSnapshot(TimelineContract):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     episode_id: UUID
     storyboard_id: UUID
     default_duration_ms: int = Field(strict=True, ge=500, le=30000)
@@ -99,14 +104,44 @@ class TimelineSnapshot(TimelineContract):
             if any(clip.start_ms + clip.duration_ms > self.duration_ms for clip in track.clips):
                 raise ValueError("片段不能超出时间轴范围")
         video = next(track for track in self.tracks if track.kind == "VIDEO")
+        if self.schema_version == 1 and any(clip.visual is not None for clip in video.clips):
+            raise ValueError("视觉配置必须使用时间轴schema 2")
+        if self.schema_version == 2:
+            if any(clip.visual is None for clip in video.clips):
+                raise ValueError("schema 2必须提供每个画面片段的完整视觉配置")
+            if sorted(clip.ordinal for clip in video.clips) != list(range(len(video.clips))):
+                raise ValueError("可编辑画面轨的片段序号必须连续")
         cursor = 0
         for clip in sorted(video.clips, key=lambda item: item.ordinal):
             if clip.start_ms != cursor:
-                raise ValueError("默认画面轨必须连续且没有重叠")
+                raise ValueError("画面轨必须连续且没有重叠")
             cursor += clip.duration_ms
         if cursor != self.duration_ms:
             raise ValueError("画面轨必须完整覆盖时间轴")
+        windows = self.video_fades()
+        if any(
+            windows[clip.id].incoming_ms + windows[clip.id].outgoing_ms > clip.duration_ms
+            for clip in video.clips
+        ):
+            raise ValueError("相邻转场窗口不能越过片段范围或互相重叠")
         return self
+
+    def video_fades(self) -> dict[UUID, FadeWindow]:
+        """Split each incoming black fade across its boundary; preserve clip durations."""
+        clips = sorted(
+            next(track for track in self.tracks if track.kind == "VIDEO").clips,
+            key=lambda clip: clip.ordinal,
+        )
+        durations = [clip.visual.transition.duration_ms if clip.visual else 0 for clip in clips]
+        if durations and durations[0]:
+            raise ValueError("首镜头没有前置镜头，必须使用硬切")
+        return {
+            clip.id: FadeWindow(
+                incoming_ms=durations[index] - durations[index] // 2,
+                outgoing_ms=durations[index + 1] // 2 if index + 1 < len(clips) else 0,
+            )
+            for index, clip in enumerate(clips)
+        }
 
 
 class TimelineSave(TimelineContract):
