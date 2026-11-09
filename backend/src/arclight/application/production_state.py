@@ -40,8 +40,39 @@ from arclight.persistence.models import (
     VisualAsset,
     WorkflowRun,
 )
+from arclight.persistence.timelines import Timeline, TimelineClip
 
 MAX_PRODUCTION_ITEMS = 2000
+
+
+def timeline_evidence(db: Session, episode: Episode) -> VersionEvidence | None:
+    row = db.scalar(
+        select(Timeline)
+        .where(Timeline.episode_id == episode.id, Timeline.sealed.is_(True))
+        .order_by(Timeline.version_no.desc())
+        .limit(1)
+    )
+    if row is None:
+        return None
+    version = db.get(AssetVersion, row.id, populate_existing=True)
+    if version is None:
+        raise DomainError("TIMELINE_HISTORY_INVALID", "时间轴的精确版本登记缺失", 409)
+    sources = {row.storyboard_id}
+    for clip in db.scalars(select(TimelineClip).where(TimelineClip.timeline_id == row.id)):
+        sources.add(clip.source_asset_version_id)
+        if clip.script_version_id:
+            sources.add(clip.script_version_id)
+        if clip.audio_version_id:
+            sources.add(clip.audio_version_id)
+    return VersionEvidence(
+        project_id=episode.project_id,
+        episode_id=episode.id,
+        version_id=row.id,
+        kind="TIMELINE",
+        status=AssetStatus(version.status),
+        stale=version.stale or version.status in {"STALE", "ARCHIVED"},
+        source_version_ids=sorted(sources),
+    )
 
 
 def text_version(db: Session, episode: Episode, row: Script | Storyboard) -> VersionEvidence:
@@ -304,7 +335,8 @@ def production_facts(db: Session, episode_id: UUID, actor: str) -> EpisodeFacts:
         unbound_media_counts=TypeAdapter(dict[ExecutionStatus, int]).validate_python(
             {status: count for status, count in media_counts}
         ),
-        unavailable_producers=["MEDIA_QA", "TIMELINE", "RENDER", "DELIVERY_QA"],
+        timeline=timeline_evidence(db, episode),
+        unavailable_producers=["MEDIA_QA", "RENDER", "DELIVERY_QA"],
     )
 
 

@@ -40,6 +40,9 @@ from arclight.persistence.service_bindings import (
 from arclight.persistence.service_bindings import (
     GenerationServiceBinding as GenerationServiceBinding,
 )
+from arclight.persistence.timelines import Timeline as Timeline
+from arclight.persistence.timelines import TimelineClip as TimelineClip
+from arclight.persistence.timelines import TimelineTrack as TimelineTrack
 from arclight.persistence.versions import ProductionVersion as ProductionVersion
 from arclight.persistence.versions import VersionBinding as VersionBinding
 
