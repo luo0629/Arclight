@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from arclight.application.audit import audit
 from arclight.application.dependencies import (
     exact_version,
+    input_usable,
     lock_dependency_graph,
     query_dependencies,
 )
@@ -144,7 +145,7 @@ def input_expired(
     db: Session, project_id: UUID, item: dict, target_kind: str, *, after_event_no: int = 0
 ) -> bool:
     version, asset = exact_version(db, project_id, UUID(item["source_asset_version_id"]))
-    if version.stale or version.status not in {"APPROVED", "LOCKED"} or asset.status == "ARCHIVED":
+    if not input_usable(db, version, asset, target_kind):
         return True
     for event in db.scalars(
         select(DependencyInvalidation).where(

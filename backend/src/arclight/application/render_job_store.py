@@ -17,7 +17,7 @@ from arclight.persistence.models import (
     RenderInspection,
     RenderJob,
 )
-from arclight.persistence.render_manifests import RenderManifest
+from arclight.persistence.render_manifests import RenderArtifact, RenderManifest
 
 
 def lock_job(db: Session, run_id: UUID) -> tuple[RenderExecution, RenderJob]:
@@ -66,6 +66,7 @@ def read_job(db: Session, run_id: UUID, actor: str) -> RenderJobRead:
             ),
             "RETAINED" if run.status == "SUCCEEDED" else "CLEANED",
         )
+    artifact = db.scalar(select(RenderArtifact).where(RenderArtifact.job_id == run_id))
     return RenderJobRead(
         id=run_id,
         manifest_id=job.manifest_id,
@@ -79,6 +80,8 @@ def read_job(db: Session, run_id: UUID, actor: str) -> RenderJobRead:
         attempt_count=job.attempt_count,
         cancel_requested_at=job.cancel_requested_at,
         output_file_id=run.output_file_id,
+        output_asset_version_id=artifact.asset_version_id if artifact else None,
+        artifact_id=artifact.id if artifact else None,
         error_code=run.error_code,
         cleanup_status=cleanup,
         created_at=run.created_at,

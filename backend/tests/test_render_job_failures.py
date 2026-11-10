@@ -27,6 +27,7 @@ from arclight.persistence.models import (
     AssetVersion,
     Project,
     ProjectMember,
+    RenderArtifact,
     RenderAttempt,
     RenderExecution,
     RenderInspection,
@@ -93,8 +94,13 @@ def test_failed_candidate_write_or_commit_is_cleaned_and_diagnostics_are_safe(
         assert (receipt is not None) == (failure != "encoder")
         if receipt is not None:
             assert receipt.passed and receipt.attempt_id == attempt(client, value).id
-        assert not list(
-            db.scalars(select(StoredFile).where(StoredFile.original_name == "render-candidate.mp4"))
+        output_key = attempt(client, value).output_key
+        assert not db.scalar(select(StoredFile.id).where(StoredFile.object_key == output_key))
+        assert not db.scalar(
+            select(RenderArtifact.id).where(RenderArtifact.job_id == UUID(value["id"]))
+        )
+        assert not db.scalar(
+            select(AssetVersion.id).where(AssetVersion.creation_key == UUID(value["id"]))
         )
         source = db.get(StoredFile, db.get(RenderExecution, UUID(value["id"])).input_file_id)
         assert snapshot(ObjectStorage(settings), source.object_key) is not None

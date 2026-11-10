@@ -4,8 +4,10 @@ Run with uvicorn arclight.file_gateway:create_gateway --factory --no-access-log.
 Every request obtains a fresh grant before consuming upload bytes or opening S3.
 """
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, AsyncIterator
+from contextlib import asynccontextmanager, suppress
+from hashlib import sha256
+from tempfile import TemporaryFile
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -14,8 +16,10 @@ import httpx
 from fastapi import FastAPI, Request
 from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from starlette.background import BackgroundTask
 from starlette.requests import ClientDisconnect
 from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.types import Receive, Scope, Send
 
 from arclight.storage.transfer_protocol import TransferGrant
 
@@ -65,6 +69,78 @@ def rejected(status: int, code: str) -> JSONResponse:
         {"error": {"code": code, "message": "文件传输未获授权或暂不可用"}},
         status_code=status,
         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+async def verified_download(upstream: httpx.Response, approved: TransferGrant) -> Response:
+    """Validate one exact object before sending bytes from the same bounded disk copy."""
+    spool = None
+    try:
+        with anyio.fail_after(TRANSFER_TIMEOUT):
+            spool = anyio.wrap_file(await anyio.to_thread.run_sync(TemporaryFile))
+            checksum = sha256()
+            size = 0
+            async for chunk in upstream.aiter_raw(CHUNK_BYTES):
+                size += len(chunk)
+                if size > approved.byte_size:
+                    raise ValueError("Storage response exceeds exact file size")
+                checksum.update(chunk)
+                await spool.write(chunk)
+            if size != approved.byte_size or checksum.hexdigest() != approved.checksum:
+                raise ValueError("Storage response differs from the registered file")
+            await spool.seek(0)
+    except (httpx.HTTPError, OSError, ValueError, TimeoutError):
+        if spool is not None:
+            with anyio.CancelScope(shield=True):
+                await spool.aclose()
+        return rejected(502, "TRANSFER_UNAVAILABLE")
+    except BaseException:
+        if spool is not None:
+            with anyio.CancelScope(shield=True):
+                await spool.aclose()
+        raise
+    finally:
+        # Cleanup must preserve the original rejection or cancellation.
+        with anyio.CancelScope(shield=True), suppress(httpx.HTTPError, OSError):
+            await upstream.aclose()
+
+    async def body() -> AsyncGenerator[bytes, None]:
+        try:
+            while True:
+                with anyio.fail_after(TRANSFER_TIMEOUT):
+                    chunk = await spool.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            with anyio.CancelScope(shield=True):
+                await spool.aclose()
+
+    chunks = body()
+
+    class VerifiedDownloadResponse(StreamingResponse):
+        async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+            try:
+                await super().__call__(scope, receive, send)
+            finally:
+                # Sending headers can fail before the body iterator starts.
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await chunks.aclose()
+                    finally:
+                        if spool is not None:
+                            await spool.aclose()
+
+    return VerifiedDownloadResponse(
+        chunks,
+        headers={
+            "Content-Length": str(approved.byte_size),
+            "Content-Type": "application/octet-stream",
+            "Content-Disposition": upstream.headers.get("content-disposition", "attachment"),
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+        background=BackgroundTask(spool.aclose),
     )
 
 
@@ -186,6 +262,9 @@ def create_gateway(
         ):
             await upstream.aclose()
             return rejected(502, "TRANSFER_UNAVAILABLE")
+
+        if approved.checksum is not None:
+            return await verified_download(upstream, approved)
 
         async def body() -> AsyncIterator[bytes]:
             try:

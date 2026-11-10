@@ -39,6 +39,8 @@ class RenderJobRead(BaseModel):
     attempt_count: int
     cancel_requested_at: datetime | None
     output_file_id: UUID | None
+    output_asset_version_id: UUID | None = None
+    artifact_id: UUID | None = None
     error_code: str | None
     cleanup_status: str
     created_at: datetime

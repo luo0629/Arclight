@@ -2,7 +2,7 @@
 
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, String, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKey, Index, String, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from arclight.persistence.base import JSON_TYPE, Base, Entity
@@ -26,13 +26,29 @@ class RenderManifest(Entity, Base):
 
 class RenderArtifact(Entity, Base):
     __tablename__ = "render_artifacts"
-    manifest_id: Mapped[UUID] = mapped_column(ForeignKey("render_manifests.id"), unique=True)
+    manifest_id: Mapped[UUID] = mapped_column(ForeignKey("render_manifests.id"), index=True)
+    job_id: Mapped[UUID | None] = mapped_column(ForeignKey("render_jobs.id"), unique=True)
+    asset_version_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("asset_versions.id"), unique=True
+    )
     file_id: Mapped[UUID] = mapped_column(ForeignKey("stored_files.id"), unique=True)
     object_key: Mapped[str] = mapped_column(String(512))
     checksum: Mapped[str] = mapped_column(String(64))
     byte_size: Mapped[int]
     duration_ms: Mapped[int]
     __table_args__ = (
+        Index(
+            "uq_render_artifact_manual_manifest",
+            "manifest_id",
+            unique=True,
+            sqlite_where=text("job_id IS NULL"),
+            postgresql_where=text("job_id IS NULL"),
+        ),
+        CheckConstraint(
+            "(job_id IS NULL AND asset_version_id IS NULL) OR "
+            "(job_id IS NOT NULL AND asset_version_id IS NOT NULL)",
+            name="render_artifact_registration",
+        ),
         CheckConstraint("byte_size > 0", name="render_artifact_size"),
         CheckConstraint(
             "duration_ms > 0 AND duration_ms <= 3600000", name="render_artifact_duration"

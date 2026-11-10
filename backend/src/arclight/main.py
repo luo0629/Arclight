@@ -40,6 +40,7 @@ from arclight.api.production_versions import router as production_versions_route
 from arclight.api.project_deletion import router as project_deletion_router
 from arclight.api.project_overview import router as project_overview_router
 from arclight.api.protection import RequestProtection
+from arclight.api.render_deliveries import router as render_deliveries_router
 from arclight.api.render_jobs import router as render_jobs_router
 from arclight.api.render_manifests import router as render_manifests_router
 from arclight.api.render_previews import router as render_previews_router
@@ -179,6 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(timelines_router)
     app.include_router(render_manifests_router)
     app.include_router(render_jobs_router)
+    app.include_router(render_deliveries_router)
     app.include_router(file_transfers_router)
     app.include_router(transfer_authorization_router)
     app.include_router(upload_completion_router)

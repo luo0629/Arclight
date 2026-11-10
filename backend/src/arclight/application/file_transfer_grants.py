@@ -161,4 +161,5 @@ def authorize_transfer(db: Session, settings: Settings, token: str, method: str)
             settings, row.bucket or "", row.object_key, row.original_name, seconds
         ),
         byte_size=row.byte_size,
+        checksum=row.checksum,
     )

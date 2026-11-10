@@ -23,7 +23,16 @@ IMAGE_KINDS = frozenset(
 # These describe dependency contracts, not availability of media generation APIs.
 CONTENT_TARGETS = {
     "SCRIPT": frozenset(
-        {"SCRIPT", "STORYBOARD", "SHOT_IMAGE", "SHOT_PREVIEW", "AUDIO", "SUBTITLE", "TIMELINE"}
+        {
+            "SCRIPT",
+            "STORYBOARD",
+            "SHOT_IMAGE",
+            "SHOT_PREVIEW",
+            "AUDIO",
+            "SUBTITLE",
+            "TIMELINE",
+            "RENDER",
+        }
     ),
     "STORYBOARD": frozenset({"STORYBOARD", "SHOT_IMAGE", "SHOT_PREVIEW", "TIMELINE"}),
     "AUDIO": frozenset({"AUDIO", "SUBTITLE", "TIMELINE"}),

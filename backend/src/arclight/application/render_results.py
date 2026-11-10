@@ -37,6 +37,8 @@ def utc(value: datetime) -> datetime:
 def artifact_read(row: RenderArtifact) -> RenderArtifactRead:
     return RenderArtifactRead(
         id=row.id,
+        job_id=row.job_id,
+        asset_version_id=row.asset_version_id,
         manifest_id=row.manifest_id,
         file_id=row.file_id,
         sha256=row.checksum,
@@ -80,7 +82,12 @@ def bind_render_artifact(
     manifest = read_render_manifest(db, manifest_id, actor)
     if type(duration_ms) is not int or not 0 < duration_ms <= 3_600_000:
         raise DomainError("RENDER_RESULT_INVALID", "产物实测时长无效", 422)
-    previous = db.scalar(select(RenderArtifact).where(RenderArtifact.manifest_id == manifest_id))
+    previous = db.scalar(
+        select(RenderArtifact)
+        .where(RenderArtifact.manifest_id == manifest_id, RenderArtifact.job_id.is_(None))
+        .order_by(RenderArtifact.created_at.desc(), RenderArtifact.id.desc())
+        .limit(1)
+    )
     if previous:
         if previous.file_id != file_id or previous.duration_ms != duration_ms:
             raise DomainError("RENDER_RESULT_CONFLICT", "渲染产物回执不能替换", 409)
@@ -114,9 +121,46 @@ def bind_render_report(
 ) -> RenderReportRead:
     row = manifest_row(db, manifest_id, actor, write=True)
     read_render_manifest(db, manifest_id, actor)
-    artifact = db.scalar(select(RenderArtifact).where(RenderArtifact.manifest_id == manifest_id))
-    if artifact is None:
+    if not db.scalar(
+        select(RenderArtifact.id).where(RenderArtifact.manifest_id == manifest_id).limit(1)
+    ):
         raise DomainError("RENDER_ARTIFACT_REQUIRED", "报告必须关联已登记的精确产物", 409)
+    borrowed = db.scalar(
+        select(RenderReportLink.id)
+        .join(RenderArtifact, RenderArtifact.id == RenderReportLink.artifact_id)
+        .where(
+            RenderReportLink.file_id == file_id,
+            RenderArtifact.manifest_id != manifest_id,
+        )
+    )
+    if borrowed:
+        raise DomainError(
+            "RENDER_RESULT_CONFLICT", "报告已绑定其他产物，不能替换或借用历史回执", 409
+        )
+    file = result_file(db, row.project_id, file_id, "application/json")
+    data = file_storage(settings, file).read(file.object_key, MAX_REPORT_BYTES, file.checksum)
+    try:
+        envelope = RenderReportEnvelope.model_validate_json(data)
+    except ValidationError:
+        raise DomainError("RENDER_REPORT_INVALID", "报告不符合精确关联格式", 409) from None
+    artifact = db.scalar(
+        select(RenderArtifact).where(
+            RenderArtifact.manifest_id == manifest_id,
+            RenderArtifact.file_id == envelope.output_file_id,
+            RenderArtifact.checksum == envelope.output_sha256,
+        )
+    )
+    if (
+        artifact is None
+        or len(data) != file.byte_size
+        or (
+            envelope.manifest_id,
+            envelope.manifest_sha256,
+            envelope.timeline_id,
+        )
+        != (row.id, row.content_sha256, row.timeline_id)
+    ):
+        raise DomainError("RENDER_REPORT_INVALID", "报告与精确清单或产物不匹配", 409)
     previous = db.scalar(
         select(RenderReportLink).where(RenderReportLink.artifact_id == artifact.id)
     )
@@ -126,20 +170,6 @@ def bind_render_report(
         return report_read(previous)
     if db.scalar(select(RenderReportLink.id).where(RenderReportLink.file_id == file_id)):
         raise DomainError("RENDER_RESULT_CONFLICT", "报告已绑定其他产物，不能借用历史回执", 409)
-    file = result_file(db, row.project_id, file_id, "application/json")
-    data = file_storage(settings, file).read(file.object_key, MAX_REPORT_BYTES, file.checksum)
-    try:
-        envelope = RenderReportEnvelope.model_validate_json(data)
-    except ValidationError:
-        raise DomainError("RENDER_REPORT_INVALID", "报告不符合精确关联格式", 409) from None
-    if len(data) != file.byte_size or (
-        envelope.manifest_id,
-        envelope.manifest_sha256,
-        envelope.timeline_id,
-        envelope.output_file_id,
-        envelope.output_sha256,
-    ) != (row.id, row.content_sha256, row.timeline_id, artifact.file_id, artifact.checksum):
-        raise DomainError("RENDER_REPORT_INVALID", "报告与精确清单或产物不匹配", 409)
     receipt = RenderReportLink(
         artifact_id=artifact.id,
         file_id=file.id,
@@ -157,7 +187,12 @@ def bind_render_report(
 
 def read_render_results(db: Session, manifest_id: UUID, actor: str) -> RenderManifestResults:
     read_render_manifest(db, manifest_id, actor)
-    artifact = db.scalar(select(RenderArtifact).where(RenderArtifact.manifest_id == manifest_id))
+    artifact = db.scalar(
+        select(RenderArtifact)
+        .where(RenderArtifact.manifest_id == manifest_id)
+        .order_by(RenderArtifact.created_at.desc(), RenderArtifact.id.desc())
+        .limit(1)
+    )
     report = (
         db.scalar(select(RenderReportLink).where(RenderReportLink.artifact_id == artifact.id))
         if artifact

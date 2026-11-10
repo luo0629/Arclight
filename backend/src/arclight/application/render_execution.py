@@ -13,6 +13,7 @@ from arclight.application.render_job_store import lock_job
 from arclight.application.render_leases import POLICY, claim, finish, keep_alive, observe, owned
 from arclight.application.render_plans import build_plan, check_support
 from arclight.application.render_reviews import require_export_approval
+from arclight.application.render_versions import register_render_version
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.media.execution import MediaExecutionError, execute_media
@@ -22,7 +23,6 @@ from arclight.persistence.models import (
     RenderExecution,
     RenderInspection,
     RenderJob,
-    StoredFile,
 )
 from arclight.persistence.render_manifests import RenderManifest
 from arclight.storage.cleanup import identity
@@ -139,23 +139,10 @@ def execute_render(factory: sessionmaker[Session], settings: Settings, run_id: U
                 # If this transaction fails, its durable attempt key still enables cleanup.
                 store.put(attempt.output_key, movie, "video/mp4")
                 owned(db, run, job, token)
-                file = StoredFile(
-                    project_id=job.project_id,
-                    storage_backend=settings.object_storage_backend.upper(),
-                    bucket=settings.s3_bucket if store.client is not None else None,
-                    object_key=attempt.output_key,
-                    checksum=inspection.output_sha256,
-                    byte_size=len(movie),
-                    media_type="video/mp4",
-                    original_name="render-candidate.mp4",
-                    source_note=f"Render Manifest {job.manifest_id} sha256:{job.manifest_sha256}",
-                    rights_note="已复验清单内精确素材的授权声明",
-                    rights_confirmed=True,
-                    created_by=run.created_by,
+                artifact = register_render_version(
+                    db, settings, run, job, attempt, facts.snapshot, inspection
                 )
-                db.add(file)
-                db.flush()
-                run.output_file_id = file.id
+                run.output_file_id = artifact.file_id
                 attempt.progress, job.progress = 100, 100
                 attempt.cleanup_status = "RETAINED"
                 finish(db, run, job, "SUCCEEDED", None)
@@ -165,7 +152,12 @@ def execute_render(factory: sessionmaker[Session], settings: Settings, run_id: U
                     run.created_by,
                     "render.succeeded",
                     run_id,
-                    {"manifest_id": str(job.manifest_id), "output_file_id": str(file.id)},
+                    {
+                        "manifest_id": str(job.manifest_id),
+                        "output_file_id": str(artifact.file_id),
+                        "asset_version_id": str(artifact.asset_version_id),
+                        "artifact_id": str(artifact.id),
+                    },
                 )
     except Exception as exc:
         with factory.begin() as db:

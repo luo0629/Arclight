@@ -82,6 +82,47 @@ def require_manifest(db: Session, project_id: UUID, manifest_id: UUID) -> Depend
     return row
 
 
+def input_usable(db: Session, version: AssetVersion, asset: VisualAsset, target_kind: str) -> bool:
+    """Keep sealed timeline preview semantics without admitting draft media."""
+    if version.stale or asset.status == "ARCHIVED":
+        return False
+    if version.status in {"APPROVED", "LOCKED"}:
+        return True
+    if (
+        target_kind != "RENDER"
+        or asset.asset_type != "TIMELINE"
+        or version.status not in {"DRAFT", "READY_FOR_REVIEW"}
+    ):
+        return False
+    from arclight.persistence.models import Episode, Timeline
+
+    manifest_id = version.metadata_json.get("dependency_manifest_id")
+    if not isinstance(manifest_id, str):
+        return False
+    try:
+        captured_manifest_id = UUID(manifest_id)
+    except ValueError:
+        return False
+    return bool(
+        db.scalar(
+            select(Timeline.id)
+            .join(Episode, Episode.id == Timeline.episode_id)
+            .join(DependencyOutput, DependencyOutput.asset_version_id == Timeline.id)
+            .join(
+                DependencyManifest, DependencyManifest.id == DependencyOutput.dependency_manifest_id
+            )
+            .where(
+                Timeline.id == version.id,
+                Timeline.sealed.is_(True),
+                Episode.project_id == asset.project_id,
+                DependencyManifest.project_id == asset.project_id,
+                DependencyManifest.target_asset_id == asset.id,
+                DependencyManifest.id == captured_manifest_id,
+            )
+        )
+    )
+
+
 def capture_manifest(
     db: Session, project_id: UUID, actor: str, payload: ManifestCreate
 ) -> tuple[DependencyManifest, bool]:
@@ -110,11 +151,7 @@ def capture_manifest(
     for item in payload.inputs:
         version, asset = exact_version(db, project_id, item.source_asset_version_id)
         validate_dependency_type(asset.asset_type, target.asset_type, item.dependency_type)
-        if (
-            version.stale
-            or version.status not in {"APPROVED", "LOCKED"}
-            or asset.status == "ARCHIVED"
-        ):
+        if not input_usable(db, version, asset, target.asset_type):
             raise DomainError("ASSET_NOT_USABLE", "输入版本必须已批准且有效", 409)
         inputs.append(
             {

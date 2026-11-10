@@ -58,7 +58,7 @@ def affects_input(change: dict, item: dict, target_kind: str) -> bool:
         return False
     kind, edge = change["change_kind"], item["dependency_type"]
     if kind == "DIALOGUE":
-        affected = edge == "CONTENT_DEPENDENCY" and target_kind in {"AUDIO", "SUBTITLE"}
+        affected = edge == "CONTENT_DEPENDENCY" and target_kind in {"AUDIO", "SUBTITLE", "RENDER"}
     elif kind == "SEQUENCE":
         affected = edge == "SEQUENCE_DEPENDENCY" and target_kind in {"TIMELINE", "RENDER"}
     elif kind == "STYLE":

@@ -15,7 +15,14 @@ from arclight.application.render_jobs import cancel_job
 from arclight.application.render_leases import claim
 from arclight.core.errors import DomainError
 from arclight.domain.render_jobs import RenderCancel
-from arclight.persistence.models import AuditEvent, RenderAttempt, RenderJob, StoredFile
+from arclight.persistence.models import (
+    AssetVersion,
+    AuditEvent,
+    RenderArtifact,
+    RenderAttempt,
+    RenderJob,
+    StoredFile,
+)
 
 __all__ = ["job_case", "render_case", "review_case", "timeline_case"]
 
@@ -138,7 +145,21 @@ def test_postgres_completion_cancel_race_has_one_terminal_result(client, postgre
         assert final["status"] == "SUCCEEDED" and final["output_file_id"]
     with factory() as db:
         outputs = list(
-            db.scalars(select(StoredFile).where(StoredFile.original_name == "render-candidate.mp4"))
+            db.scalars(
+                select(StoredFile)
+                .join(RenderArtifact, RenderArtifact.file_id == StoredFile.id)
+                .where(RenderArtifact.job_id == run_id)
+            )
         )
-        assert len(outputs) == (1 if rendered == "SUCCEEDED" else 0)
+        expected = 1 if rendered == "SUCCEEDED" else 0
+        assert len(outputs) == expected
+        assert (
+            db.scalar(
+                select(func.count(AssetVersion.id)).where(AssetVersion.creation_key == run_id)
+            )
+            == expected
+        )
+        if outputs:
+            assert str(outputs[0].id) == final["output_file_id"]
+            assert str(outputs[0].asset_version_id) == final["output_asset_version_id"]
         assert db.scalar(select(func.count(RenderAttempt.id))) == 1

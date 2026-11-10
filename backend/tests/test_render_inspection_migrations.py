@@ -226,11 +226,13 @@ def test_nonempty_downgrade_refuses_without_losing_history_or_schema(
     insert(client.app.state.session_factory, fields)
     before = client.get(f"/api/v1/render-jobs/{value['id']}/attempts").json()
     tables = set(inspect(client.app.state.engine).get_table_names())
+    with client.app.state.session_factory() as db:
+        revision = db.scalar(text("SELECT version_num FROM alembic_version"))
     with pytest.raises(RuntimeError, match="Cannot discard render inspection history"):
         command.downgrade(migrated, "0058")
     assert set(inspect(client.app.state.engine).get_table_names()) == tables
     with client.app.state.session_factory() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0059"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == revision
     assert client.get(f"/api/v1/render-jobs/{value['id']}/attempts").json() == before
     command.check(migrated)
 
@@ -248,9 +250,22 @@ def test_upgrade_preserves_legacy_attempts_without_fabricating_checks(
         if status == "SUCCEEDED":
             run.output_file_id = output_file(db, manifest, token, measured_result).id
         finish(db, run, job, status, None if status == "SUCCEEDED" else "LEGACY_FAILURE")
-    before = read(client, value)
+    tables = ("render_executions", "render_jobs", "render_attempts", "stored_files")
+    with factory() as db:
+        before = {
+            table: db.execute(text(f"SELECT * FROM {table} ORDER BY id")).mappings().all()
+            for table in tables
+        }
     command.upgrade(migrated, "head")
-    assert read(client, value) == before
+    with factory() as db:
+        after = {
+            table: db.execute(text(f"SELECT * FROM {table} ORDER BY id")).mappings().all()
+            for table in tables
+        }
+    assert after == before
+    result = read(client, value)
+    assert result["status"] == status
+    assert result["artifact_id"] is None and result["output_asset_version_id"] is None
     response = client.get(f"/api/v1/render-jobs/{value['id']}/attempts")
     assert response.status_code == 200, response.text
     assert len(response.json()) == 1 and response.json()[0]["inspection"] is None

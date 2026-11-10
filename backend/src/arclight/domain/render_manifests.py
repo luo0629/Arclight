@@ -183,6 +183,8 @@ class RenderManifestRead(RenderContract):
 
 class RenderArtifactRead(RenderContract):
     id: UUID
+    job_id: UUID | None = None
+    asset_version_id: UUID | None = None
     manifest_id: UUID
     file_id: UUID
     sha256: Sha256

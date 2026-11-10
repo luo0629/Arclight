@@ -12,3 +12,4 @@ class TransferGrant(BaseModel):
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
     byte_size: int = Field(gt=0)
+    checksum: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
