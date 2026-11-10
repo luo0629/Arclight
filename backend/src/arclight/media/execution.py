@@ -149,6 +149,9 @@ def execute_media(operation: str, argument: str, data: bytes, *, timeout: float 
             key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR") if key in os.environ
         }
         environment.update({"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
+        creation_flags = 0
+        if sys.platform == "win32":
+            creation_flags = subprocess.CREATE_NO_WINDOW
         # Bytes travel through bounded pipes. No output file or writable media path is exposed.
         with tempfile.TemporaryDirectory(prefix="arclight-media-") as directory:
             try:
@@ -169,7 +172,7 @@ def execute_media(operation: str, argument: str, data: bytes, *, timeout: float 
                     env=environment,
                     close_fds=True,
                     start_new_session=sys.platform != "win32",
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+                    creationflags=creation_flags,
                 )
                 result = _exchange(process, data, command.output_limit, timeout)
             finally:
