@@ -128,6 +128,29 @@ class ObjectStorage:
         except (OSError, BotoCoreError, ClientError):
             raise DomainError("OBJECT_UNAVAILABLE", "文件不存在或暂不可读", 409) from None
 
+    def verify(self, key: str, byte_size: int, checksum: str, max_bytes: int) -> None:
+        """Verify large private outputs in bounded chunks without retaining their bytes."""
+        safe_key(key)
+        if not 0 < byte_size <= max_bytes:
+            raise DomainError("OBJECT_UNAVAILABLE", "文件大小超出允许范围", 409)
+        try:
+            if self.client is not None:
+                response = self.client.get_object(Bucket=self.settings.s3_bucket, Key=key)
+                stream = response["Body"]
+            else:
+                stream = self.path(key).open("rb")
+            total, digest = 0, hashlib.sha256()
+            with stream:
+                while chunk := stream.read(min(1024 * 1024, byte_size + 1 - total)):
+                    total += len(chunk)
+                    digest.update(chunk)
+                    if total > byte_size:
+                        raise ValueError("Object too large")
+            if total != byte_size or digest.hexdigest() != checksum:
+                raise ValueError("Object integrity mismatch")
+        except (OSError, ValueError, BotoCoreError, ClientError):
+            raise DomainError("OBJECT_UNAVAILABLE", "文件缺失或完整性校验失败", 409) from None
+
     def delete(self, key: str) -> None:
         safe_key(key)
         try:

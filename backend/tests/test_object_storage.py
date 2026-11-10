@@ -54,6 +54,28 @@ def test_private_roundtrip_immutable_and_integrity(storage):
         storage.read(key, 100)
 
 
+def test_verify_streams_exact_large_private_objects_and_rejects_inconsistent_receipts(storage):
+    key = f"media/{uuid4()}/{uuid4()}"
+    content = b"original media\x00" * 150_000
+    checksum = hashlib.sha256(content).hexdigest()
+    storage.put(key, content, "application/octet-stream")
+    assert storage.verify(key, len(content), checksum, len(content)) is None
+    for size, digest, maximum in (
+        (0, checksum, len(content)),
+        (-1, checksum, len(content)),
+        (len(content), checksum, len(content) - 1),
+        (len(content) - 1, checksum, len(content)),
+        (len(content) + 1, checksum, len(content) + 1),
+        (len(content), "0" * 64, len(content)),
+    ):
+        with pytest.raises(DomainError) as error:
+            storage.verify(key, size, digest, maximum)
+        assert error.value.code == "OBJECT_UNAVAILABLE"
+    storage.delete(key)
+    with pytest.raises(DomainError):
+        storage.verify(key, len(content), checksum, len(content))
+
+
 @pytest.mark.parametrize("key", ["../escape", "a/../b", "/root", "a//b", "a\\b", "https://x"])
 def test_invalid_keys(key):
     with pytest.raises(DomainError):
