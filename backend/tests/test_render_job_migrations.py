@@ -33,11 +33,13 @@ def test_empty_job_migration_roundtrip_preserves_existing_manifest(client, rende
 def test_nonempty_job_downgrade_refuses_before_touching_schema(client, job_case, migrated):
     manifest, value, _ = job_case
     tables = set(inspect(client.app.state.engine).get_table_names())
+    with client.app.state.session_factory() as db:
+        head = db.scalar(text("SELECT version_num FROM alembic_version"))
     with pytest.raises(RuntimeError, match="Cannot discard render job history"):
         command.downgrade(migrated, "0057")
     assert set(inspect(client.app.state.engine).get_table_names()) == tables
     with client.app.state.session_factory() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0059"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == head
     assert read(client, value) == value
     assert client.get(f"/api/v1/render-manifests/{manifest['id']}").json() == manifest
     command.check(migrated)
