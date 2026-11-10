@@ -12,7 +12,7 @@ from arclight.media.text import InvalidStoryText, decode_story
 def main() -> None:
     operation, argument = sys.argv[1:]
     command = command_for(operation, argument)
-    restrict_process(render=operation == "render")
+    restrict_process(render=operation in {"render", "inspect"})
     seal_process()
     data = sys.stdin.buffer.read(command.input_limit + 1)
     if not 0 < len(data) <= command.input_limit:
@@ -27,6 +27,10 @@ def main() -> None:
         from arclight.media.timeline_encoder import encode_timeline
 
         result = encode_timeline(data)
+    elif operation == "inspect":
+        from arclight.media.render_inspection import inspect_render
+
+        result = inspect_render(data).model_dump_json().encode()
     else:
         from arclight.media.probe import inspect_media
 

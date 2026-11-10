@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from arclight.domain.render_inspections import RenderInspectionResult
+
 
 def _utc(value: datetime | None) -> datetime | None:
     if value is None:
@@ -60,6 +62,7 @@ class RenderAttemptRead(BaseModel):
     cleanup_error_code: str | None
     created_at: datetime
     finished_at: datetime | None
+    inspection: RenderInspectionResult | None = None
 
     @field_validator("created_at", "finished_at")
     @classmethod

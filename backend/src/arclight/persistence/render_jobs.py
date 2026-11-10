@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
-from arclight.persistence.base import Base, Entity
+from arclight.persistence.base import JSON_TYPE, Base, Entity
 
 
 class RenderJob(Entity, Base):
@@ -57,4 +57,19 @@ class RenderAttempt(Entity, Base):
             "cleanup_status IN ('PENDING','CLEANED','FAILED','RETAINED')",
             name="render_attempt_cleanup",
         ),
+    )
+
+
+class RenderInspection(Entity, Base):
+    __tablename__ = "render_inspections"
+    attempt_id: Mapped[UUID] = mapped_column(ForeignKey("render_attempts.id"), unique=True)
+    manifest_id: Mapped[UUID] = mapped_column(ForeignKey("render_manifests.id"), index=True)
+    manifest_sha256: Mapped[str] = mapped_column(String(64))
+    input_sha256: Mapped[str] = mapped_column(String(64))
+    output_sha256: Mapped[str] = mapped_column(String(64))
+    byte_size: Mapped[int]
+    passed: Mapped[bool]
+    result_json: Mapped[dict] = mapped_column(JSON_TYPE)
+    __table_args__ = (
+        CheckConstraint("byte_size > 0 AND byte_size <= 134217728", name="render_inspection_size"),
     )

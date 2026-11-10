@@ -29,6 +29,7 @@ from arclight.persistence.models import (
     ProjectMember,
     RenderAttempt,
     RenderExecution,
+    RenderInspection,
     RenderJob,
     StoredFile,
 )
@@ -51,12 +52,13 @@ def test_failed_candidate_write_or_commit_is_cleaned_and_diagnostics_are_safe(
     _, value, _ = job_case
     factory, settings = client.app.state.session_factory, client.app.state.settings
     original_put = ObjectStorage.put
+    real_encode = render_execution.execute_media
     written = []
 
     def encode(*args, **kwargs):
         if failure == "encoder":
             raise RuntimeError(PRIVATE)
-        return b"candidate-before-injected-failure"
+        return real_encode(*args, **kwargs)
 
     def put(self, key, data, media_type):
         result = original_put(self, key, data, media_type)
@@ -87,6 +89,10 @@ def test_failed_candidate_write_or_commit_is_cleaned_and_diagnostics_are_safe(
     assert (len(written) == 1) == (failure != "encoder")
     assert snapshot(ObjectStorage(settings), attempt(client, value).output_key) is None
     with factory() as db:
+        receipt = db.scalar(select(RenderInspection))
+        assert (receipt is not None) == (failure != "encoder")
+        if receipt is not None:
+            assert receipt.passed and receipt.attempt_id == attempt(client, value).id
         assert not list(
             db.scalars(select(StoredFile).where(StoredFile.original_name == "render-candidate.mp4"))
         )
@@ -94,6 +100,9 @@ def test_failed_candidate_write_or_commit_is_cleaned_and_diagnostics_are_safe(
         assert snapshot(ObjectStorage(settings), source.object_key) is not None
     history = client.get(f"/api/v1/render-jobs/{value['id']}/attempts")
     assert history.json()[0]["status"] == "FAILED"
+    if failure != "encoder":
+        assert history.json()[0]["inspection"]["passed"]
+        assert history.json()[0]["inspection"]["error_code"] is None
     assert PRIVATE not in history.text + str(final) + caplog.text
 
 

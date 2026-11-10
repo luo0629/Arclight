@@ -56,6 +56,10 @@ def command_for(operation: str, argument: str) -> MediaCommand:
         from arclight.media.render_plan import MAX_INPUT_BYTES, MAX_OUTPUT_BYTES
 
         return MediaCommand(argument, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES)
+    if operation == "inspect" and argument == "render":
+        from arclight.media.render_plan import MAX_OUTPUT_BYTES
+
+        return MediaCommand(argument, MAX_OUTPUT_BYTES, 4096)
     raise MediaExecutionError("INVALID_COMMAND")
 
 

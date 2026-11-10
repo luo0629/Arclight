@@ -37,7 +37,7 @@ def test_nonempty_job_downgrade_refuses_before_touching_schema(client, job_case,
         command.downgrade(migrated, "0057")
     assert set(inspect(client.app.state.engine).get_table_names()) == tables
     with client.app.state.session_factory() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0058"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0059"
     assert read(client, value) == value
     assert client.get(f"/api/v1/render-manifests/{manifest['id']}").json() == manifest
     command.check(migrated)

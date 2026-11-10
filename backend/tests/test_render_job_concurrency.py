@@ -104,11 +104,13 @@ def test_postgres_completion_cancel_race_has_one_terminal_result(client, postgre
     _, value, _ = postgres_job
     factory, run_id = client.app.state.session_factory, UUID(value["id"])
     encoded, barrier = Event(), Barrier(2)
+    real_encode = render_execution.execute_media
 
     def encode(*args, **kwargs):
+        movie = real_encode(*args, **kwargs)
         encoded.set()
         barrier.wait(timeout=20)
-        return b"candidate-only-for-concurrency-contract"
+        return movie
 
     def cancel(revision):
         barrier.wait(timeout=20)

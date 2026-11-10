@@ -8,8 +8,15 @@ from sqlalchemy.orm import Session
 from arclight.application.commands import require_project
 from arclight.application.render_manifests import checked_snapshot
 from arclight.core.errors import DomainError
+from arclight.domain.render_inspections import RenderInspectionResult
 from arclight.domain.render_jobs import RenderAttemptRead, RenderJobRead
-from arclight.persistence.models import Project, RenderAttempt, RenderExecution, RenderJob
+from arclight.persistence.models import (
+    Project,
+    RenderAttempt,
+    RenderExecution,
+    RenderInspection,
+    RenderJob,
+)
 from arclight.persistence.render_manifests import RenderManifest
 
 
@@ -82,6 +89,18 @@ def read_job(db: Session, run_id: UUID, actor: str) -> RenderJobRead:
 
 def read_attempts(db: Session, run_id: UUID, actor: str) -> list[RenderAttemptRead]:
     read_job(db, run_id, actor)
-    return [
-        RenderAttemptRead.model_validate(row, from_attributes=True) for row in attempts(db, run_id)
-    ]
+    receipts = {
+        row.attempt_id: row
+        for row in db.scalars(
+            select(RenderInspection)
+            .join(RenderAttempt, RenderAttempt.id == RenderInspection.attempt_id)
+            .where(RenderAttempt.run_id == run_id)
+        )
+    }
+    result = []
+    for row in attempts(db, run_id):
+        value = RenderAttemptRead.model_validate(row, from_attributes=True)
+        if row.id in receipts:
+            value.inspection = RenderInspectionResult.model_validate(receipts[row.id].result_json)
+        result.append(value)
+    return result

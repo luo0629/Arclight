@@ -1,6 +1,5 @@
 """Execute admitted manifests without holding database locks across media decoding."""
 
-import hashlib
 from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
@@ -9,6 +8,7 @@ from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.render_admission import admission_facts, validate_render_objects
 from arclight.application.render_cleanup import clean_candidates
+from arclight.application.render_inspections import inspect_candidate
 from arclight.application.render_job_store import lock_job
 from arclight.application.render_leases import POLICY, claim, finish, keep_alive, observe, owned
 from arclight.application.render_plans import build_plan, check_support
@@ -17,7 +17,13 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.media.execution import MediaExecutionError, execute_media
 from arclight.media.render_plan import RENDER_TIMEOUT
-from arclight.persistence.models import RenderAttempt, RenderExecution, RenderJob, StoredFile
+from arclight.persistence.models import (
+    RenderAttempt,
+    RenderExecution,
+    RenderInspection,
+    RenderJob,
+    StoredFile,
+)
 from arclight.persistence.render_manifests import RenderManifest
 from arclight.storage.cleanup import identity
 from arclight.storage.objects import ObjectStorage
@@ -70,6 +76,48 @@ def execute_render(factory: sessionmaker[Session], settings: Settings, run_id: U
                 timeout=RENDER_TIMEOUT,
                 observer=observer,
             )
+            observe(factory, run_id, token, phase="REVALIDATING")
+            with factory() as db:
+                validate_render_objects(db, settings, facts, observer=observer)
+            # Preserve current admission errors and avoid expensive decoding for an
+            # obsolete job. The same gate still runs immediately before publication.
+            with factory.begin() as db:
+                run, job = lock_job(db, run_id)
+                owned(db, run, job, token)
+                current = admitted(db, settings, run, job)
+                if current.input_sha256 != facts.input_sha256:
+                    raise DomainError("RENDER_INPUT_CHANGED", "渲染期间输入事实已变化", 409)
+            observe(factory, run_id, token, phase="INSPECTING")
+            inspection = inspect_candidate(
+                movie,
+                facts.snapshot.output,
+                facts.snapshot.timeline.duration_ms,
+                observer=observer,
+            )
+            # Commit evidence independently of the later object write. Even a
+            # rejected candidate or a storage failure keeps its technical receipt.
+            with factory.begin() as db:
+                run, job = lock_job(db, run_id)
+                owned(db, run, job, token)
+                if job.cancel_requested_at:
+                    raise DomainError("RENDER_CANCELLED", "渲染已请求取消", 409)
+                current = admitted(db, settings, run, job)
+                if current.input_sha256 != facts.input_sha256:
+                    raise DomainError("RENDER_INPUT_CHANGED", "渲染期间输入事实已变化", 409)
+                db.add(
+                    RenderInspection(
+                        attempt_id=token,
+                        manifest_id=job.manifest_id,
+                        manifest_sha256=job.manifest_sha256,
+                        input_sha256=facts.input_sha256,
+                        output_sha256=inspection.output_sha256,
+                        byte_size=inspection.byte_size,
+                        passed=inspection.passed,
+                        result_json=inspection.model_dump(mode="json", round_trip=True),
+                    )
+                )
+            if inspection.error_code:
+                raise DomainError(inspection.error_code, "渲染产物未通过技术检查", 422)
             # Re-read exact source objects after encoding, before the final short
             # database gate. No business row lock is held across media decoding.
             observe(factory, run_id, token, phase="REVALIDATING")
@@ -96,7 +144,7 @@ def execute_render(factory: sessionmaker[Session], settings: Settings, run_id: U
                     storage_backend=settings.object_storage_backend.upper(),
                     bucket=settings.s3_bucket if store.client is not None else None,
                     object_key=attempt.output_key,
-                    checksum=hashlib.sha256(movie).hexdigest(),
+                    checksum=inspection.output_sha256,
                     byte_size=len(movie),
                     media_type="video/mp4",
                     original_name="render-candidate.mp4",
