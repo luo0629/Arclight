@@ -51,6 +51,24 @@ def file_reference(row: StoredFile) -> RenderFileReference:
 def capture_font(
     db: Session, settings: Settings, project_id: UUID, file_id: UUID | None, *, required: bool
 ) -> RenderFileReference | None:
+    reference = font_facts(db, project_id, file_id, required=required)
+    if reference is None:
+        return None
+    row = db.get(StoredFile, reference.file_id)
+    assert row is not None
+    data = file_storage(settings, row).read(
+        row.object_key, POLICIES[row.media_type].max_bytes, row.checksum
+    )
+    if len(data) != row.byte_size:
+        raise DomainError("OBJECT_UNAVAILABLE", "字体大小与不可变回执不符", 409)
+    probe(data, row.media_type)
+    return reference
+
+
+def font_facts(
+    db: Session, project_id: UUID, file_id: UUID | None, *, required: bool
+) -> RenderFileReference | None:
+    """Database-only counterpart used inside FLOW-03 transactions."""
     if file_id is None:
         if required:
             raise DomainError("RENDER_FONT_REQUIRED", "字幕必须指定精确且已授权的字体文件", 409)
@@ -62,19 +80,27 @@ def capture_font(
         raise DomainError("RENDER_FONT_INVALID", "只能使用已登记的TTF或OTF字体", 409)
     if not row.rights_confirmed:
         raise DomainError("RENDER_RIGHTS_REQUIRED", "字幕字体必须有明确使用授权", 409)
-    reference = file_reference(row)
-    data = file_storage(settings, row).read(
-        row.object_key, POLICIES[row.media_type].max_bytes, row.checksum
-    )
-    if len(data) != row.byte_size:
-        raise DomainError("OBJECT_UNAVAILABLE", "字体大小与不可变回执不符", 409)
-    probe(data, row.media_type)
-    return reference
+    return file_reference(row)
 
 
 def capture_sources(
     db: Session, settings: Settings, project_id: UUID, timeline: TimelineSnapshot
 ) -> tuple[RenderSource, ...]:
+    sources = source_facts(db, project_id, timeline)
+    for source in sources:
+        if source.file is not None:
+            row = db.get(StoredFile, source.file.file_id)
+            assert row is not None
+            file_storage(settings, row).verify(
+                row.object_key, row.byte_size, row.checksum, POLICIES[row.media_type].max_bytes
+            )
+    return sources
+
+
+def source_facts(
+    db: Session, project_id: UUID, timeline: TimelineSnapshot
+) -> tuple[RenderSource, ...]:
+    """Resolve exact registry and file receipts without object or parser I/O."""
     expected = {
         clip.source_asset_version_id: clip.source_sha256
         for track in timeline.tracks
@@ -109,9 +135,6 @@ def capture_sources(
             ):
                 raise DomainError("RENDER_INPUT_INVALID", "素材缺少一致的精确文件回执", 409)
             reference = file_reference(row)
-            file_storage(settings, row).verify(
-                row.object_key, row.byte_size, row.checksum, POLICIES[row.media_type].max_bytes
-            )
         elif asset.asset_type not in {"SCRIPT", "STORYBOARD"}:
             raise DomainError("RENDER_INPUT_INVALID", "渲染来源类型尚不受支持", 409)
         sources.append(

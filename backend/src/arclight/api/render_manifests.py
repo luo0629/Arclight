@@ -7,11 +7,15 @@ from fastapi import APIRouter, Query, Request
 from sqlalchemy import and_, or_, select
 
 from arclight.api.dependencies import Actor, Database
+from arclight.api.human_reviews import HumanReviewRead, serialize
+from arclight.application.render_admission import admit_render
 from arclight.application.render_manifests import create_render_manifest, read_render_manifest
 from arclight.application.render_results import read_render_results
+from arclight.application.render_reviews import request_export_review
 from arclight.application.timeline_store import read_timeline
 from arclight.core.errors import DomainError
 from arclight.domain.render_manifests import (
+    RenderAdmissionRead,
     RenderManifestCreate,
     RenderManifestRead,
     RenderManifestResults,
@@ -62,3 +66,17 @@ def get(manifest_id: UUID, db: Database, actor: Actor) -> RenderManifestRead:
 @router.get("/render-manifests/{manifest_id}/results")
 def results(manifest_id: UUID, db: Database, actor: Actor) -> RenderManifestResults:
     return read_render_results(db, manifest_id, actor)
+
+
+@router.post("/render-manifests/{manifest_id}/export-review", status_code=201)
+def export_review(
+    manifest_id: UUID, request: Request, db: Database, actor: Actor
+) -> HumanReviewRead:
+    return serialize(db, request_export_review(db, request.app.state.settings, manifest_id, actor))
+
+
+@router.post("/render-manifests/{manifest_id}/admission")
+def admission(
+    manifest_id: UUID, request: Request, db: Database, actor: Actor
+) -> RenderAdmissionRead:
+    return admit_render(db, request.app.state.settings, manifest_id, actor)

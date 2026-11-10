@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.dependencies import require_manifest
+from arclight.application.render_audio import validate_line_audio
 from arclight.application.render_inputs import capture_font, capture_sources
 from arclight.application.timeline_store import read_timeline
 from arclight.application.timelines import write_episode
@@ -74,6 +75,17 @@ def manifest_row(db: Session, manifest_id: UUID, actor: str, *, write: bool = Fa
 
 def read_render_manifest(db: Session, manifest_id: UUID, actor: str) -> RenderManifestRead:
     row = manifest_row(db, manifest_id, actor)
+    return RenderManifestRead(
+        id=row.id,
+        project_id=row.project_id,
+        created_by=row.created_by,
+        content_sha256=row.content_sha256,
+        snapshot=checked_snapshot(row),
+    )
+
+
+def checked_snapshot(row: RenderManifest) -> RenderManifestSnapshot:
+    """Check immutable content; callers remain responsible for scope/authority."""
     try:
         snapshot = RenderManifestSnapshot.model_validate(row.snapshot_json)
         valid = (
@@ -93,13 +105,7 @@ def read_render_manifest(db: Session, manifest_id: UUID, actor: str) -> RenderMa
         valid = False
     if not valid:
         raise DomainError("RENDER_HISTORY_INVALID", "渲染清单内容与不可变摘要不符", 409)
-    return RenderManifestRead(
-        id=row.id,
-        project_id=row.project_id,
-        created_by=row.created_by,
-        content_sha256=row.content_sha256,
-        snapshot=snapshot,
-    )
+    return snapshot
 
 
 def create_render_manifest(
@@ -113,10 +119,17 @@ def create_render_manifest(
     if timeline_row is None or not timeline_row.sealed:
         raise DomainError("NOT_FOUND", "时间轴版本不存在", 404)
     episode = write_episode(db, timeline_row.episode_id, actor)
+    decisions = tuple(
+        sorted(
+            payload.line_audio_decisions,
+            key=lambda item: (str(item.script_version_id), item.line_id),
+        )
+    )
+    canonical = payload.model_copy(update={"line_audio_decisions": decisions})
     request_hash = digest(
         {
             "timeline_id": str(timeline_id),
-            **payload.model_dump(mode="json", exclude={"creation_key"}),
+            **canonical.model_dump(mode="json", exclude={"creation_key"}),
         }
     )
     previous = db.scalar(
@@ -130,6 +143,7 @@ def create_render_manifest(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一渲染键不能用于不同输入或创建者", 409)
         return read_render_manifest(db, previous.id, actor)
     timeline = read_timeline(db, timeline_id, actor)
+    validate_line_audio(db, timeline.snapshot, decisions, complete=False)
     dependency = require_manifest(db, episode.project_id, timeline.dependency_manifest_id)
     if (
         db.scalar(
@@ -151,6 +165,7 @@ def create_render_manifest(
     )
     now = utcnow()
     snapshot = RenderManifestSnapshot(
+        schema_version=2 if payload.line_audio_decisions else 1,
         timeline_id=timeline.id,
         timeline_sha256=timeline.content_sha256,
         dependency_manifest_id=dependency.id,
@@ -168,6 +183,7 @@ def create_render_manifest(
         font=font,
         software=renderer_software(),
         created_at=now,
+        line_audio_decisions=decisions,
     )
     frozen = snapshot.model_dump(mode="json")
     row = RenderManifest(

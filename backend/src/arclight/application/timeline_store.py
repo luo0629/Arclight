@@ -29,7 +29,12 @@ def read_timeline(db: Session, timeline_id: UUID, actor: str) -> TimelineRead:
     if row is None or not row.sealed:
         raise DomainError("NOT_FOUND", "时间轴版本不存在", 404)
     episode = require_episode(db, row.episode_id, actor)
-    version, asset = exact_version(db, episode.project_id, row.id)
+    return checked_timeline(db, row, episode.project_id)
+
+
+def checked_timeline(db: Session, row: Timeline, project_id: UUID) -> TimelineRead:
+    """Database-only aggregate integrity check for authorized domain services."""
+    version, asset = exact_version(db, project_id, row.id)
     tracks = list(
         db.scalars(
             select(TimelineTrack)

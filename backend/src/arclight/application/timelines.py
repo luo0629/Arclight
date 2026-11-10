@@ -69,6 +69,21 @@ def selected_clip(
     ordinal: int,
     duration_ms: int,
 ) -> ClipSnapshot:
+    clip = selected_clip_facts(db, episode, shot, version_id, ordinal, duration_ms)
+    version, _ = exact_version(db, episode.project_id, version_id)
+    read_object(settings, episode.project_id, version.id, version.object_key, version.checksum)
+    return clip
+
+
+def selected_clip_facts(
+    db: Session,
+    episode: Episode,
+    shot: Shot,
+    version_id: UUID,
+    ordinal: int,
+    duration_ms: int,
+) -> ClipSnapshot:
+    """Database-only selection/QA checks shared with transactional export reviews."""
     version, asset = exact_version(db, episode.project_id, version_id)
     if (
         asset.asset_type not in {"IMAGE", "SHOT_IMAGE"}
@@ -94,7 +109,6 @@ def selected_clip(
         or content.selected_visual_asset.asset_version_id != str(version.id)
     ):
         raise DomainError("TIMELINE_SELECTION_CONFLICT", "镜头已保存的选图与时间轴输入不一致", 409)
-    read_object(settings, episode.project_id, version.id, version.object_key, version.checksum)
     return ClipSnapshot(
         id=uuid4(),
         ordinal=ordinal,
@@ -185,6 +199,20 @@ def require_track_source(
 def validate_snapshot(
     db: Session, settings: Settings, episode: Episode, value: TimelineSnapshot
 ) -> None:
+    validate_snapshot_facts(db, episode, value, current_profile=True)
+    for track in value.tracks:
+        if track.kind == "VIDEO":
+            for clip in track.clips:
+                version, _ = exact_version(db, episode.project_id, clip.source_asset_version_id)
+                read_object(
+                    settings, episode.project_id, version.id, version.object_key, version.checksum
+                )
+
+
+def validate_snapshot_facts(
+    db: Session, episode: Episode, value: TimelineSnapshot, *, current_profile: bool = False
+) -> None:
+    """Validate frozen identities without file I/O or rewriting historical project specs."""
     if value.episode_id != episode.id:
         raise DomainError("TIMELINE_SCOPE_INVALID", "时间轴内容必须属于当前剧集", 422)
     board, shots = approved_board(db, episode, value.storyboard_id)
@@ -199,7 +227,7 @@ def validate_snapshot(
         )
     project = db.get(Project, episode.project_id)
     assert project is not None
-    if value.output_profile != project.output_profile:
+    if current_profile and value.output_profile != project.output_profile:
         raise DomainError("TIMELINE_PROFILE_CONFLICT", "请载入当前项目输出规格后再保存", 409)
     shots_by_id = {shot.id: shot for shot in shots}
     script = db.get(Script, board.script_version_id)
@@ -218,9 +246,8 @@ def validate_snapshot(
                 )
             if track.kind == "VIDEO":
                 assert clip.shot_id is not None
-                expected = selected_clip(
+                expected = selected_clip_facts(
                     db,
-                    settings,
                     episode,
                     shots_by_id[clip.shot_id],
                     clip.source_asset_version_id,

@@ -37,7 +37,17 @@ __all__ = [
 ]
 
 
-def stored_file(client, project_id, data, media_type, *, kind=None, rights=True, **overrides):
+def stored_file(
+    client,
+    project_id,
+    data,
+    media_type,
+    *,
+    kind=None,
+    rights=True,
+    version_metadata=None,
+    **overrides,
+):
     settings = client.app.state.settings
     key = f"render-tests/{project_id}/{uuid4()}"
     checksum = hashlib.sha256(data).hexdigest()
@@ -55,6 +65,7 @@ def stored_file(client, project_id, data, media_type, *, kind=None, rights=True,
                 checksum=checksum,
                 status="APPROVED",
                 created_by="service-owner",
+                metadata_json=version_metadata or {},
             )
             db.add(version)
             db.flush()

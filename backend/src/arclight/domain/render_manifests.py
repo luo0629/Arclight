@@ -4,7 +4,15 @@ from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, StrictBool, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    StrictBool,
+    field_validator,
+    model_validator,
+)
 
 from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.timelines import TimelineSnapshot
@@ -28,11 +36,35 @@ class SubtitleStyle(RenderContract):
     bold: StrictBool = False
 
 
+class LineAudioDecision(RenderContract):
+    script_version_id: UUID
+    line_id: str = Field(min_length=1, max_length=100)
+    mode: Literal["SILENT", "SUBTITLE_ONLY"]
+    reason: str = Field(min_length=1, max_length=500)
+
+    @field_validator("reason")
+    @classmethod
+    def meaningful_reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("静音或仅字幕必须说明创作理由")
+        return value.strip()
+
+
 class RenderManifestCreate(RenderContract):
     creation_key: UUID
     profile: RenderProfile = "PREVIEW"
     subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
     font_file_id: UUID | None = None
+    line_audio_decisions: tuple[LineAudioDecision, ...] = Field(
+        default=(), max_length=5000, exclude_if=lambda value: not value
+    )
+
+    @model_validator(mode="after")
+    def unique_line_decisions(self):
+        identities = [(item.script_version_id, item.line_id) for item in self.line_audio_decisions]
+        if len(set(identities)) != len(identities):
+            raise ValueError("每条精确台词只能设置一次声音决定")
+        return self
 
 
 class OutputGeometry(RenderContract):
@@ -98,7 +130,7 @@ class RenderSoftware(RenderContract):
 
 
 class RenderManifestSnapshot(RenderContract):
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     timeline_id: UUID
     timeline_sha256: Sha256
     dependency_manifest_id: UUID
@@ -111,12 +143,34 @@ class RenderManifestSnapshot(RenderContract):
     font: RenderFileReference | None
     software: RenderSoftware
     created_at: datetime
+    line_audio_decisions: tuple[LineAudioDecision, ...] = Field(
+        default=(), max_length=5000, exclude_if=lambda value: not value
+    )
 
     @model_validator(mode="after")
     def licensed_font(self):
+        if self.schema_version == 1 and self.line_audio_decisions:
+            raise ValueError("声音决定必须使用渲染清单schema 2")
+        identities = [(item.script_version_id, item.line_id) for item in self.line_audio_decisions]
+        if len(set(identities)) != len(identities):
+            raise ValueError("每条精确台词只能设置一次声音决定")
         if self.font is not None and not self.font.rights_confirmed:
             raise ValueError("字幕字体必须有明确使用授权")
         return self
+
+
+class RenderAdmissionRead(RenderContract):
+    """A current preflight result, never a durable authorization or delivery receipt."""
+
+    manifest_id: UUID
+    manifest_sha256: Sha256
+    profile: RenderProfile
+    review_request_id: UUID | None
+    decision_id: UUID | None
+    checked_at: datetime
+    admitted: Literal[True] = True
+    requires_recheck: Literal[True] = True
+    is_delivery: Literal[False] = False
 
 
 class RenderManifestRead(RenderContract):

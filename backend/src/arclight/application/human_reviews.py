@@ -35,9 +35,16 @@ def handlers() -> Mapping[str, ReviewHandler]:
     from arclight.application.art_reviews import ART_HANDLERS
     from arclight.application.continuity_escalations import CONTINUITY_HANDLERS
     from arclight.application.continuity_feedback_store import FEEDBACK_HANDLERS
+    from arclight.application.render_reviews import EXPORT_HANDLERS
     from arclight.application.text_reviews import TEXT_HANDLERS
 
-    return {**TEXT_HANDLERS, **ART_HANDLERS, **CONTINUITY_HANDLERS, **FEEDBACK_HANDLERS}
+    return {
+        **TEXT_HANDLERS,
+        **ART_HANDLERS,
+        **CONTINUITY_HANDLERS,
+        **FEEDBACK_HANDLERS,
+        **EXPORT_HANDLERS,
+    }
 
 
 def require_review(db: Session, request_id: UUID, actor: str) -> HumanReviewRequest:
