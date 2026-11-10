@@ -26,9 +26,11 @@ def recorded_children(monkeypatch, tmp_path):
     original_process = subprocess.Popen
     original_directory = execution.tempfile.TemporaryDirectory
     children, directories, invocations = [], [], []
+    workspaces = tmp_path / "media-workspaces"
+    workspaces.mkdir()
 
     def directory(**kwargs):
-        result = original_directory(dir=tmp_path, **kwargs)
+        result = original_directory(dir=workspaces, **kwargs)
         directories.append(Path(result.name))
         return result
 
@@ -48,7 +50,7 @@ def recorded_children(monkeypatch, tmp_path):
     yield capture, children, directories, invocations
     assert all(child.poll() is not None for child in children)
     assert all(not directory.exists() for directory in directories)
-    assert list(tmp_path.iterdir()) == []
+    assert list(workspaces.iterdir()) == []
 
 
 @pytest.mark.parametrize(

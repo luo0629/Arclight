@@ -28,6 +28,7 @@ from arclight.domain.render_manifests import (
 )
 from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.versions import digest
+from arclight.media.execution import MediaObserver
 from arclight.media.validation import probe
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import (
@@ -197,7 +198,9 @@ def admission_facts(db: Session, row: RenderManifest) -> RenderFacts:
     )
 
 
-def validate_render_objects(db: Session, settings: Settings, facts: RenderFacts) -> None:
+def validate_render_objects(
+    db: Session, settings: Settings, facts: RenderFacts, *, observer: MediaObserver | None = None
+) -> None:
     """Read exact receipts and fully decode media; never trust declared audio duration."""
     snapshot = facts.snapshot
     durations = {}
@@ -205,6 +208,8 @@ def validate_render_objects(db: Session, settings: Settings, facts: RenderFacts)
     if snapshot.font is not None:
         references.append(snapshot.font)
     for reference in references:
+        if observer is not None:
+            observer(None)
         file = db.get(StoredFile, reference.file_id)
         assert file is not None  # admission_facts resolved the same immutable receipt.
         data = file_storage(settings, file).read(
@@ -212,7 +217,11 @@ def validate_render_objects(db: Session, settings: Settings, facts: RenderFacts)
         )
         if len(data) != reference.byte_size:
             raise DomainError("OBJECT_UNAVAILABLE", "素材大小与不可变文件回执不符", 409)
-        details = probe(data, file.media_type)
+        details = (
+            probe(data, file.media_type)
+            if observer is None
+            else probe(data, file.media_type, observer=observer)
+        )
         if file.asset_version_id is not None and file.media_type.startswith("audio/"):
             durations[file.asset_version_id] = details["duration_ms"]
     for track in snapshot.timeline.tracks:

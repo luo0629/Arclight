@@ -2,7 +2,7 @@
 
 from arclight.domain.render_manifests import RenderSoftware
 
-RENDERER_VERSION = "arclight-pyav/1"
+RENDERER_VERSION = "arclight-pyav/2"
 
 
 def renderer_software() -> RenderSoftware:

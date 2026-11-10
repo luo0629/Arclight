@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from arclight.core.errors import DomainError
 from arclight.domain.file_policy import POLICIES, check_file_policy
-from arclight.media.execution import MediaExecutionError, execute_media
+from arclight.media.execution import MediaExecutionError, MediaObserver, execute_media
 
 PARSER_TIMEOUT = 20
 
@@ -30,12 +30,12 @@ def validate_file(
     return ValidatedFile(data, digest, media_type, details)
 
 
-def probe(data: bytes, media_type: str) -> dict:
+def probe(data: bytes, media_type: str, *, observer: MediaObserver | None = None) -> dict:
     policy = POLICIES.get(media_type)
     if policy is None or not 0 < len(data) <= policy.max_bytes:
         raise DomainError("INVALID_FILE", "文件类型或大小不符合允许范围", 422)
     try:
-        raw = execute_media("probe", media_type, data, timeout=PARSER_TIMEOUT)
+        raw = execute_media("probe", media_type, data, timeout=PARSER_TIMEOUT, observer=observer)
         details = json.loads(raw)
         if not isinstance(details, dict) or details.get("media_type") != media_type:
             raise ValueError("Invalid parser result")

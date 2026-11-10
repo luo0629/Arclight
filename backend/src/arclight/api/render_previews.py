@@ -11,7 +11,7 @@ from arclight.api.schemas import Input, Resource
 from arclight.application.commands import require_project
 from arclight.application.rendering import create_preview
 from arclight.core.errors import DomainError
-from arclight.persistence.models import RenderExecution
+from arclight.persistence.models import RenderExecution, RenderJob
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["render-previews"])
 
@@ -55,7 +55,7 @@ def read(
 ) -> PreviewRead:
     require_project(db, project_id, actor)
     row = db.get(RenderExecution, run_id)
-    if row is None or row.project_id != project_id:
+    if row is None or row.project_id != project_id or db.get(RenderJob, run_id) is not None:
         raise DomainError("NOT_FOUND", "渲染任务不存在", 404)
     response.headers["Cache-Control"] = "no-store"
     return PreviewRead.model_validate(row)

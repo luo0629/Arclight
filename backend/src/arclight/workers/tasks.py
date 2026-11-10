@@ -12,6 +12,8 @@ from arclight.application.generation_queues import QUEUES, claim_recovery_scan
 from arclight.application.generation_recovery import recover_job, recovery_candidates
 from arclight.application.media_services import connection_for_job
 from arclight.application.production_events import consume_stage_event, publish_stage_events
+from arclight.application.render_dispatch import candidates as render_candidates
+from arclight.application.render_execution import execute_render
 from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
 from arclight.core.config import Settings, get_settings
@@ -22,6 +24,7 @@ from arclight.persistence.models import (
     GenerationJob,
     OutboxEvent,
     RenderExecution,
+    RenderJob,
     WorkflowRun,
 )
 from arclight.persistence.session import build_engine, session_factory
@@ -128,6 +131,16 @@ def execute_render_preview(run_id: str) -> str:
         engine.dispose()
 
 
+@celery_app.task(name="arclight.execute_render")
+def execute_manifest_render(run_id: str) -> str:
+    settings = get_settings()
+    engine = build_engine(settings)
+    try:
+        return execute_render(session_factory(engine, settings), settings, UUID(run_id))
+    finally:
+        engine.dispose()
+
+
 def publish_generation(
     job_id: UUID, event_id: UUID, permit_id: UUID, epoch: int, lane: str
 ) -> None:
@@ -230,7 +243,10 @@ def dispatch_outbox() -> None:
             previews = list(
                 db.scalars(
                     select(RenderExecution.id)
-                    .where(RenderExecution.status == "QUEUED")
+                    .where(
+                        RenderExecution.status == "QUEUED",
+                        ~select(RenderJob.id).where(RenderJob.id == RenderExecution.id).exists(),
+                    )
                     .order_by(RenderExecution.created_at)
                     .limit(100)
                 )
@@ -238,5 +254,7 @@ def dispatch_outbox() -> None:
         # QUEUED rows survive broker failure; duplicate deliveries use a database CAS.
         for run_id in previews:
             execute_render_preview.apply_async(args=[str(run_id)])
+        for run_id in render_candidates(session_factory(engine, settings)):
+            execute_manifest_render.apply_async(args=[str(run_id)])
     finally:
         engine.dispose()

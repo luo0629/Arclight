@@ -14,6 +14,7 @@ celery_app.conf.update(
     task_default_queue="workflow",
     task_routes={
         "arclight.execute_generation": {"queue": "generation.interactive"},
+        "arclight.execute_render": {"queue": "generation.batch"},
         "arclight.dispatch_outbox": {"queue": "scheduler.control"},
         "arclight.coordinate_production": {"queue": "scheduler.control"},
         "arclight.recover_generation": {"queue": "generation.recovery"},

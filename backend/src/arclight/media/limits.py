@@ -6,12 +6,13 @@ MEMORY_BYTES = 512 * 1024**2
 CPU_SECONDS = 12
 
 
-def restrict_process() -> None:
+def restrict_process(*, render: bool = False) -> None:
+    cpu_seconds = 120 if render else CPU_SECONDS
     if sys.platform != "win32":
         import resource
 
         resource.setrlimit(resource.RLIMIT_AS, (MEMORY_BYTES, MEMORY_BYTES))
-        resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECONDS, CPU_SECONDS))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
         resource.setrlimit(resource.RLIMIT_FSIZE, (1024**2, 1024**2))
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
         resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
@@ -72,7 +73,7 @@ def restrict_process() -> None:
     limits = ExtendedLimits()
     # Per-process CPU, active-process count, per-process memory, kill on job close.
     limits.basic.flags = 0x2 | 0x8 | 0x100 | 0x2000
-    limits.basic.process_time = CPU_SECONDS * 10_000_000
+    limits.basic.process_time = cpu_seconds * 10_000_000
     limits.basic.active_processes = 1
     limits.process_memory = MEMORY_BYTES
     if (

@@ -16,7 +16,7 @@ from arclight.core.errors import DomainError
 from arclight.media.execution import MediaExecutionError, execute_media
 from arclight.media.validation import validate_file
 from arclight.persistence.base import utcnow
-from arclight.persistence.models import Project, RenderExecution, StoredFile
+from arclight.persistence.models import Project, RenderExecution, RenderJob, StoredFile
 from arclight.storage.cleanup import identity
 from arclight.storage.objects import ObjectStorage
 
@@ -42,6 +42,7 @@ def create_preview(
             previous is None
             or previous.project_id != project_id
             or previous.input_file_id != file_id
+            or db.get(RenderJob, retry_of) is not None
         ):
             raise DomainError("NOT_FOUND", "原渲染任务不存在", 404)
         if previous.status != "FAILED":
@@ -71,6 +72,8 @@ def render_phase(data: bytes, phase: str) -> bytes:
 def execute_preview(factory: sessionmaker[Session], settings: Settings, run_id: UUID) -> str:
     store = ObjectStorage(settings)
     with factory.begin() as db:
+        if db.get(RenderJob, run_id) is not None:
+            raise DomainError("NOT_FOUND", "单图预览任务不存在", 404)
         row = db.scalar(
             select(RenderExecution).where(RenderExecution.id == run_id).with_for_update()
         )

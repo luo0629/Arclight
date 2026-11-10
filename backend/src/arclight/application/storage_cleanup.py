@@ -16,6 +16,7 @@ from arclight.persistence.models import (
     CleanupItem,
     CleanupPlan,
     Project,
+    RenderAttempt,
     RenderExecution,
     StoredFile,
     StorySource,
@@ -125,6 +126,20 @@ def reason(
             ):
                 return None
             return "FINISHED_INTERMEDIATE"
+    if namespace == "RENDERED":
+        attempt = db.scalar(select(RenderAttempt).where(RenderAttempt.output_key == item.key))
+        if attempt is not None:
+            render = db.get(RenderExecution, attempt.run_id)
+            if (
+                render is None
+                or render.project_id != project_id
+                or render.storage_identity != identity(ObjectStorage(settings))
+                or render.status not in TERMINAL
+                or attempt.status in {"RUNNING", "SUCCEEDED"}
+                or attempt.finished_at is None
+            ):
+                return None
+            modified = max(modified, utc(attempt.finished_at))
     return "ORPHAN" if now >= modified + ORPHAN_RETENTION else None
 
 

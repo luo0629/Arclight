@@ -33,6 +33,8 @@ from arclight.persistence.human_reviews import HumanReviewRequest as HumanReview
 from arclight.persistence.model_gateway import GatewayCall as GatewayCall
 from arclight.persistence.production_events import ProductionEvent as ProductionEvent
 from arclight.persistence.production_events import ProductionEventReceipt as ProductionEventReceipt
+from arclight.persistence.render_jobs import RenderAttempt as RenderAttempt
+from arclight.persistence.render_jobs import RenderJob as RenderJob
 from arclight.persistence.render_manifests import RenderArtifact as RenderArtifact
 from arclight.persistence.render_manifests import RenderManifest as RenderManifest
 from arclight.persistence.render_manifests import RenderReportLink as RenderReportLink
