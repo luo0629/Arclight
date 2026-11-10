@@ -12,6 +12,11 @@ from arclight.media.text import InvalidStoryText, decode_story
 def main() -> None:
     operation, argument = sys.argv[1:]
     command = command_for(operation, argument)
+    if operation == "inspect":
+        # Domain schemas are outside Landlock's media-only runtime. Load the
+        # fixed implementation before sealing, while input is still unread.
+        from arclight.media.render_inspection import inspect_render
+
     restrict_process(render=operation in {"render", "inspect"})
     seal_process()
     data = sys.stdin.buffer.read(command.input_limit + 1)
@@ -28,8 +33,6 @@ def main() -> None:
 
         result = encode_timeline(data)
     elif operation == "inspect":
-        from arclight.media.render_inspection import inspect_render
-
         result = inspect_render(data).model_dump_json().encode()
     else:
         from arclight.media.probe import inspect_media

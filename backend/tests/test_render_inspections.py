@@ -1,6 +1,10 @@
 """Real FFmpeg decoding, exact profile checks and bounded safe failure evidence."""
 
 import hashlib
+import json
+import subprocess
+import sys
+import textwrap
 
 import pytest
 from render_inspection_helpers import movie
@@ -25,6 +29,40 @@ def test_real_output_inspection_records_exact_bytes_full_decoding_and_profile():
     assert result.measurement.audio.samples >= 24000
     assert result.measurement.video.duration_us == 500_000
     assert all(item.passed for item in result.checks)
+
+
+def test_cold_worker_inspects_without_loading_application_modules_after_sealing():
+    script = textwrap.dedent(
+        """
+        import importlib.abc
+        import sys
+        from arclight.media import isolation, worker
+
+        class SealedApplicationImports(importlib.abc.MetaPathFinder):
+            def find_spec(self, fullname, path, target=None):
+                if fullname.startswith('arclight.domain.'):
+                    raise PermissionError('Application source is outside the sealed runtime')
+
+        def seal():
+            isolation.seal_process()
+            sys.meta_path.insert(0, SealedApplicationImports())
+
+        worker.seal_process = seal
+        sys.argv = ['worker', 'inspect', 'render']
+        worker.main()
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", script],
+        input=movie(),
+        capture_output=True,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr
+    measurement = json.loads(result.stdout)
+    assert measurement["decodable"] is True
+    assert measurement["video"]["frames"] == 12
+    assert measurement["audio"]["samples"] >= 24000
 
 
 @pytest.mark.parametrize("fps,duration_ms", [(1, 1), (24, 501), (120, 250)])
