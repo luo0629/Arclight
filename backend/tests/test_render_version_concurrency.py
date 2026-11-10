@@ -31,7 +31,7 @@ def test_postgres_same_manifest_concurrent_jobs_append_independent_immutable_ver
     second, _ = submit(client, manifest)
     factory = client.app.state.session_factory
     source_ids = {UUID(source["asset_version_id"]) for source in manifest["snapshot"]["sources"]}
-    source_ids.add(UUID(manifest["timeline_id"]))
+    source_ids.add(UUID(manifest["snapshot"]["timeline_id"]))
     with factory() as db:
         before = {
             row.id: (row.object_key, row.checksum, deepcopy(row.metadata_json))
