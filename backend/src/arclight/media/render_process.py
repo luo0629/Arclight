@@ -1,25 +1,23 @@
 """Credential-free bounded FFmpeg still-preview encoder and MP4 finalizer."""
 
-import sys
 from io import BytesIO
 
-from arclight.media.limits import restrict_process
 
-
-def main() -> None:
-    restrict_process()
+def render(data: bytes, phase: str) -> bytes:
     import av
     from PIL import Image, ImageOps
 
-    data = sys.stdin.buffer.read(1024 * 1024 + 1)
     if not 0 < len(data) <= 1024 * 1024:
         raise ValueError("Invalid render input size")
     output = BytesIO()
-    if sys.argv[1] == "encode":
-        with Image.open(BytesIO(data), formats=["PNG", "JPEG"]) as source:
-            if source.width * source.height > 4_000_000 or max(source.size) > 4096:
+    if phase == "encode":
+        with Image.open(BytesIO(data), formats=["PNG", "JPEG"]) as image_source:
+            if (
+                image_source.width * image_source.height > 4_000_000
+                or max(image_source.size) > 4096
+            ):
                 raise ValueError("Invalid image dimensions")
-            image = ImageOps.pad(source.convert("RGB"), (256, 256))
+            image = ImageOps.pad(image_source.convert("RGB"), (256, 256))
         with av.open(output, mode="w", format="mp4") as container:
             stream = container.add_stream("libx264", rate=24)
             stream.width = stream.height = 256
@@ -32,12 +30,31 @@ def main() -> None:
                     container.mux(packet)
             for packet in stream.encode():
                 container.mux(packet)
-    elif sys.argv[1] == "finalize":
+    elif phase == "finalize":
+
+        def refuse_external(*_args, **_kwargs):
+            raise ValueError("External resources are forbidden")
+
         with (
-            av.open(BytesIO(data), mode="r") as source,
+            av.open(
+                BytesIO(data),
+                mode="r",
+                format="mov",
+                options={
+                    "protocol_whitelist": "pipe",
+                    "enable_drefs": "0",
+                    "use_absolute_path": "0",
+                },
+                io_open=refuse_external,
+            ) as source,
             av.open(output, mode="w", format="mp4") as target,
         ):
+            if len(source.streams) != 1 or len(source.streams.video) != 1:
+                raise ValueError("Exactly one preview video stream is required")
             incoming = source.streams.video[0]
+            incoming.codec_context.thread_count = 1
+            if incoming.codec_context.name != "h264":
+                raise ValueError("Only the preview encoder's H264 output is accepted")
             outgoing = target.add_stream_from_template(incoming)
             for packet in source.demux(incoming):
                 if packet.dts is not None:
@@ -48,8 +65,4 @@ def main() -> None:
     result = output.getvalue()
     if not 0 < len(result) <= 1024 * 1024:
         raise ValueError("Invalid render output size")
-    sys.stdout.buffer.write(result)
-
-
-if __name__ == "__main__":
-    main()
+    return result

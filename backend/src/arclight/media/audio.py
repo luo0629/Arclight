@@ -151,7 +151,7 @@ def inspect_audio(data: bytes, media_type: str) -> dict:
     with av.open(
         BytesIO(data),
         format=formats[media_type],
-        options={"protocol_whitelist": "file,pipe", "err_detect": "explode"},
+        options={"protocol_whitelist": "pipe", "err_detect": "explode"},
         io_open=refuse_external,
     ) as container:
         if not isinstance(container, av.container.InputContainer):

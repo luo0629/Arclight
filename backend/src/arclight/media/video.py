@@ -28,7 +28,15 @@ def inspect_video(data: bytes) -> dict:
         raise ValueError("External resources are forbidden")
 
     with av.open(
-        BytesIO(data), format="mov", options={"err_detect": "explode"}, io_open=refuse_external
+        BytesIO(data),
+        format="mov",
+        options={
+            "err_detect": "explode",
+            "protocol_whitelist": "pipe",
+            "enable_drefs": "0",
+            "use_absolute_path": "0",
+        },
+        io_open=refuse_external,
     ) as container:
         if not isinstance(container, av.container.InputContainer):
             raise ValueError("Input container required")

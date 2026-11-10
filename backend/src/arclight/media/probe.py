@@ -1,11 +1,7 @@
 """Internal child entry point. No project data, names, URLs or credentials."""
 
-import json
-import sys
 import zlib
 from io import BytesIO
-
-from arclight.media.limits import restrict_process
 
 
 def check_jpeg(data: bytes) -> None:
@@ -100,13 +96,7 @@ def inspect_text(data: bytes, media_type: str) -> dict:
     return {"media_type": media_type, "characters": len(text), "encoding": "utf-8"}
 
 
-def main() -> None:
-    restrict_process()
-    media_type = sys.argv[1]
-    maximum = 64 * 1024**2 if media_type == "video/mp4" else 32 * 1024**2
-    data = sys.stdin.buffer.read(maximum + 1)
-    if not 0 < len(data) <= maximum:
-        raise ValueError("Invalid input size")
+def inspect_media(data: bytes, media_type: str) -> dict:
     if media_type in {"image/png", "image/jpeg"}:
         result = inspect_image(data, media_type)
     elif media_type in {"text/plain", "text/markdown"}:
@@ -125,8 +115,4 @@ def main() -> None:
         result = inspect_font(data, media_type)
     else:
         raise ValueError("Unsupported media")
-    print(json.dumps(result, separators=(",", ":")))
-
-
-if __name__ == "__main__":
-    main()
+    return result

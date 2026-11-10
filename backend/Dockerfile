@@ -3,6 +3,8 @@ FROM python:3.12-slim
 COPY --from=uv /uv /uvx /bin/
 ENV PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends libseccomp2 \
+    && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml uv.lock ./
 COPY src ./src
 COPY migrations ./migrations

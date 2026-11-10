@@ -5,11 +5,6 @@ and production UI remain in their own RENDER tasks.
 """
 
 import hashlib
-import os
-import subprocess
-import sys
-import tempfile
-from pathlib import Path
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, update
@@ -18,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.application.commands import require_project
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.media.execution import MediaExecutionError, execute_media
 from arclight.media.validation import validate_file
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import Project, RenderExecution, StoredFile
@@ -66,32 +62,9 @@ def create_preview(
 
 
 def render_phase(data: bytes, phase: str) -> bytes:
-    environment = {key: os.environ[key] for key in ("SYSTEMROOT", "WINDIR") if key in os.environ}
-    environment.update({"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
-    creation_flags = 0
-    if sys.platform == "win32":
-        creation_flags = subprocess.CREATE_NO_WINDOW
     try:
-        with (
-            tempfile.TemporaryDirectory(prefix="arclight-render-") as directory,
-            (Path(directory) / "result.mp4").open("w+b") as output,
-        ):
-            result = subprocess.run(
-                [sys.executable, "-I", "-m", "arclight.media.render_process", phase],
-                input=data,
-                stdout=output,
-                stderr=subprocess.DEVNULL,
-                env=environment,
-                cwd=directory,
-                timeout=20,
-                creationflags=creation_flags,
-            )
-            output.seek(0)
-            rendered = output.read(1024 * 1024 + 1)
-        if result.returncode or not 0 < len(rendered) <= 1024 * 1024:
-            raise ValueError("Renderer refused input")
-        return rendered
-    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return execute_media("preview", phase, data)
+    except MediaExecutionError:
         raise DomainError("RENDER_FAILED", "预览渲染失败或超过执行限制", 422) from None
 
 

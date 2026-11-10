@@ -14,6 +14,7 @@ def restrict_process() -> None:
         resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECONDS, CPU_SECONDS))
         resource.setrlimit(resource.RLIMIT_FSIZE, (1024**2, 1024**2))
         resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
+        resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
         return
 

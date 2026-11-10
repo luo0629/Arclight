@@ -7,6 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 
 from arclight.core.errors import DomainError
+from arclight.media.execution import MediaExecutionError, execute_media
 
 MAX_SOURCE_BYTES = 256 * 1024
 MAX_BASE64_LENGTH = 4 * ((MAX_SOURCE_BYTES + 2) // 3)
@@ -49,22 +50,23 @@ def decode_source(filename: str, media_type: str, encoding: str, encoded: str) -
         raise DomainError("SOURCE_EMPTY", "故事文件不能为空", 422)
     if raw.startswith((b"%PDF", b"PK\x03\x04", b"\x89PNG", b"\xff\xd8\xff", b"GIF8", b"MZ")):
         raise DomainError("SOURCE_NOT_TEXT", "文件内容不是支持的纯文本", 422)
-    codec = "utf-8-sig" if encoding == "utf-8" else "gb18030"
     if encoding not in {"utf-8", "gb18030"}:
         raise DomainError("SOURCE_ENCODING", "请选择 UTF-8 或 GB18030 编码", 422)
     try:
-        text = raw.decode(codec, errors="strict")
+        text = execute_media("story", encoding, raw).decode("utf-8")
+    except MediaExecutionError as exc:
+        messages = {
+            "SOURCE_ENCODING": "无法按所选编码解码，请转换为 UTF-8 或选择正确编码",
+            "SOURCE_NOT_TEXT": "文件含二进制、控制字符或损坏的文本",
+            "SOURCE_EMPTY": "故事文件不能只有空白",
+        }
+        if exc.reason in messages:
+            raise DomainError(exc.reason, messages[exc.reason], 422) from None
+        if exc.reason == "BUSY":
+            raise DomainError("VALIDATION_BUSY", "文件校验繁忙，请重试", 503) from None
+        raise DomainError("SOURCE_PARSE_LIMIT", "故事文件无效或超出安全解析限制", 422) from None
     except UnicodeError:
-        raise DomainError(
-            "SOURCE_ENCODING", "无法按所选编码解码，请转换为 UTF-8 或选择正确编码", 422
-        ) from None
-    if any(
-        (unicodedata.category(char) in {"Cc", "Cs"} and char not in "\t\n\r") or char == "\ufffd"
-        for char in text
-    ):
-        raise DomainError("SOURCE_NOT_TEXT", "文件含二进制、控制字符或损坏的文本", 422)
-    if not text.strip():
-        raise DomainError("SOURCE_EMPTY", "故事文件不能只有空白", 422)
+        raise DomainError("SOURCE_PARSE_LIMIT", "故事文件无效或超出安全解析限制", 422) from None
     actual_encoding = (
         "utf-8-sig" if raw.startswith(b"\xef\xbb\xbf") and encoding == "utf-8" else encoding
     )
