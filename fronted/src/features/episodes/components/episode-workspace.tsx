@@ -496,6 +496,8 @@ export default function EpisodeWorkspace({
         />
       ) : view === "tasks" ? (
         <Tasks
+          projectId={episode.project_id}
+          episodeId={episode.id}
           runs={runs.rows}
           pagination={
             <ListPagination {...runs} label="任务" count={runs.rows.length} />

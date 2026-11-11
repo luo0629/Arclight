@@ -19,9 +19,12 @@ import CharacterMatching from "@/features/story/components/character-matching";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import ScreenwriterProgress from "@/features/tasks/components/screenwriter-progress";
 import ArtProgress from "./art-progress";
+import MediaTasks from "./media-tasks";
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 export default function Tasks({
+  projectId,
+  episodeId,
   runs,
   owner,
   writable,
@@ -30,6 +33,8 @@ export default function Tasks({
   reload,
   pagination,
 }: {
+  projectId: string;
+  episodeId: string;
   runs: Run[];
   pagination: React.ReactNode;
   owner: boolean;
@@ -68,219 +73,229 @@ export default function Tasks({
     });
   }
   return (
-    <PagePanel
-      eyebrow="每一步都有迹可循"
-      title="创作任务与审核"
-      description="创作会在后台继续，不必一直等待。生成完成后，由项目拥有者确认每一版剧本与分镜。"
-    >
-      {runs.length === 0 ? (
-        <EmptyState className="empty compact py-8">
-          <h3>还没有创作任务</h3>
-          <p>回到创作画布，在故事起点写下灵感并生成剧本。</p>
-        </EmptyState>
-      ) : (
-        <div className="task-list grid min-w-0 gap-4 lg:grid-cols-2">
-          {runs.map((run) => (
-            <article
-              className="task flex min-w-0 flex-col gap-3 rounded-xl border bg-background/60 p-4"
-              key={run.id}
-            >
-              <div className="task-heading flex flex-wrap items-center justify-between gap-2">
-                <strong>
-                  {run.workflow_type === "art_proposal"
-                    ? "美术提案生成"
-                    : run.workflow_type === "script_rewrite"
-                      ? "剧本局部改写"
-                      : run.workflow_type === "story_outline"
-                        ? "分集大纲"
-                        : run.workflow_type === "story_analysis"
-                          ? "故事提炼"
-                          : run.workflow_type === "storyboard"
-                            ? "分镜创作"
-                            : "剧本与分镜创作"}
-                </strong>
-                <StatusBadge status={run.status} />
-              </div>
-              <p className="muted text-sm text-muted-foreground">
-                {new Date(run.created_at).toLocaleString("zh-CN")} · 修订{" "}
-                {run.revision}
-              </p>
-              <code className="task-id text-muted-foreground">{run.id}</code>
-              {[
-                "screenwriter/1.0",
-                "screenwriter-outline/1.0",
-                "screenwriter/2.0",
-                "screenwriter-rewrite/1.0",
-                "production/1.0",
-                "production/2.0",
-                "production/3.0",
-                "production/4.0",
-                "production/5.0",
-                "production/6.0",
-              ].includes(run.workflow_version ?? "") && (
-                <ScreenwriterProgress
-                  run={run}
-                  writable={writable}
-                  busy={busy}
-                  act={act}
-                  reload={reload}
-                />
-              )}
-              {[
-                "director/1.0",
-                "director/2.0",
-                "director/3.0",
-                "production/1.0",
-                "production/2.0",
-                "production/3.0",
-                "production/4.0",
-                "production/5.0",
-                "production/6.0",
-              ].includes(run.workflow_version ?? "") && (
-                <ScreenwriterProgress
-                  agent="director"
-                  run={run}
-                  writable={writable}
-                  busy={busy}
-                  act={act}
-                  reload={reload}
-                />
-              )}
-              {run.workflow_type === "art_proposal" && (
-                <ArtProgress
-                  run={run}
-                  writable={writable}
-                  busy={busy}
-                  act={act}
-                  reload={reload}
-                />
-              )}
-              {run.error_code && run.workflow_type !== "art_proposal" && (
-                <Notice tone="error" className="error" role="alert">
-                  {runErrorMessage(run.error_code)}
-                </Notice>
-              )}
-              {run.pending_review &&
-                run.pending_review.resource_type !== "art_proposal" && (
-                  <p>
-                    等待审核：
-                    {run.pending_review.resource_type === "script"
-                      ? "剧本"
-                      : "分镜"}
-                    版本 <code>{run.pending_review.version_id}</code>
-                  </p>
+    <div className="flex min-w-0 flex-col gap-6">
+      <MediaTasks
+        key={`${projectId}:${episodeId}`}
+        projectId={projectId}
+        episodeId={episodeId}
+        owner={owner}
+        writable={writable}
+        busy={busy}
+      />
+      <PagePanel
+        eyebrow="每一步都有迹可循"
+        title="创作任务与审核"
+        description="创作会在后台继续，不必一直等待。生成完成后，由项目拥有者确认每一版剧本与分镜。"
+      >
+        {runs.length === 0 ? (
+          <EmptyState className="empty compact py-8">
+            <h3>还没有创作任务</h3>
+            <p>回到创作画布，在故事起点写下灵感并生成剧本。</p>
+          </EmptyState>
+        ) : (
+          <div className="task-list grid min-w-0 gap-4 lg:grid-cols-2">
+            {runs.map((run) => (
+              <article
+                className="task flex min-w-0 flex-col gap-3 rounded-xl border bg-background/60 p-4"
+                key={run.id}
+              >
+                <div className="task-heading flex flex-wrap items-center justify-between gap-2">
+                  <strong>
+                    {run.workflow_type === "art_proposal"
+                      ? "美术提案生成"
+                      : run.workflow_type === "script_rewrite"
+                        ? "剧本局部改写"
+                        : run.workflow_type === "story_outline"
+                          ? "分集大纲"
+                          : run.workflow_type === "story_analysis"
+                            ? "故事提炼"
+                            : run.workflow_type === "storyboard"
+                              ? "分镜创作"
+                              : "剧本与分镜创作"}
+                  </strong>
+                  <StatusBadge status={run.status} />
+                </div>
+                <p className="muted text-sm text-muted-foreground">
+                  {new Date(run.created_at).toLocaleString("zh-CN")} · 修订{" "}
+                  {run.revision}
+                </p>
+                <code className="task-id text-muted-foreground">{run.id}</code>
+                {[
+                  "screenwriter/1.0",
+                  "screenwriter-outline/1.0",
+                  "screenwriter/2.0",
+                  "screenwriter-rewrite/1.0",
+                  "production/1.0",
+                  "production/2.0",
+                  "production/3.0",
+                  "production/4.0",
+                  "production/5.0",
+                  "production/6.0",
+                ].includes(run.workflow_version ?? "") && (
+                  <ScreenwriterProgress
+                    run={run}
+                    writable={writable}
+                    busy={busy}
+                    act={act}
+                    reload={reload}
+                  />
                 )}
-              {owner &&
-                writable &&
-                run.pending_review &&
-                run.pending_review.resource_type !== "art_proposal" && (
-                  <>
-                    <FormLabel>
-                      审核意见
-                      <Textarea
-                        value={comment}
-                        onChange={(event) => setComment(event.target.value)}
-                        maxLength={2000}
-                        placeholder="记录这次创作决定的原因"
-                      />
-                    </FormLabel>
-                    <div className="button-row flex flex-wrap items-center gap-2">
-                      <ImpactButton
-                        variant="default"
-                        size="lg"
-                        className=""
-                        disabled={busy}
-                        endpoint={`/episodes/${run.episode_id}/${run.pending_review.resource_type}s/${run.pending_review.version_id}/dependency-impact`}
-                        onConfirm={(digest) =>
-                          action(run, "resume", "APPROVE", digest)
-                        }
-                      >
-                        批准并继续
-                      </ImpactButton>
+                {[
+                  "director/1.0",
+                  "director/2.0",
+                  "director/3.0",
+                  "production/1.0",
+                  "production/2.0",
+                  "production/3.0",
+                  "production/4.0",
+                  "production/5.0",
+                  "production/6.0",
+                ].includes(run.workflow_version ?? "") && (
+                  <ScreenwriterProgress
+                    agent="director"
+                    run={run}
+                    writable={writable}
+                    busy={busy}
+                    act={act}
+                    reload={reload}
+                  />
+                )}
+                {run.workflow_type === "art_proposal" && (
+                  <ArtProgress
+                    run={run}
+                    writable={writable}
+                    busy={busy}
+                    act={act}
+                    reload={reload}
+                  />
+                )}
+                {run.error_code && run.workflow_type !== "art_proposal" && (
+                  <Notice tone="error" className="error" role="alert">
+                    {runErrorMessage(run.error_code)}
+                  </Notice>
+                )}
+                {run.pending_review &&
+                  run.pending_review.resource_type !== "art_proposal" && (
+                    <p>
+                      等待审核：
+                      {run.pending_review.resource_type === "script"
+                        ? "剧本"
+                        : "分镜"}
+                      版本 <code>{run.pending_review.version_id}</code>
+                    </p>
+                  )}
+                {owner &&
+                  writable &&
+                  run.pending_review &&
+                  run.pending_review.resource_type !== "art_proposal" && (
+                    <>
+                      <FormLabel>
+                        审核意见
+                        <Textarea
+                          value={comment}
+                          onChange={(event) => setComment(event.target.value)}
+                          maxLength={2000}
+                          placeholder="记录这次创作决定的原因"
+                        />
+                      </FormLabel>
+                      <div className="button-row flex flex-wrap items-center gap-2">
+                        <ImpactButton
+                          variant="default"
+                          size="lg"
+                          className=""
+                          disabled={busy}
+                          endpoint={`/episodes/${run.episode_id}/${run.pending_review.resource_type}s/${run.pending_review.version_id}/dependency-impact`}
+                          onConfirm={(digest) =>
+                            action(run, "resume", "APPROVE", digest)
+                          }
+                        >
+                          批准并继续
+                        </ImpactButton>
+                        <Button
+                          variant="outline"
+                          size="lg"
+                          disabled={busy}
+                          onClick={() => void action(run, "resume", "REJECT")}
+                        >
+                          驳回该版本
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                {run.pending_review?.resource_type === "script" && (
+                  <CharacterMatching
+                    episodeId={run.episode_id}
+                    sourceType="scripts"
+                    versionId={run.pending_review.version_id}
+                    writable={writable}
+                    busy={busy}
+                  />
+                )}
+                <div className="button-row flex flex-wrap items-center gap-2">
+                  {writable &&
+                    ["QUEUED", "WAITING_REVIEW"].includes(run.status) && (
                       <Button
                         variant="outline"
                         size="lg"
                         disabled={busy}
-                        onClick={() => void action(run, "resume", "REJECT")}
+                        onClick={() => {
+                          if (window.confirm("取消此任务？已有版本会保留。"))
+                            void action(run, "cancel");
+                        }}
                       >
-                        驳回该版本
+                        取消任务
                       </Button>
-                    </div>
-                  </>
-                )}
-              {run.pending_review?.resource_type === "script" && (
-                <CharacterMatching
-                  episodeId={run.episode_id}
-                  sourceType="scripts"
-                  versionId={run.pending_review.version_id}
-                  writable={writable}
-                  busy={busy}
-                />
-              )}
-              <div className="button-row flex flex-wrap items-center gap-2">
-                {writable &&
-                  ["QUEUED", "WAITING_REVIEW"].includes(run.status) && (
+                    )}
+                  {writable &&
+                    run.status === "FAILED" &&
+                    run.workflow_type !== "art_proposal" && (
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        disabled={busy}
+                        onClick={() => void action(run, "retry")}
+                      >
+                        重试任务
+                      </Button>
+                    )}
+                  {writable && run.status === "FAILED" && (
                     <Button
                       variant="outline"
                       size="lg"
                       disabled={busy}
-                      onClick={() => {
-                        if (window.confirm("取消此任务？已有版本会保留。"))
-                          void action(run, "cancel");
-                      }}
+                      onClick={() => void action(run, "restart")}
                     >
-                      取消任务
+                      使用当前配置重新发起
                     </Button>
                   )}
-                {writable &&
-                  run.status === "FAILED" &&
-                  run.workflow_type !== "art_proposal" && (
-                    <Button
-                      variant="outline"
-                      size="lg"
-                      disabled={busy}
-                      onClick={() => void action(run, "retry")}
-                    >
-                      重试任务
-                    </Button>
-                  )}
-                {writable && run.status === "FAILED" && (
                   <Button
                     variant="outline"
                     size="lg"
                     disabled={busy}
-                    onClick={() => void action(run, "restart")}
+                    onClick={() => setEventRun(run.id)}
                   >
-                    使用当前配置重新发起
+                    查看执行记录
                   </Button>
+                </div>
+                {writable && run.status === "FAILED" && (
+                  <p className="text-xs text-muted-foreground">
+                    重试沿用原配置；重新发起会保留原业务输入，使用当前账号配置创建新任务。原调用结果未知时须先核验。
+                  </p>
                 )}
-                <Button
-                  variant="outline"
-                  size="lg"
-                  disabled={busy}
-                  onClick={() => setEventRun(run.id)}
-                >
-                  查看执行记录
-                </Button>
-              </div>
-              {writable && run.status === "FAILED" && (
-                <p className="text-xs text-muted-foreground">
-                  重试沿用原配置；重新发起会保留原业务输入，使用当前账号配置创建新任务。原调用结果未知时须先核验。
-                </p>
-              )}
-            </article>
-          ))}
-        </div>
-      )}
-      {pagination}
-      {eventRun && (
-        <EventHistory
-          key={eventRun}
-          runId={eventRun}
-          close={() => setEventRun("")}
-        />
-      )}
-    </PagePanel>
+              </article>
+            ))}
+          </div>
+        )}
+        {pagination}
+        {eventRun && (
+          <EventHistory
+            key={eventRun}
+            runId={eventRun}
+            close={() => setEventRun("")}
+          />
+        )}
+      </PagePanel>
+    </div>
   );
 }
 
