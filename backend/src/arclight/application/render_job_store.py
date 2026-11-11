@@ -17,7 +17,7 @@ from arclight.persistence.models import (
     RenderInspection,
     RenderJob,
 )
-from arclight.persistence.render_manifests import RenderArtifact, RenderManifest
+from arclight.persistence.render_manifests import RenderArtifact, RenderManifest, RenderReportLink
 
 
 def lock_job(db: Session, run_id: UUID) -> tuple[RenderExecution, RenderJob]:
@@ -67,6 +67,10 @@ def read_job(db: Session, run_id: UUID, actor: str) -> RenderJobRead:
             "RETAINED" if run.status == "SUCCEEDED" else "CLEANED",
         )
     artifact = db.scalar(select(RenderArtifact).where(RenderArtifact.job_id == run_id))
+    # Import locally: report registration shares the execution ledger's lock order.
+    from arclight.application.render_reports import delivery_acceptance
+
+    acceptance = delivery_acceptance(db, artifact, actor) if artifact else None
     return RenderJobRead(
         id=run_id,
         manifest_id=job.manifest_id,
@@ -82,6 +86,13 @@ def read_job(db: Session, run_id: UUID, actor: str) -> RenderJobRead:
         output_file_id=run.output_file_id,
         output_asset_version_id=artifact.asset_version_id if artifact else None,
         artifact_id=artifact.id if artifact else None,
+        is_delivery=acceptance.is_delivery if acceptance else False,
+        delivery_phase=acceptance.phase if acceptance else None,
+        report_id=db.scalar(
+            select(RenderReportLink.id).where(RenderReportLink.artifact_id == artifact.id)
+        )
+        if artifact
+        else None,
         error_code=run.error_code,
         cleanup_status=cleanup,
         created_at=run.created_at,

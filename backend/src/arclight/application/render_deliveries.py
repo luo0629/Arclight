@@ -7,12 +7,18 @@ from sqlalchemy.orm import Session
 
 from arclight.application.commands import require_episode
 from arclight.application.render_manifests import checked_snapshot
+from arclight.application.render_reports import (
+    delivery_acceptance,
+    read_machine_report,
+    report_envelope,
+)
 from arclight.core.errors import DomainError
 from arclight.domain.render_deliveries import (
     RenderDeliveryDetail,
     RenderDeliveryRead,
     RenderDeliverySource,
 )
+from arclight.domain.render_reports import RenderDeliveryReport
 from arclight.persistence.models import (
     AssetVersion,
     RenderArtifact,
@@ -41,7 +47,9 @@ def delivery_row(db: Session, episode_id: UUID, artifact_id: UUID) -> RenderArti
     return row
 
 
-def delivery_read(db: Session, row: RenderArtifact, episode_id: UUID) -> RenderDeliveryRead:
+def delivery_read(
+    db: Session, row: RenderArtifact, episode_id: UUID, actor: str
+) -> RenderDeliveryRead:
     version = db.get(AssetVersion, row.asset_version_id)
     manifest = db.get(RenderManifest, row.manifest_id)
     file = db.get(StoredFile, row.file_id)
@@ -50,6 +58,7 @@ def delivery_read(db: Session, row: RenderArtifact, episode_id: UUID) -> RenderD
     assert file.storage_backend in ("LOCAL", "S3")
     snapshot = checked_snapshot(manifest)
     report = db.scalar(select(RenderReportLink).where(RenderReportLink.artifact_id == row.id))
+    acceptance = delivery_acceptance(db, row, actor)
     return RenderDeliveryRead(
         id=row.id,
         project_id=manifest.project_id,
@@ -72,6 +81,8 @@ def delivery_read(db: Session, row: RenderArtifact, episode_id: UUID) -> RenderD
         report_file_id=report.file_id if report else None,
         storage_backend="LOCAL" if file.storage_backend == "LOCAL" else "S3",
         stale=version.stale,
+        is_delivery=acceptance.is_delivery,
+        acceptance=acceptance,
         created_at=row.created_at,
     )
 
@@ -92,7 +103,7 @@ def list_deliveries(
     rows = db.scalars(
         query.order_by(RenderArtifact.created_at.desc(), RenderArtifact.id.desc()).limit(limit)
     )
-    return [delivery_read(db, row, episode_id) for row in rows]
+    return [delivery_read(db, row, episode_id, actor) for row in rows]
 
 
 def read_delivery(
@@ -104,7 +115,7 @@ def read_delivery(
     assert manifest is not None
     snapshot = checked_snapshot(manifest)
     return RenderDeliveryDetail(
-        **delivery_read(db, row, episode_id).model_dump(),
+        **delivery_read(db, row, episode_id, actor).model_dump(),
         timeline_sha256=snapshot.timeline_sha256,
         timeline_dependency_manifest_id=snapshot.dependency_manifest_id,
         timeline_dependency_manifest_sha256=snapshot.dependency_manifest_sha256,
@@ -114,4 +125,23 @@ def read_delivery(
         font=snapshot.font,
         software=snapshot.software,
         output=snapshot.output,
+    )
+
+
+def read_delivery_report(
+    db: Session, episode_id: UUID, artifact_id: UUID, actor: str
+) -> RenderDeliveryReport:
+    require_episode(db, episode_id, actor)
+    artifact = delivery_row(db, episode_id, artifact_id)
+    report = read_machine_report(db, artifact)
+    if report is None:
+        raise DomainError("NOT_FOUND", "该成片尚无机器验收报告", 404)
+    link = db.scalar(select(RenderReportLink).where(RenderReportLink.artifact_id == artifact.id))
+    assert link is not None
+    return RenderDeliveryReport(
+        report_id=link.id,
+        report_file_id=link.file_id,
+        report_sha256=link.checksum,
+        report=report_envelope(report),
+        acceptance=delivery_acceptance(db, artifact, actor),
     )

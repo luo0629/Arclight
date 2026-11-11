@@ -2,7 +2,8 @@
 
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from arclight.persistence.base import JSON_TYPE, Base, Entity
@@ -63,4 +64,19 @@ class RenderReportLink(Entity, Base):
     object_key: Mapped[str] = mapped_column(String(512))
     checksum: Mapped[str] = mapped_column(String(64))
     byte_size: Mapped[int]
-    __table_args__ = (CheckConstraint("byte_size > 0", name="render_report_size"),)
+    inspection_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("render_inspections.id"), unique=True
+    )
+    input_sha256: Mapped[str | None] = mapped_column(String(64))
+    machine_report_json: Mapped[dict | None] = mapped_column(
+        JSON(none_as_null=True).with_variant(JSONB(none_as_null=True), "postgresql")
+    )
+    __table_args__ = (
+        CheckConstraint("byte_size > 0", name="render_report_size"),
+        CheckConstraint(
+            "(inspection_id IS NULL AND input_sha256 IS NULL AND machine_report_json IS NULL) OR "
+            "(inspection_id IS NOT NULL AND input_sha256 IS NOT NULL "
+            "AND machine_report_json IS NOT NULL)",
+            name="render_report_machine_provenance",
+        ),
+    )

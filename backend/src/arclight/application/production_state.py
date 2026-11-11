@@ -40,7 +40,7 @@ from arclight.persistence.models import (
     VisualAsset,
     WorkflowRun,
 )
-from arclight.persistence.timelines import Timeline, TimelineClip
+from arclight.persistence.timelines import Timeline, TimelineClip, TimelineTrack
 
 MAX_PRODUCTION_ITEMS = 2000
 
@@ -190,23 +190,37 @@ def input_issues(
     return list(dict.fromkeys(issues))
 
 
-def shot_facts(db: Session, episode: Episode, row: Shot) -> ShotFacts:
+def shot_facts(
+    db: Session, episode: Episode, row: Shot, clip: TimelineClip | None = None
+) -> ShotFacts:
     issues: list[IssueCode] = []
     media = None
     file_check = None
+    continuity = None
+    selection = None
     try:
         content = ShotContent.model_validate(row.content_json)
     except ValidationError:
         issues.append("INVALID_CONTENT")
     else:
         reference = content.selected_visual_asset
-        if reference:
+        selected = (
+            db.get(AssetVersion, clip.source_asset_version_id)
+            if clip is not None and clip.shot_id == row.id
+            else None
+        )
+        if reference or selected:
+            if reference:
+                version_id, asset_id = UUID(reference.asset_version_id), UUID(reference.asset_id)
+            else:
+                assert selected is not None
+                version_id, asset_id = selected.id, selected.asset_id
             found = db.execute(
                 select(AssetVersion, VisualAsset)
                 .join(VisualAsset, AssetVersion.asset_id == VisualAsset.id)
                 .where(
-                    AssetVersion.id == UUID(reference.asset_version_id),
-                    VisualAsset.id == UUID(reference.asset_id),
+                    AssetVersion.id == version_id,
+                    VisualAsset.id == asset_id,
                     VisualAsset.project_id == episode.project_id,
                     VisualAsset.asset_type.in_(("IMAGE", "SHOT_IMAGE")),
                 )
@@ -258,8 +272,52 @@ def shot_facts(db: Session, episode: Episode, row: Shot) -> ShotFacts:
                         actor_id=candidate.created_by,
                         decision="PASS",
                     )
-    # Text approval and a generic quality reference cannot invent continuity or selection evidence.
-    # Current jobs have no authoritative shot binding; arbitrary spec.context is not such a binding.
+                if clip is not None and clip.shot_id == row.id:
+                    from arclight.application.timelines import selected_clip_facts
+
+                    try:
+                        checked = selected_clip_facts(
+                            db, episode, row, version.id, clip.ordinal, clip.duration_ms
+                        )
+                        if (
+                            checked.review_id is not None
+                            and checked.source_sha256 == clip.source_sha256
+                            and checked.review_id == clip.review_id
+                            and checked.review_storyboard_id == clip.review_storyboard_id
+                            and checked.review_shot_id == clip.review_shot_id
+                            and clip.source_asset_version_id == version.id
+                        ):
+                            # The sealed clip binds this exact media to the approved
+                            # storyboard after the shared selection/review gate passes.
+                            media = media.model_copy(
+                                update={
+                                    "source_version_ids": sorted(
+                                        {*media.source_version_ids, row.storyboard_id}
+                                    )
+                                }
+                            )
+                            continuity = ReviewEvidence(
+                                project_id=episode.project_id,
+                                episode_id=episode.id,
+                                review_id=checked.review_id,
+                                version_id=version.id,
+                                source_version_id=row.storyboard_id,
+                                actor_id="continuity-selection",
+                                decision="PASS",
+                            )
+                            selection = ReviewEvidence(
+                                project_id=episode.project_id,
+                                episode_id=episode.id,
+                                review_id=clip.id,
+                                version_id=version.id,
+                                source_version_id=row.storyboard_id,
+                                actor_id="timeline-selection",
+                                decision="APPROVE",
+                            )
+                    except DomainError:
+                        # A historical clip cannot grant a revoked or obsolete selection.
+                        pass
+    # Generic job context and text approval cannot invent continuity or selection proof.
     return ShotFacts(
         project_id=episode.project_id,
         episode_id=episode.id,
@@ -268,6 +326,8 @@ def shot_facts(db: Session, episode: Episode, row: Shot) -> ShotFacts:
         issues=issues,
         media=media,
         file_check=file_check,
+        continuity=continuity,
+        selection=selection,
     )
 
 
@@ -311,6 +371,32 @@ def production_facts(db: Session, episode_id: UUID, actor: str) -> EpisodeFacts:
     ).all()
     if len(shots) > MAX_PRODUCTION_ITEMS:
         raise DomainError("PRODUCTION_STATE_LIMIT", "生产状态证据数量超限，请缩小生产范围", 413)
+    from arclight.application.render_production import render_evidence
+
+    timeline = timeline_evidence(db, episode)
+    delivery = render_evidence(db, episode, timeline, actor)
+    clips = (
+        list(
+            db.scalars(
+                select(TimelineClip)
+                .join(TimelineTrack, TimelineTrack.id == TimelineClip.track_id)
+                .join(Timeline, Timeline.id == TimelineClip.timeline_id)
+                .where(
+                    Timeline.id == timeline.version_id,
+                    Timeline.storyboard_id == board.id,
+                    TimelineTrack.kind == "VIDEO",
+                    TimelineClip.shot_id.is_not(None),
+                )
+                .order_by(TimelineClip.ordinal)
+            )
+        )
+        if timeline and board
+        else []
+    )
+    selections = {clip.shot_id: clip for clip in clips}
+    if len(selections) != len(clips):
+        # Ambiguous historical clips never establish a shot selection.
+        selections = {}
     return EpisodeFacts(
         project_id=episode.project_id,
         episode_id=episode.id,
@@ -331,12 +417,17 @@ def production_facts(db: Session, episode_id: UUID, actor: str) -> EpisodeFacts:
         )
         if script
         else None,
-        shots=[shot_facts(db, episode, row) for row in shots],
+        shots=[shot_facts(db, episode, row, selections.get(row.id)) for row in shots],
         unbound_media_counts=TypeAdapter(dict[ExecutionStatus, int]).validate_python(
             {status: count for status, count in media_counts}
         ),
-        timeline=timeline_evidence(db, episode),
-        unavailable_producers=["MEDIA_QA", "RENDER", "DELIVERY_QA"],
+        timeline=timeline,
+        render=delivery.render,
+        render_validation=delivery.validation,
+        delivery_review=delivery.review,
+        warnings=delivery.warnings,
+        warning_acceptance=delivery.acceptance,
+        unavailable_producers=["MEDIA_QA"],
     )
 
 

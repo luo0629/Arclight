@@ -80,7 +80,7 @@ def test_existing_text_reviews_resume_and_complete_without_inventing_media(
     assert state["shot_count"] > 0
     assert state["shot_counts"] == {"READY": state["shot_count"]}
     assert state["task_counts"] == {"SUCCEEDED": 1}
-    assert state["unavailable_producers"] == ["MEDIA_QA", "RENDER", "DELIVERY_QA"]
+    assert state["unavailable_producers"] == ["MEDIA_QA"]
     # Duplicate completion and polling cannot create a second execution or approval.
     advance(client, settings, run_id)
     assert read(client, episode) == state

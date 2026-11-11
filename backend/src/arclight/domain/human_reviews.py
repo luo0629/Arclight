@@ -9,7 +9,7 @@ from arclight.domain.production_state import ProductionContract
 from arclight.domain.workflow_contracts import Checksum
 
 ReviewKind = Literal[
-    "SCRIPT", "STORYBOARD", "REFERENCE", "VISUAL_SPEC", "EXCEPTIONAL_SHOT", "EXPORT"
+    "SCRIPT", "STORYBOARD", "REFERENCE", "VISUAL_SPEC", "EXCEPTIONAL_SHOT", "EXPORT", "DELIVERY"
 ]
 
 

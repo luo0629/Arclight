@@ -46,7 +46,9 @@ class RenderJobRead(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
-    is_delivery: Literal[False] = False
+    is_delivery: bool = False
+    report_id: UUID | None = None
+    delivery_phase: str | None = None
 
     @field_validator("cancel_requested_at", "created_at", "started_at", "finished_at")
     @classmethod

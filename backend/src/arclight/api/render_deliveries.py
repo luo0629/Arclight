@@ -6,13 +6,21 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request, Response
 
 from arclight.api.dependencies import Actor, Database
+from arclight.api.human_reviews import HumanReviewRead, serialize
 from arclight.application.audit import audit
 from arclight.application.commands import require_episode
-from arclight.application.render_deliveries import delivery_row, list_deliveries, read_delivery
+from arclight.application.render_deliveries import (
+    delivery_row,
+    list_deliveries,
+    read_delivery,
+    read_delivery_report,
+)
 from arclight.application.render_inputs import file_storage
+from arclight.application.render_reports import request_delivery_warning_review
 from arclight.application.render_results import MAX_RENDER_BYTES
 from arclight.core.errors import DomainError
 from arclight.domain.render_deliveries import RenderDeliveryDetail, RenderDeliveryRead
+from arclight.domain.render_reports import RenderDeliveryReport
 from arclight.persistence.models import StoredFile
 
 router = APIRouter(prefix="/api/v1/episodes/{episode_id}/deliveries", tags=["render-deliveries"])
@@ -72,3 +80,21 @@ def content(
             "Content-Disposition": f'attachment; filename="render-{row.id}.mp4"',
         },
     )
+
+
+@router.get("/{artifact_id}/report")
+def report(
+    episode_id: UUID, artifact_id: UUID, response: Response, db: Database, actor: Actor
+) -> RenderDeliveryReport:
+    response.headers["Cache-Control"] = "no-store"
+    return read_delivery_report(db, episode_id, artifact_id, actor)
+
+
+@router.post("/{artifact_id}/warning-review")
+def warning_review(
+    episode_id: UUID, artifact_id: UUID, db: Database, actor: Actor
+) -> HumanReviewRead:
+    require_episode(db, episode_id, actor, write=True, owner=True)
+    artifact = delivery_row(db, episode_id, artifact_id)
+    request = request_delivery_warning_review(db, artifact, actor)
+    return serialize(db, request)

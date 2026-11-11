@@ -35,6 +35,7 @@ def handlers() -> Mapping[str, ReviewHandler]:
     from arclight.application.art_reviews import ART_HANDLERS
     from arclight.application.continuity_escalations import CONTINUITY_HANDLERS
     from arclight.application.continuity_feedback_store import FEEDBACK_HANDLERS
+    from arclight.application.render_reports import DELIVERY_HANDLERS
     from arclight.application.render_reviews import EXPORT_HANDLERS
     from arclight.application.text_reviews import TEXT_HANDLERS
 
@@ -44,6 +45,7 @@ def handlers() -> Mapping[str, ReviewHandler]:
         **CONTINUITY_HANDLERS,
         **FEEDBACK_HANDLERS,
         **EXPORT_HANDLERS,
+        **DELIVERY_HANDLERS,
     }
 
 
@@ -207,7 +209,7 @@ def submit_decision(
         if prior.actor_id != actor or prior.decision_json != decision.model_dump(mode="json"):
             raise DomainError("REVIEW_DECISION_CONFLICT", "该对象已有不同人工决定", 409)
         # A handoff already committed cannot be applied again; authority is still checked above.
-        if resumed is None:
+        if resumed is None or row.handler == "RENDER_DELIVERY":
             _current(db, row, registry if registry is not None else handlers())
         return prior
     handler = _current(db, row, registry if registry is not None else handlers())
@@ -293,6 +295,8 @@ def resume_review(
     require_review_authority(db, row, decision.actor_id, owner=True)
     prior = db.scalar(select(HumanReviewResume).where(HumanReviewResume.request_id == row.id))
     if prior is not None:
+        if row.handler == "RENDER_DELIVERY":
+            _current(db, row, registry if registry is not None else handlers())
         return prior
     handler = _current(db, row, registry if registry is not None else handlers())
     result = handler.apply(db, row, decision, actor)

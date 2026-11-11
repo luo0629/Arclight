@@ -148,6 +148,23 @@ def episode_state(facts: EpisodeFacts) -> EpisodeProductionState:
     render_issues = version_issues(
         facts.render, "MISSING_RENDER", {facts.timeline.version_id} if facts.timeline else set()
     )
+    # A formal report proves that these exact sealed inputs and decoded output
+    # passed the approved export gate. It does not approve or select asset versions.
+    validated = bool(
+        facts.render
+        and facts.render.kind == "RENDER"
+        and facts.timeline
+        and review_matches(
+            facts.render_validation, facts.render.version_id, facts.timeline.version_id
+        )
+        and facts.render_validation
+        and facts.render_validation.decision == "PASS"
+    )
+    if validated:
+        if facts.timeline and facts.timeline.status == "DRAFT":
+            timeline_issues = [i for i in timeline_issues if i != "ASSET_NOT_APPROVED"]
+        if facts.render and facts.render.status == "DRAFT":
+            render_issues = [i for i in render_issues if i != "ASSET_NOT_APPROVED"]
     delivery_issues: list[IssueCode] = []
     if (
         not facts.render

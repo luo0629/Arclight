@@ -178,6 +178,7 @@ class EpisodeFacts(EvidenceScope):
     )
     timeline: VersionEvidence | None = None
     render: VersionEvidence | None = None
+    render_validation: ReviewEvidence | None = None
     delivery_review: ReviewEvidence | None = None
     warnings: list[WarningCode] = Field(default_factory=list, max_length=100)
     warning_acceptance: WarningAcceptance | None = None
@@ -201,6 +202,7 @@ class EpisodeFacts(EvidenceScope):
             self.storyboard_execution,
             self.timeline,
             self.render,
+            self.render_validation,
             self.delivery_review,
             self.warning_acceptance,
             *self.media_executions,

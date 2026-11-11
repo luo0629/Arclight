@@ -12,6 +12,7 @@ from arclight.application.render_inspections import inspect_candidate
 from arclight.application.render_job_store import lock_job
 from arclight.application.render_leases import POLICY, claim, finish, keep_alive, observe, owned
 from arclight.application.render_plans import build_plan, check_support
+from arclight.application.render_reports import register_machine_report
 from arclight.application.render_reviews import require_export_approval
 from arclight.application.render_versions import register_render_version
 from arclight.core.config import Settings
@@ -141,6 +142,9 @@ def execute_render(factory: sessionmaker[Session], settings: Settings, run_id: U
                 owned(db, run, job, token)
                 artifact = register_render_version(
                     db, settings, run, job, attempt, facts.snapshot, inspection
+                )
+                register_machine_report(
+                    db, settings, run, job, attempt, artifact, current, inspection
                 )
                 run.output_file_id = artifact.file_id
                 attempt.progress, job.progress = 100, 100

@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from pydantic import StrictBool
+
 from arclight.domain.render_manifests import (
     RenderContract,
     RenderFileReference,
@@ -12,6 +14,7 @@ from arclight.domain.render_manifests import (
     RenderSoftware,
     Sha256,
 )
+from arclight.domain.render_reports import RenderDeliveryAcceptance
 
 
 class RenderDeliveryRead(RenderContract):
@@ -36,7 +39,8 @@ class RenderDeliveryRead(RenderContract):
     report_file_id: UUID | None
     storage_backend: Literal["LOCAL", "S3"]
     stale: bool
-    is_delivery: Literal[False] = False
+    is_delivery: StrictBool = False
+    acceptance: RenderDeliveryAcceptance = RenderDeliveryAcceptance(phase="LEGACY")
     created_at: datetime
 
 
