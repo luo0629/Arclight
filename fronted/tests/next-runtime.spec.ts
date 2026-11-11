@@ -17,6 +17,9 @@ test("Next.js 首页：元信息、脚本 nonce 与客户端页面正常运行",
   expect(response.status()).toBe(200);
   const policy = response.headers()["content-security-policy"] ?? "";
   expect(policy).toContain("frame-ancestors 'none'");
+  expect(policy.split(";").map((directive) => directive.trim())).toContain(
+    "media-src 'self' blob:",
+  );
   expect(policy).toContain("'strict-dynamic'");
   expect(policy).toMatch(/'nonce-[^']+'/);
   expect(response.headers()["x-content-type-options"]).toBe("nosniff");

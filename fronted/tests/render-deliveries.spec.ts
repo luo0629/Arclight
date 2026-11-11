@@ -562,12 +562,14 @@ test("RENDER-12：快速切换成片，迟到的报告不能覆盖当前精确�
 }) => {
   const env = await renderFixture(page);
   const gate = deferred();
+  const reportSettled = deferred();
   let intercepted = false;
   env.control.reportGate = async (route, row) => {
     intercepted = true;
     const snapshot = structuredClone(env.report(row));
     await gate.promise;
     await route.fulfill({ json: snapshot }).catch(() => {});
+    reportSettled.release();
   };
   const panel = await env.open();
   await panel.getByRole("button", { name: "查看报告", exact: true }).click();
@@ -576,15 +578,18 @@ test("RENDER-12：快速切换成片，迟到的报告不能覆盖当前精确�
     .getByRole("button", { name: "查看成片版本 2", exact: true })
     .click();
   gate.release();
-  await expect(panel.getByLabel("当前成片版本", { exact: true })).toContainText(
-    "预览",
-  );
+  await reportSettled.promise;
+  const detail = panel.getByLabel("当前成片版本", { exact: true });
+  await expect(detail).toContainText("预览");
   await expect(
     panel.getByRole("region", { name: "机器验收报告", exact: true }),
   ).toHaveCount(0);
-  await expect(
-    panel.getByLabel("当前成片版本", { exact: true }),
-  ).not.toContainText(env.deliveries[0].sha256);
+  // Identical bytes can have the same hash across immutable delivery versions.
+  expect(env.deliveries[1].sha256).toBe(env.deliveries[0].sha256);
+  await expect(detail).toContainText(env.deliveries[1].asset_version_id);
+  await expect(detail).toContainText(env.deliveries[1].manifest_id);
+  await expect(detail).not.toContainText(env.deliveries[0].asset_version_id);
+  await expect(detail).not.toContainText(env.deliveries[0].manifest_id);
 });
 
 test("RENDER-12：切集后丢弃旧下载回执，不触发其他剧集的下载", async ({
@@ -836,13 +841,33 @@ test("RENDER-12：旧手工报告端点404保留缺证据结论，不伪造机�
   await panel
     .getByRole("button", { name: "查看成片版本 1", exact: true })
     .click();
+  const reportPath = `/api/v1/episodes/${env.episodes[0].id}/deliveries/${legacy.id}/report`;
+  const reportResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === reportPath &&
+      response.request().method() === "GET",
+  );
   await panel.getByRole("button", { name: "查看报告", exact: true }).click();
+  expect((await reportResponse).status()).toBe(404);
   await expect(
-    panel
-      .getByRole("alert")
-      .filter({ hasText: "本版本没有正式机器验收报告" })
-      .first(),
-  ).toBeVisible();
+    panel.getByRole("alert").filter({
+      hasText: "该成片没有可读取的机器报告。历史成片和授权预览仍可查看。",
+    }),
+  ).toContainText("render-browser-request");
+  const detail = panel.getByLabel("当前成片版本", { exact: true });
+  await expect(detail).toContainText(legacy.asset_version_id);
+  await expect(detail).not.toContainText("正式交付已完成");
+  await expect(
+    detail.getByRole("button", { name: "读取成片预览", exact: true }),
+  ).toBeEnabled();
+  await expect(
+    detail.getByRole("button", { name: "下载 MP4", exact: true }),
+  ).toBeEnabled();
+  await expect(panel.getByLabel("时间轴版本", { exact: true })).toBeEnabled();
+  await expect(panel.getByLabel("渲染清单", { exact: true })).toBeEnabled();
+  await expect(
+    panel.getByRole("button", { name: "查看成片版本 3", exact: true }),
+  ).toBeEnabled();
   await expect(
     panel.getByRole("region", { name: "机器验收报告", exact: true }),
   ).toHaveCount(0);
