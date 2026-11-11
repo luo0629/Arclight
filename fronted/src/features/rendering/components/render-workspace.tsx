@@ -143,6 +143,7 @@ function RenderContent({
           <label className="flex min-w-0 max-w-xl flex-col gap-2 text-sm font-medium">
             时间轴版本
             <select
+              aria-label="时间轴版本"
               className={selectClass}
               value={selected?.id ?? ""}
               disabled={timelines.loading}
@@ -389,6 +390,7 @@ function TimelineManifests({
             <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm font-medium sm:max-w-xs">
               输出用途
               <select
+                aria-label="输出用途"
                 className={selectClass}
                 value={profile}
                 disabled={mutation.busy}
@@ -424,6 +426,7 @@ function TimelineManifests({
         <label className="flex min-w-0 flex-col gap-2 text-sm font-medium">
           渲染清单
           <select
+            aria-label="渲染清单"
             className={selectClass}
             value={selected?.id ?? ""}
             disabled={manifests.loading || mutation.busy}

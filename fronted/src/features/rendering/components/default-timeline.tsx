@@ -46,6 +46,7 @@ export default function DefaultTimeline({
         <label className="flex min-w-0 max-w-xl flex-col gap-2 text-sm font-medium">
           已批准分镜版本
           <select
+            aria-label="已批准分镜版本"
             className={selectClass}
             value={board?.id ?? ""}
             onChange={(event) => setBoardId(event.target.value)}
@@ -217,6 +218,7 @@ function PreparedTimeline({
                     <label className="flex min-w-0 flex-col gap-2">
                       镜头 {shot.shot_no} 的已选用版本
                       <select
+                        aria-label={`镜头 ${shot.shot_no} 的已选用版本`}
                         className={selectClass}
                         value={choices[shot.shot_id] ?? ""}
                         disabled={mutation.busy}

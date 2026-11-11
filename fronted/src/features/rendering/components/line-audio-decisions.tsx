@@ -61,6 +61,7 @@ export default function LineAudioDecisions({
                 <label className="flex min-w-0 flex-col gap-2">
                   台词 {index + 1} 的声音处理
                   <select
+                    aria-label={`台词 ${index + 1} 的声音处理`}
                     className={selectClass}
                     value={choice.mode}
                     disabled={disabled}
@@ -86,6 +87,7 @@ export default function LineAudioDecisions({
                 <label className="flex min-w-0 flex-col gap-2">
                   台词 {index + 1} 的处理原因
                   <Textarea
+                    aria-label={`台词 ${index + 1} 的处理原因`}
                     value={choice.reason}
                     disabled={disabled}
                     maxLength={500}
