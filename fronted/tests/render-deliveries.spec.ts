@@ -504,7 +504,31 @@ test("RENDER-12：Viewer 可查报告与下载，没有生产或人工确认写�
   await expect(
     panel.getByRole("button", { name: "检查正式导出条件", exact: true }),
   ).toHaveCount(0);
-  await panel.getByRole("button", { name: "查看报告", exact: true }).click();
+  const detail = panel.getByLabel("当前成片版本", { exact: true });
+  const previewButton = detail.getByRole("button", {
+    name: "读取成片预览",
+    exact: true,
+  });
+  const downloadButton = detail.getByRole("button", {
+    name: "下载 MP4",
+    exact: true,
+  });
+  const reportButton = detail.getByRole("button", {
+    name: "查看报告",
+    exact: true,
+  });
+  await expect(previewButton).toBeEnabled();
+  await previewButton.focus();
+  await expect(previewButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(downloadButton).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(
+    detail.locator("summary").filter({ hasText: "成片与输入版本" }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(reportButton).toBeFocused();
+  await page.keyboard.press("Enter");
   await expect(
     panel.getByRole("region", { name: "机器验收报告", exact: true }),
   ).toBeVisible();
