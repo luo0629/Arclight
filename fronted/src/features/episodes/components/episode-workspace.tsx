@@ -34,6 +34,7 @@ import AssetLibrary from "@/features/editor/components/asset-library";
 import ShotViewer from "@/features/editor/components/shot-viewer";
 
 import Tasks from "@/features/tasks/components/tasks";
+import RenderWorkspace from "@/features/rendering/components/render-workspace";
 import StorySources from "@/features/story/components/story-sources";
 import StoryAnalysis from "@/features/story/components/story-analysis";
 import StoryOutline from "@/features/story/components/story-outline";
@@ -286,6 +287,7 @@ export default function EpisodeWorkspace({
             ["library", "素材库"],
             ["list", "版本列表"],
             ["tasks", "任务与审核"],
+            ["render", "渲染与成片"],
             ["sources", "故事来源"],
             ["analysis", "故事提炼"],
             ["outline", "分集大纲"],
@@ -443,6 +445,20 @@ export default function EpisodeWorkspace({
             }
             setInspectorOpen(true);
           }}
+        />
+      ) : view === "render" ? (
+        <RenderWorkspace
+          episode={episode}
+          owner={owner}
+          writable={writable}
+          boards={boardRows}
+          boardPagination={
+            <ListPagination
+              {...boards}
+              label="分镜版本"
+              count={boards.rows.length}
+            />
+          }
         />
       ) : view === "sources" ? (
         <StorySources
