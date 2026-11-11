@@ -201,6 +201,8 @@ test("RENDER-12：真实任务进度轮询，取消使用最新 revision", async
   const env = await renderFixture(page);
   const job = env.job(env.manifests[0]);
   Object.assign(job, {
+    // A numeric substring in the ID must not satisfy a progress assertion.
+    id: "62000037-0000-4000-8000-000000000008",
     status: "RUNNING",
     revision: 7,
     progress: 37,
@@ -210,7 +212,14 @@ test("RENDER-12：真实任务进度轮询，取消使用最新 revision", async
   env.jobs.push(job);
   const panel = await env.open();
   const detail = panel.getByLabel("当前渲染任务", { exact: true });
-  await expect(detail).toContainText("37");
+  const progress = detail.getByRole("progressbar", {
+    name: "渲染进度",
+    exact: true,
+  });
+  await expect(progress).toHaveAttribute("value", "37");
+  await expect(
+    detail.getByText(`任务 ${job.id} · 修订 7`, { exact: true }),
+  ).toBeVisible();
   const gate = deferred();
   const completed = deferred();
   const stale = structuredClone([job]);
@@ -230,14 +239,22 @@ test("RENDER-12：真实任务进度轮询，取消使用最新 revision", async
   await expect.poll(() => refreshStarted).toBe(true);
   Object.assign(job, { revision: 8, progress: 62, phase: "INSPECTING" });
   try {
-    await expect(detail).toContainText("62", { timeout: 10000 });
+    await expect(progress).toHaveAttribute("value", "62", { timeout: 10000 });
+    await expect(
+      detail.getByText(`任务 ${job.id} · 修订 8`, { exact: true }),
+    ).toBeVisible();
   } finally {
     gate.release();
   }
   await completed.promise;
-  await expect(detail).toContainText("62");
+  await expect(progress).toHaveAttribute("value", "62");
+  await expect(
+    detail.getByText(`任务 ${job.id} · 修订 8`, { exact: true }),
+  ).toBeVisible();
   await panel.getByRole("button", { name: "取消渲染", exact: true }).click();
-  await expect(detail).toContainText("取消");
+  await expect(detail.getByRole("heading", { level: 4 })).toHaveText(
+    "已取消 · 62%",
+  );
   const cancelled = env.mutations.find((row) => row.path.endsWith("/cancel"))!;
   expect(cancelled.body).toEqual({ expected_revision: 8 });
   expect(job.status).toBe("CANCELLED");
@@ -261,7 +278,9 @@ test("RENDER-12：失败保留技术错误和清理状态，重渲染关联原�
   const panel = await env.open();
   const detail = panel.getByLabel("当前渲染任务", { exact: true });
   await expect(detail).toContainText("RENDER_OUTPUT_DURATION");
-  await expect(detail).toContainText("清理");
+  await expect(
+    detail.getByText("清理状态：清理失败", { exact: true }),
+  ).toBeVisible();
   await panel.getByRole("button", { name: "重新渲染", exact: true }).click();
   await expect.poll(() => env.jobs.length).toBe(2);
   const submitted = env.mutations.find((row) => row.path.endsWith("/jobs"))!;
@@ -380,8 +399,10 @@ test("RENDER-12：警告逐条展示，Owner 明确接受后仍须独立恢复",
       .poll(() => env.deliveries[0].acceptance.phase)
       .toBe("COMPLETED_WITH_WARNINGS");
     await expect(
-      panel.getByLabel("当前成片版本", { exact: true }),
-    ).toContainText("警告");
+      panel
+        .getByLabel("当前成片版本", { exact: true })
+        .getByText("正式交付已接受警告", { exact: true }),
+    ).toBeVisible();
     reviewGate.release();
     await expect.poll(() => settledReviewReads).toBe(initialReviewReads);
     await expect(
@@ -390,6 +411,11 @@ test("RENDER-12：警告逐条展示，Owner 明确接受后仍须独立恢复",
     await expect(
       panel.getByRole("button", { name: "恢复交付确认", exact: true }),
     ).toHaveCount(0);
+    await expect(
+      panel
+        .getByLabel("当前成片版本", { exact: true })
+        .getByText("正式交付已接受警告", { exact: true }),
+    ).toBeVisible();
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth + 1,
@@ -427,6 +453,11 @@ test("RENDER-12：授权 MP4 预览可解码，下载重新带鉴权读取精确
   expect(measurement.width).toBe(64);
   expect(measurement.height).toBe(64);
   expect(measurement.duration).toBeGreaterThan(0);
+  await video.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: info.outputPath("render12-preview-desktop.png"),
+    fullPage: true,
+  });
   const downloadPending = page.waitForEvent("download");
   await panel.getByRole("button", { name: "下载 MP4", exact: true }).click();
   const downloaded = await downloadPending;
@@ -466,7 +497,9 @@ test("RENDER-12：预览与旧手工回执不能冒充正式交付", async ({ pa
         exact: true,
       }),
     ).toContainText(version === 2 ? "预览" : "历史");
-    await expect(detail).not.toContainText("正式交付已完成");
+    await expect(
+      detail.getByText("尚未满足正式交付条件", { exact: true }),
+    ).toBeVisible();
     await expect(
       detail.getByRole("button", { name: "查看报告", exact: true }),
     ).toBeDisabled();
@@ -621,6 +654,7 @@ test("RENDER-12：切集后丢弃旧下载回执，不触发其他剧集的下�
 }) => {
   const env = await renderFixture(page);
   const gate = deferred();
+  const contentSettled = deferred();
   let requested = false;
   const downloads: string[] = [];
   page.on("download", (item) => downloads.push(item.suggestedFilename()));
@@ -628,12 +662,19 @@ test("RENDER-12：切集后丢弃旧下载回执，不触发其他剧集的下�
     requested = true;
     await gate.promise;
     await route
-      .fulfill({ contentType: "video/mp4", body: Buffer.from("old content") })
+      .fulfill({ contentType: "video/mp4", body: env.mediaBytes() })
       .catch(() => {});
+    contentSettled.release();
   };
   const panel = await env.open();
   await panel.getByRole("button", { name: "下载 MP4", exact: true }).click();
   await expect.poll(() => requested).toBe(true);
+  const contentPath = `/api/v1/episodes/${env.episodes[0].id}/deliveries/${env.deliveries[0].id}/content`;
+  const abortedContent = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      new URL(request.url()).pathname === contentPath &&
+      request.method() === "GET",
+  });
   await openDirectory(page);
   await page.getByRole("button", { name: /第二集的独立成片/ }).click();
   await expect(page).toHaveURL(env.href(1).replace("?view=render", ""));
@@ -641,10 +682,12 @@ test("RENDER-12：切集后丢弃旧下载回执，不触发其他剧集的下�
   await expect(
     page.getByRole("region", { name: "渲染与成片", exact: true }),
   ).toBeVisible();
-  gate.release();
   await expect(page.getByLabel("当前成片版本", { exact: true })).toContainText(
-    env.deliveries[3].sha256,
+    env.deliveries[3].asset_version_id,
   );
+  gate.release();
+  await contentSettled.promise;
+  expect((await abortedContent).failure()?.errorText).toBe("net::ERR_ABORTED");
   expect(downloads).toHaveLength(0);
   await expect(page.locator("video")).toHaveCount(0);
 });
@@ -880,7 +923,9 @@ test("RENDER-12：旧手工报告端点404保留缺证据结论，不伪造机�
   ).toContainText("render-browser-request");
   const detail = panel.getByLabel("当前成片版本", { exact: true });
   await expect(detail).toContainText(legacy.asset_version_id);
-  await expect(detail).not.toContainText("正式交付已完成");
+  await expect(
+    detail.getByText("尚未满足正式交付条件", { exact: true }),
+  ).toBeVisible();
   await expect(
     detail.getByRole("button", { name: "读取成片预览", exact: true }),
   ).toBeEnabled();
