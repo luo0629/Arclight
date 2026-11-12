@@ -11,6 +11,7 @@ from arclight.application.content_dependencies import reference_ids
 from arclight.application.context_builder import load_local, resolve_assets
 from arclight.application.context_evidence import append_resolved_evidence, read_trace, round_key
 from arclight.application.context_sources import asset_sources, validate_sources, verify_images
+from arclight.application.continuity_neighbors import selected_neighbor
 from arclight.application.continuity_reviews import require_review_target, shot_sha256
 from arclight.application.dependencies import exact_version, require_manifest
 from arclight.core.config import Settings
@@ -128,6 +129,16 @@ def investigate_continuity(
                         "selector"
                     ].get("asset_version_id"):
                         missing_bindings[item["selector"]["asset_version_id"]] = item["reason"]
+        for neighbor in local["neighbors"]:
+            bound = bindings.get(("SHOT", neighbor["id"]))
+            if bound is not None:
+                neighbor.update(deepcopy(bound["content"]["shot"]))
+            elif not neighbor.get("selected_visual_asset"):
+                neighbor["selected_visual_asset"] = selected_neighbor(
+                    db, root.project_id, UUID(neighbor["id"])
+                )
+            if neighbor.get("selected_visual_asset"):
+                exact_ids.add(neighbor["selected_visual_asset"]["asset_version_id"])
         if previous is not None:
             exact_ids = set(previous["reference_version_ids"])
         if not set(map(str, parameters.reference_version_ids)) <= exact_ids:

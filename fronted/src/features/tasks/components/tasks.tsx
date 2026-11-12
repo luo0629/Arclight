@@ -155,17 +155,19 @@ export default function Tasks({
               >
                 <div className="task-heading flex flex-wrap items-center justify-between gap-2">
                   <strong>
-                    {run.workflow_type === "art_proposal"
-                      ? "美术提案生成"
-                      : run.workflow_type === "script_rewrite"
-                        ? "剧本局部改写"
-                        : run.workflow_type === "story_outline"
-                          ? "分集大纲"
-                          : run.workflow_type === "story_analysis"
-                            ? "故事提炼"
-                            : run.workflow_type === "storyboard"
-                              ? "分镜创作"
-                              : "剧本与分镜创作"}
+                    {run.workflow_type === "continuity_review"
+                      ? "画面连续性审查"
+                      : run.workflow_type === "art_proposal"
+                        ? "美术提案生成"
+                        : run.workflow_type === "script_rewrite"
+                          ? "剧本局部改写"
+                          : run.workflow_type === "story_outline"
+                            ? "分集大纲"
+                            : run.workflow_type === "story_analysis"
+                              ? "故事提炼"
+                              : run.workflow_type === "storyboard"
+                                ? "分镜创作"
+                                : "剧本与分镜创作"}
                   </strong>
                   <StatusBadge status={run.status} />
                 </div>
@@ -229,7 +231,10 @@ export default function Tasks({
                   </Notice>
                 )}
                 {run.pending_review &&
-                  run.pending_review.resource_type !== "art_proposal" && (
+                  ["script", "storyboard"].includes(
+                    run.pending_review.resource_type,
+                  ) &&
+                  "version_id" in run.pending_review && (
                     <p>
                       等待审核：
                       {run.pending_review.resource_type === "script"
@@ -241,7 +246,10 @@ export default function Tasks({
                 {owner &&
                   writable &&
                   run.pending_review &&
-                  run.pending_review.resource_type !== "art_proposal" && (
+                  ["script", "storyboard"].includes(
+                    run.pending_review.resource_type,
+                  ) &&
+                  "version_id" in run.pending_review && (
                     <>
                       <FormLabel>
                         审核意见
@@ -276,6 +284,15 @@ export default function Tasks({
                       </div>
                     </>
                   )}
+                {run.pending_review?.resource_type === "continuity_review" && (
+                  <p className="text-sm text-muted-foreground">
+                    {run.pending_review.destination === "REVISION_REQUIRED"
+                      ? "画面需要局部修订，请在素材审查页处理。"
+                      : run.pending_review.destination === "READY_FOR_REVIEW"
+                        ? "审查已完成，等待人工批准并选用素材。"
+                        : "审查已暂停，请在素材审查页处理人工决定。"}
+                  </p>
+                )}
                 {run.pending_review?.resource_type === "script" && (
                   <CharacterMatching
                     episodeId={run.episode_id}

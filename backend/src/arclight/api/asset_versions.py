@@ -353,12 +353,17 @@ def select_version(
     db: Database,
     actor: Actor,
 ) -> AssetRead:
+    from arclight.application.continuity_completion import lock_selection_run
+
+    require_project(db, project_id, actor)
+    lock_selection_run(db, project_id, version_id)
     require_project(db, project_id, actor, write=True)
     asset = find_asset(db, project_id, asset_id, include_media=True)
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
-    if require_candidate_review(row, db) is not None:
+    reviewed = require_candidate_review(row, db)
+    if reviewed is not None:
         require_project(db, project_id, actor, owner=True)
     if row.status != "APPROVED" or row.stale:
         raise DomainError("ASSET_NOT_USABLE", "只能选用已批准且有效的精确版本", 409)
@@ -386,6 +391,10 @@ def select_version(
             payload.impact_digest,
         )
     change_selection(db, asset, payload, current_version_id=row.id)
+    if reviewed is not None:
+        from arclight.application.continuity_completion import complete_selected_review
+
+        complete_selected_review(db, reviewed)
     propagation_id = None
     if previous is not None and previous != row.id:
         old = find_version(db, asset_id, previous)

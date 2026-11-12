@@ -96,6 +96,20 @@ def test_common_envelopes_round_trip_for_all_production_families(family):
     assert value.result.requires_human_review is True
 
 
+def test_persisted_continuity_trace_keeps_its_original_namespace():
+    payload = contract_fixture("REVIEW")
+    payload["trace_id"] = "continuity:" + str(uuid4())
+    value = WorkflowRunContract.model_validate(payload)
+    assert value.trace_id == payload["trace_id"]
+
+
+@pytest.mark.parametrize("trace", ["x y", "x/y", "x\ny", "x" * 65])
+def test_trace_namespace_does_not_allow_payloads_paths_or_unbounded_values(trace):
+    payload = contract_fixture("REVIEW") | {"trace_id": trace}
+    with pytest.raises(ValidationError):
+        WorkflowRunContract.model_validate(payload)
+
+
 @pytest.mark.parametrize(
     "path,value",
     [

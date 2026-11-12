@@ -184,11 +184,19 @@ export type Run = {
   id: string;
   status: string;
   revision: number;
-  pending_review: {
-    resource_type: "script" | "storyboard" | "art_proposal";
-    review_request_id?: string;
-    version_id: string;
-  } | null;
+  pending_review:
+    | {
+        resource_type: "script" | "storyboard" | "art_proposal";
+        review_request_id?: string;
+        version_id: string;
+      }
+    | {
+        resource_type: "continuity_review";
+        destination?: string;
+        candidate_id?: string;
+        review_id?: string;
+      }
+    | null;
   error_code: string | null;
   created_at: string;
 };

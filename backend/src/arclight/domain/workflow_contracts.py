@@ -174,7 +174,7 @@ class WorkflowRunContract(WorkflowContract):
     versions: RunVersionSnapshot
     budget: RunBudget
     usage: RunUsage
-    trace_id: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[\w-]+$")]
+    trace_id: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[\w:-]+$")]
     status: RunStatus
     result: WorkflowResult | None
 
