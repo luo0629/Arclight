@@ -3,10 +3,11 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
 
 from arclight.api.dependencies import Actor, Database
+from arclight.application.audio_import import import_audio, read_import
 from arclight.application.audio_production import (
     bind_audio,
     capture_line_inputs,
@@ -18,6 +19,8 @@ from arclight.application.commands import require_episode
 from arclight.domain.audio_production import (
     AudioBindingCreate,
     AudioBindingRead,
+    AudioImportCreate,
+    AudioImportRead,
     AudioInputCreate,
     AudioInputRead,
     AudioLine,
@@ -109,3 +112,29 @@ def bindings(
         .limit(limit)
     )
     return [AudioBindingRead.model_validate(value) for value in values]
+
+
+@router.post("/audio-snapshots/{snapshot_id}/lines/{line_id}/imports", status_code=201)
+def import_recording(
+    snapshot_id: UUID,
+    line_id: str,
+    payload: AudioImportCreate,
+    request: Request,
+    response: Response,
+    db: Database,
+    actor: Actor,
+) -> AudioImportRead:
+    result, created = import_audio(
+        db, request.app.state.settings, snapshot_id, line_id, actor, payload
+    )
+    response.status_code = 201 if created else 200
+    return result
+
+
+@router.get("/audio-snapshots/{snapshot_id}/lines/{line_id}/imports/{version_id}")
+def get_import(
+    snapshot_id: UUID, line_id: str, version_id: UUID, db: Database, actor: Actor
+) -> AudioImportRead:
+    snapshot = require_snapshot(db, snapshot_id, actor)
+    require_line(snapshot, line_id)
+    return read_import(db, snapshot.id, line_id, version_id)

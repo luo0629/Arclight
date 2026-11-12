@@ -56,3 +56,44 @@ class AudioBindingRead(AudioContract):
     file_id: UUID
     duration_ms: int = Field(gt=0)
     created_at: datetime
+
+
+class AudioImportCreate(AudioContract):
+    creation_key: UUID
+    source_file_id: UUID
+    target_asset_id: UUID | None = None
+    expected_revision: int = Field(default=0, strict=True, ge=0)
+
+
+class AudioSilenceRead(AudioContract):
+    schema_version: str
+    threshold_dbfs: int
+    threshold_pcm16: int
+    silent: bool
+    peak: float = Field(ge=0, le=1)
+    rms: float = Field(ge=0, le=1)
+    silent_sample_fraction: float = Field(ge=0, le=1)
+
+
+class AudioValidationRead(AudioContract):
+    media_type: str
+    codec: str
+    duration_ms: int = Field(gt=0, le=600000)
+    sample_rate: int = Field(ge=8000, le=48000)
+    channels: int = Field(ge=1, le=2)
+    silence: AudioSilenceRead
+
+
+class AudioImportRead(AudioContract):
+    snapshot_id: UUID
+    line_id: str
+    target_asset_id: UUID
+    asset_revision: int
+    asset_version_id: UUID
+    file_id: UUID
+    source_file_id: UUID
+    dependency_manifest_id: UUID
+    binding_id: UUID
+    validation: AudioValidationRead
+    created_by: str
+    created_at: datetime

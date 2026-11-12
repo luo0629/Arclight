@@ -142,39 +142,36 @@ def content_changes(before: dict, after: dict, kind: str) -> list[tuple[str, lis
 
 
 def approval_changes(db: Session, row: Script | Storyboard) -> list[dict]:
-    """Read the proposed approval without registering or changing historical rows."""
+    """Compare every approved exact source that downstream outputs can still consume."""
     episode = db.get(Episode, row.episode_id)
     assert episode is not None
     kind = "SCRIPT" if isinstance(row, Script) else "STORYBOARD"
     asset = db.get(VisualAsset, uuid5(episode.id, "dependency:" + kind))
+    if asset is not None and asset.current_version_id == row.id:
+        return []
     model = Script if isinstance(row, Script) else Storyboard
-    previous = cast(
-        Script | Storyboard | None,
-        db.get(model, asset.current_version_id)
-        if asset and asset.current_version_id
-        else db.scalar(
-            select(model)
-            .where(
-                model.episode_id == row.episode_id, model.id != row.id, model.status == "APPROVED"
-            )
-            .order_by(model.version_no.desc())
-            .limit(1)
-        ),
+    # Equal lines from older versions remain reusable after intermediate approvals.
+    # They need their own change event when a later approval finally changes them.
+    # Legacy text without a registry cannot have outgoing exact-version edges.
+    sources = db.execute(
+        select(model, AssetVersion)
+        .join(AssetVersion, AssetVersion.id == model.id)
+        .where(
+            model.episode_id == row.episode_id,
+            model.id != row.id,
+            model.status == "APPROVED",
+        )
+        .order_by(model.version_no.desc(), model.id)
     )
-    if previous is None or previous.id == row.id:
-        return []
-    registry = db.get(AssetVersion, previous.id)
-    # A legacy text without a registry cannot have outgoing version edges.
-    if registry is None:
-        return []
     return [
         {
             "source_asset_version_id": str(previous.id),
             "expected_revision": registry.revision,
-            "change_kind": kind,
+            "change_kind": change,
             "selectors": selectors,
         }
-        for kind, selectors in content_changes(previous.content_json, row.content_json, kind)
+        for previous, registry in sources
+        for change, selectors in content_changes(previous.content_json, row.content_json, kind)
     ]
 
 
@@ -183,8 +180,10 @@ def review_registry(
 ) -> None:
     episode = db.get(Episode, row.episode_id)
     assert episode is not None
+    lock_dependency_graph(db, episode.project_id)
+    changes = approval_changes(db, row) if row.status == "APPROVED" else []
     if row.status == "APPROVED":
-        check_impact(db, episode.project_id, approval_changes(db, row), impact_digest)
+        check_impact(db, episode.project_id, changes, impact_digest)
     registry = register_content(db, row, actor)
     asset = db.get(VisualAsset, registry.asset_id)
     assert asset is not None
@@ -210,33 +209,16 @@ def review_registry(
             )
             if previous:
                 previous_id = register_content(db, previous, actor).id
-        if previous_id and previous_id != row.id:
-            model = Script if isinstance(row, Script) else Storyboard
-            previous = cast(Script | Storyboard | None, db.get(model, previous_id))
-            if previous:
-                old_registry = db.get(AssetVersion, previous_id)
-                assert old_registry is not None
-                changes = [
-                    {
-                        "source_asset_version_id": str(previous_id),
-                        "expected_revision": old_registry.revision,
-                        "change_kind": change,
-                        "selectors": selectors,
-                    }
-                    for change, selectors in content_changes(
-                        previous.content_json, row.content_json, asset.asset_type
-                    )
-                ]
-                if changes:
-                    propagation, _ = invalidate(
-                        db,
-                        episode.project_id,
-                        actor,
-                        uuid5(row.id, "approved-content"),
-                        changes,
-                        "已批准新的精确文本版本",
-                    )
-                    propagation_id = str(propagation.id)
+        if changes:
+            propagation, _ = invalidate(
+                db,
+                episode.project_id,
+                actor,
+                uuid5(row.id, "approved-content"),
+                changes,
+                "已批准新的精确文本版本",
+            )
+            propagation_id = str(propagation.id)
         asset.current_version_id = row.id
         asset.revision += 1
         audit(

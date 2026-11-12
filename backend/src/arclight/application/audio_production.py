@@ -13,6 +13,7 @@ from arclight.application.commands import require_episode
 from arclight.application.content_dependencies import register_content
 from arclight.application.content_references import validate_script_assets
 from arclight.application.dependencies import capture_manifest, exact_version, lock_dependency_graph
+from arclight.application.invalidation import input_expired
 from arclight.application.render_inputs import file_storage
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -157,7 +158,7 @@ def capture_line_inputs(
         raise DomainError("NOT_FOUND", "音频目标不存在", 404)
     if asset.asset_type != "AUDIO":
         raise DomainError("AUDIO_TARGET_INVALID", "台词生产目标必须是音频资产", 422)
-    manifest, _ = capture_manifest(
+    manifest, created = capture_manifest(
         db,
         episode.project_id,
         actor,
@@ -174,6 +175,12 @@ def capture_line_inputs(
             context=input_context(row, line_id),
         ),
     )
+    if created and input_expired(
+        db, episode.project_id, manifest.snapshot_json["inputs"][0], "AUDIO"
+    ):
+        raise DomainError(
+            "AUDIO_LINE_NOT_USABLE", "该快照台词已被批准修改，请使用更新后的精确剧本", 409
+        )
     return manifest
 
 
@@ -219,6 +226,8 @@ def bind_audio(
         raise DomainError(
             "AUDIO_PROVENANCE_REQUIRED", "音频须在创建时固定本快照台词的输入清单", 409
         )
+    if input_expired(db, episode.project_id, manifest.snapshot_json["inputs"][0], "AUDIO"):
+        raise DomainError("AUDIO_LINE_NOT_USABLE", "该快照台词已被批准修改，不能绑定新音频", 409)
     files = list(db.scalars(select(StoredFile).where(StoredFile.asset_version_id == identity)))
     if len(files) != 1:
         raise DomainError("AUDIO_FILE_REQUIRED", "音频须有唯一的不可变文件回执", 409)

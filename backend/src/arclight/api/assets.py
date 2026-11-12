@@ -5,13 +5,14 @@ from uuid import UUID
 
 from fastapi import APIRouter
 from pydantic import Field
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import Input, Resource
+from arclight.application.asset_mutations import change_asset as change_asset
 from arclight.application.asset_profiles import (
     validate_character_profile,
     validate_prop_profile,
@@ -105,19 +106,6 @@ def find_asset(
     if row is None or row.project_id != project_id or row.asset_type not in kinds:
         raise DomainError("NOT_FOUND", "视觉资产不存在", 404)
     return row
-
-
-def change_asset(db: Session, row: VisualAsset, expected: int, **values) -> None:
-    changed = db.scalar(
-        update(VisualAsset)
-        .where(VisualAsset.id == row.id, VisualAsset.revision == expected)
-        .values(**values, revision=VisualAsset.revision + 1)
-        .returning(VisualAsset.id)
-        .execution_options(synchronize_session=False)
-    )
-    if changed is None:
-        raise DomainError("VERSION_CONFLICT", "资产已被修改，请保留草稿并重新载入", 409)
-    db.refresh(row)
 
 
 @router.get("/projects/{project_id}/assets")

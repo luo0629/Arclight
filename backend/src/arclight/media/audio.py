@@ -2,6 +2,8 @@
 
 from fractions import Fraction
 from io import BytesIO
+from math import isfinite, sqrt
+from typing import Literal
 
 MAX_AUDIO_SECONDS = 600
 
@@ -168,12 +170,45 @@ def inspect_audio(data: bytes, media_type: str) -> dict:
         if stream.codec_context.name not in allowed[media_type]:
             raise ValueError("Unsupported audio codec")
         stream.codec_context.thread_count = 1
+        codec = stream.codec_context.name
         elapsed, samples = Fraction(0), 0
         rate, channels = 0, 0
+        layout = None
+        resampler = None
+        pcm_count, quiet_count, peak, square_sum = 0, 0, 0, 0
+
+        def observe_pcm(frame) -> None:
+            nonlocal pcm_count, quiet_count, peak, square_sum
+            count = frame.samples * len(frame.layout.channels)
+            # A decoded plane can include alignment padding after its valid samples.
+            values = memoryview(frame.planes[0]).cast("h")[:count]
+            pcm_count += len(values)
+            for value in values:
+                amplitude = abs(value)
+                quiet_count += amplitude <= 32
+                if amplitude > peak:
+                    peak = amplitude
+                square_sum += value * value
+
         for frames, frame in enumerate(container.decode(stream), 1):
-            rate, channels = frame.sample_rate, len(frame.layout.channels)
-            if not 8000 <= rate <= 48000 or not 1 <= channels <= 2:
+            frame_rate, frame_channels = frame.sample_rate, len(frame.layout.channels)
+            if not 8000 <= frame_rate <= 48000 or not 1 <= frame_channels <= 2:
                 raise ValueError("Unsupported audio sample rate or channels")
+            if resampler is None:
+                rate, channels, layout = frame_rate, frame_channels, frame.layout.name
+                # Preserve the channels: averaging stereo could hide opposite-phase speech.
+                resampler = av.AudioResampler(format="s16", layout=frame.layout, rate=rate)
+            elif (frame_rate, frame_channels, frame.layout.name) != (rate, channels, layout):
+                raise ValueError("Audio sample rate or channel layout changes within the file")
+            if frame.format.name in {"flt", "fltp", "dbl", "dblp"}:
+                scalar: Literal["f", "d"] = "f" if frame.format.name.startswith("flt") else "d"
+                count = frame.samples if frame.format.is_planar else frame.samples * channels
+                for plane in frame.planes:
+                    values = memoryview(plane).cast(scalar)[:count]
+                    if not all(isfinite(value) for value in values):
+                        raise ValueError("Non-finite decoded audio samples")
+            for pcm in resampler.resample(frame):
+                observe_pcm(pcm)
             elapsed += Fraction(frame.samples, rate)
             samples += frame.samples
             if elapsed > MAX_AUDIO_SECONDS or frames > 30000 or samples > 48_000 * 600:
@@ -182,9 +217,24 @@ def inspect_audio(data: bytes, media_type: str) -> dict:
             raise ValueError("No decoded audio")
         if expected_samples is not None and samples != expected_samples:
             raise ValueError("Incomplete FLAC samples")
+        assert resampler is not None
+        for pcm in resampler.resample(None):
+            observe_pcm(pcm)
+        if pcm_count != samples * channels:
+            raise ValueError("Incomplete normalized audio samples")
     return {
         "media_type": media_type,
         "duration_ms": int(elapsed * 1000),
         "sample_rate": rate,
         "channels": channels,
+        "codec": codec,
+        "silence": {
+            "schema_version": "audio-silence/1",
+            "threshold_dbfs": -60,
+            "threshold_pcm16": 32,
+            "silent": quiet_count == pcm_count,
+            "peak": peak / 32768,
+            "rms": sqrt(square_sum / pcm_count) / 32768,
+            "silent_sample_fraction": quiet_count / pcm_count,
+        },
     }
