@@ -35,6 +35,7 @@ import ShotViewer from "@/features/editor/components/shot-viewer";
 
 import Tasks from "@/features/tasks/components/tasks";
 import RenderWorkspace from "@/features/rendering/components/render-workspace";
+import ProductionStageNavigation from "./production-stage-navigation";
 import StorySources from "@/features/story/components/story-sources";
 import StoryAnalysis from "@/features/story/components/story-analysis";
 import StoryOutline from "@/features/story/components/story-outline";
@@ -266,6 +267,18 @@ export default function EpisodeWorkspace({
       aria-label="剧集工作区"
       aria-busy={!data && !error}
     >
+      <ProductionStageNavigation
+        key={`${episode.id}:${owner}:${writable}`}
+        episodeId={episode.id}
+        projectId={episode.project_id}
+        writable={writable}
+        revision={data?.graph}
+        onOpen={(nextView, node) => {
+          navigate({ view: nextView, ...(node !== undefined ? { node } : {}) });
+          if (nextView === "list") setInspectorOpen(true);
+          setFocused(false);
+        }}
+      />
       <div className="workspace-toolbar mb-4 flex flex-wrap items-center justify-between gap-3">
         <ToggleGroup
           type="single"

@@ -2,6 +2,7 @@
 
 import { useSearchParams } from "next/navigation";
 import { episodeViews, type EpisodeView } from "@/lib/routes";
+import { productionStages, type ProductionStage } from "../production-stages";
 
 export default function useEpisodeNavigation() {
   const search = useSearchParams();
@@ -10,9 +11,17 @@ export default function useEpisodeNavigation() {
     ? (requestedView as EpisodeView)
     : "canvas";
   const selectedId = search.get("node") ?? "";
+  const stage = productionStages.find(
+    (item) => item.id === search.get("stage"),
+  )?.id;
 
   function navigate(
-    patch: { view?: EpisodeView; node?: string; run?: string },
+    patch: {
+      view?: EpisodeView;
+      node?: string;
+      run?: string;
+      stage?: ProductionStage | "";
+    },
     replace = false,
   ) {
     // Read the live URL so changes made in the same event are merged.
@@ -36,6 +45,7 @@ export default function useEpisodeNavigation() {
   return {
     view,
     selectedId,
+    stage,
     navigate,
     setView: (value: EpisodeView) => navigate({ view: value }),
     setSelectedId: (value: string) => navigate({ node: value }),
