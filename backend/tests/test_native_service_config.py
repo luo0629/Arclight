@@ -1,5 +1,6 @@
 """Named providers require exact model IDs; custom destinations retain strict isolation."""
 
+import socket
 from collections import Counter
 from uuid import UUID
 
@@ -7,6 +8,7 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import func, select
+from sqlalchemy.engine import make_url
 from test_model_services import account
 
 from arclight.application.model_services import run_settings, text_snapshot
@@ -169,7 +171,20 @@ def test_speech_model_suggestions_save_exact_ids_and_preserve_unlisted_models_wi
     def unexpected_call(*args, **kwargs):
         pytest.fail("Reading suggestions and saving model configuration must not call a provider")
 
-    monkeypatch.setattr("socket.getaddrinfo", unexpected_call)
+    resolve = socket.getaddrinfo
+    database = make_url(settings.database_url)
+
+    def unexpected_dns(host, port, *args, **kwargs):
+        # PostgreSQL may resolve its own test host on each new DB connection.
+        if (
+            database.get_backend_name() == "postgresql"
+            and host == database.host
+            and str(port) == str(database.port or 5432)
+        ):
+            return resolve(host, port, *args, **kwargs)
+        unexpected_call()
+
+    monkeypatch.setattr(socket, "getaddrinfo", unexpected_dns)
     monkeypatch.setattr(
         "arclight.providers.native_media.NativeMediaProvider.submit", unexpected_call
     )
