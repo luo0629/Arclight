@@ -257,7 +257,7 @@ for (const viewport of [
 ]) {
   test(`TTS 模型预设按供应商选择、保存和手填兼容（${viewport.name}）`, async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize(viewport);
     const { dialog, headers } = await openSettings(page);
     const catalogResponse = await page.request.get(
@@ -327,7 +327,7 @@ for (const viewport of [
     ).toContainText(selected!.name);
     await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
     await page.screenshot({
-      path: `../artifacts/web/tts-model-presets-${viewport.width}.png`,
+      path: testInfo.outputPath(`tts-model-presets-${viewport.width}.png`),
       fullPage: true,
       animations: "disabled",
     });
@@ -359,7 +359,13 @@ for (const viewport of [
       has_key: true,
       revision: 2,
     });
-    await dialog.getByRole("radio", { name: "OpenAI", exact: true }).click();
+    const openAI = catalog.suppliers.find(
+      (row) => row.kind === "speech" && row.id === "openai",
+    );
+    expect(openAI).toBeDefined();
+    await dialog
+      .getByRole("radio", { name: openAI!.name, exact: true })
+      .click();
     const selector = dialog.getByRole("combobox", {
       name: "TTS 模型预设",
       exact: true,
@@ -433,7 +439,7 @@ for (const viewport of [
       revision: 3,
     });
     await page.screenshot({
-      path: `../artifacts/web/tts-custom-model-${viewport.width}.png`,
+      path: testInfo.outputPath(`tts-custom-model-${viewport.width}.png`),
       fullPage: true,
       animations: "disabled",
     });
