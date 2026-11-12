@@ -146,6 +146,36 @@ def input_context(row: AudioSnapshot, line_id: str) -> dict:
     }
 
 
+def line_target(
+    db: Session, snapshot: AudioSnapshot, line_id: str, target_id: UUID | None, actor: str
+) -> VisualAsset:
+    """Allocate the same dialogue target for imports and generated recordings."""
+    from uuid import uuid5
+
+    line = require_line(snapshot, line_id)
+    episode = require_episode(db, snapshot.episode_id, actor, write=True)
+    identity = target_id or uuid5(snapshot.id, f"audio-line:{line_id}")
+    asset = db.get(VisualAsset, identity, populate_existing=True)
+    if asset is None:
+        if target_id is not None:
+            raise DomainError("NOT_FOUND", "音频目标不存在", 404)
+        asset = VisualAsset(
+            id=identity,
+            project_id=episode.project_id,
+            asset_type="AUDIO",
+            name=f"{line.speaker}：{line.text}"[:160],
+            created_by=actor,
+            metadata_json={"audio_snapshot_id": str(snapshot.id), "line_id": line_id},
+        )
+        db.add(asset)
+        db.flush()
+    if asset.project_id != episode.project_id:
+        raise DomainError("NOT_FOUND", "音频目标不存在", 404)
+    if asset.asset_type != "AUDIO":
+        raise DomainError("AUDIO_TARGET_INVALID", "台词生产目标必须是音频资产", 422)
+    return asset
+
+
 def capture_line_inputs(
     db: Session, snapshot_id: UUID, line_id: str, actor: str, payload: AudioInputCreate
 ) -> DependencyManifest:

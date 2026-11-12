@@ -85,6 +85,8 @@ def replay_job(
     assert manifest is not None
     check_media(db, project_id, source.id, manifest.id)
     snapshot = manifest.snapshot_json
+    if snapshot["context"].get("audio_line") is not None:
+        raise DomainError("AUDIO_REPLAY_REQUIRES_LINE", "台词配音须通过专用逐句入口重新生成", 409)
     lane = db.scalar(select(GenerationLane.lane).where(GenerationLane.job_id == source.id))
     request = GenerationCreate.model_validate(
         {

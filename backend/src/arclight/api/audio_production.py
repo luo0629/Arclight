@@ -6,6 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
 
+from arclight.api.audio_tts import router as tts_router
 from arclight.api.dependencies import Actor, Database
 from arclight.application.audio_import import import_audio, read_import
 from arclight.application.audio_production import (
@@ -30,6 +31,7 @@ from arclight.domain.audio_production import (
 from arclight.persistence.audio_production import AudioLineBinding, AudioSnapshot
 
 router = APIRouter(prefix="/api/v1", tags=["audio-production"])
+router.include_router(tts_router)
 Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0, le=100000)]
 

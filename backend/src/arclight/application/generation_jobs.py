@@ -96,6 +96,7 @@ def create_job(
     art_concept_origin: dict | None = None,
     frozen_service: dict | None = None,
     continuity_revision_origin: dict | None = None,
+    audio_line_origin: dict | None = None,
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
@@ -116,8 +117,9 @@ def create_job(
             or manifest.snapshot_json["context"].get("art_concept") != art_concept_origin
             or manifest.snapshot_json["context"].get("continuity_revision")
             != continuity_revision_origin
+            or manifest.snapshot_json["context"].get("audio_line") != audio_line_origin
         ):
-            raise DomainError("IDEMPOTENCY_CONFLICT", "同一任务不能更换受控美术来源", 409)
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一任务不能更换受控生成来源", 409)
         return existing
     asset = validate_target(db, project_id, payload)
     from arclight.application.continuity_workflow import freeze_review_binding
@@ -274,6 +276,11 @@ def create_job(
                 **(
                     {"continuity_revision": deepcopy(continuity_revision_origin)}
                     if continuity_revision_origin is not None
+                    else {}
+                ),
+                **(
+                    {"audio_line": deepcopy(audio_line_origin)}
+                    if audio_line_origin is not None
                     else {}
                 ),
                 "provider_capabilities": capabilities.model_dump(mode="json"),

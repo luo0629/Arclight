@@ -25,6 +25,8 @@ from arclight.persistence.art_proposals import ArtProposalReview as ArtProposalR
 from arclight.persistence.art_proposals import ArtProposalVersion as ArtProposalVersion
 from arclight.persistence.audio_production import AudioLineBinding as AudioLineBinding
 from arclight.persistence.audio_production import AudioSnapshot as AudioSnapshot
+from arclight.persistence.audio_tts import AudioTTSRequest as AudioTTSRequest
+from arclight.persistence.audio_voices import AudioVoiceVersion as AudioVoiceVersion
 from arclight.persistence.base import JSON_TYPE, Base, Entity
 from arclight.persistence.generation import GenerationAttempt as GenerationAttempt
 from arclight.persistence.generation import GenerationJob as GenerationJob

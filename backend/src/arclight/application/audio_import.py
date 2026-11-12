@@ -2,7 +2,7 @@
 
 import hashlib
 import json
-from uuid import UUID, uuid4, uuid5
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -12,6 +12,7 @@ from arclight.application.asset_objects import object_key, write_object
 from arclight.application.audio_production import (
     bind_audio,
     capture_line_inputs,
+    line_target,
     require_line,
     require_snapshot,
     write_episode,
@@ -36,7 +37,6 @@ from arclight.persistence.models import (
     FileRegistration,
     StoredFile,
     UploadCompletion,
-    VisualAsset,
 )
 
 
@@ -107,28 +107,10 @@ def import_audio(
     payload: AudioImportCreate,
 ) -> tuple[AudioImportRead, bool]:
     snapshot = require_snapshot(db, snapshot_id, actor, write=True)
-    line = require_line(snapshot, line_id)
+    require_line(snapshot, line_id)
     # Acquire the same project lock as text invalidation before idempotency/CAS checks.
     episode = write_episode(db, snapshot.episode_id, actor)
-    target_id = payload.target_asset_id or uuid5(snapshot.id, f"audio-line:{line_id}")
-    asset = db.get(VisualAsset, target_id, populate_existing=True)
-    if asset is None:
-        if payload.target_asset_id is not None:
-            raise DomainError("NOT_FOUND", "音频目标不存在", 404)
-        asset = VisualAsset(
-            id=target_id,
-            project_id=episode.project_id,
-            asset_type="AUDIO",
-            name=f"{line.speaker}：{line.text}"[:160],
-            created_by=actor,
-            metadata_json={"audio_snapshot_id": str(snapshot.id), "line_id": line_id},
-        )
-        db.add(asset)
-        db.flush()
-    if asset.project_id != episode.project_id:
-        raise DomainError("NOT_FOUND", "音频目标不存在", 404)
-    if asset.asset_type != "AUDIO":
-        raise DomainError("AUDIO_TARGET_INVALID", "台词导入目标必须是音频资产", 422)
+    asset = line_target(db, snapshot, line_id, payload.target_asset_id, actor)
     fingerprint = hashlib.sha256(
         json.dumps(
             {

@@ -106,8 +106,10 @@ def start_attempt(
         matches = False
     if not matches:
         raise DomainError("INVALID_GENERATION_INPUT", "媒体任务缺少匹配的冻结输入", 409)
+    from arclight.application.audio_tts import validate_tts_dispatch
     from arclight.application.production_versions import bind_output, check_media
 
+    validate_tts_dispatch(db, row)
     check_media(db, row.project_id, row.id, manifest.id)
     live = capabilities or resolve_capabilities(row.provider, row.model)
     references = reference_count(snapshot["inputs"])
