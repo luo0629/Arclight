@@ -300,12 +300,14 @@ test("UI-09：切集后旧请求迟到不覆盖新集状态", async ({ page }) =
   env.states[0].phase = "COMPLETED";
   env.control.gate = gate.promise;
   const before = env.control.requests;
-  await env.panel
-    .getByRole("button", { name: "刷新阶段状态", exact: true })
-    .click();
-  await expect.poll(() => env.control.requests).toBeGreaterThan(before);
-  env.control.gate = undefined;
   try {
+    // An automatic refresh can disable the button after the gate is armed.
+    // Exercise the existing visibility refresh without waiting on that button.
+    await page.evaluate(() =>
+      document.dispatchEvent(new Event("visibilitychange")),
+    );
+    await expect.poll(() => env.control.requests).toBeGreaterThan(before);
+    env.control.gate = undefined;
     await openDirectory(page);
     await page
       .getByRole("navigation", { name: "剧集列表" })
@@ -316,6 +318,7 @@ test("UI-09：切集后旧请求迟到不覆盖新集状态", async ({ page }) =
     await expect(page).toHaveURL(new RegExp(env.episodes[1].id));
     await expect(env.panel).toContainText("尚未起稿");
   } finally {
+    env.control.gate = undefined;
     gate.release();
   }
   await expect(env.panel).not.toContainText("正式成片已完成");
