@@ -9,10 +9,12 @@ import {
 } from "@/components/ui-kit";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
-import { api, json } from "@/lib/api/client";
+import { api, json, message } from "@/lib/api/client";
 import { runErrorMessage } from "@/lib/run-errors";
 import type { Run } from "@/types/api";
 import CharacterMatching from "@/features/story/components/character-matching";
@@ -45,6 +47,36 @@ export default function Tasks({
 }) {
   const [eventRun, setEventRun] = useState("");
   const [comment, setComment] = useState("");
+  const requestedRun = useSearchParams().get("run");
+  const pinScope = `${episodeId}:${requestedRun ?? ""}`;
+  const currentPinScope = useRef(pinScope);
+  currentPinScope.current = pinScope;
+  const [pinned, setPinned] = useState<Run | null>(null);
+  const [pinError, setPinError] = useState("");
+  useEffect(() => {
+    const controller = new AbortController();
+    setPinned(null);
+    setPinError("");
+    if (requestedRun && isResourceId(requestedRun))
+      void api<Run>(`/runs/${requestedRun}`, { signal: controller.signal })
+        .then((row) => {
+          if (controller.signal.aborted) return;
+          if (row.id !== requestedRun || row.episode_id !== episodeId)
+            throw new Error("任务不属于当前剧集。");
+          setPinned(row);
+        })
+        .catch((error: unknown) => {
+          if (!controller.signal.aborted) setPinError(message(error));
+        });
+    return () => controller.abort();
+  }, [requestedRun, episodeId]);
+  const visibleRuns =
+    pinned &&
+    pinned.id === requestedRun &&
+    pinned.episode_id === episodeId &&
+    !runs.some((row) => row.id === pinned.id)
+      ? [pinned, ...runs]
+      : runs;
   async function action(
     run: Run,
     command: string,
@@ -69,6 +101,23 @@ export default function Tasks({
           : {}),
       });
       await reload();
+      if (pinned?.id === run.id) {
+        setPinned(null);
+        try {
+          const latest = await api<Run>(`/runs/${run.id}`);
+          if (
+            currentPinScope.current === pinScope &&
+            latest.id === run.id &&
+            latest.episode_id === episodeId
+          )
+            setPinned(latest);
+        } catch (cause) {
+          if (currentPinScope.current === pinScope)
+            setPinError(
+              `操作已保存；指定任务刷新失败，请重新打开：${message(cause)}`,
+            );
+        }
+      }
       setComment("");
     });
   }
@@ -87,17 +136,22 @@ export default function Tasks({
         title="创作任务与审核"
         description="创作会在后台继续，不必一直等待。生成完成后，由项目拥有者确认每一版剧本与分镜。"
       >
-        {runs.length === 0 ? (
+        {pinError && <Notice tone="error">{pinError}</Notice>}
+        {visibleRuns.length === 0 ? (
           <EmptyState className="empty compact py-8">
             <h3>还没有创作任务</h3>
             <p>回到创作画布，在故事起点写下灵感并生成剧本。</p>
           </EmptyState>
         ) : (
           <div className="task-list grid min-w-0 gap-4 lg:grid-cols-2">
-            {runs.map((run) => (
+            {visibleRuns.map((run) => (
               <article
                 className="task flex min-w-0 flex-col gap-3 rounded-xl border bg-background/60 p-4"
                 key={run.id}
+                id={`run-${run.id}`}
+                aria-label={
+                  requestedRun === run.id ? `所选创作任务 ${run.id}` : undefined
+                }
               >
                 <div className="task-heading flex flex-wrap items-center justify-between gap-2">
                   <strong>
@@ -337,10 +391,6 @@ function EventHistory({ runId, close }: { runId: string; close: () => void }) {
               {new Date(event.created_at).toLocaleTimeString("zh-CN")}
             </time>
             <strong>{event.event_type}</strong>
-            <details>
-              <summary>事件数据</summary>
-              <pre>{JSON.stringify(event.payload_json, null, 2)}</pre>
-            </details>
           </li>
         ))}
       </ol>

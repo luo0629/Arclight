@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -141,6 +143,34 @@ export default function StoryOutline({
   const submitted = useRef(0);
   const writerKey = useRef({ version: "", key: "" });
   const [creation, setCreation] = useState(initialCreationOptions);
+  const requestedOutline = useSearchParams().get("outline");
+  useEffect(() => {
+    if (!requestedOutline || !isResourceId(requestedOutline)) return;
+    const controller = new AbortController();
+    const ticket = ++sequence.current;
+    setSelected(requestedOutline);
+    setDetail(null);
+    setDetailError("");
+    setLoading(true);
+    void api<Detail>(`${prefix}/story-outlines/${requestedOutline}`, {
+      signal: controller.signal,
+    })
+      .then((result) => {
+        if (controller.signal.aborted || ticket !== sequence.current) return;
+        if (result.id !== requestedOutline || result.episode_id !== episode.id)
+          throw new Error("大纲版本不属于当前剧集。");
+        setDetail(result);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && ticket === sequence.current)
+          setDetailError(message(error));
+      })
+      .finally(() => {
+        if (!controller.signal.aborted && ticket === sequence.current)
+          setLoading(false);
+      });
+    return () => controller.abort();
+  }, [requestedOutline, prefix, episode.id]);
   useEffect(() => {
     live.current = true;
     return () => {

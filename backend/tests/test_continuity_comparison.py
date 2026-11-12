@@ -1,10 +1,11 @@
 """QA-08 read model uses real stored contracts and the existing write gates."""
 
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 from test_asset_selection import approved, choose, current, restore
 from test_asset_versions import state
 from test_assets import create
@@ -19,9 +20,14 @@ from test_generation_delivery import deliver
 from test_generation_jobs import capture_ok, payload
 from test_upload_completion import complete, ticket
 
+from arclight.domain.continuity_escalations import INCOMPLETE_REVIEW_HANDLER
+from arclight.domain.continuity_selection import HUMAN_REVIEW_HANDLER
+from arclight.domain.human_reviews import ReviewSnapshot
 from arclight.domain.versions import digest
+from arclight.persistence.human_reviews import HumanReviewRequest
 from arclight.persistence.models import (
     AssetVersion,
+    Episode,
     GenerationAttempt,
     Project,
     ProjectMember,
@@ -42,6 +48,167 @@ def comparison(client, case, **params):
     response = client.get(comparison_path(case), params=params)
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def comparison_request(
+    client, case, *, handler=HUMAN_REVIEW_HANDLER, kind="EXCEPTIONAL_SHOT", stamp=None
+):
+    target = case["target"]
+    with client.app.state.session_factory.begin() as db:
+        version = db.get(AssetVersion, UUID(target["asset_version_id"]))
+        snapshot = ReviewSnapshot(
+            project_id=UUID(case["project_id"]),
+            episode_id=UUID(case["episode_id"]),
+            run_id=None,
+            thread_id=f"comparison:{uuid4()}",
+            kind=kind,
+            object_id=uuid4(),
+            version_id=version.id,
+            content_sha256=version.checksum,
+            input_sha256="a" * 64,
+        ).model_dump(mode="json")
+        row = HumanReviewRequest(
+            project_id=UUID(case["project_id"]),
+            episode_id=UUID(case["episode_id"]),
+            creation_key=str(uuid4()),
+            handler=handler,
+            requested_by="service-owner",
+            request_sha256=digest(snapshot),
+            snapshot_json=snapshot,
+            **({"created_at": stamp} if stamp else {}),
+        )
+        db.add(row)
+        db.flush()
+        return str(row.id)
+
+
+def test_exact_human_request_outside_history_page_retains_permissions_without_writes(
+    client, review_case
+):
+    stamp = datetime(2026, 1, 2, tzinfo=UTC)
+    original = comparison_request(client, review_case, stamp=stamp)
+    for index in range(21):
+        comparison_request(client, review_case, stamp=stamp + timedelta(seconds=index + 1))
+    first = comparison(client, review_case, limit=20)
+    assert original not in {row["id"] for row in first["human_reviews"]}
+    assert first["next_human_offset"] == 20
+    last = comparison(client, review_case, limit=20, human_offset=20)
+    expected = next(row for row in last["human_reviews"] if row["id"] == original)
+    statements = []
+
+    def capture(_conn, _cursor, statement, _params, _context, _many):
+        statements.append(statement)
+
+    before = effects(client)
+    event.listen(client.app.state.engine, "before_cursor_execute", capture)
+    try:
+        response = client.get(comparison_path(review_case) + f"/human-reviews/{original}")
+    finally:
+        event.remove(client.app.state.engine, "before_cursor_execute", capture)
+    assert response.status_code == 200, response.text
+    assert response.json() == expected
+    assert response.json()["can_approve"] is True
+    assert response.headers["cache-control"] == "private, no-store"
+    assert effects(client) == before
+    assert not any(
+        sql.lstrip().upper().startswith(("UPDATE", "INSERT", "DELETE")) for sql in statements
+    )
+
+
+@pytest.mark.parametrize("readonly", ["incomplete", "archived", "editor", "viewer", "outsider"])
+def test_exact_human_request_reuses_actual_read_and_approval_authority(
+    client, review_case, readonly
+):
+    identity = comparison_request(
+        client,
+        review_case,
+        handler=INCOMPLETE_REVIEW_HANDLER if readonly == "incomplete" else HUMAN_REVIEW_HANDLER,
+    )
+    if readonly == "archived":
+        with client.app.state.session_factory.begin() as db:
+            db.get(Project, UUID(review_case["project_id"])).archived = True
+    if readonly in {"viewer", "editor", "outsider"}:
+        session = register(client, f"exact-comparison-{readonly}@example.com")
+        if readonly != "outsider":
+            with client.app.state.session_factory.begin() as db:
+                db.add(
+                    ProjectMember(
+                        project_id=UUID(review_case["project_id"]),
+                        user_id=UUID(session["user"]["id"]),
+                        role=readonly,
+                    )
+                )
+    response = client.get(comparison_path(review_case) + f"/human-reviews/{identity}")
+    assert response.status_code == (404 if readonly == "outsider" else 200), response.text
+    if readonly != "outsider":
+        assert response.json()["can_approve"] is False
+        matching = next(
+            row for row in comparison(client, review_case)["human_reviews"] if row["id"] == identity
+        )
+        assert matching == response.json()
+
+
+@pytest.mark.parametrize("fault", ["project", "asset", "version", "request", "kind", "handler"])
+def test_exact_human_request_rejects_inexact_scope(client, review_case, fault):
+    identity = comparison_request(
+        client,
+        review_case,
+        kind="SCRIPT" if fault == "kind" else "EXCEPTIONAL_SHOT",
+        handler="TEXT_SCRIPT" if fault == "handler" else HUMAN_REVIEW_HANDLER,
+    )
+    path = comparison_path(review_case) + f"/human-reviews/{identity}"
+    replacements = {
+        "project": review_case["project_id"],
+        "asset": review_case["target"]["asset_id"],
+        "version": review_case["target"]["asset_version_id"],
+        "request": identity,
+    }
+    if fault in replacements:
+        path = path.replace(replacements[fault], str(uuid4()))
+    response = client.get(path)
+    assert response.status_code == 404, response.text
+
+
+def test_exact_human_request_cannot_cross_existing_projects_or_asset_versions(client, review_case):
+    original = comparison_request(client, review_case)
+    with client.app.state.session_factory.begin() as db:
+        project = Project(name="Other comparison", owner_id="service-owner")
+        db.add(project)
+        db.flush()
+        episode = Episode(project_id=project.id, episode_no=1, title="Other")
+        asset = VisualAsset(project_id=project.id, asset_type="IMAGE", name="Other image")
+        db.add_all([episode, asset])
+        db.flush()
+        version = AssetVersion(
+            asset_id=asset.id,
+            version_no=1,
+            object_key="private/other-image",
+            checksum="b" * 64,
+            created_by="service-owner",
+        )
+        later = AssetVersion(
+            asset_id=UUID(review_case["target"]["asset_id"]),
+            version_no=99,
+            object_key="private/later-image",
+            checksum="c" * 64,
+            created_by="service-owner",
+        )
+        db.add_all([version, later])
+        db.flush()
+        other_case = {
+            "project_id": str(project.id),
+            "episode_id": str(episode.id),
+            "target": {"asset_id": str(asset.id), "asset_version_id": str(version.id)},
+        }
+        later_id = str(later.id)
+    foreign = comparison_request(client, other_case)
+    assert client.get(comparison_path(other_case) + f"/human-reviews/{foreign}").status_code == 200
+    assert client.get(comparison_path(review_case) + f"/human-reviews/{foreign}").status_code == 404
+    assert client.get(comparison_path(other_case) + f"/human-reviews/{original}").status_code == 404
+    later_path = comparison_path(review_case).replace(
+        review_case["target"]["asset_version_id"], later_id
+    )
+    assert client.get(later_path + f"/human-reviews/{original}").status_code == 404
 
 
 def test_unreviewed_candidate_is_readable_without_fabricating_evidence_or_writing(

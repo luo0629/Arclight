@@ -9,6 +9,9 @@ import {
   Leaf,
   BookOpen,
   ChartNoAxesCombined,
+  ListTodo,
+  ClipboardCheck,
+  Film,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -271,6 +274,30 @@ export default function ProjectWorkspace({
             >
               <Leaf data-icon="inline-start" />
               视觉资产
+            </Button>
+            <Button
+              variant={page === "tasks" ? "secondary" : "ghost"}
+              aria-pressed={page === "tasks"}
+              onClick={() => setPage("tasks")}
+            >
+              <ListTodo />
+              项目任务
+            </Button>
+            <Button
+              variant={page === "reviews" ? "secondary" : "ghost"}
+              aria-pressed={page === "reviews"}
+              onClick={() => setPage("reviews")}
+            >
+              <ClipboardCheck />
+              待审队列
+            </Button>
+            <Button
+              variant={page === "deliveries" ? "secondary" : "ghost"}
+              aria-pressed={page === "deliveries"}
+              onClick={() => setPage("deliveries")}
+            >
+              <Film />
+              成片版本
             </Button>
             {owner && (
               <Button

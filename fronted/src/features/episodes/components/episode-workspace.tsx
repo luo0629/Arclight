@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import useEpisodeNavigation from "@/features/episodes/hooks/use-episode-navigation";
-import type { EpisodeView } from "@/lib/routes";
+import { isResourceId, type EpisodeView } from "@/lib/routes";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Notice, EmptyState, StatusBadge } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
@@ -653,7 +653,12 @@ export default function EpisodeWorkspace({
                       : ensureBoard(selectedResource)
                     : Promise.resolve()
                 }
-                showTasks={() => setView("tasks")}
+                showTasks={(runId) =>
+                  navigate({
+                    view: "tasks",
+                    run: runId && isResourceId(runId) ? runId : "",
+                  })
+                }
               />
             </div>
           )}

@@ -1,5 +1,9 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
+import ContinuityComparisonButton from "@/features/continuity/components/continuity-comparison";
+
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Box, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -56,6 +60,9 @@ export default function VisualAssets({
   const live = useRef(true);
   const request = useRef(0);
   const submitting = useRef(false);
+  const searchParams = useSearchParams();
+  const requestedAsset = searchParams.get("asset");
+  const requestedReview = searchParams.get("asset_review");
   useEffect(() => {
     live.current = true;
     void list.reload().catch(() => {});
@@ -132,7 +139,7 @@ export default function VisualAssets({
       className="studio-page"
       eyebrow="项目共用"
       title="视觉资产"
-      description="管理角色、场景、道具与风格的目录、资料及精确图片版本，可人工选用或从历史另存候选。Owner可锁定当前选用，媒体生成尚未开放。"
+      description="管理角色、场景、道具与风格，查看美术提案与精确图片版本，比较审核后选用。项目拥有者可锁定当前选用。"
     >
       {!writable && <Notice tone="info">当前项目只读，可查看视觉资产。</Notice>}
       {notice && (
@@ -145,7 +152,28 @@ export default function VisualAssets({
           {error}
         </Notice>
       )}
-      <details className="min-w-0 border-b pb-4">
+      {requestedAsset &&
+        isResourceId(requestedAsset) &&
+        requestedReview &&
+        isResourceId(requestedReview) && (
+          <section
+            aria-label="指定版本连续性审核"
+            className="rounded-xl border p-4"
+          >
+            <ContinuityComparisonButton
+              key={`${projectId}:${requestedAsset}:${requestedReview}`}
+              projectId={projectId}
+              assetId={requestedAsset}
+              versionId={requestedReview}
+              initiallyOpen
+              onChanged={refresh}
+            />
+          </section>
+        )}
+      <details
+        className="min-w-0 border-b pb-4"
+        open={!!searchParams.get("proposal")}
+      >
         <summary className="cursor-pointer font-semibold">
           美术提案与审核
         </summary>

@@ -67,7 +67,7 @@ export default function Inspector({
   busy: boolean;
   act: Act;
   reload: () => Promise<void>;
-  showTasks: () => void;
+  showTasks: (runId?: string) => void;
   versionLoading: boolean;
   retryVersion: () => Promise<unknown>;
   onCreated: VersionCreated;
@@ -288,7 +288,7 @@ export default function Inspector({
                 variant="ghost"
                 size="lg"
                 className=""
-                onClick={showTasks}
+                onClick={() => showTasks()}
               >
                 前往任务与审核
               </Button>
@@ -414,7 +414,7 @@ export default function Inspector({
                 variant="default"
                 size="lg"
                 className="wide w-full"
-                onClick={showTasks}
+                onClick={() => showTasks(version.run_id ?? undefined)}
               >
                 前往任务审核此版本
               </Button>

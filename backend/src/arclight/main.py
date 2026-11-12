@@ -39,6 +39,7 @@ from arclight.api.production_state import router as production_state_router
 from arclight.api.production_versions import router as production_versions_router
 from arclight.api.project_deletion import router as project_deletion_router
 from arclight.api.project_overview import router as project_overview_router
+from arclight.api.project_production import router as project_production_router
 from arclight.api.protection import RequestProtection
 from arclight.api.render_deliveries import router as render_deliveries_router
 from arclight.api.render_jobs import router as render_jobs_router
@@ -203,6 +204,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(director_router)
     app.include_router(character_matching_router)
     app.include_router(project_overview_router)
+    app.include_router(project_production_router)
     app.include_router(production_state_router)
     return app
 

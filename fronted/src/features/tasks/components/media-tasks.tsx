@@ -1,5 +1,9 @@
 "use client";
 
+import { useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
+
 import { Button } from "@/components/ui/button";
 import {
   EmptyState,
@@ -128,6 +132,11 @@ export default function MediaTasks({
     writable,
     owner,
   });
+  const requestedJob = useSearchParams().get("generation_job");
+  const { selectJob } = state;
+  useEffect(() => {
+    if (requestedJob && isResourceId(requestedJob)) selectJob(requestedJob);
+  }, [requestedJob, projectId, episodeId, selectJob]);
   const selectedInPage = state.jobs.some((job) => job.id === state.selectedId);
   const listDisabled = busy || state.loading || state.mutating;
   const detail = state.selectedId ? (

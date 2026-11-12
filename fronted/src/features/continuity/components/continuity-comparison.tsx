@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
+import { api, message } from "@/lib/api/client";
 import { ChoiceSelect } from "@/components/choice-select";
 import Dialog from "@/components/shared/app-dialog";
 import { Button } from "@/components/ui/button";
@@ -18,7 +21,12 @@ import { LoadingState, Notice, StatusBadge } from "@/components/ui-kit";
 import VersionImage from "@/features/assets/components/version-image";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import useContinuityComparison from "../hooks/use-continuity-comparison";
-import { label, roundLabel, type ComparisonImage } from "../types";
+import {
+  label,
+  roundLabel,
+  type ComparisonImage,
+  type HumanReview,
+} from "../types";
 import HumanReviewActions from "./human-review-actions";
 import ReviewReport from "./review-report";
 
@@ -49,6 +57,68 @@ function ComparisonBody({
     mutate,
     unavailable,
   } = useContinuityComparison(endpoint + "/continuity", onChanged);
+  const search = useSearchParams();
+  const requestedHuman = search.get("review");
+  const requestedVersion = search.get("asset_review");
+  const [exactHuman, setExactHuman] = useState<HumanReview | null>(null);
+  const [humanError, setHumanError] = useState("");
+  useEffect(() => {
+    setExactHuman(null);
+    setHumanError("");
+    if (
+      !data ||
+      !requestedHuman ||
+      !isResourceId(requestedHuman) ||
+      requestedVersion !== resource.versionId
+    )
+      return;
+    const controller = new AbortController();
+    void api<
+      HumanReview & {
+        project_id: string;
+        snapshot: { project_id: string; kind: string };
+      }
+    >(`${endpoint}/continuity/human-reviews/${requestedHuman}`, {
+      signal: controller.signal,
+    })
+      .then((row) => {
+        if (controller.signal.aborted) return;
+        if (
+          row.id !== requestedHuman ||
+          row.project_id !== projectId ||
+          row.snapshot.project_id !== projectId ||
+          row.snapshot.version_id !== resource.versionId ||
+          row.snapshot.kind !== "EXCEPTIONAL_SHOT" ||
+          typeof row.can_approve !== "boolean"
+        )
+          throw new Error("人工请求与当前精确图片不一致。");
+        setExactHuman(row);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setHumanError(message(cause));
+          unavailable(cause);
+        }
+      });
+    return () => controller.abort();
+  }, [
+    data,
+    endpoint,
+    projectId,
+    resource.versionId,
+    requestedHuman,
+    requestedVersion,
+    unavailable,
+  ]);
+  const humanRows =
+    exactHuman && exactHuman.snapshot.version_id === resource.versionId
+      ? [
+          exactHuman,
+          ...(data?.human_reviews ?? []).filter(
+            (row) => row.id !== exactHuman.id,
+          ),
+        ]
+      : (data?.human_reviews ?? []);
   const [baseId, setBaseId] = useState("");
   const [reviewId, setReviewId] = useState("");
   const [comment, setComment] = useState("");
@@ -381,12 +451,13 @@ function ComparisonBody({
             className="flex min-w-0 flex-col gap-4"
           >
             <h3 className="font-semibold">人工处理</h3>
-            {!data.human_reviews.length && (
+            {humanError && <Notice tone="error">{humanError}</Notice>}
+            {!humanRows.length && (
               <p className="text-sm text-muted-foreground">
                 此精确图片尚无人工请求。缺少证据时请等待取证或审查流程交接。
               </p>
             )}
-            {data.human_reviews.map((row) => (
+            {humanRows.map((row) => (
               <HumanReviewActions
                 key={row.id}
                 row={row}
@@ -533,13 +604,15 @@ export default function ContinuityComparisonButton({
   assetId,
   versionId,
   onChanged,
+  initiallyOpen = false,
 }: {
   projectId: string;
   assetId: string;
   versionId: string;
   onChanged: () => Promise<void>;
+  initiallyOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initiallyOpen);
   return (
     <>
       <Button variant="outline" onClick={() => setOpen(true)}>

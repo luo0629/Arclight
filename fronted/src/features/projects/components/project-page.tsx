@@ -6,6 +6,9 @@ import { projectSections, type ProjectSection } from "@/lib/routes";
 import { useProject } from "@/features/projects/project-context";
 import { useWorkbench } from "@/features/workbench/workbench-context";
 import ProjectOverview from "@/features/projects/components/project-overview";
+import ProductionTasks from "./production-tasks";
+import ProductionReviews from "./production-reviews";
+import ProductionDeliveries from "./production-deliveries";
 import VisualAssets from "@/features/assets/components/visual-assets";
 import Members from "@/features/projects/components/members";
 import StoryBible from "@/features/story/components/story-bible";
@@ -52,6 +55,12 @@ export default function ProjectPage() {
         openEpisode(row, view);
       }}
     />
+  ) : page === "tasks" ? (
+    <ProductionTasks key={project.id} />
+  ) : page === "reviews" ? (
+    <ProductionReviews key={project.id} />
+  ) : page === "deliveries" ? (
+    <ProductionDeliveries key={project.id} />
   ) : page === "assets" ? (
     <VisualAssets
       key={project.id}

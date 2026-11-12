@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
 import { message } from "@/lib/api/client";
@@ -29,6 +31,7 @@ export default function RenderJobs({
   unavailable,
   refresh,
   onRendered,
+  initialJob,
 }: {
   manifest: RenderManifest;
   owner: boolean;
@@ -36,6 +39,7 @@ export default function RenderJobs({
   unavailable: (cause: unknown) => void;
   refresh: number;
   onRendered: () => void;
+  initialJob?: RenderJob;
 }) {
   const fetchJobs = useCallback(
     (cursor: string | undefined, signal: AbortSignal) =>
@@ -52,10 +56,59 @@ export default function RenderJobs({
     if (refresh) void jobs.load();
   }, [refresh, jobs.load]);
   const [selectedId, setSelectedId] = useState("");
+  const [pinnedJob, setPinnedJob] = useState(initialJob);
+  const jobRows = pinnedJob
+    ? [
+        jobs.rows.find(
+          (row) =>
+            row.id === pinnedJob.id && row.revision >= pinnedJob.revision,
+        ) ?? pinnedJob,
+        ...jobs.rows.filter((row) => row.id !== pinnedJob.id),
+      ]
+    : jobs.rows;
   const selected = selectedId
-    ? jobs.rows.find((job) => job.id === selectedId)
-    : jobs.rows[0];
+    ? jobRows.find((job) => job.id === selectedId)
+    : jobRows[0];
+  const replaceJob = useCallback(
+    (row: RenderJob) => {
+      setPinnedJob((current) =>
+        current?.id === row.id && row.revision >= current.revision
+          ? row
+          : current,
+      );
+      jobs.replace(row);
+    },
+    [jobs.replace],
+  );
   const [review, setReview] = useState<HumanReview | null>(null);
+  const requestedReview = useSearchParams().get("review");
+  const [reviewError, setReviewError] = useState("");
+  useEffect(() => {
+    if (!requestedReview || !isResourceId(requestedReview)) return;
+    const controller = new AbortController();
+    setReview(null);
+    setReviewError("");
+    void renderingApi
+      .getHumanReview(requestedReview, controller.signal)
+      .then((next) => {
+        if (controller.signal.aborted) return;
+        if (
+          next.id !== requestedReview ||
+          next.snapshot.kind !== "EXPORT" ||
+          next.snapshot.object_id !== manifest.id ||
+          next.snapshot.project_id !== manifest.project_id
+        )
+          throw new Error("审核请求与当前渲染清单不一致。");
+        setReview(next);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setReviewError(message(cause));
+          unavailable(cause);
+        }
+      });
+    return () => controller.abort();
+  }, [requestedReview, manifest.id, manifest.project_id, unavailable]);
   const [admission, setAdmission] = useState<RenderAdmission | null>(null);
   const [admissionError, setAdmissionError] = useState("");
   const mutation = useRenderMutation(manifest.id, writable, unavailable);
@@ -63,17 +116,15 @@ export default function RenderJobs({
   const seen = useRef(new Set<string>());
   const pollGeneration = useRef(0);
   const rowsRef = useRef(jobs.rows);
-  rowsRef.current = jobs.rows;
+  rowsRef.current = jobRows;
   useEffect(() => {
-    for (const row of jobs.rows)
+    for (const row of jobRows)
       if (row.status === "SUCCEEDED" && !seen.current.has(row.id)) {
         seen.current.add(row.id);
         onRendered();
       }
-  }, [jobs.rows, onRendered]);
-  const hasActive = jobs.rows.some((job) =>
-    activeStatuses.includes(job.status),
-  );
+  }, [jobRows, onRendered]);
+  const hasActive = jobRows.some((job) => activeStatuses.includes(job.status));
   useEffect(() => {
     if (!hasActive) return;
     const controller = new AbortController();
@@ -94,7 +145,7 @@ export default function RenderJobs({
             return;
           const current = rowsRef.current.find((job) => job.id === next.id);
           if (current && next.revision < current.revision) continue;
-          jobs.replace(next);
+          replaceJob(next);
         }
       } catch (cause) {
         if (!controller.signal.aborted) {
@@ -112,7 +163,7 @@ export default function RenderJobs({
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", poll);
     };
-  }, [hasActive, manifest.id, jobs.replace, jobs.load, unavailable]);
+  }, [hasActive, manifest.id, replaceJob, jobs.load, unavailable]);
   async function submit(retryOf?: string) {
     if (formal && (!admission || (review && review.status !== "RESUMED")))
       return;
@@ -220,7 +271,7 @@ export default function RenderJobs({
     ++pollGeneration.current;
     await mutation.mutate(
       (signal) => renderingApi.cancelJob(job.id, job.revision, signal),
-      jobs.replace,
+      replaceJob,
       "取消请求已保存，执行器会在安全边界停止并记录清理状态。",
     );
   }
@@ -278,6 +329,7 @@ export default function RenderJobs({
       )}
       {mutation.error && <Notice tone="error">{mutation.error}</Notice>}
       {mutation.notice && <Notice tone="success">{mutation.notice}</Notice>}
+      {reviewError && <Notice tone="error">{reviewError}</Notice>}
       {review && (
         <RenderReviewActions
           key={review.id}
@@ -290,18 +342,18 @@ export default function RenderJobs({
         />
       )}
       <h4>本清单的渲染记录</h4>
-      {selectedId && !selected && !jobs.loading && jobs.rows.length > 0 && (
+      {selectedId && !selected && !jobs.loading && jobRows.length > 0 && (
         <Notice>所选任务不在当前页，请加载更多或重新选择任务。</Notice>
       )}
       {jobs.error && <Notice tone="error">{jobs.error}</Notice>}
-      {jobs.loading && jobs.rows.length === 0 && (
+      {jobs.loading && jobRows.length === 0 && (
         <p role="status">正在读取渲染任务…</p>
       )}
-      {!jobs.loading && !jobs.error && jobs.rows.length === 0 && (
+      {!jobs.loading && !jobs.error && jobRows.length === 0 && (
         <p className="text-sm text-muted-foreground">本清单还没有渲染任务。</p>
       )}
       <div className="flex min-w-0 flex-col gap-2">
-        {jobs.rows.map((job) => (
+        {jobRows.map((job) => (
           <Button
             key={job.id}
             variant="outline"

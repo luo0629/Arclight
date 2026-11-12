@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
 import { ApiError, message } from "@/lib/api/client";
@@ -40,7 +42,16 @@ export default function DeliveryHistory({
     idOf,
     unavailable,
   );
-  const [selectedId, setSelectedId] = useState("");
+  const requested = useSearchParams().get("delivery");
+  const requestedId = requested && isResourceId(requested) ? requested : "";
+  const [selection, setSelection] = useState({
+    request: requestedId,
+    id: requestedId,
+  });
+  const selectedId =
+    selection.request === requestedId ? selection.id : requestedId;
+  const setSelectedId = (id: string) =>
+    setSelection({ request: requestedId, id });
   const selected = selectedId
     ? rows.rows.find((row) => row.id === selectedId)
     : rows.rows[0];
@@ -78,8 +89,8 @@ export default function DeliveryHistory({
           这一集还没有成片。请先选择时间轴并提交渲染。
         </p>
       )}
-      {selectedId && !selected && !rows.loading && rows.rows.length > 0 && (
-        <Notice>所选成片不在当前页，请加载更多或重新选择精确成片版本。</Notice>
+      {selectedId && !selected && !rows.loading && (
+        <Notice>正在打开指定成片版本，目录分页不影响精确版本读取。</Notice>
       )}
       <div className="grid min-w-0 items-start gap-5 lg:grid-cols-[minmax(0,15rem)_minmax(0,1fr)]">
         <div className="flex min-w-0 flex-col gap-2">
@@ -120,11 +131,11 @@ export default function DeliveryHistory({
             </Button>
           )}
         </div>
-        {selected && (
+        {(selectedId || selected) && (
           <DeliveryDetail
-            key={selected.id}
+            key={selectedId || selected!.id}
             episode={episode}
-            artifactId={selected.id}
+            artifactId={selectedId || selected!.id}
             owner={owner}
             writable={writable}
             unavailable={unavailable}
@@ -152,9 +163,21 @@ function DeliveryDetail({
   refresh: number;
 }) {
   const fetchDetail = useCallback(
-    (signal: AbortSignal) =>
-      renderingApi.getDelivery(episode.id, artifactId, signal),
-    [episode.id, artifactId],
+    async (signal: AbortSignal) => {
+      const value = await renderingApi.getDelivery(
+        episode.id,
+        artifactId,
+        signal,
+      );
+      if (
+        value.id !== artifactId ||
+        value.project_id !== episode.project_id ||
+        value.episode_id !== episode.id
+      )
+        throw new Error("成片与指定项目、剧集或版本不一致。");
+      return value;
+    },
+    [episode.id, episode.project_id, artifactId],
   );
   const detail = useRenderDetail(artifactId, fetchDetail, unavailable);
   const fetchReport = useCallback(

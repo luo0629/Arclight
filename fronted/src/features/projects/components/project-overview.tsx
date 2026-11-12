@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { projectPath } from "@/lib/routes";
 import { RefreshCw } from "lucide-react";
 import { api, message } from "@/lib/api/client";
 import type { Episode } from "@/types/api";
@@ -210,7 +212,7 @@ export default function ProjectOverview({
                 `生产中 ${data.active_episode_count} · 已归档 ${data.archived_episode_count}`,
               ],
               [
-                "待处理审核与确认",
+                "待处理文本审核与确认",
                 String(data.pending_reviews.total),
                 "按待处理对象计数，不重复计算任务产物",
               ],
@@ -251,8 +253,18 @@ export default function ProjectOverview({
               </p>
             )}
             <p className="text-sm leading-relaxed text-muted-foreground">
-              画面、配音、时间轴与导出尚未接入；总览仅覆盖已落库的文本生产记录。
+              此处展示文本生产阶段；项目任务、待审队列与成片版本分别汇总实际生产记录。
             </p>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" asChild>
+                <Link href={projectPath(projectId, "tasks")}>查看项目任务</Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link href={projectPath(projectId, "assets")}>
+                  打开视觉资产
+                </Link>
+              </Button>
+            </div>
           </PagePanel>
           <div className="grid min-w-0 gap-5 lg:grid-cols-2">
             <PagePanel
@@ -277,8 +289,13 @@ export default function ProjectOverview({
                 ))}
               </dl>
               <p className="text-xs leading-relaxed text-muted-foreground">
-                待处理数包含历史待审版本；批准仍须满足来源、引用与时长校验。视觉资产审核尚未接入。
+                以上为文本待处理数，包含历史待审版本。完整待审队列还包括美术参考、画面例外、导出与交付请求；处理须在原工作区核对精确版本。
               </p>
+              <Button variant="outline" asChild>
+                <Link href={projectPath(projectId, "reviews")}>
+                  查看完整待审队列
+                </Link>
+              </Button>
             </PagePanel>
             <PagePanel
               title="成本与成片"
@@ -301,9 +318,9 @@ export default function ProjectOverview({
                   </dd>
                 </div>
                 <div>
-                  <dt className="font-medium">成片版本：尚未接入交付记录</dt>
+                  <dt className="font-medium">成片版本与正式交付</dt>
                   <dd className="mt-1 text-muted-foreground">
-                    当前分镜与通用资产均不计作成片。
+                    从成片版本查看各集真实渲染产物、正式交付状态和机器报告。分镜与通用资产不计作成片。
                   </dd>
                 </div>
               </dl>
@@ -313,6 +330,11 @@ export default function ProjectOverview({
                 onClick={() => setShowCosts((value) => !value)}
               >
                 {showCosts ? "收起成本明细" : "查看成本明细"}
+              </Button>
+              <Button variant="outline" asChild>
+                <Link href={projectPath(projectId, "deliveries")}>
+                  查看项目成片
+                </Link>
               </Button>
             </PagePanel>
           </div>

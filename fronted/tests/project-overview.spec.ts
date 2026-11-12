@@ -94,7 +94,7 @@ test("aggregates actual versions and tasks, refreshes reviews, opens tasks, and 
   await expect(page.getByText("125.50", { exact: true })).toBeVisible();
   await expect(page.getByText("实际成本", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("成片版本：尚未接入交付记录", { exact: true }),
+    page.getByRole("link", { name: "查看项目成片", exact: true }),
   ).toBeVisible();
   await page.screenshot({
     path: info.outputPath("project-overview-desktop.png"),

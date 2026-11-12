@@ -1,6 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
 import { ApiError, message } from "@/lib/api/client";
@@ -9,6 +11,7 @@ import { prepareLineAudioDecisions, renderingApi } from "../api";
 import type {
   LineAudioDecision,
   RenderManifest,
+  RenderJob,
   RenderProfile,
   Timeline,
 } from "../types";
@@ -35,6 +38,7 @@ export default function RenderWorkspace(props: {
   boards: ContentVersion[];
   boardPagination: ReactNode;
 }) {
+  const search = useSearchParams();
   const [denied, setDenied] = useState("");
   const [epoch, setEpoch] = useState(0);
   const unavailable = useCallback((cause: unknown) => {
@@ -60,7 +64,7 @@ export default function RenderWorkspace(props: {
         </Notice>
       ) : (
         <RenderContent
-          key={`${props.episode.id}:${props.owner}:${props.writable}:${epoch}`}
+          key={`${props.episode.id}:${props.owner}:${props.writable}:${epoch}:${search.get("render_job") ?? ""}:${search.get("render_manifest") ?? ""}`}
           {...props}
           unavailable={unavailable}
         />
@@ -95,10 +99,61 @@ function RenderContent({
     versionOf,
     unavailable,
   );
+  const search = useSearchParams();
+  const requestedJob = search.get("render_job");
+  const requestedManifest = search.get("render_manifest");
+  const exactId =
+    requestedJob && isResourceId(requestedJob)
+      ? `job:${requestedJob}`
+      : requestedManifest && isResourceId(requestedManifest)
+        ? `manifest:${requestedManifest}`
+        : "";
+  const fetchExact = useCallback(
+    async (signal: AbortSignal) => {
+      let job: RenderJob | undefined;
+      if (exactId.startsWith("job:")) {
+        job = await renderingApi.getJob(exactId.slice(4), signal);
+        if (job.id !== exactId.slice(4))
+          throw new Error("渲染任务标识不一致。");
+      }
+      const manifestId = job?.manifest_id ?? exactId.slice(9);
+      const manifest = await renderingApi.getManifest(manifestId, signal);
+      if (
+        manifest.id !== manifestId ||
+        manifest.project_id !== episode.project_id ||
+        manifest.snapshot.timeline.episode_id !== episode.id
+      )
+        throw new Error("渲染清单不属于当前剧集。");
+      const timeline = await renderingApi.getTimeline(
+        manifest.snapshot.timeline_id,
+        signal,
+      );
+      if (
+        timeline.id !== manifest.snapshot.timeline_id ||
+        timeline.snapshot.episode_id !== episode.id
+      )
+        throw new Error("时间轴不属于当前剧集。");
+      return { timeline, manifest, job };
+    },
+    [exactId, episode.id, episode.project_id],
+  );
+  const exact = useRenderDetail(
+    `${episode.id}:${exactId}`,
+    fetchExact,
+    unavailable,
+    !!exactId,
+  );
+  const timelineRows =
+    exact.data &&
+    !timelines.rows.some((row) => row.id === exact.data!.timeline.id)
+      ? [exact.data.timeline, ...timelines.rows]
+      : timelines.rows;
   const [selectedId, setSelectedId] = useState("");
   const selected = selectedId
-    ? timelines.rows.find((row) => row.id === selectedId)
-    : timelines.rows[0];
+    ? timelineRows.find((row) => row.id === selectedId)
+    : exactId
+      ? exact.data?.timeline
+      : timelineRows[0];
   const [refresh, setRefresh] = useState(0);
   const rendered = useCallback(() => setRefresh((value) => value + 1), []);
   function created(timeline: Timeline) {
@@ -136,10 +191,12 @@ function RenderContent({
           </p>
         </header>
         {timelines.error && <Notice tone="error">{timelines.error}</Notice>}
+        {exact.error && <Notice tone="error">{exact.error}</Notice>}
+        {exact.loading && <p role="status">正在读取指定渲染任务的精确输入…</p>}
         {timelines.loading && timelines.rows.length === 0 && (
           <p role="status">正在读取时间轴版本…</p>
         )}
-        {timelines.rows.length > 0 && (
+        {timelineRows.length > 0 && (
           <label className="flex min-w-0 max-w-xl flex-col gap-2 text-sm font-medium">
             时间轴版本
             <select
@@ -154,7 +211,7 @@ function RenderContent({
                   请重新选择精确时间轴版本
                 </option>
               )}
-              {timelines.rows.map((timeline) => (
+              {timelineRows.map((timeline) => (
                 <option key={timeline.id} value={timeline.id}>
                   v{timeline.version_no} ·{" "}
                   {duration(timeline.snapshot.duration_ms)}
@@ -207,6 +264,16 @@ function RenderContent({
             unavailable={unavailable}
             refresh={refresh}
             onRendered={rendered}
+            initialManifest={
+              exact.data?.timeline.id === selected.id
+                ? exact.data.manifest
+                : undefined
+            }
+            initialJob={
+              exact.data?.timeline.id === selected.id
+                ? exact.data.job
+                : undefined
+            }
           />
         )}
       </section>
@@ -228,6 +295,8 @@ function TimelineManifests({
   unavailable,
   refresh,
   onRendered,
+  initialManifest,
+  initialJob,
 }: {
   timeline: Timeline;
   owner: boolean;
@@ -235,6 +304,8 @@ function TimelineManifests({
   unavailable: (cause: unknown) => void;
   refresh: number;
   onRendered: () => void;
+  initialManifest?: RenderManifest;
+  initialJob?: RenderJob;
 }) {
   const fetchManifests = useCallback(
     (cursor: string | undefined, signal: AbortSignal) =>
@@ -251,10 +322,15 @@ function TimelineManifests({
     if (refresh) void manifests.load();
   }, [refresh, manifests.load]);
   const [profile, setProfile] = useState<RenderProfile>("PREVIEW");
+  const manifestRows =
+    initialManifest &&
+    !manifests.rows.some((row) => row.id === initialManifest.id)
+      ? [initialManifest, ...manifests.rows]
+      : manifests.rows;
   const [selectedId, setSelectedId] = useState("");
   const selected = selectedId
-    ? manifests.rows.find((row) => row.id === selectedId)
-    : manifests.rows[0];
+    ? manifestRows.find((row) => row.id === selectedId)
+    : (initialManifest ?? manifestRows[0]);
   const fetchAudio = useCallback(
     (signal: AbortSignal) =>
       prepareLineAudioDecisions(timeline.snapshot.episode_id, timeline, signal),
@@ -419,10 +495,10 @@ function TimelineManifests({
       {mutation.error && <Notice tone="error">{mutation.error}</Notice>}
       {mutation.notice && <Notice tone="success">{mutation.notice}</Notice>}
       {manifests.error && <Notice tone="error">{manifests.error}</Notice>}
-      {manifests.loading && manifests.rows.length === 0 && (
+      {manifests.loading && manifestRows.length === 0 && (
         <p role="status">正在读取渲染清单…</p>
       )}
-      {manifests.rows.length > 0 && (
+      {manifestRows.length > 0 && (
         <label className="flex min-w-0 flex-col gap-2 text-sm font-medium">
           渲染清单
           <select
@@ -437,7 +513,7 @@ function TimelineManifests({
                 请重新选择精确渲染清单
               </option>
             )}
-            {manifests.rows.map((manifest) => (
+            {manifestRows.map((manifest) => (
               <option key={manifest.id} value={manifest.id}>
                 {renderLabel(manifest.snapshot.output.name)} ·{" "}
                 {date(manifest.snapshot.created_at)} · {manifest.id.slice(0, 8)}
@@ -449,7 +525,7 @@ function TimelineManifests({
       {selectedId &&
         !selected &&
         !manifests.loading &&
-        manifests.rows.length > 0 && (
+        manifestRows.length > 0 && (
           <Notice>所选清单不在当前页，请加载更多或重新选择精确清单。</Notice>
         )}
       {manifests.hasMore && (
@@ -462,13 +538,11 @@ function TimelineManifests({
           加载更多渲染清单
         </Button>
       )}
-      {!manifests.loading &&
-        !manifests.error &&
-        manifests.rows.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            本时间轴还没有渲染清单。
-          </p>
-        )}
+      {!manifests.loading && !manifests.error && manifestRows.length === 0 && (
+        <p className="text-sm text-muted-foreground">
+          本时间轴还没有渲染清单。
+        </p>
+      )}
       {selected && (
         <>
           <section
@@ -528,6 +602,9 @@ function TimelineManifests({
             unavailable={unavailable}
             refresh={refresh}
             onRendered={onRendered}
+            initialJob={
+              initialJob?.manifest_id === selected.id ? initialJob : undefined
+            }
           />
         </>
       )}

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Notice } from "@/components/ui-kit";
@@ -37,6 +39,41 @@ export default function ArtProposals({
   const live = useRef(true);
   const operation = useRef(false);
   const sequence = useRef(0);
+  const search = useSearchParams();
+  const requestedProposal = search.get("proposal");
+  const requestedVersion = search.get("proposal_version");
+  useEffect(() => {
+    if (
+      !requestedProposal ||
+      !isResourceId(requestedProposal) ||
+      !requestedVersion ||
+      !isResourceId(requestedVersion)
+    )
+      return;
+    const controller = new AbortController();
+    const request = ++sequence.current;
+    setSelected(null);
+    setError("");
+    void api<ArtRecord>(
+      `${path}/${requestedProposal}/versions/${requestedVersion}`,
+      { signal: controller.signal },
+    )
+      .then((row) => {
+        if (controller.signal.aborted || request !== sequence.current) return;
+        if (
+          row.id !== requestedProposal ||
+          row.project_id !== projectId ||
+          row.version.id !== requestedVersion
+        )
+          throw new Error("美术提案与指定精确版本不一致。");
+        setSelected(row);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted && request === sequence.current)
+          setError(message(error));
+      });
+    return () => controller.abort();
+  }, [path, projectId, requestedProposal, requestedVersion]);
   function select(row: ArtRecord) {
     setSelected(row);
     try {
@@ -47,13 +84,14 @@ export default function ArtProposals({
   }
   useEffect(() => {
     live.current = true;
+    const controller = new AbortController();
     void list.reload().catch(() => {});
     try {
       const id = sessionStorage.getItem(storageKey);
-      if (id)
-        void api<ArtRecord>(`${path}/${id}`)
+      if (id && !requestedProposal)
+        void api<ArtRecord>(`${path}/${id}`, { signal: controller.signal })
           .then((row) => {
-            if (live.current) setSelected(row);
+            if (live.current && !controller.signal.aborted) setSelected(row);
           })
           .catch(() => {});
     } catch {
@@ -61,9 +99,10 @@ export default function ArtProposals({
     }
     return () => {
       live.current = false;
+      controller.abort();
       ++sequence.current;
     };
-  }, [path, storageKey, list.reload]);
+  }, [path, storageKey, list.reload, requestedProposal]);
   async function load(id: string, version?: string) {
     const request = ++sequence.current;
     setError("");

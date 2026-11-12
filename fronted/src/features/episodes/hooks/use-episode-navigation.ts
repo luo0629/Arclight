@@ -12,7 +12,7 @@ export default function useEpisodeNavigation() {
   const selectedId = search.get("node") ?? "";
 
   function navigate(
-    patch: { view?: EpisodeView; node?: string },
+    patch: { view?: EpisodeView; node?: string; run?: string },
     replace = false,
   ) {
     // Read the live URL so changes made in the same event are merged.

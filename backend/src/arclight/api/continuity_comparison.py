@@ -30,6 +30,7 @@ from arclight.persistence.models import (
     AssetVersion,
     GenerationCandidate,
     GenerationJob,
+    Project,
     ProjectMember,
     VersionBinding,
     VisualAsset,
@@ -86,6 +87,35 @@ class ComparisonActions(BaseModel):
 
 class ComparisonHumanReview(HumanReviewRead):
     can_approve: bool
+
+
+COMPARISON_REVIEW_HANDLERS = frozenset(
+    {HUMAN_REVIEW_HANDLER, INCOMPLETE_REVIEW_HANDLER, FEEDBACK_HANDLER}
+)
+
+
+def comparison_access(db: Database, project: Project, actor: str) -> tuple[bool, bool]:
+    owner = project.owner_id == actor
+    member = (
+        db.scalar(
+            select(ProjectMember).where(
+                ProjectMember.project_id == project.id, ProjectMember.user_id == UUID(actor)
+            )
+        )
+        if not owner
+        else None
+    )
+    writable = not project.archived and (owner or member is not None and member.role == "editor")
+    return owner, writable
+
+
+def comparison_human_review(
+    db: Database, row: HumanReviewRequest, *, owner: bool, writable: bool
+) -> ComparisonHumanReview:
+    return ComparisonHumanReview(
+        **serialize(db, row).model_dump(),
+        can_approve=owner and writable and row.handler != INCOMPLETE_REVIEW_HANDLER,
+    )
 
 
 class ContinuityComparison(BaseModel):
@@ -306,17 +336,7 @@ def get_comparison(
         require_shot_review(db, version)
     except DomainError as exc:
         blocker = Blocker(code=exc.code, message=exc.message)
-    owner = project.owner_id == actor
-    member = (
-        db.scalar(
-            select(ProjectMember).where(
-                ProjectMember.project_id == project_id, ProjectMember.user_id == UUID(actor)
-            )
-        )
-        if not owner
-        else None
-    )
-    writable = not project.archived and (owner or member is not None and member.role == "editor")
+    owner, writable = comparison_access(db, project, actor)
     editable = writable and asset.status not in {"ARCHIVED", "LOCKED"}
     usable = editable and not version.stale and blocker is None
     humans = list(
@@ -324,13 +344,7 @@ def get_comparison(
             select(HumanReviewRequest)
             .where(
                 HumanReviewRequest.project_id == project_id,
-                HumanReviewRequest.handler.in_(
-                    {
-                        HUMAN_REVIEW_HANDLER,
-                        INCOMPLETE_REVIEW_HANDLER,
-                        FEEDBACK_HANDLER,
-                    }
-                ),
+                HumanReviewRequest.handler.in_(COMPARISON_REVIEW_HANDLERS),
                 HumanReviewRequest.snapshot_json["version_id"].as_string() == str(version_id),
             )
             .order_by(HumanReviewRequest.created_at.desc(), HumanReviewRequest.id)
@@ -352,10 +366,7 @@ def get_comparison(
         images_truncated=truncated,
         revisions=revisions,
         human_reviews=[
-            ComparisonHumanReview(
-                **serialize(db, row).model_dump(),
-                can_approve=owner and writable and row.handler != INCOMPLETE_REVIEW_HANDLER,
-            )
+            comparison_human_review(db, row, owner=owner, writable=writable)
             for row in humans[:limit]
         ],
         next_human_offset=human_offset + limit if len(humans) > limit else None,
@@ -369,6 +380,41 @@ def get_comparison(
             can_select=usable and owner and version.status == "APPROVED",
         ),
     )
+
+
+@router.get("/{version_id}/continuity/human-reviews/{request_id}")
+def get_comparison_human_review(
+    project_id: UUID,
+    asset_id: UUID,
+    version_id: UUID,
+    request_id: UUID,
+    db: Database,
+    actor: Actor,
+    response: Response,
+) -> ComparisonHumanReview:
+    """Read an exact request beyond a paged history, with the same approval hints."""
+    project = require_project(db, project_id, actor)
+    asset = find_asset(db, project_id, asset_id, include_media=True)
+    version = find_version(db, asset_id, version_id)
+    if asset.asset_type not in {"SHOT_IMAGE", "IMAGE"} or (
+        version.metadata_json.get("required_review") == "ART_PROPOSAL"
+    ):
+        raise DomainError("NOT_FOUND", "镜头候选不存在", 404)
+    row = db.scalar(
+        select(HumanReviewRequest).where(
+            HumanReviewRequest.id == request_id,
+            HumanReviewRequest.project_id == project_id,
+            HumanReviewRequest.handler.in_(COMPARISON_REVIEW_HANDLERS),
+            HumanReviewRequest.snapshot_json["project_id"].as_string() == str(project_id),
+            HumanReviewRequest.snapshot_json["kind"].as_string() == "EXCEPTIONAL_SHOT",
+            HumanReviewRequest.snapshot_json["version_id"].as_string() == str(version_id),
+        )
+    )
+    if row is None:
+        raise DomainError("NOT_FOUND", "此精确图片没有该人工审核请求", 404)
+    response.headers["Cache-Control"] = "private, no-store"
+    owner, writable = comparison_access(db, project, actor)
+    return comparison_human_review(db, row, owner=owner, writable=writable)
 
 
 @router.get("/{version_id}/continuity/reviews/{review_id}/references/{reference_id}/image")
