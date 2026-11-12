@@ -90,7 +90,10 @@ test("UI-07 UI7-04/06：三类生产任务使用服务端20项分页及精确原
       "href",
       `/projects/${env.project.id}/episodes/${env.episodes[0].id}?${query}`,
     );
-  await panel.screenshot({
+  const title = panel.getByRole("heading", { name: "生产任务", exact: true });
+  await title.scrollIntoViewIfNeeded();
+  await expect(title).toBeInViewport();
+  await page.screenshot({
     path: info.outputPath("ui07-production-desktop.png"),
   });
   await panel.getByRole("button", { name: "下一页", exact: true }).click();
@@ -321,6 +324,12 @@ test("UI-07 UI7-08：390px键盘筛选及分页可用并保存截图", async ({
   ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(type).toContainText("图片生成");
+  const title = panel.getByRole("heading", { name: "生产任务", exact: true });
+  await title.scrollIntoViewIfNeeded();
+  await expect(title).toBeInViewport();
+  await page.screenshot({
+    path: info.outputPath("ui07-production-mobile-filters.png"),
+  });
   const apply = panel.getByRole("button", { name: "应用筛选", exact: true });
   await apply.focus();
   await expect(apply).toBeFocused();
@@ -337,7 +346,9 @@ test("UI-07 UI7-08：390px键盘筛选及分页可用并保存截图", async ({
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
-  await panel.screenshot({
+  await next.scrollIntoViewIfNeeded();
+  await expect(next).toBeInViewport();
+  await page.screenshot({
     path: info.outputPath("ui07-production-mobile.png"),
   });
 });
