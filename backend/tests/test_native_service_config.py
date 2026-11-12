@@ -6,12 +6,12 @@ from uuid import UUID
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import func, select
 from test_model_services import account
 
 from arclight.application.model_services import run_settings, text_snapshot
 from arclight.domain.model_suppliers import SUPPLIERS
-from arclight.persistence.models import ModelService
+from arclight.persistence.models import GatewayCall, GenerationJob, ModelService
 
 
 @pytest.mark.parametrize("preset", SUPPLIERS, ids=lambda p: p.kind + ":" + p.id)
@@ -120,3 +120,124 @@ def test_personal_native_protocol_is_frozen(client, settings, supplier, protocol
             db.scalar(select(ModelService).where(ModelService.user_id == UUID(uid))).model
             == "exact-native-model"
         )
+
+
+def test_speech_model_suggestions_are_v2_only_without_automatic_configuration(client):
+    account(client)
+    legacy = client.get("/api/v1/me/model-services")
+    response = client.get("/api/v1/me/model-services?catalog_version=2")
+    assert legacy.status_code == response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert legacy.json()["catalog_version"] == 1
+    assert "speech_models" not in legacy.json()
+    assert all("model" in row for row in legacy.json()["suppliers"])
+    catalog = response.json()
+    assert catalog["services"] == []
+    assert all("model" not in row for row in catalog["suppliers"])
+    models = catalog["speech_models"]
+    assert models
+    speech_suppliers = {row["id"] for row in catalog["suppliers"] if row["kind"] == "speech"}
+    identities = {(row["supplier"], row["model"]) for row in models}
+    assert len(identities) == len(models)
+    assert identities == {
+        ("qwen", "qwen3-tts-flash"),
+        ("siliconflow", "FunAudioLLM/CosyVoice2-0.5B"),
+        ("siliconflow", "fnlp/MOSS-TTSD-v0.5"),
+    }
+    deprecated_openai_models = {
+        "gpt-4o-mini-tts",
+        "gpt-4o-mini-tts-2025-12-15",
+        "gpt-4o-mini-tts-2025-03-20",
+        "tts-1",
+        "tts-1-hd",
+    }
+    assert deprecated_openai_models.isdisjoint(row["model"] for row in models)
+    assert "openai" in speech_suppliers
+    assert not any(row["supplier"] == "openai" for row in models)
+    for row in models:
+        assert set(row) == {"supplier", "model", "name", "description"}
+        assert row["supplier"] in speech_suppliers
+        assert all(isinstance(value, str) and value.strip() for value in row.values())
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(ModelService)) == 0
+
+
+@pytest.mark.parametrize("supplier", ["qwen", "siliconflow", "openai"])
+def test_speech_model_suggestions_save_exact_ids_and_preserve_unlisted_models_without_calls(
+    client, settings, monkeypatch, supplier
+):
+    def unexpected_call(*args, **kwargs):
+        pytest.fail("Reading suggestions and saving model configuration must not call a provider")
+
+    monkeypatch.setattr("socket.getaddrinfo", unexpected_call)
+    monkeypatch.setattr(
+        "arclight.providers.native_media.NativeMediaProvider.submit", unexpected_call
+    )
+    settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
+    uid = account(client)
+    response = client.get("/api/v1/me/model-services?catalog_version=2")
+    assert response.status_code == 200
+    catalog = response.json()
+    suggestion = next(
+        (row for row in catalog["speech_models"] if row["supplier"] == supplier), None
+    )
+    if supplier == "openai":
+        assert suggestion is None
+        # Removing suggestions must not reject an operator-specified existing ID.
+        selected_model = "gpt-4o-mini-tts"
+    else:
+        assert suggestion is not None
+        selected_model = suggestion["model"]
+    provider = next(
+        row for row in catalog["suppliers"] if row["id"] == supplier and row["kind"] == "speech"
+    )
+    path = "/api/v1/me/model-services/speech"
+    payload = {
+        "contract_version": 2,
+        "mode": "custom",
+        "supplier": supplier,
+        "model": selected_model,
+        "api_key": "private-speech-suggestion-canary",
+        "expected_revision": 0,
+    }
+    saved = client.put(path, json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["model"] == selected_model
+    initial_refresh = client.get("/api/v1/me/model-services?catalog_version=2")
+    assert initial_refresh.status_code == 200
+    assert initial_refresh.json()["services"][0]["model"] == selected_model
+    assert saved.json()["protocol"] == provider["protocol"]
+    assert saved.json()["base_url"] == provider["base_url"]
+    assert saved.json()["has_key"] is True
+    with client.app.state.session_factory() as db:
+        service = db.scalar(
+            select(ModelService).where(
+                ModelService.user_id == UUID(uid), ModelService.kind == "speech"
+            )
+        )
+        original_credential = service.credential_id
+        assert original_credential is not None
+    unlisted_model = f"operator-specific-{supplier}-tts-id"
+    assert unlisted_model not in {row["model"] for row in catalog["speech_models"]}
+    changed = client.put(
+        path,
+        json={**payload, "model": unlisted_model, "api_key": None, "expected_revision": 1},
+    )
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["model"] == unlisted_model
+    assert changed.json()["revision"] == 2 and changed.json()["has_key"] is True
+    fetched = client.get("/api/v1/me/model-services?catalog_version=2")
+    assert fetched.status_code == 200
+    assert "private-speech-suggestion-canary" not in fetched.text + saved.text + changed.text
+    assert fetched.json()["speech_models"] == catalog["speech_models"]
+    assert fetched.json()["services"][0]["model"] == unlisted_model
+    assert fetched.json()["services"][0]["key_status"] == "READY"
+    with client.app.state.session_factory() as db:
+        service = db.scalar(
+            select(ModelService).where(
+                ModelService.user_id == UUID(uid), ModelService.kind == "speech"
+            )
+        )
+        assert service.credential_id == original_credential
+        assert db.scalar(select(func.count()).select_from(GenerationJob)) == 0
+        assert db.scalar(select(func.count()).select_from(GatewayCall)) == 0

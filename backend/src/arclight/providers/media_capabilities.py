@@ -63,7 +63,12 @@ def resolve_parameters(provider: str, model: str) -> frozenset[str]:
     from arclight.providers.native_media_protocols import PARAMETERS
 
     if provider in PARAMETERS:
-        return PARAMETERS[provider]
+        parameters = PARAMETERS[provider]
+        # OpenAI explicitly excludes delivery instructions for these two models.
+        # Do not infer restrictions for unknown compatible models from their names.
+        if provider == "openai_tts" and model in {"tts-1", "tts-1-hd"}:
+            return parameters - {"instructions"}
+        return parameters
     if provider == "openai":
         return frozenset({"quality"})
     return frozenset({"steps"})

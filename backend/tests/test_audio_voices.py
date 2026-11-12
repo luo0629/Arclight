@@ -287,10 +287,14 @@ def test_voice_history_rejects_update_delete_and_replace(client, voice_case):
     saved, _ = save_voice(client, actor, project_id, voice_payload())
     with client.app.state.session_factory() as db:
         postgres = db.bind.dialect.name == "postgresql"
+        original = db.get(AudioVoiceVersion, saved.id)
+        assert original is not None
+        frozen_configuration = original.configuration_json
+        frozen_service_snapshot = original.service_snapshot_json
     statements = [
         "UPDATE audio_voice_versions SET updated_at=created_at WHERE id=:id",
         "DELETE FROM audio_voice_versions WHERE id=:id",
-        "TRUNCATE TABLE audio_voice_versions"
+        "TRUNCATE TABLE audio_voice_versions CASCADE"
         if postgres
         else (
             "INSERT OR REPLACE INTO audio_voice_versions "
@@ -303,6 +307,12 @@ def test_voice_history_rejects_update_delete_and_replace(client, voice_case):
             client.app.state.session_factory.begin() as db,
         ):
             db.execute(text(statement), {"id": saved.id if postgres else saved.id.hex})
+        with client.app.state.session_factory.begin() as db:
+            unchanged = db.get(AudioVoiceVersion, saved.id)
+            assert unchanged is not None
+            assert read_voice(unchanged) == saved
+            assert unchanged.configuration_json == frozen_configuration
+            assert unchanged.service_snapshot_json == frozen_service_snapshot
 
 
 def test_postgres_same_voice_creation_is_serialized_and_new_version_cas_conflicts(

@@ -17,6 +17,48 @@ class Supplier(BaseModel):
     response_format: Literal["json_schema", "json_object"] = "json_object"
 
 
+class SpeechModelPreset(BaseModel):
+    """Optional model suggestions; never defaults, admission rules or price quotes."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    supplier: str
+    model: str
+    name: str
+    description: str
+
+
+# Verified against official API documentation on 2026-11-12.
+# A suggestion does not expand the installed protocol's parameters or audio behavior.
+SPEECH_MODEL_PRESETS = (
+    SpeechModelPreset(
+        supplier="qwen",
+        model="qwen3-tts-flash",
+        name="Qwen3 TTS Flash",
+        description=(
+            "千问非实时语音合成；当前官方预设使用中国内地接口与对应 API Key；"
+            "使用 Qwen3 音色和原生 WAV，可设置 language_type。"
+        ),
+    ),
+    SpeechModelPreset(
+        supplier="siliconflow",
+        model="FunAudioLLM/CosyVoice2-0.5B",
+        name="CosyVoice2 0.5B",
+        description=(
+            "支持中文、英文及多语种；voice 需带模型前缀，如 FunAudioLLM/CosyVoice2-0.5B:alex。"
+        ),
+    ),
+    SpeechModelPreset(
+        supplier="siliconflow",
+        model="fnlp/MOSS-TTSD-v0.5",
+        name="MOSS TTSD v0.5",
+        description=(
+            "中英长文本语音；当前按单角色单音色使用，"
+            "voice 如 fnlp/MOSS-TTSD-v0.5:alex；建议 WAV 或 MP3。"
+        ),
+    ),
+)
+
+
 # Connection defaults only: the user supplies the model ID and personal credential.
 # Protocols are explicit: a vendor name is not evidence of model capabilities.
 SUPPLIERS = (

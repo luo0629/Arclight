@@ -262,6 +262,111 @@ def test_native_speech_request_and_private_audio(settings, tmp_path, protocol):
     receipt = provider.submit(request)
     assert receipt.status == "SUCCEEDED" and receipt.result
     assert provider.download(request, receipt.result.output_handles[0], 1024).data == audio
+
+
+@pytest.mark.parametrize(
+    "model,parameters,accepted",
+    [
+        ("tts-1", {"voice": "alloy", "instructions": "Speak calmly."}, False),
+        ("tts-1-hd", {"voice": "alloy", "instructions": "Speak calmly."}, False),
+        ("tts-1", {"voice": "alloy", "speed": 0.8}, True),
+        ("tts-1-hd", {"voice": "alloy", "speed": 1.2}, True),
+        ("gpt-4o-mini-tts", {"voice": "alloy", "instructions": "Speak calmly."}, True),
+        ("tts-1-compatible", {"voice": "alloy", "instructions": "Speak calmly."}, True),
+    ],
+)
+def test_native_tts_model_parameters_are_validated_before_wire_submission(
+    model, parameters, accepted
+):
+    spec = GenerationSpec(
+        provider="openai_tts",
+        model=model,
+        model_config_version="test-config:1",
+        prompt="Original test dialogue.",
+        prompt_version="test:1",
+        parameters=parameters,
+        output_spec={"format": "wav"},
+    )
+    if not accepted:
+        with pytest.raises(DomainError) as error:
+            media_submission(spec)
+        assert error.value.code == "PROVIDER_PARAMETERS_UNSUPPORTED"
+        return
+    path, body, _ = media_submission(spec)
+    assert path == "/audio/speech"
+    assert body == {
+        "model": model,
+        "input": spec.prompt,
+        "response_format": "wav",
+        **parameters,
+    }
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("FunAudioLLM/CosyVoice2-0.5B", id="cosyvoice2"),
+        pytest.param("fnlp/MOSS-TTSD-v0.5", id="moss-ttsd"),
+    ],
+)
+@pytest.mark.parametrize(
+    "output,accepted",
+    [
+        pytest.param({"format": "flac"}, False, id="flac"),
+        pytest.param({"format": "wav", "sample_rate": 48000}, False, id="wav-48000"),
+        pytest.param({"format": "mp3", "sample_rate": 24000}, False, id="mp3-24000"),
+        pytest.param({"format": "opus", "sample_rate": 44100}, False, id="opus-44100"),
+        pytest.param({"format": "wav", "sample_rate": 44100}, True, id="wav-44100"),
+        pytest.param({"format": "mp3", "sample_rate": 32000}, True, id="mp3-32000"),
+        pytest.param({"format": "opus", "sample_rate": 48000}, True, id="opus-48000"),
+        pytest.param({"format": "wav"}, True, id="wav-native-rate"),
+        pytest.param({"format": "mp3"}, True, id="mp3-native-rate"),
+        pytest.param({"format": "opus"}, True, id="opus-native-rate"),
+    ],
+)
+def test_siliconflow_known_speech_models_validate_format_and_rate_before_submission(
+    model, output, accepted
+):
+    spec = GenerationSpec(
+        provider="siliconflow_tts",
+        model=model,
+        model_config_version="test-config:1",
+        prompt="Original test dialogue.",
+        prompt_version="test:1",
+        parameters={"voice": f"{model}:alex", "speed": 1.0},
+        output_spec=output,
+    )
+    if not accepted:
+        with pytest.raises(DomainError) as error:
+            media_submission(spec)
+        assert error.value.code == "PROVIDER_PARAMETERS_UNSUPPORTED"
+        return
+    path, body, _ = media_submission(spec)
+    assert path == "/audio/speech"
+    assert body == {
+        "model": model,
+        "input": spec.prompt,
+        "voice": f"{model}:alex",
+        "speed": 1.0,
+        "response_format": output["format"],
+        **({"sample_rate": output["sample_rate"]} if "sample_rate" in output else {}),
+    }
+
+
+def test_siliconflow_unknown_compatible_speech_model_keeps_protocol_output_contract():
+    spec = GenerationSpec(
+        provider="siliconflow_tts",
+        model="FunAudioLLM/CosyVoice2-0.5B-compatible",
+        model_config_version="test-config:1",
+        prompt="Original test dialogue.",
+        prompt_version="test:1",
+        parameters={"voice": "custom-voice"},
+        output_spec={"format": "flac", "sample_rate": 48000},
+    )
+    path, body, _ = media_submission(spec)
+    assert path == "/audio/speech"
+    assert body["response_format"] == "flac"
+    assert body["sample_rate"] == 48000
     # Container safety is checked separately by the existing isolated parser before registration.
 
 

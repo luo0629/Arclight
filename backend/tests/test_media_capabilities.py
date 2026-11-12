@@ -34,7 +34,7 @@ from arclight.domain.media_capabilities import MediaCapabilities, validate_capab
 from arclight.persistence.generation import GenerationAttempt, GenerationJob
 from arclight.persistence.models import DependencyManifest
 from arclight.providers.media_cancel import CancellationReceipt
-from arclight.providers.media_capabilities import MOCK_CAPABILITIES
+from arclight.providers.media_capabilities import MOCK_CAPABILITIES, resolve_parameters
 from arclight.providers.media_query import QueryReceipt
 from arclight.providers.media_submission import MockMediaSubmissionProvider, SubmissionReceipt
 
@@ -92,6 +92,23 @@ def test_only_installed_capabilities_are_public_and_permission_scoped(client, ep
 def test_invalid_capability_declarations_are_rejected(changes):
     with pytest.raises(ValidationError):
         profile(**changes)
+
+
+@pytest.mark.parametrize(
+    "model,instructions_supported",
+    [
+        ("tts-1", False),
+        ("tts-1-hd", False),
+        ("gpt-4o-mini-tts", True),
+        ("tts-1-compatible", True),
+    ],
+)
+def test_native_tts_gateway_parameter_declaration_obeys_known_model_support(
+    model, instructions_supported
+):
+    parameters = resolve_parameters("openai_tts", model)
+    assert {"voice", "speed"} <= parameters
+    assert ("instructions" in parameters) is instructions_supported
 
 
 @pytest.mark.parametrize(

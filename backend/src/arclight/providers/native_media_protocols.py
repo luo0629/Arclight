@@ -68,6 +68,8 @@ def capabilities(protocol: str) -> MediaCapabilities:
 
 
 def validate_spec(spec: GenerationSpec) -> None:
+    from arclight.providers.media_capabilities import resolve_parameters
+
     task = KINDS[spec.provider]
     validate_capabilities(capabilities(spec.provider), spec, task, 0)
     output = spec.output_spec
@@ -78,7 +80,10 @@ def validate_spec(spec: GenerationSpec) -> None:
         if task == "VIDEO"
         else {"sample_rate", "channels"}
     )
-    if set(spec.parameters) - PARAMETERS[spec.provider] or set(output) - allowed:
+    if (
+        set(spec.parameters) - resolve_parameters(spec.provider, spec.model)
+        or set(output) - allowed
+    ):
         raise DomainError("PROVIDER_PARAMETERS_UNSUPPORTED", "当前协议不支持这些参数", 422)
     for key, value in spec.parameters.items():
         if key in {
@@ -127,6 +132,24 @@ def validate_spec(spec: GenerationSpec) -> None:
             or output["sample_rate"] not in {8000, 16000, 24000, 32000, 44100, 48000}
         ):
             raise DomainError("PROVIDER_PARAMETERS_UNSUPPORTED", "当前协议不支持该采样率", 422)
+        if spec.provider == "siliconflow_tts" and spec.model in {
+            "FunAudioLLM/CosyVoice2-0.5B",
+            "fnlp/MOSS-TTSD-v0.5",
+        }:
+            sample_rates = {
+                "wav": {8000, 16000, 24000, 32000, 44100},
+                "mp3": {32000, 44100},
+                "opus": {48000},
+            }
+            kind = cast(str, output.get("format", "wav"))
+            if kind not in sample_rates or (
+                "sample_rate" in output and output["sample_rate"] not in sample_rates[kind]
+            ):
+                raise DomainError(
+                    "PROVIDER_PARAMETERS_UNSUPPORTED",
+                    "当前 SiliconFlow 模型不支持该音频格式或采样率",
+                    422,
+                )
     elif task == "VIDEO":
         duration = output.get("duration_seconds")
         if (

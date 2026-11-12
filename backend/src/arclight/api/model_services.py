@@ -19,7 +19,13 @@ from arclight.application.service_credentials import (
 )
 from arclight.core.errors import DomainError
 from arclight.core.service_keys import keyring
-from arclight.domain.model_suppliers import LEGACY_MODELS, PROTOCOLS, SUPPLIERS, supplier_by_id
+from arclight.domain.model_suppliers import (
+    LEGACY_MODELS,
+    PROTOCOLS,
+    SPEECH_MODEL_PRESETS,
+    SUPPLIERS,
+    supplier_by_id,
+)
 from arclight.persistence.models import ModelService, ServiceAudit
 
 Kind = Literal["text", "image", "video", "speech"]
@@ -91,6 +97,11 @@ def list_services(
         "text_runtime": "mock" if settings.provider == "mock" else "服务器文字服务",
         "catalog_version": catalog_version,
         "protocols": PROTOCOLS,
+        **(
+            {"speech_models": [preset.model_dump() for preset in SPEECH_MODEL_PRESETS]}
+            if catalog_version == 2
+            else {}
+        ),
         "suppliers": [
             row.model_dump()
             if catalog_version == 2

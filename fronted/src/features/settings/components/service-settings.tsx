@@ -49,8 +49,15 @@ type Profile = {
   key_status?: string;
 };
 type Draft = Profile & { api_key: string; clear_key: boolean; dirty: boolean };
+type SpeechModelPreset = {
+  supplier: string;
+  model: string;
+  name: string;
+  description: string;
+};
 type Configuration = {
   services: Profile[];
+  speech_models?: SpeechModelPreset[];
   suppliers: ServicePreset[];
   protocols: Record<Kind, string[]>;
   can_store_keys: boolean;
@@ -85,6 +92,7 @@ const initialDrafts = (): Record<Kind, Draft> => ({
   speech: empty("speech"),
 });
 const endpoint = (url: string) => url.trim().replace(/\/+$/, "");
+const CUSTOM_TTS_MODEL = "__custom_tts__";
 const protocolNames: Record<string, string> = {
   openai_chat: "OpenAI Chat Completions",
   gemini: "Google Gemini",
@@ -167,6 +175,13 @@ export default function ServiceSettings({
   const presets =
     config?.suppliers.filter((supplier) => supplier.kind === kind) ?? [];
   const preset = presets.find((row) => row.id === draft.supplier);
+  const speechModels =
+    kind === "speech"
+      ? (config?.speech_models ?? []).filter(
+          (row) => row.supplier === draft.supplier,
+        )
+      : [];
+  const speechModel = speechModels.find((row) => row.model === draft.model);
   const stored = config?.services.find((row) => row.kind === kind);
   const hasStoredKey =
     !!stored?.has_key &&
@@ -506,6 +521,48 @@ export default function ServiceSettings({
                         </span>
                       </FormLabel>
                     )}
+                    {kind === "speech" && (
+                      <Field data-disabled={busy}>
+                        <FieldLabel htmlFor="service-speech-model-preset">
+                          TTS 模型预设
+                        </FieldLabel>
+                        <ChoiceSelect
+                          id="service-speech-model-preset"
+                          aria-label="TTS 模型预设"
+                          aria-describedby="service-speech-model-preset-hint"
+                          placeholder="选择预设模型"
+                          value={
+                            draft.supplier === "custom"
+                              ? CUSTOM_TTS_MODEL
+                              : (speechModel?.model ?? "")
+                          }
+                          disabled={busy}
+                          onValueChange={(model) => {
+                            if (model === CUSTOM_TTS_MODEL) {
+                              selectProvider("custom");
+                            } else {
+                              change({ model });
+                            }
+                          }}
+                          options={[
+                            ...speechModels.map((row) => ({
+                              value: row.model,
+                              label: row.name,
+                            })),
+                            {
+                              value: CUSTOM_TTS_MODEL,
+                              label: "用户自定义 TTS 模型",
+                            },
+                          ]}
+                        />
+                        <FieldDescription id="service-speech-model-preset-hint">
+                          {draft.supplier === "custom"
+                            ? "填写 Base URL、API Key 和模型 ID，并选择服务支持的 API 协议。"
+                            : (speechModel?.description ??
+                              "选择预设填入模型 ID，或选择用户自定义 TTS 模型。")}
+                        </FieldDescription>
+                      </Field>
+                    )}
                     <Field data-invalid={!!modelError} data-disabled={busy}>
                       <FieldLabel htmlFor="service-model">
                         模型 ID
@@ -536,7 +593,9 @@ export default function ServiceSettings({
                         }
                       />
                       <FieldDescription id="service-model-hint">
-                        请手动填写当前服务商支持的模型 ID。
+                        {speechModels.length > 0
+                          ? "可选择 TTS 预设，或填写当前服务商支持的模型 ID。"
+                          : "请手动填写当前服务商支持的模型 ID。"}
                       </FieldDescription>
                       {modelError && (
                         <FieldError id="service-model-error">
