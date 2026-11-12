@@ -104,10 +104,10 @@ export default function ProductionStageNavigation({
   return (
     <section
       aria-label="剧集生产阶段"
-      className="mb-4 max-h-[45dvh] min-w-0 shrink-0 overflow-y-auto rounded-xl border bg-card p-3 sm:p-4"
+      className="max-h-[45dvh] min-w-0 shrink-0 overflow-y-auto border-b bg-card px-3 py-2"
     >
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 text-sm">
-        <h2 className="font-semibold">制作进度</h2>
+      <div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-xs">
+        <h2 className="text-sm font-semibold">制作进度</h2>
         <span role="status">
           {status.loading
             ? "正在核对生产状态…"
@@ -124,7 +124,7 @@ export default function ProductionStageNavigation({
           刷新阶段状态
         </Button>
       </div>
-      <nav aria-label="制作阶段" className="overflow-x-auto pb-2">
+      <nav aria-label="制作阶段" className="overflow-x-auto">
         <ol className="flex min-w-max gap-1">
           {productionStages.map((item, index) => (
             <li key={item.id}>
@@ -134,7 +134,7 @@ export default function ProductionStageNavigation({
                 aria-expanded={stage === item.id}
                 aria-controls="production-stage-detail"
                 className={cn(
-                  "h-auto min-w-24 flex-col items-start gap-1 px-3 py-2",
+                  "h-auto min-h-11 min-w-24 flex-col items-start gap-0.5 px-3 py-1",
                   stage === item.id && "bg-muted ring-1 ring-border",
                 )}
                 onClick={() => navigate({ stage: item.id })}
@@ -155,29 +155,33 @@ export default function ProductionStageNavigation({
           无法读取当前剧集的生产状态。旧状态已清空，请确认权限或稍后重试。
         </Notice>
       )}
-      {state && (
-        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span>
-            必需镜头已批准 {state.approved_shot_count} / {state.shot_count}
-          </span>
-          {state.shot_count > 0 && (
-            <progress
-              aria-label="必需镜头批准进度"
-              value={state.approved_shot_count}
-              max={state.shot_count}
-              className="h-2 w-28 accent-primary"
-            />
-          )}
-          <span>待检查／审核镜头 {pendingShots}</span>
-          {state.has_partial_failure && (
-            <span>存在部分失败，请查看任务详情</span>
-          )}
-          {state.blocked_phase && (
-            <span>阻塞位置：{phaseLabel(state.blocked_phase)}</span>
-          )}
-          {(!writable || state.archived) && <span>当前只读，可查看各阶段</span>}
-        </div>
-      )}
+      <div className="mt-1 min-h-4 text-xs text-muted-foreground">
+        {state && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <span>
+              必需镜头已批准 {state.approved_shot_count} / {state.shot_count}
+            </span>
+            {state.shot_count > 0 && (
+              <progress
+                aria-label="必需镜头批准进度"
+                value={state.approved_shot_count}
+                max={state.shot_count}
+                className="h-2 w-28 accent-primary"
+              />
+            )}
+            <span>待检查／审核镜头 {pendingShots}</span>
+            {state.has_partial_failure && (
+              <span>存在部分失败，请查看任务详情</span>
+            )}
+            {state.blocked_phase && (
+              <span>阻塞位置：{phaseLabel(state.blocked_phase)}</span>
+            )}
+            {(!writable || state.archived) && (
+              <span>当前只读，可查看各阶段</span>
+            )}
+          </div>
+        )}
+      </div>
       {selected && (
         <div
           id="production-stage-detail"
