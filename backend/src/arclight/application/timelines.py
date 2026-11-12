@@ -278,6 +278,11 @@ def validate_snapshot_facts(
                 raise DomainError(
                     "TIMELINE_LINE_INVALID", "片段须引用本精确分镜剧本中的稳定台词身份", 422
                 )
+            if track.kind == "VOICE":
+                from arclight.application.audio_production import validate_audio_line
+
+                assert clip.line_id is not None
+                validate_audio_line(db, clip.source_asset_version_id, script.id, clip.line_id)
             if clip.audio_version_id:
                 require_track_source(db, episode, clip.audio_version_id, "AUDIO")
 

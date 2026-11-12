@@ -15,6 +15,7 @@ from arclight.api.art_proposals import router as art_proposals_router
 from arclight.api.asset_usage import router as asset_usage_router
 from arclight.api.asset_versions import router as asset_versions_router
 from arclight.api.assets import router as assets_router
+from arclight.api.audio_production import router as audio_production_router
 from arclight.api.auth import router as auth_router
 from arclight.api.canvas import router as canvas_router
 from arclight.api.character_matching import router as character_matching_router
@@ -179,6 +180,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(storage_cleanup_router)
     app.include_router(render_previews_router)
     app.include_router(timelines_router)
+    app.include_router(audio_production_router)
     app.include_router(render_manifests_router)
     app.include_router(render_jobs_router)
     app.include_router(render_deliveries_router)
