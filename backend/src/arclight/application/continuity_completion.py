@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.commands import emit
 from arclight.application.continuity_workflow import read_work
+from arclight.application.generation_candidates import requires_continuity_review
 from arclight.application.production_versions import checked_snapshot
 from arclight.domain.agent_state import restore_agent_state, transition_agent_step
 from arclight.domain.continuity_reviews import ReviewContractRecord
@@ -26,6 +27,15 @@ def lock_selection_run(db: Session, project_id: UUID, version_id: UUID) -> None:
     from arclight.application.production_events import begin_serialized
 
     begin_serialized(db)
+    version = db.get(AssetVersion, version_id)
+    asset = db.get(VisualAsset, version.asset_id) if version is not None else None
+    if (
+        version is None
+        or asset is None
+        or asset.project_id != project_id
+        or not requires_continuity_review(version, asset)
+    ):
+        return  # Ordinary references do not depend on the later generation tables.
     candidate = db.scalar(
         select(GenerationCandidate).where(
             GenerationCandidate.project_id == project_id,

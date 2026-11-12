@@ -38,12 +38,9 @@ from arclight.providers.media_outputs import MediaOutputProvider
 from arclight.providers.media_submission import MediaSubmission
 
 
-def require_candidate_review(
-    version: AssetVersion, db: Session | None = None
-) -> ReviewContractRecord | None:
+def requires_continuity_review(version: AssetVersion, asset: VisualAsset | None) -> bool:
     gate = version.metadata_json.get("required_review")
-    asset = db.get(VisualAsset, version.asset_id) if db is not None else None
-    if (
+    return (
         gate == "CONTINUITY"
         or asset is not None
         and (
@@ -52,7 +49,15 @@ def require_candidate_review(
             and version.creation_key is not None
             and gate != "ART_PROPOSAL"
         )
-    ):
+    )
+
+
+def require_candidate_review(
+    version: AssetVersion, db: Session | None = None
+) -> ReviewContractRecord | None:
+    gate = version.metadata_json.get("required_review")
+    asset = db.get(VisualAsset, version.asset_id) if db is not None else None
+    if requires_continuity_review(version, asset):
         if db is None:
             raise DomainError("CONTINUITY_REVIEW_REQUIRED", "候选图片须先完成必需的连续性审查", 409)
         from arclight.application.continuity_selection import require_shot_review
