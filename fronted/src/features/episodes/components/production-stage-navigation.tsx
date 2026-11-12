@@ -292,7 +292,7 @@ function StageAudio({
   const detail = useRenderDetail(episodeId, read, ignore);
   const timeline = detail.data;
   return (
-    <div
+    <section
       aria-label="声音与字幕现状"
       className="mt-3 rounded-lg bg-muted/40 p-3"
     >
@@ -335,6 +335,6 @@ function StageAudio({
           </details>
         </>
       )}
-    </div>
+    </section>
   );
 }
