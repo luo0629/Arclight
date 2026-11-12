@@ -331,6 +331,27 @@ for (const viewport of [
       fullPage: true,
       animations: "disabled",
     });
+    await dialog.locator("form").evaluate((element) =>
+      element.scrollIntoView({
+        block: "start",
+        inline: "nearest",
+        behavior: "instant",
+      }),
+    );
+    await expect(dialog.getByLabel("API Key", { exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(dialog.getByLabel("模型 ID", { exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(
+      dialog.getByText(selected!.description, { exact: true }),
+    ).toBeInViewport({ ratio: 1 });
+    await page.screenshot({
+      path: testInfo.outputPath(`tts-model-presets-form-${viewport.width}.png`),
+      fullPage: true,
+      animations: "disabled",
+    });
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
@@ -443,6 +464,65 @@ for (const viewport of [
       fullPage: true,
       animations: "disabled",
     });
+    await dialog.locator("form").evaluate((element) =>
+      element.scrollIntoView({
+        block: "start",
+        inline: "nearest",
+        behavior: "instant",
+      }),
+    );
+    await expect(dialog.getByLabel("API Key", { exact: true })).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(dialog.getByLabel("Base URL", { exact: true })).toBeInViewport(
+      {
+        ratio: 1,
+      },
+    );
+    if (viewport.width >= 640) {
+      await expect(
+        dialog.getByLabel("模型 ID", { exact: true }),
+      ).toBeInViewport({
+        ratio: 1,
+      });
+      await expect(
+        dialog.getByRole("combobox", { name: "API 协议", exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+    }
+    await page.screenshot({
+      path: testInfo.outputPath(`tts-custom-model-form-${viewport.width}.png`),
+      fullPage: true,
+      animations: "disabled",
+    });
+    if (viewport.width < 640) {
+      await dialog.getByLabel("Base URL", { exact: true }).evaluate((element) =>
+        element.closest("label")!.scrollIntoView({
+          block: "start",
+          inline: "nearest",
+          behavior: "instant",
+        }),
+      );
+      await expect(
+        dialog.getByLabel("Base URL", { exact: true }),
+      ).toBeInViewport({
+        ratio: 1,
+      });
+      await expect(
+        dialog.getByLabel("模型 ID", { exact: true }),
+      ).toBeInViewport({
+        ratio: 1,
+      });
+      await expect(
+        dialog.getByRole("combobox", { name: "API 协议", exact: true }),
+      ).toBeInViewport({ ratio: 1 });
+      await page.screenshot({
+        path: testInfo.outputPath(
+          `tts-custom-model-fields-${viewport.width}.png`,
+        ),
+        fullPage: true,
+        animations: "disabled",
+      });
+    }
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= innerWidth,
