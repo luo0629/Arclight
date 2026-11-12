@@ -301,18 +301,34 @@ test("UI-07 UI7-08：390px键盘筛选及分页可用并保存截图", async ({
   await expect(panel.getByRole("article")).toHaveCount(20);
   const type = panel.getByRole("combobox", { name: "任务类型", exact: true });
   await type.focus();
+  await expect(type).toBeFocused();
   await page.keyboard.press("Enter");
+  await expect(page.getByRole("listbox")).toBeVisible();
+  await expect(
+    page.getByRole("option", { name: "全部", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("Home");
+  await expect(
+    page.getByRole("option", { name: "全部", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("option", { name: "文字创作", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("option", { name: "图片生成", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(type).toContainText("图片生成");
   const apply = panel.getByRole("button", { name: "应用筛选", exact: true });
   await apply.focus();
+  await expect(apply).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(panel).toContainText("共 21 项；第 1 页");
   const next = panel.getByRole("button", { name: "下一页", exact: true });
   await next.focus();
+  await expect(next).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(panel).toContainText("共 21 项；第 2 页");
   await expect(panel.getByRole("article")).toHaveCount(1);
