@@ -22,7 +22,7 @@ from arclight.application.files import record_asset_file
 from arclight.application.production_versions import bind_output, digest
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.asset_versions import MAX_IMAGE_BYTES, ImportedImage, decode_image
+from arclight.domain.asset_versions import ImportedImage, decode_image
 from arclight.domain.continuity_reviews import ReviewContractRecord
 from arclight.persistence.generation_candidates import GenerationImageImport
 from arclight.persistence.models import (
@@ -240,9 +240,9 @@ def import_attempt(
         image = None
         error = None
         try:
-            output = bounded_call(partial(provider.download, request, handle, MAX_IMAGE_BYTES), 30)
-            if not output.data or len(output.data) > MAX_IMAGE_BYTES:
-                raise DomainError("INVALID_IMAGE", "生成图片超出大小限制", 422)
+            output = bounded_call(partial(provider.download, request, handle, None), 30)
+            if not output.data:
+                raise DomainError("INVALID_IMAGE", "生成图片不能为空", 422)
             # Untrusted results use a private temporary object before validation;
             # only successfully decoded bytes reach immutable asset storage.
             with TemporaryDirectory(prefix="arclight-generation-") as folder:
@@ -250,7 +250,7 @@ def import_attempt(
                 with staging.open("xb") as stream:
                     stream.write(output.data)
                 with staging.open("rb") as stream:
-                    staged = stream.read(MAX_IMAGE_BYTES + 1)
+                    staged = stream.read()
                 image = decode_image(base64.b64encode(staged).decode(), output.media_type)
         except DomainError as exc:
             if exc.status_code >= 500:

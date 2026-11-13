@@ -1,4 +1,4 @@
-"""Compile the frozen, admitted static-image contract into a bounded byte-only plan."""
+"""Compile frozen admitted images into a byte-only plan with bounded render work."""
 
 import base64
 
@@ -13,7 +13,6 @@ from arclight.domain.timeline_visuals import ClipVisual
 from arclight.media.execution import MediaObserver
 from arclight.media.render_plan import (
     MAX_FRAMES,
-    MAX_INPUT_BYTES,
     MAX_PIXEL_FRAMES,
     RenderClip,
     RenderPlan,
@@ -50,7 +49,6 @@ def build_plan(
     sources = {item.asset_version_id: item for item in snapshot.sources}
     fades = snapshot.timeline.video_fades()
     clips = []
-    encoded_bytes = 0
     for clip in sorted(
         next(t for t in snapshot.timeline.tracks if t.kind == "VIDEO").clips,
         key=lambda c: c.ordinal,
@@ -61,12 +59,9 @@ def build_plan(
         assert reference is not None
         file = db.get(StoredFile, reference.file_id)
         assert file is not None
-        data = file_storage(settings, file).read(file.object_key, 1024**2, reference.sha256)
+        data = file_storage(settings, file).read(file.object_key, None, reference.sha256)
         if len(data) != reference.byte_size:
             raise DomainError("OBJECT_UNAVAILABLE", "精确图片大小与文件回执不符", 409)
-        encoded_bytes += 4 * ((len(data) + 2) // 3) + 4096
-        if encoded_bytes > MAX_INPUT_BYTES - 4096:
-            raise DomainError("RENDER_WORK_LIMIT", "渲染计划字节数超过执行限制", 409)
         clips.append(
             RenderClip(
                 image=base64.b64encode(data).decode("ascii"),
@@ -83,7 +78,4 @@ def build_plan(
         )
     except ValidationError:
         raise DomainError("RENDER_PLAN_INVALID", "渲染计划超限或时间范围无效", 409) from None
-    result = plan.model_dump_json().encode()
-    if len(result) > MAX_INPUT_BYTES:
-        raise DomainError("RENDER_WORK_LIMIT", "渲染计划字节数超过执行限制", 409)
-    return result
+    return plan.model_dump_json().encode()

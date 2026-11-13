@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from arclight.domain.asset_versions import MAX_IMAGE_BYTES, MAX_IMAGE_PIXELS
+from arclight.domain.asset_versions import MAX_IMAGE_PIXELS
 
 
 class CheckedImage(BaseModel):
@@ -13,7 +13,7 @@ class CheckedImage(BaseModel):
 
     checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
     media_type: str = Field(pattern=r"^image/(png|jpeg)$")
-    byte_size: int = Field(strict=True, gt=0, le=MAX_IMAGE_BYTES)
+    byte_size: int = Field(strict=True, gt=0)
     width: int = Field(strict=True, gt=0, le=4096)
     height: int = Field(strict=True, gt=0, le=4096)
 

@@ -11,6 +11,7 @@ from arclight.application.audio_tts import (
     create_tts,
     read_result,
     read_tts,
+    regenerate_tts,
     register_result,
     require_tts,
 )
@@ -19,6 +20,7 @@ from arclight.application.commands import require_project
 from arclight.domain.audio_tts import (
     AudioTTSCreate,
     AudioTTSRead,
+    AudioTTSRegenerate,
     AudioTTSRegister,
     AudioTTSResultRead,
 )
@@ -89,6 +91,28 @@ def create(
     actor: Actor,
 ) -> AudioTTSRead:
     row, created = create_tts(
+        db,
+        snapshot_id,
+        line_id,
+        actor,
+        payload,
+        execution_policy=request.app.state.settings.media_execution_policy,
+    )
+    response.status_code = 202 if created else 200
+    return row
+
+
+@router.post("/audio-snapshots/{snapshot_id}/lines/{line_id}/tts/regenerate", status_code=202)
+def regenerate(
+    snapshot_id: UUID,
+    line_id: str,
+    payload: AudioTTSRegenerate,
+    request: Request,
+    response: Response,
+    db: Database,
+    actor: Actor,
+) -> AudioTTSRead:
+    row, created = regenerate_tts(
         db,
         snapshot_id,
         line_id,

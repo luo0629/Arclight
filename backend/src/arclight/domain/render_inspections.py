@@ -78,7 +78,7 @@ class RenderInspectionResult(BaseModel):
     schema_version: Literal[1] = 1
     checker: Literal["arclight-ffmpeg-decode-v1"] = "arclight-ffmpeg-decode-v1"
     output_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
-    byte_size: int = Field(strict=True, gt=0, le=128 * 1024**2)
+    byte_size: int = Field(strict=True, gt=0)
     measurement: RenderMediaMeasurement | None
     checks: tuple[RenderCheck, ...] = Field(min_length=9, max_length=9)
     failure: InspectionFailure | None = None

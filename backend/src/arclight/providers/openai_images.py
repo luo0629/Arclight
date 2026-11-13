@@ -11,7 +11,6 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.asset_versions import MAX_IMAGE_BASE64, MAX_IMAGE_BYTES
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
 from arclight.domain.media_capabilities import validate_capabilities
 from arclight.domain.model_gateway import GatewayFailure
@@ -39,7 +38,7 @@ def validate_spec(spec: GenerationSpec) -> None:
 
 class ImageData(BaseModel):
     model_config = ConfigDict(extra="ignore", hide_input_in_errors=True)
-    b64_json: str = Field(min_length=1, max_length=MAX_IMAGE_BASE64, repr=False)
+    b64_json: str = Field(min_length=1, repr=False)
 
 
 class ImageResponse(BaseModel):
@@ -130,11 +129,8 @@ class OpenAIImageProvider:
                     "content-encoding", "identity"
                 ) not in {"", "identity"}:
                     raise GatewayFailure("INVALID_RESPONSE")
-                maximum = spec.batch_size * MAX_IMAGE_BASE64 + 16384
                 raw = bytearray()
                 for chunk in response.iter_raw(chunk_size=65536):
-                    if len(raw) + len(chunk) > maximum:
-                        raise GatewayFailure("INVALID_RESPONSE")
                     raw.extend(chunk)
                 result = ImageResponse.model_validate_json(raw)
                 request_id = response.headers.get("x-request-id")
@@ -154,7 +150,7 @@ class OpenAIImageProvider:
         for index, item in enumerate(result.data):
             try:
                 data = base64.b64decode(item.b64_json, validate=True)
-                if not data or len(data) > MAX_IMAGE_BYTES:
+                if not data:
                     raise ValueError
             except (ValueError, binascii.Error):
                 raise GatewayFailure("INVALID_RESPONSE") from None
@@ -170,7 +166,7 @@ class OpenAIImageProvider:
             except DomainError as exc:
                 if exc.code != "OBJECT_EXISTS":
                     raise GatewayFailure("PROVIDER_FAILED") from None
-                if self.store.read(key, MAX_IMAGE_BYTES, checksum) != data:
+                if self.store.read(key, None, checksum) != data:
                     raise GatewayFailure("INVALID_RESPONSE") from None
             handles.append(handle)
         # Dollar charges are not returned by Images. Tokens never become an invoice.
@@ -184,13 +180,13 @@ class OpenAIImageProvider:
             cost=None,
         )
 
-    def download(self, request: MediaSubmission, handle: str, max_bytes: int) -> MediaOutput:
+    def download(self, request: MediaSubmission, handle: str, max_bytes: int | None) -> MediaOutput:
         prefix = f"openai/image/{request.job_id.hex}/{request.attempt_id.hex}/"
         match = re.fullmatch(re.escape(prefix) + r"([0-3])/([a-f0-9]{64})\.(png|jpeg)", handle)
         if match is None:
             raise DomainError("MEDIA_OUTPUT_UNAVAILABLE", "图像结果标识不属于当前尝试", 422)
         checksum, kind = match[2], match[3]
         return MediaOutput(
-            self.store.read(result_object_key(handle), min(max_bytes, MAX_IMAGE_BYTES), checksum),
+            self.store.read(result_object_key(handle), max_bytes, checksum),
             "image/" + kind,
         )

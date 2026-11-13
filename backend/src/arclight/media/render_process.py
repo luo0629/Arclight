@@ -7,7 +7,7 @@ def render(data: bytes, phase: str) -> bytes:
     import av
     from PIL import Image, ImageOps
 
-    if not 0 < len(data) <= 1024 * 1024:
+    if not data:
         raise ValueError("Invalid render input size")
     output = BytesIO()
     if phase == "encode":
@@ -63,6 +63,6 @@ def render(data: bytes, phase: str) -> bytes:
     else:
         raise ValueError("Unknown rendering phase")
     result = output.getvalue()
-    if not 0 < len(result) <= 1024 * 1024:
+    if not result:
         raise ValueError("Invalid render output size")
     return result

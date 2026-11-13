@@ -3,10 +3,12 @@ from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     String,
     Text,
@@ -462,7 +464,7 @@ class StoredFile(Entity, Base):
     bucket: Mapped[str | None] = mapped_column(String(63), nullable=True)
     object_key: Mapped[str] = mapped_column(String(512))
     checksum: Mapped[str] = mapped_column(String(64))
-    byte_size: Mapped[int]
+    byte_size: Mapped[int] = mapped_column(BigInteger().with_variant(Integer(), "sqlite"))
     media_type: Mapped[str] = mapped_column(String(100))
     original_name: Mapped[str] = mapped_column(String(160))
     source_note: Mapped[str] = mapped_column(Text)
@@ -483,7 +485,7 @@ class UploadIntent(Entity, Base):
     purpose: Mapped[str] = mapped_column(String(32))
     original_name: Mapped[str] = mapped_column(String(160))
     declared_media_type: Mapped[str] = mapped_column(String(100))
-    byte_size: Mapped[int]
+    byte_size: Mapped[int] = mapped_column(BigInteger().with_variant(Integer(), "sqlite"))
     checksum: Mapped[str] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     created_by: Mapped[str] = mapped_column(String(100))
@@ -523,7 +525,7 @@ class CleanupItem(Entity, Base):
     __tablename__ = "cleanup_items"
     plan_id: Mapped[UUID] = mapped_column(ForeignKey("cleanup_plans.id"), index=True)
     object_key: Mapped[str] = mapped_column(String(512))
-    byte_size: Mapped[int]
+    byte_size: Mapped[int] = mapped_column(BigInteger().with_variant(Integer(), "sqlite"))
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     object_token: Mapped[str] = mapped_column(String(256))
     reason: Mapped[str] = mapped_column(String(32))

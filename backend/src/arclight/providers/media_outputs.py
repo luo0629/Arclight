@@ -8,7 +8,6 @@ from PIL import Image
 
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.asset_versions import MAX_IMAGE_BYTES
 from arclight.providers.media_submission import MediaSubmission
 
 
@@ -21,15 +20,15 @@ class MediaOutput:
 class MediaOutputProvider(Protocol):
     name: str
 
-    def download(self, request: MediaSubmission, handle: str, max_bytes: int) -> MediaOutput:
-        """Return at most max_bytes; real adapters must bound their network reads."""
+    def download(self, request: MediaSubmission, handle: str, max_bytes: int | None) -> MediaOutput:
+        """Read the exact media output; an explicit caller limit remains optional."""
         ...
 
 
 class MockMediaOutputProvider:
     name = "mock"
 
-    def download(self, request: MediaSubmission, handle: str, max_bytes: int) -> MediaOutput:
+    def download(self, request: MediaSubmission, handle: str, max_bytes: int | None) -> MediaOutput:
         spec = request.snapshot["context"]["generation"]
         allowed = {
             f"mock/image/{request.attempt_id}/{index}" for index in range(spec.get("batch_size", 1))
@@ -46,7 +45,7 @@ class MockMediaOutputProvider:
         index = int(handle.rsplit("/", 1)[1])
         Image.new("RGB", (width, height), (30 + index * 3, 70, 120)).save(stream, kind)
         data = stream.getvalue()
-        if len(data) > min(max_bytes, MAX_IMAGE_BYTES):
+        if max_bytes is not None and len(data) > max_bytes:
             raise DomainError("INVALID_IMAGE", "Mock output exceeds byte limit", 422)
         return MediaOutput(data, "image/jpeg" if kind == "JPEG" else "image/png")
 

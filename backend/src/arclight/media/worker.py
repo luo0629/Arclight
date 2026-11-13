@@ -19,8 +19,8 @@ def main() -> None:
 
     restrict_process(render=operation in {"render", "inspect"})
     seal_process()
-    data = sys.stdin.buffer.read(command.input_limit + 1)
-    if not 0 < len(data) <= command.input_limit:
+    data = sys.stdin.buffer.read(-1 if command.input_limit is None else command.input_limit + 1)
+    if not data or (command.input_limit is not None and len(data) > command.input_limit):
         raise ValueError("Invalid input size")
     if operation == "story":
         result = decode_story(data, argument)
@@ -38,7 +38,7 @@ def main() -> None:
         from arclight.media.probe import inspect_media
 
         result = json.dumps(inspect_media(data, argument), separators=(",", ":")).encode()
-    if not 0 < len(result) <= command.output_limit:
+    if not result or (command.output_limit is not None and len(result) > command.output_limit):
         raise ValueError("Invalid output size")
     sys.stdout.buffer.write(result)
 

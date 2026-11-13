@@ -25,7 +25,8 @@ from arclight.workers import tasks
 
 class BatchImages(FixedImageProvider):
     def download(self, request, handle, max_bytes):
-        assert len(self.data) <= max_bytes
+        if max_bytes is not None:
+            assert len(self.data) <= max_bytes
         return MediaOutput(self.data, "image/png")
 
 

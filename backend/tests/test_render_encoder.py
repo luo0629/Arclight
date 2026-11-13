@@ -11,9 +11,8 @@ from pydantic import ValidationError
 
 from arclight.domain.render_manifests import RenderOutputProfile
 from arclight.domain.timeline_visuals import ClipVisual
-from arclight.media.execution import MediaExecutionError, execute_media
+from arclight.media.execution import MediaExecutionError, command_for, execute_media
 from arclight.media.render_plan import RenderClip, RenderPlan
-from arclight.media.timeline_encoder import BoundedOutput
 
 
 def image_bytes(image):
@@ -157,10 +156,14 @@ def test_child_refuses_image_locations_and_invalid_base64(image):
     assert result.value.reason == "INVALID_MEDIA"
 
 
-def test_encoded_output_cannot_grow_past_bound(monkeypatch):
-    monkeypatch.setattr("arclight.media.timeline_encoder.MAX_OUTPUT_BYTES", 10)
-    output = BoundedOutput()
-    output.write(b"12345")
-    with pytest.raises(ValueError, match="output limit"):
-        output.write(b"678901")
-    assert output.getvalue() == b"12345"
+def test_encoded_output_has_no_fixed_byte_ceiling():
+    plan = RenderPlan(
+        output=profile(),
+        duration_ms=500,
+        clips=(clip(Image.new("RGB", (100, 100), (230, 20, 10))),),
+    )
+    assert command_for("render", "timeline").output_limit is None
+    movie = execute_media("render", "timeline", plan.model_dump_json().encode())
+    assert len(movie) > 10
+    with av.open(BytesIO(movie)) as container:
+        assert len(list(container.decode(video=0))) == 12

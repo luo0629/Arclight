@@ -24,7 +24,6 @@ from starlette.types import Receive, Scope, Send
 from arclight.storage.transfer_protocol import TransferGrant
 
 CHUNK_BYTES = 64 * 1024
-MAX_UPLOAD_BYTES = 32 * 1024 * 1024
 TRANSFER_TIMEOUT = 300
 
 
@@ -207,8 +206,6 @@ def create_gateway(
         approved = await grant(request, ticket, "POST")
         if isinstance(approved, Response):
             return approved
-        if approved.byte_size > MAX_UPLOAD_BYTES:
-            return rejected(413, "TRANSFER_TOO_LARGE")
         if request.headers.get("content-type") != approved.headers["Content-Type"]:
             return rejected(403, "TRANSFER_TYPE_MISMATCH")
         # No multipart parser, temporary disk file, or full-body buffering is needed.

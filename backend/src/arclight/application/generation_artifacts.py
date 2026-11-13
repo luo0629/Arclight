@@ -20,7 +20,7 @@ from arclight.persistence.models import (
 )
 from arclight.providers.media_outputs import MediaOutputProvider
 from arclight.providers.media_submission import MediaSubmission
-from arclight.providers.native_media import MAX_AUDIO_BYTES, MAX_VIDEO_BYTES, object_key
+from arclight.providers.native_media import object_key
 from arclight.providers.native_media_protocols import KINDS
 
 
@@ -72,10 +72,9 @@ def import_attempt(
             return 0
         handle = handles[0]
         task_type, project_id, creator = job.task_type, job.project_id, job.created_by
-    maximum = MAX_AUDIO_BYTES if task_type == "AUDIO" else MAX_VIDEO_BYTES
     media, output, error = {}, None, None
     try:
-        output = provider.download(request, handle, maximum)
+        output = provider.download(request, handle, None)
         if not output.media_type.startswith("audio/" if task_type == "AUDIO" else "video/"):
             raise DomainError("INVALID_FILE", "结果类型与任务类型不一致", 422)
         media = probe(output.data, output.media_type)

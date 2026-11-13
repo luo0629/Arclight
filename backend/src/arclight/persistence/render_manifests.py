@@ -2,7 +2,17 @@
 
 from uuid import UUID
 
-from sqlalchemy import JSON, CheckConstraint, ForeignKey, Index, String, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -35,7 +45,7 @@ class RenderArtifact(Entity, Base):
     file_id: Mapped[UUID] = mapped_column(ForeignKey("stored_files.id"), unique=True)
     object_key: Mapped[str] = mapped_column(String(512))
     checksum: Mapped[str] = mapped_column(String(64))
-    byte_size: Mapped[int]
+    byte_size: Mapped[int] = mapped_column(BigInteger().with_variant(Integer(), "sqlite"))
     duration_ms: Mapped[int]
     __table_args__ = (
         Index(
@@ -63,7 +73,7 @@ class RenderReportLink(Entity, Base):
     file_id: Mapped[UUID] = mapped_column(ForeignKey("stored_files.id"), unique=True)
     object_key: Mapped[str] = mapped_column(String(512))
     checksum: Mapped[str] = mapped_column(String(64))
-    byte_size: Mapped[int]
+    byte_size: Mapped[int] = mapped_column(BigInteger().with_variant(Integer(), "sqlite"))
     inspection_id: Mapped[UUID | None] = mapped_column(
         ForeignKey("render_inspections.id"), unique=True
     )

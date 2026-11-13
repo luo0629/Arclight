@@ -494,7 +494,7 @@ async function verifiedBlob(
   signal: AbortSignal,
 ) {
   signal.throwIfAborted();
-  if (blob.size !== delivery.byte_size || blob.size > 128 * 1024 ** 2)
+  if (blob.size !== delivery.byte_size)
     throw new ApiError(
       409,
       "DELIVERY_BYTES_MISMATCH",
@@ -536,8 +536,7 @@ export async function loadDeliveryBlob(
     delivery.project_id !== projectId ||
     delivery.episode_id !== episodeId ||
     !Number.isSafeInteger(delivery.byte_size) ||
-    delivery.byte_size <= 0 ||
-    delivery.byte_size > 128 * 1024 ** 2
+    delivery.byte_size <= 0
   )
     throw new ApiError(
       409,

@@ -14,7 +14,6 @@ from test_collaboration import create_episode, create_project, register
 from test_file_transfers import transfer_setup
 from test_human_reviews import decide, resume
 
-from arclight.api import render_deliveries
 from arclight.persistence.models import AuditEvent, StoredFile
 from arclight.storage.objects import ObjectStorage
 
@@ -171,10 +170,21 @@ def test_formal_render_history_keeps_profile_without_claiming_final_delivery(
     assert client.get(root + f"/{detail['id']}/content").status_code == 200
 
 
-def test_local_download_uses_exact_receipt_headers_and_audit(client, episode, delivery_case):
+def test_local_download_uses_exact_receipt_headers_and_audit(
+    client, episode, delivery_case, monkeypatch
+):
     _, _, delivery = delivery_case
+    original_read = ObjectStorage.read
+    limits = []
+
+    def read_exact(storage, key, max_bytes, checksum=None):
+        limits.append(max_bytes)
+        return original_read(storage, key, max_bytes, checksum)
+
+    monkeypatch.setattr(ObjectStorage, "read", read_exact)
     response = client.get(history_url(episode) + f"/{delivery['id']}/content")
     assert response.status_code == 200, response.text
+    assert limits == [None]
     assert response.content == movie_bytes(client, delivery)
     assert response.headers["content-type"] == "video/mp4"
     assert response.headers["cache-control"] == "no-store"
@@ -196,7 +206,7 @@ def test_local_download_uses_exact_receipt_headers_and_audit(client, episode, de
 
 @pytest.mark.parametrize("damage", ["missing", "replaced", "over_limit"])
 def test_local_download_rechecks_storage_integrity_and_bounds(
-    client, episode, delivery_case, monkeypatch, damage
+    client, episode, delivery_case, damage
 ):
     _, _, delivery = delivery_case
     with client.app.state.session_factory() as db:
@@ -207,7 +217,7 @@ def test_local_download_rechecks_storage_integrity_and_bounds(
     elif damage == "replaced":
         path.write_bytes(b"x" * delivery["byte_size"])
     else:
-        monkeypatch.setattr(render_deliveries, "MAX_RENDER_BYTES", delivery["byte_size"] - 1)
+        path.write_bytes(path.read_bytes() + b"x")
     root = history_url(episode)
     response = client.get(root + f"/{delivery['id']}/content")
     assert response.status_code == 409, response.text

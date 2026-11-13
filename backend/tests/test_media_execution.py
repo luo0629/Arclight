@@ -65,7 +65,7 @@ def recorded_children(monkeypatch, tmp_path):
         ("probe", "image/png -filter_complex movie=secret", b"data"),
         ("story", "utf-7", b"data"),
         ("probe", "image/png", b""),
-        ("probe", "image/png", bytes(1024**2 + 1)),
+        ("story", "utf-8", bytes(256 * 1024 + 1)),
         ("preview", "encode", "not bytes"),
     ],
     ids=[

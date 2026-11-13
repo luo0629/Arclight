@@ -8,8 +8,6 @@ from dataclasses import dataclass
 from arclight.core.errors import DomainError
 from arclight.media.validation import probe
 
-MAX_IMAGE_BYTES = 1024 * 1024
-MAX_IMAGE_BASE64 = 4 * ((MAX_IMAGE_BYTES + 2) // 3)
 MAX_IMAGE_PIXELS = 4_000_000
 TRANSITIONS = {
     "DRAFT": {"READY_FOR_REVIEW", "ARCHIVED"},
@@ -36,8 +34,8 @@ def decode_image(encoded: str, media_type: str) -> ImportedImage:
         data = base64.b64decode(encoded, validate=True)
     except (ValueError, binascii.Error) as exc:
         raise DomainError("INVALID_IMAGE", "图片编码无效", 422) from exc
-    if not data or len(data) > MAX_IMAGE_BYTES:
-        raise DomainError("INVALID_IMAGE", "图片不能为空且不得超过1 MiB", 422)
+    if not data:
+        raise DomainError("INVALID_IMAGE", "图片不能为空", 422)
     try:
         details = probe(data, media_type)
     except DomainError as exc:

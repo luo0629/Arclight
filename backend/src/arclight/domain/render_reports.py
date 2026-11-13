@@ -95,7 +95,7 @@ class RenderMachineReport(RenderContract):
     input_sha256: Sha256
     output_file_id: UUID
     output_sha256: Sha256
-    byte_size: int = Field(strict=True, gt=0, le=128 * 1024**2)
+    byte_size: int = Field(strict=True, gt=0)
     duration_ms: int = Field(strict=True, gt=0)
     profile: Literal["FORMAL"] = "FORMAL"
     sources: tuple[RenderSource, ...] = Field(max_length=2000)

@@ -1,11 +1,12 @@
 """Audio preparation, frozen dialogue reads and exact version registration."""
 
 from typing import Annotated
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
 
+from arclight.api.asset_versions import VersionRead, read_version
 from arclight.api.audio_tts import router as tts_router
 from arclight.api.dependencies import Actor, Database
 from arclight.application.audio_import import import_audio, read_import
@@ -20,6 +21,7 @@ from arclight.application.commands import require_episode
 from arclight.domain.audio_production import (
     AudioBindingCreate,
     AudioBindingRead,
+    AudioContract,
     AudioImportCreate,
     AudioImportRead,
     AudioInputCreate,
@@ -29,6 +31,8 @@ from arclight.domain.audio_production import (
     AudioSnapshotRead,
 )
 from arclight.persistence.audio_production import AudioLineBinding, AudioSnapshot
+from arclight.persistence.audio_tts import AudioTTSRequest
+from arclight.persistence.models import AssetVersion
 
 router = APIRouter(prefix="/api/v1", tags=["audio-production"])
 router.include_router(tts_router)
@@ -114,6 +118,80 @@ def bindings(
         .limit(limit)
     )
     return [AudioBindingRead.model_validate(value) for value in values]
+
+
+class AudioHistoryRead(AudioContract):
+    binding: AudioBindingRead
+    version: VersionRead
+    tts_job_id: UUID | None = None
+    source_audio_version_id: UUID | None = None
+
+
+@router.get("/audio-snapshots/{snapshot_id}/lines/{line_id}/history")
+def history(
+    snapshot_id: UUID,
+    line_id: str,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 100,
+    offset: Offset = 0,
+) -> list[AudioHistoryRead]:
+    snapshot = require_snapshot(db, snapshot_id, actor)
+    require_line(snapshot, line_id)
+    rows = list(
+        db.execute(
+            select(AudioLineBinding, AssetVersion)
+            .join(AssetVersion, AssetVersion.id == AudioLineBinding.asset_version_id)
+            .where(
+                AudioLineBinding.snapshot_id == snapshot.id,
+                AudioLineBinding.line_id == line_id,
+            )
+            .order_by(AudioLineBinding.created_at, AudioLineBinding.id)
+            .offset(offset)
+            .limit(limit)
+        )
+    )
+    # Only expose a TTS lineage when its immutable request agrees with this exact result.
+    job_ids: dict[UUID, UUID] = {}
+    for _, version in rows:
+        metadata = version.metadata_json.get("audio_tts")
+        if isinstance(metadata, dict) and isinstance(metadata.get("job_id"), str):
+            try:
+                job_ids[version.id] = UUID(metadata["job_id"])
+            except ValueError:
+                continue
+    requests = (
+        {
+            request.job_id: request
+            for request in db.scalars(
+                select(AudioTTSRequest).where(
+                    AudioTTSRequest.snapshot_id == snapshot.id,
+                    AudioTTSRequest.line_id == line_id,
+                    AudioTTSRequest.job_id.in_(job_ids.values()),
+                )
+            )
+        }
+        if job_ids
+        else {}
+    )
+    results = []
+    for binding, version in rows:
+        job_id = job_ids.get(version.id)
+        request = requests.get(job_id) if job_id is not None else None
+        if request is not None and (
+            request.target_asset_id != version.asset_id
+            or version.creation_key != uuid5(request.job_id, "audio-tts-result")
+        ):
+            request = None
+        results.append(
+            AudioHistoryRead(
+                binding=AudioBindingRead.model_validate(binding),
+                version=read_version(version),
+                tts_job_id=request.job_id if request else None,
+                source_audio_version_id=request.source_audio_version_id if request else None,
+            )
+        )
+    return results
 
 
 @router.post("/audio-snapshots/{snapshot_id}/lines/{line_id}/imports", status_code=201)

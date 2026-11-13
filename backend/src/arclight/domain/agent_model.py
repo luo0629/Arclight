@@ -36,8 +36,8 @@ class AgentModelCapabilities(AgentModelValue):
     tools: bool = False
     response_formats: frozenset[Literal["json_schema", "json_object"]] = frozenset()
     max_input_images: int = Field(default=0, strict=True, ge=0, le=8)
-    max_image_bytes: int = Field(default=1048576, strict=True, ge=1, le=1048576)
-    max_total_image_bytes: int = Field(default=4194304, strict=True, ge=1, le=8388608)
+    max_image_bytes: int | None = Field(default=None, strict=True, ge=1)
+    max_total_image_bytes: int | None = Field(default=None, strict=True, ge=1)
 
     @field_serializer("response_formats")
     def sorted_formats(self, value: frozenset[str]) -> list[str]:

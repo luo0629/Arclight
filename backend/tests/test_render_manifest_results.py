@@ -166,7 +166,7 @@ def test_output_requires_exact_project_receipt_and_actual_bounded_bytes(
     if problem == "hash":
         overrides["checksum"] = "0" * 64
     elif problem in {"size", "oversize"}:
-        overrides["byte_size"] = 1 if problem == "size" else render_results.MAX_RENDER_BYTES + 1
+        overrides["byte_size"] = 1 if problem == "size" else 512 * 1024**2 + 1
     elif problem == "provenance":
         overrides["source_note"] = " "
     file_id, _, _ = stored_file(
@@ -196,6 +196,29 @@ def test_output_requires_exact_project_receipt_and_actual_bounded_bytes(
     assert error.value.code == code
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count(RenderArtifact.id))) == 0
+
+
+def test_output_binding_verifies_exact_bytes_without_a_fixed_size_ceiling(
+    client, episode, render_case, monkeypatch
+):
+    value, _ = manifest(client, render_case)
+    data = b"exact-private-render-result"
+    file_id, _, _ = stored_file(client, episode["project_id"], data, "video/mp4")
+    original_verify = ObjectStorage.verify
+    limits = []
+
+    def verify_exact(storage, key, expected_size, checksum, max_bytes):
+        limits.append(max_bytes)
+        return original_verify(storage, key, expected_size, checksum, max_bytes)
+
+    monkeypatch.setattr(ObjectStorage, "verify", verify_exact)
+    with client.app.state.session_factory.begin() as db:
+        artifact = bind_render_artifact(
+            db, client.app.state.settings, UUID(value["id"]), file_id, 2500, "service-owner"
+        )
+    assert limits == [None]
+    assert artifact.byte_size == len(data)
+    assert artifact.file_id == file_id
 
 
 @pytest.mark.parametrize(

@@ -23,8 +23,8 @@ MediaObserver = Callable[[int | None], None]
 @dataclass(frozen=True)
 class MediaCommand:
     argument: str
-    input_limit: int
-    output_limit: int
+    input_limit: int | None
+    output_limit: int | None
 
 
 FAILURES = frozenset(
@@ -51,7 +51,7 @@ def command_for(operation: str, argument: str) -> MediaCommand:
     if operation == "story" and argument in {"utf-8", "gb18030"}:
         return MediaCommand(argument, 256 * 1024, 1024**2)
     if operation == "preview" and argument in {"encode", "finalize"}:
-        return MediaCommand(argument, 1024**2, 1024**2)
+        return MediaCommand(argument, None, None)
     if operation == "render" and argument == "timeline":
         from arclight.media.render_plan import MAX_INPUT_BYTES, MAX_OUTPUT_BYTES
 
@@ -76,11 +76,11 @@ def _stop(process: subprocess.Popen) -> None:
 def _exchange(
     process: subprocess.Popen,
     data: bytes,
-    limit: int,
+    limit: int | None,
     timeout: float,
     observer: MediaObserver | None = None,
 ) -> bytes:
-    """Drain both pipes continuously; never accumulate unbounded stdout or stderr."""
+    """Drain media output continuously and keep diagnostic output bounded."""
     output, diagnostic = bytearray(), bytearray()
     exceeded = Event()
     assert process.stdin is not None and process.stdout is not None and process.stderr is not None
@@ -89,7 +89,7 @@ def _exchange(
     def read(pipe, target, maximum):
         try:
             while chunk := pipe.read1(4096):
-                remaining = maximum - len(target)
+                remaining = len(chunk) if maximum is None else maximum - len(target)
                 target.extend(chunk[:remaining])
                 if len(chunk) > remaining:
                     exceeded.set()
@@ -178,7 +178,8 @@ def execute_media(
     command = command_for(operation, argument)
     if (
         not isinstance(data, bytes)
-        or not 0 < len(data) <= command.input_limit
+        or not data
+        or (command.input_limit is not None and len(data) > command.input_limit)
         or not 0 < timeout <= 600
     ):
         raise MediaExecutionError("INVALID_INPUT")

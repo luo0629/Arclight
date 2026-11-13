@@ -38,7 +38,7 @@ class UploadCreate(TransferExpiry):
         "font/ttf",
         "font/otf",
     ]
-    byte_size: int = Field(strict=True, gt=0, le=32 * 1024 * 1024)
+    byte_size: int = Field(strict=True, gt=0)
     checksum: str = Field(pattern=r"^[0-9a-f]{64}$")
 
     @field_validator("original_name")

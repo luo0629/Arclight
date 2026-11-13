@@ -5,14 +5,7 @@ import sys
 from fractions import Fraction
 from io import BytesIO
 
-from arclight.media.render_plan import MAX_OUTPUT_BYTES, RenderClip, RenderPlan
-
-
-class BoundedOutput(BytesIO):
-    def write(self, data, /):
-        if self.tell() + len(data) > MAX_OUTPUT_BYTES:
-            raise ValueError("Render output limit exceeded")
-        return super().write(data)
+from arclight.media.render_plan import RenderClip, RenderPlan
 
 
 def viewport(image, clip: RenderClip, local_ms: Fraction, size: tuple[int, int], fps: int):
@@ -45,7 +38,7 @@ def encode_timeline(data: bytes) -> bytes:
 
     plan = RenderPlan.model_validate_json(data)
     profile = plan.output
-    output = BoundedOutput()
+    output = BytesIO()
     with av.open(output, mode="w", format="mp4") as container:
         video = container.add_stream("libx264", rate=profile.fps)
         video.width, video.height = profile.width, profile.height
@@ -69,7 +62,7 @@ def encode_timeline(data: bytes) -> bytes:
                 clip_index = next_index
                 clip = plan.clips[clip_index]
                 raw = base64.b64decode(clip.image, validate=True)
-                if not 0 < len(raw) <= 1024**2:
+                if not raw:
                     raise ValueError("Invalid image size")
                 with Image.open(BytesIO(raw), formats=["PNG", "JPEG"]) as source:
                     if source.width * source.height > 4_000_000 or max(source.size) > 4096:

@@ -99,7 +99,8 @@ class FixedImageProvider:
 
     def download(self, request, handle, max_bytes):
         assert handle == f"mock/image/{request.attempt_id}/0"
-        assert len(self.data) <= max_bytes
+        if max_bytes is not None:
+            assert len(self.data) <= max_bytes
         return MediaOutput(self.data, "image/png")
 
 

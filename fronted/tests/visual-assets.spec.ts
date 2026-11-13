@@ -31,14 +31,17 @@ const save = (page: Page) =>
 
 const versionPng =
   "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAMCAIAAADQ/GvKAAAAFUlEQVR4nGNkYPjPgA0wYRVlGMkSADciARf1YEhDAAAAAElFTkSuQmCC";
-async function fillImageImport(page: Page) {
+async function fillImageImport(
+  page: Page,
+  image = Buffer.from(versionPng, "base64"),
+) {
   await page
     .getByRole("button", { name: "导入新图片版本", exact: true })
     .click();
   await page.getByLabel("版本图片", { exact: true }).setInputFiles({
     name: "scene.png",
     mimeType: "image/png",
-    buffer: Buffer.from(versionPng, "base64"),
+    buffer: image,
   });
   await page
     .getByLabel("图片来源说明", { exact: true })
@@ -52,6 +55,50 @@ async function fillImageImport(page: Page) {
     })
     .check();
 }
+
+test("ASSET-05：超过原1MiB限制的PNG可保存并按原始字节读取", async ({
+  page,
+}) => {
+  const { path, headers } = await setup(page);
+  const encoded = await page.evaluate(() => {
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = 1024;
+    const context = canvas.getContext("2d")!;
+    const pixels = context.createImageData(1024, 1024);
+    let seed = 193;
+    for (let index = 0; index < pixels.data.length; index += 4) {
+      seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+      pixels.data[index] = seed >>> 24;
+      pixels.data[index + 1] = seed >>> 16;
+      pixels.data[index + 2] = seed >>> 8;
+      pixels.data[index + 3] = 255;
+    }
+    context.putImageData(pixels, 0, 0);
+    return canvas.toDataURL("image/png").split(",")[1];
+  });
+  const original = Buffer.from(encoded, "base64");
+  expect(original.length).toBeGreaterThan(1024 * 1024);
+  await create(page, "大图片版本场景", "场景");
+  await fillImageImport(page, original);
+  await page
+    .getByRole("button", { name: "保存新候选版本", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  const details = page.getByLabel("精确资产版本详情", { exact: true });
+  await expect(details).toContainText("1024×1024");
+  const asset = (await (await page.request.get(path, { headers })).json())[0];
+  const versionPath = `${path}/${asset.id}/versions`;
+  const version = (
+    await (await page.request.get(versionPath, { headers })).json()
+  )[0];
+  expect(version.media.byte_size).toBe(original.length);
+  const response = await page.request.get(
+    `${versionPath}/${version.id}/image`,
+    { headers },
+  );
+  expect(response.status()).toBe(200);
+  expect((await response.body()).equals(original)).toBe(true);
+});
 
 test("ASSET-05：真实原图版本、人工批准、归档历史和精确回执", async ({
   page,

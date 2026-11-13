@@ -12,7 +12,6 @@ from test_render_encoder import profile
 
 from arclight.application.render_inspections import inspect_candidate
 from arclight.media.execution import MediaExecutionError, command_for, execute_media
-from arclight.media.render_plan import MAX_OUTPUT_BYTES
 
 
 def inspect(data, duration_ms=500, **changes):
@@ -125,9 +124,9 @@ def test_invalid_encoding_and_broken_packets_fail_safely(damage):
     assert "PRIVATE_NATIVE_ERROR" not in result.model_dump_json()
 
 
-def test_inspection_uses_fixed_byte_limits_and_no_client_arguments():
+def test_inspection_keeps_bounded_control_reply_and_rejects_client_arguments():
     command = command_for("inspect", "render")
-    assert command.input_limit == MAX_OUTPUT_BYTES and command.output_limit == 4096
+    assert command.input_limit is None and command.output_limit == 4096
     for argument in ("../../private.mp4", "ffprobe -i private.mp4", "http://localhost/input"):
         with pytest.raises(MediaExecutionError, match="INVALID_COMMAND"):
             execute_media("inspect", argument, b"x")

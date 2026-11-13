@@ -12,6 +12,11 @@ class AudioContract(BaseModel):
     model_config = ConfigDict(extra="forbid", from_attributes=True)
 
 
+class AudioAssetMetadata(AudioContract):
+    audio_snapshot_id: UUID
+    line_id: str
+
+
 class AudioSnapshotCreate(AudioContract):
     creation_key: UUID
     script_version_id: UUID

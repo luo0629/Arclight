@@ -33,6 +33,7 @@ from arclight.domain.audio_production import AudioBindingRead, AudioInputCreate,
 from arclight.domain.audio_tts import (
     AudioTTSCreate,
     AudioTTSRead,
+    AudioTTSRegenerate,
     AudioTTSRegister,
     AudioTTSResultRead,
 )
@@ -62,7 +63,7 @@ def fingerprint(value: dict) -> str:
 
 
 def origin_for(row: AudioTTSRequest) -> dict:
-    return {
+    origin = {
         "schema_version": "audio-tts/1",
         "snapshot_id": str(row.snapshot_id),
         "line_id": row.line_id,
@@ -70,6 +71,9 @@ def origin_for(row: AudioTTSRequest) -> dict:
         "dependency_manifest_id": str(row.dependency_manifest_id),
         "request_sha256": row.request_fingerprint,
     }
+    if row.source_audio_version_id is not None:
+        origin["source_audio_version_id"] = str(row.source_audio_version_id)
+    return origin
 
 
 def result_version(db: Session, row: AudioTTSRequest) -> AssetVersion | None:
@@ -112,8 +116,32 @@ def read_tts(db: Session, row: AudioTTSRequest) -> AudioTTSRead:
             .limit(1)
         ),
         asset_version_id=version.id if version else None,
+        source_audio_version_id=row.source_audio_version_id,
         created_at=row.created_at,
     )
+
+
+def require_regeneration_source(
+    db: Session, project_id: UUID, snapshot_id: UUID, line_id: str, version_id: UUID
+) -> VisualAsset:
+    """A regeneration stays on the exact bound line and original audio asset."""
+    binding = db.scalar(
+        select(AudioLineBinding).where(AudioLineBinding.asset_version_id == version_id)
+    )
+    version = db.get(AssetVersion, version_id)
+    asset = db.get(VisualAsset, version.asset_id, populate_existing=True) if version else None
+    if (
+        binding is None
+        or binding.snapshot_id != snapshot_id
+        or binding.line_id != line_id
+        or asset is None
+        or asset.project_id != project_id
+        or asset.asset_type != "AUDIO"
+    ):
+        raise DomainError(
+            "AUDIO_REGENERATION_SOURCE_INVALID", "重新生成须指定本快照本句已绑定的精确音频版本", 409
+        )
+    return asset
 
 
 def create_tts(
@@ -124,6 +152,7 @@ def create_tts(
     payload: AudioTTSCreate,
     *,
     execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+    source_audio_version_id: UUID | None = None,
 ) -> tuple[AudioTTSRead, bool]:
     snapshot = require_snapshot(db, snapshot_id, actor, write=True)
     line = require_line(snapshot, line_id)
@@ -131,6 +160,11 @@ def create_tts(
     request_hash = fingerprint(
         {
             **payload.model_dump(mode="json", exclude={"expected_revision"}),
+            **(
+                {"source_audio_version_id": str(source_audio_version_id)}
+                if source_audio_version_id is not None
+                else {}
+            ),
             "snapshot_id": str(snapshot_id),
             "line_id": line_id,
             "actor": actor,
@@ -149,7 +183,16 @@ def create_tts(
     voice = require_voice(db, episode.project_id, payload.voice_version_id, actor, write=True)
     if voice.speaker != line.speaker:
         raise DomainError("AUDIO_VOICE_SPEAKER_MISMATCH", "音色版本不属于该台词的说话角色", 422)
-    asset = line_target(db, snapshot, line_id, payload.target_asset_id, actor)
+    if source_audio_version_id is None:
+        asset = line_target(db, snapshot, line_id, payload.target_asset_id, actor)
+    else:
+        asset = require_regeneration_source(
+            db, episode.project_id, snapshot.id, line_id, source_audio_version_id
+        )
+        if payload.target_asset_id is not None and payload.target_asset_id != asset.id:
+            raise DomainError(
+                "AUDIO_REGENERATION_SOURCE_INVALID", "重新生成不能更换原音频资产", 409
+            )
     if asset.status in {"ARCHIVED", "LOCKED", "STALE", "REJECTED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档、锁定或失效资产不能生成新音频", 409)
     manifest = capture_line_inputs(
@@ -165,6 +208,7 @@ def create_tts(
         line_id=line_id,
         voice_version_id=voice.id,
         target_asset_id=asset.id,
+        source_audio_version_id=source_audio_version_id,
         dependency_manifest_id=manifest.id,
         creation_key=payload.creation_key,
         request_fingerprint=request_hash,
@@ -209,6 +253,26 @@ def create_tts(
     return read_tts(db, request), True
 
 
+def regenerate_tts(
+    db: Session,
+    snapshot_id: UUID,
+    line_id: str,
+    actor: str,
+    payload: AudioTTSRegenerate,
+    *,
+    execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
+) -> tuple[AudioTTSRead, bool]:
+    return create_tts(
+        db,
+        snapshot_id,
+        line_id,
+        actor,
+        AudioTTSCreate(**payload.model_dump(exclude={"source_audio_version_id"})),
+        execution_policy=execution_policy,
+        source_audio_version_id=payload.source_audio_version_id,
+    )
+
+
 def validate_tts_dispatch(db: Session, job: GenerationJob) -> None:
     """Revalidate dialogue before a new paid attempt, retaining generic media behavior."""
     generation = db.get(DependencyManifest, job.input_manifest_id)
@@ -223,6 +287,12 @@ def validate_tts_dispatch(db: Session, job: GenerationJob) -> None:
     episode = write_episode(db, snapshot.episode_id, job.created_by)
     approved_script(db, episode, snapshot.script_version_id, job.created_by)
     voice = require_voice(db, row.project_id, row.voice_version_id, job.created_by, write=True)
+    if row.source_audio_version_id is not None:
+        source_asset = require_regeneration_source(
+            db, row.project_id, snapshot.id, row.line_id, row.source_audio_version_id
+        )
+        if source_asset.id != row.target_asset_id:
+            raise DomainError("AUDIO_PROVENANCE_REQUIRED", "重新生成的来源音频资产不匹配", 409)
     manifest = db.get(DependencyManifest, row.dependency_manifest_id)
     if (
         row.project_id != job.project_id

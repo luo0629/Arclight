@@ -256,7 +256,7 @@ def test_definite_http_rejection_releases_reservation_and_never_retries_inline(
     assert costs["actual_cost"] == "0.000000" and costs["pending_estimate"] == "0.000000"
 
 
-@pytest.mark.parametrize("failure", ["timeout", "server", "invalid", "batch", "encoding", "large"])
+@pytest.mark.parametrize("failure", ["timeout", "server", "invalid", "batch", "encoding", "empty"])
 def test_uncertain_response_holds_budget_and_goes_to_manual_without_resubmit(
     configured, client, episode, failure
 ):
@@ -277,7 +277,7 @@ def test_uncertain_response_holds_budget_and_goes_to_manual_without_resubmit(
             return response(success(2))
         if failure == "encoding":
             return response({"data": [{"b64_json": "%%%"}]})
-        return response({"data": [{"b64_json": "A" * 2_000_000}]})
+        return response({"data": [{"b64_json": ""}]})
 
     provider = OpenAIImageProvider(configured, transport=httpx.MockTransport(fail))
     event_id = event_for(client, job)

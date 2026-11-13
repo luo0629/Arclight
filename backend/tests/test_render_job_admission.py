@@ -1,16 +1,23 @@
 """Public submissions reject content the bounded renderer cannot faithfully encode."""
 
+import base64
+import io
 from copy import deepcopy
+from random import Random
 from uuid import UUID, uuid4
 
 import pytest
+from PIL import Image
 from render_admission_helpers import assert_blocked, edited, ready_manifest, render_path
-from render_manifest_helpers import audio_case, render_case, review_case, timeline_case
+from render_manifest_helpers import audio_case, render_case, review_case, stored_file, timeline_case
 from sqlalchemy import func, select
 from test_timeline_saves import duration_edit
 
 from arclight.application import render_manifests
-from arclight.media.render_plan import MAX_FRAMES, MAX_PIXEL_FRAMES
+from arclight.application.render_plans import build_plan
+from arclight.domain.render_manifests import RenderManifestSnapshot
+from arclight.media.execution import command_for
+from arclight.media.render_plan import MAX_FRAMES, MAX_PIXEL_FRAMES, RenderPlan
 from arclight.media.versions import renderer_software
 from arclight.persistence.models import Project, RenderExecution, RenderJob
 
@@ -78,3 +85,48 @@ def test_public_submission_rejects_frame_or_pixel_workload_before_creating_execu
     else:
         assert frames > MAX_FRAMES
     rejected(client, manifest, "RENDER_WORK_LIMIT")
+
+
+def test_render_plan_preserves_large_images_without_a_total_byte_ceiling(
+    client, episode, render_case
+):
+    value, _ = ready_manifest(client, render_case)
+    image = Image.frombytes("RGB", (2000, 2000), Random(19).randbytes(2000 * 2000 * 3))
+    encoded = io.BytesIO()
+    image.save(encoded, format="PNG")
+    data = encoded.getvalue()
+    assert len(data) > 1024**2
+    file_id, _, checksum = stored_file(client, episode["project_id"], data, "image/png")
+    snapshot = deepcopy(value["snapshot"])
+    for source in snapshot["sources"]:
+        if source["file"] is not None:
+            source["sha256"] = checksum
+            source["file"].update(file_id=str(file_id), sha256=checksum, byte_size=len(data))
+    with client.app.state.session_factory() as db:
+        raw_plan = build_plan(
+            db, client.app.state.settings, RenderManifestSnapshot.model_validate(snapshot)
+        )
+    assert len(raw_plan) > 16 * 1024**2
+    plan = RenderPlan.model_validate_json(raw_plan)
+    assert plan.clips
+    assert all(base64.b64decode(clip.image, validate=True) == data for clip in plan.clips)
+    # Repeat an already compiled exact reference without another storage read or media encode.
+    expanded = RenderPlan(
+        output=plan.output,
+        duration_ms=2000,
+        clips=tuple(
+            plan.clips[0].model_copy(
+                update={
+                    "start_ms": index * 500,
+                    "duration_ms": 500,
+                    "fade_in_ms": 0,
+                    "fade_out_ms": 0,
+                }
+            )
+            for index in range(4)
+        ),
+    )
+    expanded_bytes = expanded.model_dump_json().encode()
+    assert len(expanded_bytes) > 48 * 1024**2
+    assert command_for("render", "timeline").input_limit is None
+    assert len(RenderPlan.model_validate_json(expanded_bytes).clips) == 4

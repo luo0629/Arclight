@@ -27,8 +27,8 @@ def load_context_images(
     capabilities: AgentModelCapabilities | None = None,
 ) -> dict[UUID, ContextImage]:
     maximum = capabilities.max_input_images if capabilities else 8
-    per_image = capabilities.max_image_bytes if capabilities else 1048576
-    total = capabilities.max_total_image_bytes if capabilities else 4194304
+    per_image = capabilities.max_image_bytes if capabilities else None
+    total = capabilities.max_total_image_bytes if capabilities else None
     if len(file_ids) > maximum:
         raise DomainError("GATEWAY_CAPABILITY_REJECTED", "图片数量超出模型输入能力", 422)
     if not file_ids:
@@ -47,10 +47,12 @@ def load_context_images(
         reference = references.get(str(file_id))
         if reference is None:
             raise DomainError("NOT_FOUND", "图片不属于当前上下文", 404)
-        if not 0 < reference["byte_size"] <= per_image:
+        if reference["byte_size"] <= 0 or (
+            per_image is not None and reference["byte_size"] > per_image
+        ):
             raise DomainError("GATEWAY_CAPABILITY_REJECTED", "图片超出模型单图输入限额", 422)
         selected.append(reference)
-    if sum(item["byte_size"] for item in selected) > total:
+    if total is not None and sum(item["byte_size"] for item in selected) > total:
         raise DomainError("GATEWAY_CAPABILITY_REJECTED", "图片超出模型总输入限额", 422)
     episode = db.get(Episode, run.episode_id)
     if episode is None:

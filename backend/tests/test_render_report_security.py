@@ -378,6 +378,22 @@ def test_machine_report_schema_refuses_failed_missing_coerced_and_borrowed_check
             RenderMachineReport.model_validate(changed)
 
 
+def test_machine_report_accepts_large_exact_media_sizes_but_keeps_size_integrity(
+    formal_report_case,
+):
+    _, _, response = formal_report_case
+    details = deepcopy(response["report"]["details"])
+    byte_size = 512 * 1024**2 + 1
+    details["byte_size"] = byte_size
+    details["checks"]["technical"]["byte_size"] = byte_size
+    report = RenderMachineReport.model_validate(details)
+    assert report.byte_size == byte_size
+    assert report.checks.technical.byte_size == byte_size
+    details["checks"]["technical"]["byte_size"] -= 1
+    with pytest.raises(ValidationError):
+        RenderMachineReport.model_validate(details)
+
+
 def test_subtitle_only_exception_names_exact_line_and_cannot_forge_warning_identity():
     script = uuid4()
     warning = report_warning("SUBTITLE_ONLY", script, "line-1", "仅字幕表现该段内心独白")

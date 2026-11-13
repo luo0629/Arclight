@@ -97,7 +97,7 @@ def read_object(
                 }
             )
             try:
-                return ObjectStorage(configuration).read(key, 1024 * 1024, checksum)
+                return ObjectStorage(configuration).read(key, None, checksum)
             except DomainError as exc:
                 raise DomainError(
                     "ASSET_OBJECT_UNAVAILABLE", "图片缺失或完整性校验失败", 409
@@ -107,10 +107,9 @@ def read_object(
         raise DomainError("ASSET_OBJECT_UNAVAILABLE", "此历史对象尚未接入本机读取", 409)
     path = object_path(root, project_id, version_id)
     try:
-        # Do not allocate an unbounded buffer if an object was replaced outside the app.
         with path.open("rb") as stream:
-            data = stream.read(1024 * 1024 + 1)
-        if len(data) > 1024 * 1024 or hashlib.sha256(data).hexdigest() != checksum:
+            data = stream.read()
+        if hashlib.sha256(data).hexdigest() != checksum:
             raise ValueError("Checksum mismatch")
     except (OSError, ValueError) as exc:
         raise DomainError(

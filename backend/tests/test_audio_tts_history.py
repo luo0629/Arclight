@@ -195,11 +195,13 @@ def test_audio_tts_downgrade_refuses_history_before_any_ddl(
         with engine.begin() as db:
             db.execute(TABLES[1].insert().values(**tts_ready["request"]))
     before = set(inspect(engine).get_table_names())
+    with engine.connect() as db:
+        revision_before = db.scalar(text("SELECT version_num FROM alembic_version"))
     with pytest.raises(RuntimeError, match="audio TTS history"):
         command.downgrade(migrated, "0062")
     assert set(inspect(engine).get_table_names()) == before
     with engine.connect() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0063"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == revision_before
         assert db.scalar(select(func.count()).select_from(TABLES[0])) == 1
         assert db.scalar(select(func.count()).select_from(TABLES[1])) == int(with_request)
 

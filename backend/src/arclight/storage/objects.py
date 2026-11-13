@@ -96,19 +96,19 @@ class ObjectStorage:
         except (OSError, BotoCoreError):
             raise DomainError("STORAGE_UNAVAILABLE", "对象保存失败，请重试", 503) from None
 
-    def read(self, key: str, max_bytes: int, checksum: str | None = None) -> bytes:
+    def read(self, key: str, max_bytes: int | None, checksum: str | None = None) -> bytes:
         safe_key(key)
         try:
             if self.client is not None:
                 response = self.client.get_object(Bucket=self.settings.s3_bucket, Key=key)
                 with response["Body"] as stream:
-                    if response["ContentLength"] > max_bytes:
+                    if max_bytes is not None and response["ContentLength"] > max_bytes:
                         raise ValueError("Object too large")
-                    data = stream.read(max_bytes + 1)
+                    data = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
             else:
                 with self.path(key).open("rb") as stream:
-                    data = stream.read(max_bytes + 1)
-            if len(data) > max_bytes or (
+                    data = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+            if (max_bytes is not None and len(data) > max_bytes) or (
                 checksum is not None and hashlib.sha256(data).hexdigest() != checksum
             ):
                 raise ValueError("Object integrity mismatch")
@@ -128,10 +128,10 @@ class ObjectStorage:
         except (OSError, BotoCoreError, ClientError):
             raise DomainError("OBJECT_UNAVAILABLE", "文件不存在或暂不可读", 409) from None
 
-    def verify(self, key: str, byte_size: int, checksum: str, max_bytes: int) -> None:
+    def verify(self, key: str, byte_size: int, checksum: str, max_bytes: int | None) -> None:
         """Verify large private outputs in bounded chunks without retaining their bytes."""
         safe_key(key)
-        if not 0 < byte_size <= max_bytes:
+        if byte_size <= 0 or (max_bytes is not None and byte_size > max_bytes):
             raise DomainError("OBJECT_UNAVAILABLE", "文件大小超出允许范围", 409)
         try:
             if self.client is not None:

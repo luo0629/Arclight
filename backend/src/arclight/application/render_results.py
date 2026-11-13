@@ -26,7 +26,7 @@ from arclight.media.versions import renderer_software
 from arclight.persistence.models import StoredFile
 from arclight.persistence.render_manifests import RenderArtifact, RenderReportLink
 
-MAX_RENDER_BYTES = 512 * 1024**2
+MAX_RENDER_BYTES: int | None = None
 MAX_REPORT_BYTES = 256 * 1024
 
 

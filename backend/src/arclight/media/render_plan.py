@@ -5,8 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from arclight.domain.render_manifests import RenderOutputProfile
 from arclight.domain.timeline_visuals import ClipVisual
 
-MAX_INPUT_BYTES = 48 * 1024**2
-MAX_OUTPUT_BYTES = 128 * 1024**2
+MAX_INPUT_BYTES = None
+MAX_OUTPUT_BYTES = None
 MAX_FRAMES = 18_000
 MAX_PIXEL_FRAMES = 10_000_000_000
 RENDER_TIMEOUT = 600
@@ -14,7 +14,7 @@ RENDER_TIMEOUT = 600
 
 class RenderClip(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    image: str = Field(min_length=1, max_length=1_398_104)
+    image: str = Field(min_length=1)
     start_ms: int = Field(strict=True, ge=0, le=3_600_000)
     duration_ms: int = Field(strict=True, gt=0, le=3_600_000)
     visual: ClipVisual

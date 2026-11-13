@@ -201,7 +201,7 @@ def test_upload_limits_and_partial_streams_fail_closed(case):
                 send,
             )
             status = next(m["status"] for m in messages if m["type"] == "http.response.start")
-            assert status in {400, 403, 413}
+            assert status in {400, 403}
 
     anyio.run(exercise)
     assert bool(contacted) == (case in {"short", "long", "disconnect"})

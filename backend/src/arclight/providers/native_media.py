@@ -13,7 +13,6 @@ from pydantic import JsonValue
 
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.asset_versions import MAX_IMAGE_BYTES
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
 from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
 from arclight.providers.chat import raise_for_provider_status
@@ -30,9 +29,6 @@ from arclight.providers.native_media_protocols import (
 )
 from arclight.providers.network import PublicHTTPTransport, validate_endpoint
 from arclight.storage.objects import ObjectStorage
-
-MAX_AUDIO_BYTES = 32 * 1024 * 1024
-MAX_VIDEO_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -96,7 +92,7 @@ class NativeMediaProvider:
         payload: dict | None = None,
         extra: dict | None = None,
         download: bool = False,
-        maximum: int = 2097152,
+        maximum: int | None = 2097152,
     ) -> tuple[bytes, str, dict]:
         headers = {"Accept-Encoding": "identity"}
         if not download or (
@@ -117,7 +113,7 @@ class NativeMediaProvider:
         ):
             raw = bytearray()
             for chunk in response.iter_bytes():
-                if len(raw) + len(chunk) > maximum:
+                if maximum is not None and len(raw) + len(chunk) > maximum:
                     raise GatewayFailure("INVALID_RESPONSE")
                 raw.extend(chunk)
             try:
@@ -140,7 +136,7 @@ class NativeMediaProvider:
         body: dict | None = None,
         extra: dict | None = None,
         *,
-        maximum: int = 2097152,
+        maximum: int | None = 2097152,
     ) -> dict:
         base = validate_endpoint(self.connection.configuration["base_url"])
         raw, _, _ = self._read(method, base + path, payload=body, extra=extra, maximum=maximum)
@@ -169,13 +165,6 @@ class NativeMediaProvider:
         self, request: MediaSubmission, sources: list[tuple[str, str]], usage: dict | None = None
     ) -> GenerationResult:
         task = KINDS[self.name]
-        maximum = (
-            MAX_IMAGE_BYTES
-            if task == "IMAGE"
-            else MAX_AUDIO_BYTES
-            if task == "AUDIO"
-            else MAX_VIDEO_BYTES
-        )
         if len(sources) != 1:
             raise GatewayFailure("INVALID_RESPONSE")
         handles = []
@@ -183,12 +172,10 @@ class NativeMediaProvider:
             if source.startswith("https://"):
                 if len(source) > 8192 or urlsplit(source).fragment:
                     raise GatewayFailure("INVALID_RESPONSE")
-                data, _, _ = self._read("GET", source, download=True, maximum=maximum)
+                data, _, _ = self._read("GET", source, download=True, maximum=None)
             else:
-                if len(source) > (maximum + 2) // 3 * 4:
-                    raise GatewayFailure("INVALID_RESPONSE")
                 data = base64.b64decode(source, validate=True)
-            if not data or len(data) > maximum:
+            if not data:
                 raise GatewayFailure("INVALID_RESPONSE")
             kind = media_kind(data, hint)
             suffix = {
@@ -211,7 +198,7 @@ class NativeMediaProvider:
             try:
                 self.store.put(key, data, kind)
             except DomainError as exc:
-                if exc.code != "OBJECT_EXISTS" or self.store.read(key, maximum, checksum) != data:
+                if exc.code != "OBJECT_EXISTS" or self.store.read(key, None, checksum) != data:
                     raise GatewayFailure("STORAGE_FAILED") from None
             handles.append(handle)
         measured: dict[str, JsonValue] = {"images": 1} if task == "IMAGE" else {}
@@ -263,7 +250,7 @@ class NativeMediaProvider:
                     self.connection.configuration["base_url"] + path,
                     payload=body,
                     extra=extra,
-                    maximum=MAX_AUDIO_BYTES,
+                    maximum=None,
                 )
                 completed = True
                 fallback = {
@@ -287,7 +274,9 @@ class NativeMediaProvider:
                 path,
                 body,
                 extra,
-                maximum=2097152,
+                maximum=None
+                if self.name not in ASYNC and KINDS[self.name] in {"IMAGE", "VIDEO"}
+                else 2097152,
             )
             if self.name in ASYNC:
                 identity = value.get("id") or value.get("request_id")
@@ -384,7 +373,7 @@ class NativeMediaProvider:
         # intent never becomes a fabricated remote cancellation confirmation.
         return CancellationReceipt(status="UNSUPPORTED")
 
-    def download(self, request: MediaSubmission, handle: str, max_bytes: int) -> MediaOutput:
+    def download(self, request: MediaSubmission, handle: str, max_bytes: int | None) -> MediaOutput:
         prefix = f"native/{self.name}/{request.job_id.hex}/{request.attempt_id.hex}/"
         match = re.fullmatch(
             re.escape(prefix) + r"0/([a-f0-9]{64})\.(png|jpeg|wav|mp3|opus|flac|mp4)", handle

@@ -110,7 +110,7 @@ def execute_preview(factory: sessionmaker[Session], settings: Settings, run_id: 
                     }
                 )
             )
-            image = source_store.read(source.object_key, 1024 * 1024, source.checksum)
+            image = source_store.read(source.object_key, None, source.checksum)
             media_type, name, source_note, rights_note = (
                 source.media_type,
                 source.original_name,
@@ -122,7 +122,7 @@ def execute_preview(factory: sessionmaker[Session], settings: Settings, run_id: 
         store.put(intermediate, clip, "video/mp4")
         # Finalization reads the actual intermediate through the private adapter.
         movie = render_phase(
-            store.read(intermediate, 1024 * 1024, hashlib.sha256(clip).hexdigest()), "finalize"
+            store.read(intermediate, None, hashlib.sha256(clip).hexdigest()), "finalize"
         )
         file_id = uuid4()
         key = f"rendered/{project_id}/{file_id}"

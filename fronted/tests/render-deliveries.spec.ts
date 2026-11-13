@@ -876,6 +876,21 @@ test("RENDER-12：S3 预览与下载逐次申请精确授权，传输不携带�
   await expect(page).toHaveURL(env.href());
 });
 
+test("RENDER-12：大文件成片先授权读取并继续校验精确字节", async ({ page }) => {
+  const env = await renderFixture(page);
+  env.deliveries[0].byte_size = 5 * 1024 ** 3;
+  const panel = await env.open();
+  await panel
+    .getByRole("button", { name: "读取成片预览", exact: true })
+    .click();
+  await expect.poll(() => env.contentReads.length).toBe(1);
+  expect(env.contentReads[0].authorization).toMatch(/^Bearer .+/);
+  await expect(
+    panel.getByRole("alert").filter({ hasText: "成片大小与精确版本不一致" }),
+  ).toBeVisible();
+  await expect(panel.locator("video")).toHaveCount(0);
+});
+
 test("RENDER-12：成片哈希不符时清除已有预览并阻止下载", async ({ page }) => {
   const env = await renderFixture(page);
   const downloads: string[] = [];

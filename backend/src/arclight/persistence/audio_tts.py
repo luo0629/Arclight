@@ -15,6 +15,7 @@ class AudioTTSRequest(Entity, Base):
     line_id: Mapped[str] = mapped_column(String(100))
     voice_version_id: Mapped[UUID] = mapped_column(ForeignKey("audio_voice_versions.id"))
     target_asset_id: Mapped[UUID] = mapped_column(ForeignKey("visual_assets.id"))
+    source_audio_version_id: Mapped[UUID | None] = mapped_column(ForeignKey("asset_versions.id"))
     dependency_manifest_id: Mapped[UUID] = mapped_column(ForeignKey("dependency_manifests.id"))
     job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), unique=True)
     creation_key: Mapped[UUID]

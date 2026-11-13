@@ -223,8 +223,7 @@ export default function AssetVersions({
     >
       <h3 className="font-semibold">不可变图片版本</h3>
       <p className="text-sm text-muted-foreground">
-        人工导入原图，每次另建候选版本。批准后可人工选用；历史图片可另存为新候选并重新审核。支持PNG/JPEG，最大1
-        MiB、400万像素、最长边4096。
+        人工导入原图，每次另建候选版本。批准后可人工选用；历史图片可另存为新候选并重新审核。支持PNG/JPEG，最多400万像素、最长边4096。
       </p>
       <p className="break-all text-sm" role="status">
         当前选用：{asset.current_version_id ?? "尚未选用"}
@@ -576,11 +575,8 @@ function ImportDialog({
   async function save(event: FormEvent) {
     event.preventDefault();
     if (!file || !writable || submitting.current) return;
-    if (
-      file.size > 1024 * 1024 ||
-      !["image/png", "image/jpeg"].includes(file.type)
-    ) {
-      setError("请选择不超过1 MiB的PNG/JPEG图片");
+    if (!["image/png", "image/jpeg"].includes(file.type)) {
+      setError("请选择PNG/JPEG图片");
       return;
     }
     submitting.current = true;

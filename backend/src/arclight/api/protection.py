@@ -1,5 +1,6 @@
 import time
 from collections import deque
+from uuid import UUID
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -60,6 +61,20 @@ class RequestProtection:
 
         if scope["method"] not in {"POST", "PUT", "PATCH"}:
             return await self.app(scope, receive, send)
+        parts = scope["path"].removesuffix("/").split("/")
+        inline_media = (
+            scope["method"] == "POST"
+            and len(parts) == 8
+            and parts[1:4] == ["api", "v1", "projects"]
+            and parts[5] == "assets"
+            and parts[7] == "versions"
+        )
+        if inline_media:
+            try:
+                UUID(parts[4])
+                UUID(parts[6])
+            except ValueError:
+                inline_media = False
         headers = dict(scope["headers"])
         if b"content-length" in headers:
             try:
@@ -68,8 +83,10 @@ class RequestProtection:
                 return await reject(400, "INVALID_CONTENT_LENGTH", "请求长度无效")
             if length < 0:
                 return await reject(400, "INVALID_CONTENT_LENGTH", "请求长度无效")
-            if length > self.max_bytes:
+            if not inline_media and length > self.max_bytes:
                 return await reject(413, "REQUEST_TOO_LARGE", "请求体超过服务限制")
+        if inline_media:
+            return await self.app(scope, receive, send)
         chunks = []
         size = 0
         while True:

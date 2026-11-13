@@ -32,7 +32,11 @@ def validate_file(
 
 def probe(data: bytes, media_type: str, *, observer: MediaObserver | None = None) -> dict:
     policy = POLICIES.get(media_type)
-    if policy is None or not 0 < len(data) <= policy.max_bytes:
+    if (
+        policy is None
+        or not data
+        or (policy.max_bytes is not None and len(data) > policy.max_bytes)
+    ):
         raise DomainError("INVALID_FILE", "文件类型或大小不符合允许范围", 422)
     try:
         raw = execute_media("probe", media_type, data, timeout=PARSER_TIMEOUT, observer=observer)

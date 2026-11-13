@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.asset_versions import MAX_IMAGE_BYTES, ImportedImage, decode_image
+from arclight.domain.asset_versions import ImportedImage, decode_image
 from arclight.domain.file_policy import check_file_policy
 from arclight.media.validation import validate_file
 from arclight.persistence.models import StoredFile, UploadCompletion, UploadIntent
@@ -49,7 +49,7 @@ def validated_image(settings: Settings, row: StoredFile) -> ImportedImage:
         or row.media_type not in {"image/png", "image/jpeg"}
     ):
         raise DomainError("INVALID_CANDIDATE", "请选择已验证的候选图片文件", 409)
-    data = file_store(settings, row.bucket).read(row.object_key, MAX_IMAGE_BYTES, row.checksum)
+    data = file_store(settings, row.bucket).read(row.object_key, None, row.checksum)
     return decode_image(base64.b64encode(data).decode(), row.media_type)
 
 

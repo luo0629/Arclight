@@ -153,11 +153,18 @@ class OpenAICompatibleAgentProvider:
             or any(
                 image.file_id != identity
                 or image.media_type not in {"image/png", "image/jpeg"}
-                or not 0 < len(image.data) <= capabilities.max_image_bytes
+                or not image.data
+                or (
+                    capabilities.max_image_bytes is not None
+                    and len(image.data) > capabilities.max_image_bytes
+                )
                 for identity, image in images.items()
             )
-            or sum(len(images[identity].data) for identity in image_ids)
-            > capabilities.max_total_image_bytes
+            or (
+                capabilities.max_total_image_bytes is not None
+                and sum(len(images[identity].data) for identity in image_ids)
+                > capabilities.max_total_image_bytes
+            )
         ):
             raise DomainError("GATEWAY_CAPABILITY_REJECTED", "模型图片输入缺失或超限", 422)
         schema = result_model.model_json_schema()

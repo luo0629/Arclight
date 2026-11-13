@@ -3,7 +3,15 @@
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from arclight.persistence.base import JSON_TYPE, Base, Entity
@@ -67,9 +75,7 @@ class RenderInspection(Entity, Base):
     manifest_sha256: Mapped[str] = mapped_column(String(64))
     input_sha256: Mapped[str] = mapped_column(String(64))
     output_sha256: Mapped[str] = mapped_column(String(64))
-    byte_size: Mapped[int]
+    byte_size: Mapped[int] = mapped_column(BigInteger().with_variant(Integer(), "sqlite"))
     passed: Mapped[bool]
     result_json: Mapped[dict] = mapped_column(JSON_TYPE)
-    __table_args__ = (
-        CheckConstraint("byte_size > 0 AND byte_size <= 134217728", name="render_inspection_size"),
-    )
+    __table_args__ = (CheckConstraint("byte_size > 0", name="render_inspection_size"),)

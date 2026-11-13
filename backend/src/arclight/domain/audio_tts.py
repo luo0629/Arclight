@@ -19,6 +19,16 @@ class AudioTTSCreate(AudioContract):
     scheduling_mode: Literal["INTERACTIVE", "BATCH"] = "INTERACTIVE"
 
 
+class AudioTTSRegenerate(AudioContract):
+    creation_key: UUID
+    source_audio_version_id: UUID
+    voice_version_id: UUID
+    expected_revision: int = Field(strict=True, ge=0)
+    performance_parameters: dict[str, JsonValue] = Field(default_factory=dict)
+    batch_id: UUID | None = None
+    scheduling_mode: Literal["INTERACTIVE", "BATCH"] = "INTERACTIVE"
+
+
 class AudioTTSRead(AudioContract):
     job_id: UUID
     snapshot_id: UUID
@@ -31,6 +41,7 @@ class AudioTTSRead(AudioContract):
     revision: int
     error_code: str | None
     asset_version_id: UUID | None
+    source_audio_version_id: UUID | None = None
     created_at: datetime
 
 
