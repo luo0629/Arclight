@@ -337,8 +337,18 @@ def test_postgres_offline_widens_all_six_receipts_but_refuses_unchecked_downgrad
     )
     command.upgrade(config, "0064:0065", sql=True)
     sql = output.getvalue()
+    drop = sql.index("DROP TRIGGER immutable_cleanup_items_write ON cleanup_items")
+    recreate = sql.index("CREATE TRIGGER immutable_cleanup_items_write BEFORE UPDATE OF")
+    assert sql.index("IN ACCESS EXCLUSIVE MODE") < drop
     for table in TABLES:
-        assert f"ALTER TABLE {table} ALTER COLUMN byte_size TYPE BIGINT" in sql
+        alteration = sql.index(f"ALTER TABLE {table} ALTER COLUMN byte_size TYPE BIGINT")
+        assert drop < alteration < recreate
+    assert (
+        "id,plan_id,object_key,byte_size,modified_at,object_token,reason,created_at "
+        "OR DELETE ON cleanup_items FOR EACH ROW "
+        "EXECUTE FUNCTION immutable_stored_files_guard()"
+    ) in sql
+    assert "immutable_cleanup_items_truncate" not in sql
     assert "CHECK (byte_size > 0)" in sql
     assert "134217728" not in sql
     with pytest.raises(RuntimeError, match="requires an online range check"):

@@ -68,18 +68,32 @@ def sqlite_inspection_check(*, restore: bool) -> None:
         raise RuntimeError("Media byte size schema edit failed SQLite integrity validation")
 
 
-def upgrade() -> None:
-    if op.get_bind().dialect.name == "sqlite":
-        sqlite_inspection_check(restore=False)
-        return
+def alter_media_byte_sizes(*, restore: bool) -> None:
+    # PostgreSQL tracks UPDATE OF column dependencies even without a WHEN clause.
+    # The caller holds all receipt table locks; this entire command is transactional.
+    op.execute("DROP TRIGGER immutable_cleanup_items_write ON cleanup_items")
     for table in MEDIA_TABLES:
         op.alter_column(
             table,
             "byte_size",
-            existing_type=sa.Integer(),
-            type_=sa.BigInteger(),
+            existing_type=sa.BigInteger() if restore else sa.Integer(),
+            type_=sa.Integer() if restore else sa.BigInteger(),
             existing_nullable=False,
         )
+    op.execute(
+        "CREATE TRIGGER immutable_cleanup_items_write BEFORE UPDATE OF "
+        "id,plan_id,object_key,byte_size,modified_at,object_token,reason,created_at "
+        "OR DELETE ON cleanup_items FOR EACH ROW "
+        "EXECUTE FUNCTION immutable_stored_files_guard()"
+    )
+
+
+def upgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        sqlite_inspection_check(restore=False)
+        return
+    op.execute(f"LOCK TABLE {', '.join(MEDIA_TABLES)} IN ACCESS EXCLUSIVE MODE")
+    alter_media_byte_sizes(restore=False)
     op.drop_constraint(op.f(SIZE_CONSTRAINT), "render_inspections", type_="check")
     op.create_check_constraint(op.f(SIZE_CONSTRAINT), "render_inspections", NEW_CHECK)
 
@@ -111,11 +125,4 @@ def downgrade() -> None:
         return
     op.drop_constraint(op.f(SIZE_CONSTRAINT), "render_inspections", type_="check")
     op.create_check_constraint(op.f(SIZE_CONSTRAINT), "render_inspections", OLD_CHECK)
-    for table in MEDIA_TABLES:
-        op.alter_column(
-            table,
-            "byte_size",
-            existing_type=sa.BigInteger(),
-            type_=sa.Integer(),
-            existing_nullable=False,
-        )
+    alter_media_byte_sizes(restore=True)
