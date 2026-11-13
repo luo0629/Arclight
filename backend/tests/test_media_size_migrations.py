@@ -45,7 +45,19 @@ TABLES = (
 
 
 @pytest.fixture
-def seed_receipts(client, episode, inspection_case):
+def media_size_revision(client, migrated):
+    """Check current metadata while isolating 0065 receipt migration invariants."""
+    command.check(migrated)
+    command.downgrade(migrated, "0065")
+    try:
+        yield
+    finally:
+        command.upgrade(migrated, "head")
+        command.check(migrated)
+
+
+@pytest.fixture
+def seed_receipts(client, episode, inspection_case, media_size_revision):
     """Insert DB receipts only; multi-GiB values do not claim real media decoding."""
     manifest, _, inspection_fields = inspection_case
     factory = client.app.state.session_factory
@@ -210,14 +222,12 @@ def test_nonempty_roundtrip_keeps_receipts_guards_and_table_identity(
     engine = client.app.state.engine
     before = snapshot(engine)
     assert_types(engine, "INTEGER" if engine.dialect.name == "sqlite" else "BIGINT")
-    command.check(migrated)
     command.downgrade(migrated, "0064")
     assert snapshot(engine) == before
     assert_types(engine, "INTEGER")
     checks = inspect(engine).get_check_constraints("render_inspections")
     assert any("134217728" in row["sqltext"] for row in checks)
-    command.upgrade(migrated, "head")
-    command.check(migrated)
+    command.upgrade(migrated, "0065")
     assert snapshot(engine) == before
     assert_types(engine, "INTEGER" if engine.dialect.name == "sqlite" else "BIGINT")
     assert all(
@@ -264,7 +274,6 @@ def test_large_receipt_refuses_narrowing_before_any_schema_mutation(
     )
     assert snapshot(engine) == before
     assert schema(engine) == before_schema
-    command.check(migrated)
 
 
 def test_inspection_old_check_refuses_downgrade_before_any_schema_mutation(
@@ -279,7 +288,6 @@ def test_inspection_old_check_refuses_downgrade_before_any_schema_mutation(
         command.downgrade(migrated, "0064")
     assert snapshot(engine) == before
     assert schema(engine) == before_schema
-    command.check(migrated)
 
 
 @pytest.mark.parametrize("direction", ["upgrade", "downgrade"])
@@ -307,7 +315,7 @@ def test_sqlite_schema_edit_failure_rolls_back_and_can_retry(
     try:
         with pytest.raises(RuntimeError, match="Injected failure after schema rewrite"):
             if direction == "upgrade":
-                command.upgrade(migrated, "head")
+                command.upgrade(migrated, "0065")
             else:
                 command.downgrade(migrated, "0064")
     finally:
@@ -321,12 +329,11 @@ def test_sqlite_schema_edit_failure_rolls_back_and_can_retry(
         )
         assert db.exec_driver_sql("PRAGMA schema_version").scalar_one() == original_version
     if direction == "upgrade":
-        command.upgrade(migrated, "head")
+        command.upgrade(migrated, "0065")
     else:
         command.downgrade(migrated, "0064")
-        command.upgrade(migrated, "head")
+        command.upgrade(migrated, "0065")
     assert snapshot(engine) == before
-    command.check(migrated)
 
 
 def test_postgres_offline_widens_all_six_receipts_but_refuses_unchecked_downgrade(monkeypatch):
