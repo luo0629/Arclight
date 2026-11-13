@@ -29,12 +29,17 @@ from arclight.core.errors import DomainError
 from arclight.domain.dependencies import DependencyInput, ManifestCreate
 from arclight.domain.file_policy import POLICIES
 from arclight.domain.subtitles import (
+    EditedSubtitleDocument,
     SubtitleAssetMetadata,
     SubtitleCue,
+    SubtitleDisplayCue,
     SubtitleDocument,
+    SubtitleEdit,
     SubtitleGenerate,
+    SubtitleTrackDocument,
     SubtitleTrackRead,
     srt_bytes,
+    visible_cues,
 )
 from arclight.domain.timelines import ClipSnapshot
 from arclight.domain.versions import digest
@@ -55,9 +60,13 @@ def invalid_history() -> DomainError:
     return DomainError("SUBTITLE_HISTORY_INVALID", "字幕不可变生产来源或文件回执不完整", 409)
 
 
-def subtitle_document(db: Session, row: SubtitleProduction) -> SubtitleDocument:
+def subtitle_document(db: Session, row: SubtitleProduction) -> SubtitleTrackDocument:
     try:
-        document = SubtitleDocument.model_validate(row.snapshot_json)
+        document: SubtitleTrackDocument
+        if row.snapshot_json.get("schema_version") == "subtitle-track/2":
+            document = EditedSubtitleDocument.model_validate(row.snapshot_json)
+        else:
+            document = SubtitleDocument.model_validate(row.snapshot_json)
     except ValidationError:
         raise invalid_history() from None
     if document.episode_id != row.episode_id or document.timeline_id != row.timeline_id:
@@ -79,7 +88,7 @@ def production_record(db: Session, version: AssetVersion) -> SubtitleProduction 
 
 
 def validate_provenance(
-    db: Session, row: SubtitleProduction, document: SubtitleDocument, version: AssetVersion
+    db: Session, row: SubtitleProduction, document: SubtitleTrackDocument, version: AssetVersion
 ) -> None:
     """Verify frozen declarations using historical facts, never current selections."""
     timeline = db.get(Timeline, row.timeline_id)
@@ -153,11 +162,50 @@ def validate_provenance(
         line = require_line(snapshot, cue.line_id)
         if (line.text, line.speaker, line.line_type) != (cue.text, cue.speaker, cue.line_type):
             raise invalid_history()
+    if isinstance(document, EditedSubtitleDocument):
+        validate_edit_provenance(db, row, document, version, timeline)
+
+
+def validate_edit_provenance(
+    db: Session,
+    row: SubtitleProduction,
+    document: EditedSubtitleDocument,
+    version: AssetVersion,
+    timeline: Timeline,
+) -> None:
+    parent = db.get(AssetVersion, document.edit_source_version_id)
+    parent_row = db.scalar(
+        select(SubtitleProduction).where(
+            SubtitleProduction.asset_version_id == document.edit_source_version_id
+        )
+    )
+    if (
+        parent is None
+        or parent_row is None
+        or parent.asset_id != version.asset_id
+        or parent.version_no >= version.version_no
+        or parent_row.episode_id != row.episode_id
+        or parent_row.timeline_id != row.timeline_id
+        or parent.checksum != document.edit_source_checksum
+        or digest(parent_row.snapshot_json) != document.edit_source_document_sha256
+        or parent.metadata_json.get("subtitle_document_sha256")
+        != document.edit_source_document_sha256
+    ):
+        raise invalid_history()
+    # The parent is an immutable earlier receipt, not a current selection or a recursive load.
+    source = subtitle_document(db, parent_row)
+    if (
+        source.timeline_sha256 != document.timeline_sha256
+        or source.cues != document.cues
+        or any(cue.end_ms > timeline.duration_ms for cue in document.display_cues)
+        or hashlib.sha256(srt_bytes(source)).hexdigest() != parent.checksum
+    ):
+        raise invalid_history()
 
 
 def checked_production(
     db: Session, settings: Settings, row: SubtitleProduction
-) -> tuple[SubtitleDocument, AssetVersion, VisualAsset, StoredFile]:
+) -> tuple[SubtitleTrackDocument, AssetVersion, VisualAsset, StoredFile]:
     episode = db.get(Episode, row.episode_id)
     if episode is None:
         raise invalid_history()
@@ -207,7 +255,7 @@ def checked_production(
     return document, version, asset, file
 
 
-def subtitle_clips(document: SubtitleDocument, version: AssetVersion) -> list[ClipSnapshot]:
+def subtitle_clips(document: SubtitleTrackDocument, version: AssetVersion) -> list[ClipSnapshot]:
     return [
         ClipSnapshot(
             id=uuid5(version.id, f"subtitle-cue:{cue.cue_no}"),
@@ -221,7 +269,7 @@ def subtitle_clips(document: SubtitleDocument, version: AssetVersion) -> list[Cl
             line_id=cue.line_id,
             audio_version_id=cue.audio_asset_version_id,
         )
-        for cue in document.cues
+        for cue in visible_cues(document)
     ]
 
 
@@ -248,8 +296,13 @@ def read_subtitle(
         created_at=row.created_at.replace(tzinfo=UTC)
         if row.created_at.tzinfo is None
         else row.created_at.astimezone(UTC),
-        cues=document.cues,
+        cues=visible_cues(document),
         clips=subtitle_clips(document, version),
+        schema_version=document.schema_version,
+        source_cues=document.cues if isinstance(document, EditedSubtitleDocument) else None,
+        edit_source_version_id=document.edit_source_version_id
+        if isinstance(document, EditedSubtitleDocument)
+        else None,
     )
 
 
@@ -347,7 +400,7 @@ def source_cues(
     )
 
 
-def document_inputs(document: SubtitleDocument) -> list[DependencyInput]:
+def document_inputs(document: SubtitleTrackDocument) -> list[DependencyInput]:
     audio_ids = sorted({cue.audio_asset_version_id for cue in document.cues}, key=str)
     scripts: dict[UUID, set[str]] = {}
     for cue in document.cues:
@@ -376,77 +429,32 @@ def document_inputs(document: SubtitleDocument) -> list[DependencyInput]:
     return inputs
 
 
-def generate_subtitles(
-    db: Session, settings: Settings, episode_id: UUID, payload: SubtitleGenerate, actor: str
+def store_subtitle_document(
+    db: Session,
+    settings: Settings,
+    episode: Episode,
+    asset: VisualAsset,
+    expected_revision: int | None,
+    creation_key: UUID,
+    fingerprint: str,
+    document: SubtitleTrackDocument,
+    actor: str,
 ) -> SubtitleTrackRead:
-    episode = write_episode(db, episode_id, actor)
-    fingerprint = digest(
-        {
-            "schema_version": "subtitle-request/1",
-            "episode_id": str(episode_id),
-            "actor": actor,
-            **payload.model_dump(mode="json", exclude={"creation_key", "expected_revision"}),
-        }
-    )
-    previous = db.scalar(
-        select(SubtitleProduction).where(
-            SubtitleProduction.episode_id == episode_id,
-            SubtitleProduction.creation_key == payload.creation_key,
-        )
-    )
-    if previous is not None:
-        if previous.request_fingerprint != fingerprint:
-            raise DomainError("IDEMPOTENCY_CONFLICT", "同一生成标识不能更换字幕来源或目标", 409)
-        return read_subtitle(db, settings, previous.asset_version_id, actor)
-    document = source_cues(db, settings, episode, payload.timeline_id, actor)
+    """Publish a new immutable document through the existing subtitle production path."""
     inputs = document_inputs(document)
     data = srt_bytes(document)
     text_limit = POLICIES["text/plain"].max_bytes
     if text_limit is not None and len(data) > text_limit:
         raise DomainError("SUBTITLE_TEXT_INVALID", "字幕文本超出文本文件策略范围", 422)
-    if payload.target_asset_id is None:
-        asset = VisualAsset(
-            id=uuid4(),
-            project_id=episode.project_id,
-            asset_type="SUBTITLE",
-            name=f"字幕 · {episode.id}",
-            metadata_json=SubtitleAssetMetadata(
-                episode_id=episode.id, subtitle_production=1
-            ).model_dump(mode="json"),
-            created_by=actor,
-            status="DRAFT",
-        )
-        db.add(asset)
-        db.flush()
-    else:
-        existing_asset = db.get(VisualAsset, payload.target_asset_id, populate_existing=True)
-        if existing_asset is None or existing_asset.project_id != episode.project_id:
-            raise DomainError("NOT_FOUND", "字幕目标资产不存在", 404)
-        asset = existing_asset
-        has_production = db.scalar(
-            select(SubtitleProduction.id)
-            .join(AssetVersion, AssetVersion.id == SubtitleProduction.asset_version_id)
-            .where(AssetVersion.asset_id == asset.id, SubtitleProduction.episode_id == episode.id)
-            .limit(1)
-        )
-        if has_production is None:
-            raise DomainError("SUBTITLE_TARGET_INVALID", "目标必须是本集已有生产字幕资产", 422)
-        if asset.asset_type != "SUBTITLE" or asset.metadata_json != SubtitleAssetMetadata(
-            episode_id=episode.id, subtitle_production=1
-        ).model_dump(mode="json"):
-            raise DomainError("SUBTITLE_TARGET_INVALID", "目标必须是本集已有生产字幕资产", 422)
     if asset.status in {"LOCKED", "ARCHIVED", "STALE", "REJECTED"}:
         raise DomainError("ASSET_READ_ONLY", "锁定、归档或失效字幕资产不能生成新版本", 409)
-    expected_revision = payload.expected_revision
-    if payload.target_asset_id is not None and expected_revision is None:
-        raise DomainError("VERSION_CONFLICT", "字幕目标缺少目录版本", 409)
     change_asset(db, asset, expected_revision if expected_revision is not None else 0)
     manifest, _ = capture_manifest(
         db,
         episode.project_id,
         actor,
         ManifestCreate(
-            creation_key=uuid5(payload.creation_key, "subtitle-manifest"),
+            creation_key=uuid5(creation_key, "subtitle-manifest"),
             target_asset_id=asset.id,
             inputs=inputs,
             context={"subtitle_document_sha256": digest(document.model_dump(mode="json"))},
@@ -470,7 +478,7 @@ def generate_subtitles(
         + 1,
         object_key=object_key(episode.project_id, version_id, settings),
         checksum=hashlib.sha256(data).hexdigest(),
-        creation_key=payload.creation_key,
+        creation_key=creation_key,
         created_by=actor,
         status="DRAFT",
         metadata_json={
@@ -503,7 +511,7 @@ def generate_subtitles(
         asset_version_id=version.id,
         dependency_manifest_id=manifest.id,
         file_id=file.id,
-        creation_key=payload.creation_key,
+        creation_key=creation_key,
         request_fingerprint=fingerprint,
         snapshot_json=document.model_dump(mode="json"),
         created_by=actor,
@@ -514,16 +522,180 @@ def generate_subtitles(
         db,
         episode.project_id,
         actor,
-        "subtitle.generated",
+        "subtitle.edited" if isinstance(document, EditedSubtitleDocument) else "subtitle.generated",
         version.id,
         {
             "timeline_id": str(document.timeline_id),
             "cue_count": len(document.cues),
             "dependency_manifest_id": str(manifest.id),
             "file_id": str(file.id),
+            **(
+                {"edit_source_version_id": str(document.edit_source_version_id)}
+                if isinstance(document, EditedSubtitleDocument)
+                else {}
+            ),
         },
     )
     return read_subtitle(db, settings, version.id, actor)
+
+
+def generate_subtitles(
+    db: Session, settings: Settings, episode_id: UUID, payload: SubtitleGenerate, actor: str
+) -> SubtitleTrackRead:
+    episode = write_episode(db, episode_id, actor)
+    fingerprint = digest(
+        {
+            "schema_version": "subtitle-request/1",
+            "episode_id": str(episode_id),
+            "actor": actor,
+            **payload.model_dump(mode="json", exclude={"creation_key", "expected_revision"}),
+        }
+    )
+    previous = db.scalar(
+        select(SubtitleProduction).where(
+            SubtitleProduction.episode_id == episode_id,
+            SubtitleProduction.creation_key == payload.creation_key,
+        )
+    )
+    if previous is not None:
+        if previous.request_fingerprint != fingerprint:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一生成标识不能更换字幕来源或目标", 409)
+        return read_subtitle(db, settings, previous.asset_version_id, actor)
+    document = source_cues(db, settings, episode, payload.timeline_id, actor)
+    if payload.target_asset_id is None:
+        asset = VisualAsset(
+            id=uuid4(),
+            project_id=episode.project_id,
+            asset_type="SUBTITLE",
+            name=f"字幕 · {episode.id}",
+            metadata_json=SubtitleAssetMetadata(
+                episode_id=episode.id, subtitle_production=1
+            ).model_dump(mode="json"),
+            created_by=actor,
+            status="DRAFT",
+        )
+        db.add(asset)
+        db.flush()
+    else:
+        existing_asset = db.get(VisualAsset, payload.target_asset_id, populate_existing=True)
+        if existing_asset is None or existing_asset.project_id != episode.project_id:
+            raise DomainError("NOT_FOUND", "字幕目标资产不存在", 404)
+        asset = existing_asset
+        has_production = db.scalar(
+            select(SubtitleProduction.id)
+            .join(AssetVersion, AssetVersion.id == SubtitleProduction.asset_version_id)
+            .where(AssetVersion.asset_id == asset.id, SubtitleProduction.episode_id == episode.id)
+            .limit(1)
+        )
+        if has_production is None:
+            raise DomainError("SUBTITLE_TARGET_INVALID", "目标必须是本集已有生产字幕资产", 422)
+        if asset.asset_type != "SUBTITLE" or asset.metadata_json != SubtitleAssetMetadata(
+            episode_id=episode.id, subtitle_production=1
+        ).model_dump(mode="json"):
+            raise DomainError("SUBTITLE_TARGET_INVALID", "目标必须是本集已有生产字幕资产", 422)
+    return store_subtitle_document(
+        db,
+        settings,
+        episode,
+        asset,
+        payload.expected_revision,
+        payload.creation_key,
+        fingerprint,
+        document,
+        actor,
+    )
+
+
+def edit_subtitles(
+    db: Session,
+    settings: Settings,
+    asset_version_id: UUID,
+    payload: SubtitleEdit,
+    actor: str,
+) -> SubtitleTrackRead:
+    source_row = db.scalar(
+        select(SubtitleProduction).where(SubtitleProduction.asset_version_id == asset_version_id)
+    )
+    if source_row is None:
+        raise DomainError("NOT_FOUND", "字幕生产版本不存在", 404)
+    episode = write_episode(db, source_row.episode_id, actor)
+    fingerprint = digest(
+        {
+            "schema_version": "subtitle-edit-request/1",
+            "episode_id": str(episode.id),
+            "actor": actor,
+            "source_asset_version_id": str(asset_version_id),
+            "source_document_sha256": digest(source_row.snapshot_json),
+            **payload.model_dump(mode="json", exclude={"creation_key", "expected_revision"}),
+        }
+    )
+    previous = db.scalar(
+        select(SubtitleProduction).where(
+            SubtitleProduction.episode_id == episode.id,
+            SubtitleProduction.creation_key == payload.creation_key,
+        )
+    )
+    if previous is not None:
+        if previous.request_fingerprint != fingerprint:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一编辑标识不能更换字幕来源或修改内容", 409)
+        return read_subtitle(db, settings, previous.asset_version_id, actor)
+    source, version, asset, _ = checked_production(db, settings, source_row)
+    if version.status in {"LOCKED", "ARCHIVED"}:
+        raise DomainError("ASSET_READ_ONLY", "锁定或归档字幕不能编辑，请先显式解除", 409)
+    require_subtitle_version(db, settings, episode.project_id, asset, version, actor)
+    displays = [
+        SubtitleDisplayCue(
+            cue_no=cue.cue_no,
+            text=cue.text,
+            start_ms=cue.start_ms,
+            end_ms=cue.start_ms + cue.duration_ms,
+        )
+        for cue in visible_cues(source)
+    ]
+    for change in payload.changes:
+        if change.cue_no > len(displays):
+            raise DomainError("SUBTITLE_CUE_NOT_FOUND", "修改的字幕句不存在", 422)
+        index = change.cue_no - 1
+        values = displays[index].model_dump()
+        if change.text is not None:
+            values["text"] = change.text
+        if change.sync_to_audio:
+            cue = source.cues[index]
+            values["start_ms"] = cue.start_ms
+            values["end_ms"] = cue.start_ms + cue.duration_ms
+        elif change.start_ms is not None and change.end_ms is not None:
+            values["start_ms"] = change.start_ms
+            values["end_ms"] = change.end_ms
+        displays[index] = SubtitleDisplayCue.model_validate(values)
+    timeline = db.get(Timeline, source.timeline_id)
+    if timeline is None or not timeline.sealed:
+        raise invalid_history()
+    if any(cue.end_ms > timeline.duration_ms for cue in displays):
+        raise DomainError("SUBTITLE_TIME_INVALID", "字幕结束时间超出实际时间轴", 422)
+    try:
+        document = EditedSubtitleDocument(
+            episode_id=episode.id,
+            timeline_id=source.timeline_id,
+            timeline_sha256=source.timeline_sha256,
+            cues=source.cues,
+            display_cues=displays,
+            edit_source_version_id=version.id,
+            edit_source_checksum=version.checksum,
+            edit_source_document_sha256=digest(source_row.snapshot_json),
+        )
+    except ValidationError:
+        raise DomainError("SUBTITLE_TIME_INVALID", "字幕句顺序或重叠范围不合法", 422) from None
+    return store_subtitle_document(
+        db,
+        settings,
+        episode,
+        asset,
+        payload.expected_revision,
+        payload.creation_key,
+        fingerprint,
+        document,
+        actor,
+    )
 
 
 def require_subtitle_version(
@@ -575,7 +747,7 @@ def validate_subtitle_clip(db: Session, episode: Episode, clip: ClipSnapshot) ->
             and cue.script_version_id == clip.script_version_id
             and cue.line_id == clip.line_id
             and cue.audio_asset_version_id == clip.audio_version_id
-            for cue in document.cues
+            for cue in visible_cues(document)
         )
     ):
         raise DomainError("SUBTITLE_CLIP_MISMATCH", "字幕片段与不可变生产台词、音频或时点不符", 422)

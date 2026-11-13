@@ -7,10 +7,16 @@ from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import select
 
 from arclight.api.dependencies import Actor, Database
-from arclight.application.subtitles import generate_subtitles, read_subtitle, subtitle_history
+from arclight.application.subtitles import (
+    edit_subtitles,
+    generate_subtitles,
+    read_subtitle,
+    subtitle_document,
+    subtitle_history,
+)
 from arclight.core.errors import DomainError
 from arclight.domain.subtitles import (
-    SubtitleDocument,
+    SubtitleEdit,
     SubtitleGenerate,
     SubtitleTrackRead,
     srt_bytes,
@@ -27,6 +33,13 @@ def create(
     episode_id: UUID, payload: SubtitleGenerate, request: Request, db: Database, actor: Actor
 ) -> SubtitleTrackRead:
     return generate_subtitles(db, request.app.state.settings, episode_id, payload, actor)
+
+
+@router.post("/subtitle-tracks/{asset_version_id}/edits", status_code=201)
+def edit(
+    asset_version_id: UUID, payload: SubtitleEdit, request: Request, db: Database, actor: Actor
+) -> SubtitleTrackRead:
+    return edit_subtitles(db, request.app.state.settings, asset_version_id, payload, actor)
 
 
 @router.get("/episodes/{episode_id}/subtitle-tracks")
@@ -54,7 +67,7 @@ def export(asset_version_id: UUID, request: Request, db: Database, actor: Actor)
     )
     if row is None:
         raise DomainError("NOT_FOUND", "字幕生产版本不存在", 404)
-    document = SubtitleDocument.model_validate(row.snapshot_json)
+    document = subtitle_document(db, row)
     return Response(
         srt_bytes(document),
         media_type="text/plain",
