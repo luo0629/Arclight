@@ -1,7 +1,8 @@
 """Claims fence old workers, bound recovery and persist observable render progress."""
 
-import time
+from contextlib import contextmanager
 from datetime import timedelta
+from threading import Event
 from threading import enumerate as threads
 from uuid import UUID
 
@@ -17,6 +18,7 @@ from render_job_helpers import (
 )
 from sqlalchemy import select
 
+from arclight.application import render_leases
 from arclight.application.generation_leases import LeasePolicy, clock, utc
 from arclight.application.render_dispatch import candidates
 from arclight.application.render_leases import claim, keep_alive, observe, owned
@@ -108,23 +110,47 @@ def test_cancelled_expired_worker_recovers_to_cancelled_without_new_attempt(clie
     assert final["status"] == "CANCELLED" and final["attempt_count"] == 1
 
 
-def test_heartbeat_renews_database_deadline_and_is_joined(client, job_case):
+def test_heartbeat_renews_database_deadline_and_is_joined(client, job_case, monkeypatch):
     _, value, _ = job_case
     factory, run_id = client.app.state.session_factory, UUID(value["id"])
     policy = LeasePolicy(duration_seconds=4, heartbeat_seconds=0.1, poll_seconds=0.05)
     token = claim(factory, run_id, policy)
     with factory.begin() as db:
-        db.get(RenderJob, run_id).lease_expires_at = clock(db) + timedelta(seconds=2)
-        initial = utc(db.get(RenderJob, run_id).lease_expires_at)
+        now = clock(db)
+        initial = now + timedelta(seconds=2)
+        db.get(RenderJob, run_id).lease_expires_at = initial
+    # Exercise renewal without making transaction/scheduler latency a lease deadline.
+    monkeypatch.setattr(render_leases, "clock", lambda db: now)
+    renewal_finished = Event()
+    failures = []
+    begin = factory.begin
+
+    @contextmanager
+    def record_renewal():
+        try:
+            with begin() as db:
+                yield db
+        except Exception as exc:
+            failures.append(exc)
+            raise
+        finally:
+            # Success is signalled only after the real transaction has committed.
+            renewal_finished.set()
+
+    monkeypatch.setattr(factory, "begin", record_renewal)
     with keep_alive(factory, run_id, token, policy):
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            with factory() as db:
-                job, render = db.get(RenderJob, run_id), db.get(RenderExecution, run_id)
-                if utc(job.lease_expires_at) > initial:
-                    owned(db, render, job, token)
-                    break
-            time.sleep(0.02)
-        else:
-            pytest.fail("Renderer heartbeat did not renew its durable claim")
+        assert renewal_finished.wait(3), "Renderer heartbeat transaction did not finish"
+        assert not failures, f"Renderer heartbeat transaction failed: {failures!r}"
+        with factory() as db:
+            job, render = db.get(RenderJob, run_id), db.get(RenderExecution, run_id)
+            renewed = utc(job.lease_expires_at)
+            assert renewed > initial
+            assert renewed == now + timedelta(seconds=policy.duration_seconds)
+            owned(db, render, job, token)
     assert not any(thread.name == f"render-heartbeat-{run_id}" for thread in threads())
+    assert not failures, f"Renderer heartbeat transaction failed: {failures!r}"
+    monkeypatch.setattr(factory, "begin", begin)
+    monkeypatch.setattr(render_leases, "clock", lambda db: renewed)
+    with pytest.raises(DomainError) as expired:
+        observe(factory, run_id, token)
+    assert expired.value.code == "RENDER_LEASE_LOST"

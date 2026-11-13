@@ -64,16 +64,16 @@ def edit_track(client, case):
 
 def test_subtitle_edit_empty_guard_roundtrip_retains_schema(client, migrated):
     engine = client.app.state.session_factory.kw["bind"]
-    tables = inspect(engine).get_table_names()
+    tables = sorted(inspect(engine).get_table_names())
     command.check(migrated)
     assert "subtitle-track/2" in insert_guard(engine)
     command.downgrade(migrated, "0066")
     assert "subtitle-track/2" not in insert_guard(engine)
-    assert inspect(engine).get_table_names() == tables
+    assert sorted(inspect(engine).get_table_names()) == tables
     command.upgrade(migrated, "head")
     command.check(migrated)
     assert "subtitle-track/2" in insert_guard(engine)
-    assert inspect(engine).get_table_names() == tables
+    assert sorted(inspect(engine).get_table_names()) == tables
 
 
 def test_subtitle_edit_guard_roundtrip_preserves_generated_history(client, subtitle_case, migrated):
