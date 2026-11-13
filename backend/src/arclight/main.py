@@ -55,6 +55,7 @@ from arclight.api.story_analysis import router as story_analysis_router
 from arclight.api.story_bible import router as story_bible_router
 from arclight.api.story_outline import router as story_outline_router
 from arclight.api.story_sources import router as story_sources_router
+from arclight.api.subtitles import router as subtitles_router
 from arclight.api.timelines import router as timelines_router
 from arclight.api.transfer_authorization import router as transfer_authorization_router
 from arclight.api.upload_completion import router as upload_completion_router
@@ -181,6 +182,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(render_previews_router)
     app.include_router(timelines_router)
     app.include_router(audio_production_router)
+    app.include_router(subtitles_router)
     app.include_router(render_manifests_router)
     app.include_router(render_jobs_router)
     app.include_router(render_deliveries_router)

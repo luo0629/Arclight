@@ -60,7 +60,10 @@ def affects_input(change: dict, item: dict, target_kind: str) -> bool:
     if kind == "DIALOGUE":
         affected = edge == "CONTENT_DEPENDENCY" and target_kind in {"AUDIO", "SUBTITLE", "RENDER"}
     elif kind == "SEQUENCE":
-        affected = edge == "SEQUENCE_DEPENDENCY" and target_kind in {"TIMELINE", "RENDER"}
+        affected = edge == "SEQUENCE_DEPENDENCY" and (
+            target_kind in {"TIMELINE", "RENDER"}
+            or (item.get("asset_type") == "TIMELINE" and target_kind == "SUBTITLE")
+        )
     elif kind == "STYLE":
         affected = edge == "STYLE_DEPENDENCY"
     elif kind == "REFERENCE":

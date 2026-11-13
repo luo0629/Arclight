@@ -28,6 +28,7 @@ from arclight.application.dependency_rebuild import (
 from arclight.application.files import record_asset_file
 from arclight.application.generation_candidates import require_candidate_review
 from arclight.application.invalidation import check_impact, invalidate
+from arclight.application.subtitles import require_subtitle_version
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
 from arclight.domain.asset_versions import decode_image, next_status
@@ -126,7 +127,9 @@ def list_versions(
     offset: Offset = 0,
 ) -> list[VersionRead]:
     require_project(db, project_id, actor)
-    find_asset(db, project_id, asset_id, include_media=True, include_audio=True)
+    find_asset(
+        db, project_id, asset_id, include_media=True, include_audio=True, include_subtitle=True
+    )
     return [
         read_version(row)
         for row in db.scalars(
@@ -148,7 +151,9 @@ def get_version(
     actor: Actor,
 ) -> VersionRead:
     require_project(db, project_id, actor)
-    find_asset(db, project_id, asset_id, include_media=True, include_audio=True)
+    find_asset(
+        db, project_id, asset_id, include_media=True, include_audio=True, include_subtitle=True
+    )
     return read_version(find_version(db, asset_id, version_id))
 
 
@@ -359,7 +364,9 @@ def select_version(
     require_project(db, project_id, actor)
     lock_selection_run(db, project_id, version_id)
     require_project(db, project_id, actor, write=True)
-    asset = find_asset(db, project_id, asset_id, include_media=True, include_audio=True)
+    asset = find_asset(
+        db, project_id, asset_id, include_media=True, include_audio=True, include_subtitle=True
+    )
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
@@ -370,6 +377,8 @@ def select_version(
         raise DomainError("ASSET_NOT_USABLE", "只能选用已批准且有效的精确版本", 409)
     if asset.asset_type == "AUDIO":
         require_audio_version(db, request.app.state.settings, project_id, asset, row, actor)
+    elif asset.asset_type == "SUBTITLE":
+        require_subtitle_version(db, request.app.state.settings, project_id, asset, row, actor)
     else:
         read_object(
             request.app.state.settings,
@@ -466,7 +475,9 @@ def change_lock(
     locked: bool,
 ) -> AssetRead:
     require_project(db, project_id, actor, write=True, owner=True)
-    asset = find_asset(db, project_id, asset_id, include_media=True, include_audio=True)
+    asset = find_asset(
+        db, project_id, asset_id, include_media=True, include_audio=True, include_subtitle=True
+    )
     version = find_version(db, asset_id, version_id)
     record = db.scalar(select(AssetSelectionLock).where(AssetSelectionLock.asset_id == asset_id))
     if asset.current_version_id != version.id or asset.status == "ARCHIVED":
@@ -483,6 +494,10 @@ def change_lock(
             raise DomainError("ASSET_LOCK_CONFLICT", "选用版本未批准、失效或已锁定", 409)
         if asset.asset_type == "AUDIO":
             require_audio_version(db, request.app.state.settings, project_id, asset, version, actor)
+        elif asset.asset_type == "SUBTITLE":
+            require_subtitle_version(
+                db, request.app.state.settings, project_id, asset, version, actor
+            )
         else:
             read_object(
                 request.app.state.settings,
@@ -685,7 +700,9 @@ def update_version_state(
     require_project(
         db, project_id, actor, write=True, owner=payload.status in {"APPROVED", "REJECTED", "STALE"}
     )
-    asset = find_asset(db, project_id, asset_id, include_media=True, include_audio=True)
+    asset = find_asset(
+        db, project_id, asset_id, include_media=True, include_audio=True, include_subtitle=True
+    )
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产只允许查看版本", 409)
@@ -700,6 +717,8 @@ def update_version_state(
         require_candidate_review(row, db)
         if asset.asset_type == "AUDIO":
             require_audio_version(db, request.app.state.settings, project_id, asset, row, actor)
+        elif asset.asset_type == "SUBTITLE":
+            require_subtitle_version(db, request.app.state.settings, project_id, asset, row, actor)
         else:
             if row.creation_key is None or row.metadata_json.get("storage_backend") not in {
                 "LOCAL",

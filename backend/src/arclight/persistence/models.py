@@ -52,6 +52,7 @@ from arclight.persistence.service_bindings import (
 from arclight.persistence.service_bindings import (
     GenerationServiceBinding as GenerationServiceBinding,
 )
+from arclight.persistence.subtitles import SubtitleProduction as SubtitleProduction
 from arclight.persistence.timelines import Timeline as Timeline
 from arclight.persistence.timelines import TimelineClip as TimelineClip
 from arclight.persistence.timelines import TimelineClipVisual as TimelineClipVisual

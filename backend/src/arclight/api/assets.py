@@ -23,6 +23,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.asset_metadata import AssetMetadata, AssetOrigin
 from arclight.domain.asset_profiles import CharacterProfile, PropProfile, SceneProfile
 from arclight.domain.audio_production import AudioAssetMetadata
+from arclight.domain.subtitles import LegacySubtitleAssetMetadata, SubtitleAssetMetadata
 from arclight.persistence.models import AssetVersion, Episode, VisualAsset
 
 router = APIRouter(prefix="/api/v1", tags=["visual-assets"])
@@ -78,13 +79,15 @@ class AssetArchive(Input):
 
 class AssetRead(Resource):
     project_id: UUID
-    asset_type: AssetType | Literal["IMAGE", "SHOT_IMAGE", "AUDIO"]
+    asset_type: AssetType | Literal["IMAGE", "SHOT_IMAGE", "AUDIO", "SUBTITLE"]
     name: str
     status: str
     current_version_id: UUID | None
     lock_version: int
     revision: int
-    metadata: AssetMetadata | AudioAssetMetadata = Field(validation_alias="metadata_json")
+    metadata: (
+        AssetMetadata | AudioAssetMetadata | SubtitleAssetMetadata | LegacySubtitleAssetMetadata
+    ) = Field(validation_alias="metadata_json")
     creation_source: AssetOrigin | None
     created_by: str | None
     character_profile: CharacterProfile | None
@@ -106,11 +109,14 @@ def find_asset(
     *,
     include_media: bool = False,
     include_audio: bool = False,
+    include_subtitle: bool = False,
 ) -> VisualAsset:
     row = db.get(VisualAsset, asset_id, populate_existing=True)
     kinds = (*DIRECTORY_TYPES, "IMAGE", "SHOT_IMAGE") if include_media else DIRECTORY_TYPES
     if include_audio:
         kinds = (*kinds, "AUDIO")
+    if include_subtitle:
+        kinds = (*kinds, "SUBTITLE")
     if row is None or row.project_id != project_id or row.asset_type not in kinds:
         raise DomainError("NOT_FOUND", "视觉资产不存在", 404)
     return row
@@ -135,7 +141,9 @@ def list_assets(
 def get_asset(project_id: UUID, asset_id: UUID, db: Database, actor: Actor) -> AssetRead:
     require_project(db, project_id, actor)
     return AssetRead.model_validate(
-        find_asset(db, project_id, asset_id, include_media=True, include_audio=True)
+        find_asset(
+            db, project_id, asset_id, include_media=True, include_audio=True, include_subtitle=True
+        )
     )
 
 

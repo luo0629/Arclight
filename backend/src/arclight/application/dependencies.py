@@ -89,7 +89,7 @@ def input_usable(db: Session, version: AssetVersion, asset: VisualAsset, target_
     if version.status in {"APPROVED", "LOCKED"}:
         return True
     if (
-        target_kind != "RENDER"
+        target_kind not in {"RENDER", "SUBTITLE"}
         or asset.asset_type != "TIMELINE"
         or version.status not in {"DRAFT", "READY_FOR_REVIEW"}
     ):

@@ -283,6 +283,10 @@ def validate_snapshot_facts(
 
                 assert clip.line_id is not None
                 validate_audio_line(db, clip.source_asset_version_id, script.id, clip.line_id)
+            if track.kind == "SUBTITLE":
+                from arclight.application.subtitles import validate_subtitle_clip
+
+                validate_subtitle_clip(db, episode, clip)
             if clip.audio_version_id:
                 require_track_source(db, episode, clip.audio_version_id, "AUDIO")
 
