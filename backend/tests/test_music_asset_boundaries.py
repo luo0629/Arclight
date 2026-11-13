@@ -175,6 +175,20 @@ def test_music_registration_requires_explicit_known_role(client, episode, role):
     assert music_counts(client, asset) == (0, 0, 0, 0)
 
 
+@pytest.mark.parametrize("target", ["music", "missing"])
+def test_legacy_file_registration_without_role_keeps_visual_contract(client, episode, target):
+    asset = create_music(client, episode)
+    source_id = music_source(client, episode)
+    payload = music_payload(asset, "BACKGROUND")
+    payload.pop("purpose_role")
+    if target == "missing":
+        payload["asset_id"] = str(uuid4())
+    response = client.post(import_endpoint(asset, source_id), json=payload)
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "INVALID_CANDIDATE"
+    assert music_counts(client, asset) == (0, 0, 0, 0)
+
+
 def test_music_cross_project_source_and_target_are_hidden(client, episode):
     asset = create_music(client, episode)
     source_id = music_source(client, episode)

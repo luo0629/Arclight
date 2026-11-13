@@ -84,10 +84,7 @@ def register_file(
 ) -> VersionRead:
     require_project(db, project_id, actor, write=True)
     row = find_file(db, project_id, file_id)
-    completion = db.scalar(select(UploadCompletion).where(UploadCompletion.file_id == row.id))
-    if payload.purpose_role is not None or (
-        completion is not None and completion.purpose == "MUSIC"
-    ):
+    if "purpose_role" in payload.model_fields_set:
         if payload.purpose_role is None:
             raise DomainError("MUSIC_ROLE_REQUIRED", "登记音乐或音效时必须声明用途", 422)
         version = register_music(
