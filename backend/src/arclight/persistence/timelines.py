@@ -105,3 +105,12 @@ class TimelineClipVisual(Entity, Base):
     id: Mapped[UUID] = mapped_column(ForeignKey("timeline_clips.id"), primary_key=True)
     timeline_id: Mapped[UUID] = mapped_column(ForeignKey("timelines.id"), index=True)
     settings_json: Mapped[dict[str, JsonValue]] = mapped_column(JSON_TYPE)
+
+
+class TimelineClipAudio(Entity, Base):
+    """Immutable gain automation belonging to one precise music or effect clip."""
+
+    __tablename__ = "timeline_clip_audio"
+    id: Mapped[UUID] = mapped_column(ForeignKey("timeline_clips.id"), primary_key=True)
+    timeline_id: Mapped[UUID] = mapped_column(ForeignKey("timelines.id"), index=True)
+    settings_json: Mapped[dict[str, JsonValue]] = mapped_column(JSON_TYPE)

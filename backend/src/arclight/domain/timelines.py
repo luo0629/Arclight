@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from arclight.domain.timeline_audio import ClipAudio
 from arclight.domain.timeline_visuals import ClipVisual, FadeWindow
 
 TrackKind = Literal["VIDEO", "VOICE", "SFX", "MUSIC", "SUBTITLE"]
@@ -51,11 +52,14 @@ class ClipSnapshot(TimelineContract):
     review_storyboard_id: UUID | None = None
     review_shot_id: UUID | None = None
     visual: ClipVisual | None = Field(default=None, exclude_if=lambda value: value is None)
+    audio: ClipAudio | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def precise_line(self):
         if (self.line_id is None) != (self.script_version_id is None):
             raise ValueError("台词必须同时绑定精确剧本版本和稳定台词ID")
+        if self.audio is not None:
+            self.audio.validate_duration(self.duration_ms)
         return self
 
 
@@ -70,6 +74,10 @@ class TrackSnapshot(TimelineContract):
         if len({item.ordinal for item in self.clips}) != len(self.clips):
             raise ValueError("同一轨道的片段序号不能重复")
         for clip in self.clips:
+            if clip.audio is not None:
+                expected = "MUSIC" if clip.audio.purpose_role == "BACKGROUND" else "SFX"
+                if self.kind != expected:
+                    raise ValueError("音频用途须匹配背景音乐或音效轨道")
             if self.kind != "VIDEO" and clip.visual is not None:
                 raise ValueError("视觉配置只能用于画面轨")
             if self.kind == "VIDEO" and clip.shot_id is None:

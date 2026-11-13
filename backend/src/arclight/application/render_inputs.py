@@ -19,6 +19,7 @@ SOURCE_TYPES = {
     "IMAGE": {"image/png", "image/jpeg"},
     "SHOT_IMAGE": {"image/png", "image/jpeg"},
     "AUDIO": {"audio/wav", "audio/mpeg", "audio/ogg", "audio/flac"},
+    "MUSIC": {"audio/wav", "audio/mpeg", "audio/ogg", "audio/flac"},
     "SUBTITLE": {"text/plain"},
 }
 
@@ -88,6 +89,10 @@ def capture_sources(
 ) -> tuple[RenderSource, ...]:
     sources = source_facts(db, project_id, timeline)
     for source in sources:
+        if source.asset_type == "MUSIC":
+            version, asset = exact_version(db, project_id, source.asset_version_id)
+            if asset.current_version_id != version.id:
+                raise DomainError("ASSET_NOT_SELECTED", "音乐音效须显式选用本精确批准版本", 409)
         if source.file is not None:
             row = db.get(StoredFile, source.file.file_id)
             assert row is not None
@@ -124,6 +129,10 @@ def source_facts(
         if identity in expected and expected[identity] != version.checksum:
             raise DomainError("RENDER_INPUT_INVALID", "时间轴素材摘要与精确版本不符", 409)
         reference = None
+        if asset.asset_type == "MUSIC":
+            from arclight.application.music_assets import music_resource_facts
+
+            music_resource_facts(db, project_id, asset, version)
         if asset.asset_type in SOURCE_TYPES:
             row = db.scalar(select(StoredFile).where(StoredFile.asset_version_id == identity))
             if (

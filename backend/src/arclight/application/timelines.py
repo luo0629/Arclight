@@ -196,8 +196,44 @@ def require_track_source(
         raise DomainError("ASSET_NOT_USABLE", "时间轴轨道需要已批准且有效的精确素材版本", 409)
 
 
+def require_sound_source(db: Session, episode: Episode, clip: ClipSnapshot) -> None:
+    """Preserve legacy AUDIO references while admitting exact registered music resources."""
+    version, asset = exact_version(db, episode.project_id, clip.source_asset_version_id)
+    kind = "MUSIC" if asset.asset_type == "MUSIC" else "AUDIO"
+    require_track_source(db, episode, version.id, kind, clip.source_sha256)
+    if kind == "MUSIC":
+        from arclight.application.music_assets import music_resource_facts
+
+        resource = music_resource_facts(db, episode.project_id, asset, version)
+        if clip.source_start_ms + clip.duration_ms > resource.validation.duration_ms:
+            raise DomainError(
+                "TIMELINE_SOURCE_RANGE_INVALID", "音乐音效入出点超出精确音频的实测时长", 409
+            )
+        if asset.current_version_id != version.id:
+            raise DomainError("ASSET_NOT_SELECTED", "音乐音效须显式选用本精确批准版本", 409)
+        if clip.audio is None or clip.audio.purpose_role != resource.purpose_role:
+            raise DomainError(
+                "TIMELINE_AUDIO_ROLE_INVALID", "音轨须固定与素材版本一致的音乐或音效用途", 409
+            )
+    elif clip.audio is not None:
+        from arclight.persistence.models import StoredFile
+
+        file = db.scalar(select(StoredFile).where(StoredFile.asset_version_id == version.id))
+        if (
+            file is None
+            or file.project_id != episode.project_id
+            or file.checksum != version.checksum
+            or file.object_key != version.object_key
+            or not file.media_type.startswith("audio/")
+            or not file.rights_confirmed
+            or not file.source_note.strip()
+            or not file.rights_note.strip()
+        ):
+            raise DomainError("RENDER_RIGHTS_REQUIRED", "音乐音效须保留精确文件来源和使用授权", 409)
+
+
 def validate_snapshot(
-    db: Session, settings: Settings, episode: Episode, value: TimelineSnapshot
+    db: Session, settings: Settings, episode: Episode, value: TimelineSnapshot, *, actor: str
 ) -> None:
     validate_snapshot_facts(db, episode, value, current_profile=True)
     for track in value.tracks:
@@ -207,6 +243,13 @@ def validate_snapshot(
                 read_object(
                     settings, episode.project_id, version.id, version.object_key, version.checksum
                 )
+        elif track.kind in {"MUSIC", "SFX"}:
+            from arclight.application.music_assets import require_music_version
+
+            for clip in track.clips:
+                version, asset = exact_version(db, episode.project_id, clip.source_asset_version_id)
+                if asset.asset_type == "MUSIC":
+                    require_music_version(db, settings, episode.project_id, asset, version, actor)
 
 
 def validate_snapshot_facts(
@@ -264,6 +307,8 @@ def validate_snapshot_facts(
                         raise DomainError(
                             "TIMELINE_REFERENCE_CONFLICT", "片段须保留当前精确素材与审查身份", 409
                         )
+            elif track.kind in {"MUSIC", "SFX"}:
+                require_sound_source(db, episode, clip)
             else:
                 require_track_source(
                     db,
@@ -323,7 +368,7 @@ def save_timeline(
             409,
         )
     read_timeline(db, base.id, actor)
-    validate_snapshot(db, settings, episode, snapshot)
+    validate_snapshot(db, settings, episode, snapshot, actor=actor)
     fresh = snapshot.model_copy(
         update={
             "tracks": [

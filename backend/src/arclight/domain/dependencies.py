@@ -60,6 +60,7 @@ def validate_dependency_type(source_kind: str, target_kind: str, dependency_type
         allowed = source_kind in IMAGE_KINDS | {
             "SHOT_PREVIEW",
             "AUDIO",
+            "MUSIC",
             "SUBTITLE",
             "TIMELINE",
         } and target_kind in {"TIMELINE", "RENDER"}

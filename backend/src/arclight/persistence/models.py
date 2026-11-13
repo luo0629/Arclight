@@ -55,6 +55,7 @@ from arclight.persistence.service_bindings import (
 from arclight.persistence.subtitles import SubtitleProduction as SubtitleProduction
 from arclight.persistence.timelines import Timeline as Timeline
 from arclight.persistence.timelines import TimelineClip as TimelineClip
+from arclight.persistence.timelines import TimelineClipAudio as TimelineClipAudio
 from arclight.persistence.timelines import TimelineClipVisual as TimelineClipVisual
 from arclight.persistence.timelines import TimelineRevision as TimelineRevision
 from arclight.persistence.timelines import TimelineTrack as TimelineTrack

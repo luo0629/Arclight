@@ -162,7 +162,7 @@ def admission_facts(db: Session, row: RenderManifest) -> RenderFacts:
                 "asset_status": asset.status,
                 "asset_revision": asset.revision,
                 "selection": str(asset.current_version_id)
-                if source.asset_type in {"IMAGE", "SHOT_IMAGE"}
+                if source.asset_type in {"IMAGE", "SHOT_IMAGE", "MUSIC"}
                 else None,
             }
         )
@@ -224,6 +224,16 @@ def validate_render_objects(
         )
         if file.asset_version_id is not None and file.media_type.startswith("audio/"):
             durations[file.asset_version_id] = details["duration_ms"]
+            version, asset = exact_version(db, file.project_id, file.asset_version_id)
+            if asset.asset_type == "MUSIC":
+                from arclight.application.music_assets import music_resource_facts
+                from arclight.domain.audio_production import AudioValidationRead
+
+                resource = music_resource_facts(db, file.project_id, asset, version)
+                if AudioValidationRead.model_validate(details) != resource.validation:
+                    raise DomainError(
+                        "MUSIC_OUTPUT_MISMATCH", "音乐音效与冻结的实际文件检查记录不符", 409
+                    )
     for track in snapshot.timeline.tracks:
         if track.kind in {"VOICE", "SFX", "MUSIC"}:
             for clip in track.clips:

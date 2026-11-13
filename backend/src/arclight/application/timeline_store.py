@@ -18,6 +18,7 @@ from arclight.persistence.models import AssetVersion, Episode, VisualAsset
 from arclight.persistence.timelines import (
     Timeline,
     TimelineClip,
+    TimelineClipAudio,
     TimelineClipVisual,
     TimelineRevision,
     TimelineTrack,
@@ -55,6 +56,14 @@ def checked_timeline(db: Session, row: Timeline, project_id: UUID) -> TimelineRe
             select(TimelineClipVisual).where(TimelineClipVisual.timeline_id == row.id)
         )
     }
+    audio = {
+        item.id: item.settings_json
+        for item in db.scalars(
+            select(TimelineClipAudio).where(TimelineClipAudio.timeline_id == row.id)
+        )
+    }
+    if len(audio) != version.metadata_json.get("timeline_audio_clip_count", 0):
+        raise DomainError("TIMELINE_HISTORY_INVALID", "音频配置与冻结的片段数量不匹配", 409)
     snapshot = TimelineSnapshot(
         schema_version=version.metadata_json.get("timeline_schema_version", 1),
         episode_id=row.episode_id,
@@ -73,9 +82,10 @@ def checked_timeline(db: Session, row: Timeline, project_id: UUID) -> TimelineRe
                             **{
                                 key: getattr(clip, key)
                                 for key in ClipSnapshot.model_fields
-                                if key != "visual"
+                                if key not in {"visual", "audio"}
                             },
                             "visual": visuals.get(clip.id),
+                            "audio": audio.get(clip.id),
                         }
                     )
                     for clip in clips
@@ -192,6 +202,9 @@ def append_timeline(
         "dependency_manifest_id": str(manifest.id),
         "timeline_schema_version": snapshot.schema_version,
     }
+    audio_count = sum(clip.audio is not None for track in snapshot.tracks for clip in track.clips)
+    if audio_count:
+        metadata["timeline_audio_clip_count"] = audio_count
     if base:
         metadata["based_on_timeline_id"] = str(base.id)
     version = AssetVersion(
@@ -229,7 +242,9 @@ def append_timeline(
         for clip in track.clips:
             db.add(
                 TimelineClip(
-                    timeline_id=row.id, track_id=track.id, **clip.model_dump(exclude={"visual"})
+                    timeline_id=row.id,
+                    track_id=track.id,
+                    **clip.model_dump(exclude={"visual", "audio"}),
                 )
             )
     db.flush()
@@ -241,6 +256,16 @@ def append_timeline(
                         id=clip.id,
                         timeline_id=row.id,
                         settings_json=clip.visual.model_dump(mode="json"),
+                    )
+                )
+    for track in snapshot.tracks:
+        for clip in track.clips:
+            if clip.audio is not None:
+                db.add(
+                    TimelineClipAudio(
+                        id=clip.id,
+                        timeline_id=row.id,
+                        settings_json=clip.audio.model_dump(mode="json"),
                     )
                 )
     db.flush()

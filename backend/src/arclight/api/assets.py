@@ -27,7 +27,7 @@ from arclight.domain.subtitles import LegacySubtitleAssetMetadata, SubtitleAsset
 from arclight.persistence.models import AssetVersion, Episode, VisualAsset
 
 router = APIRouter(prefix="/api/v1", tags=["visual-assets"])
-AssetType = Literal["CHARACTER", "SCENE", "PROP", "STYLE"]
+AssetType = Literal["CHARACTER", "SCENE", "PROP", "STYLE", "MUSIC"]
 DIRECTORY_TYPES = ("CHARACTER", "SCENE", "PROP", "STYLE")
 
 
@@ -110,6 +110,7 @@ def find_asset(
     include_media: bool = False,
     include_audio: bool = False,
     include_subtitle: bool = False,
+    include_music: bool = False,
 ) -> VisualAsset:
     row = db.get(VisualAsset, asset_id, populate_existing=True)
     kinds = (*DIRECTORY_TYPES, "IMAGE", "SHOT_IMAGE") if include_media else DIRECTORY_TYPES
@@ -117,6 +118,8 @@ def find_asset(
         kinds = (*kinds, "AUDIO")
     if include_subtitle:
         kinds = (*kinds, "SUBTITLE")
+    if include_music:
+        kinds = (*kinds, "MUSIC")
     if row is None or row.project_id != project_id or row.asset_type not in kinds:
         raise DomainError("NOT_FOUND", "视觉资产不存在", 404)
     return row
@@ -124,12 +127,18 @@ def find_asset(
 
 @router.get("/projects/{project_id}/assets")
 def list_assets(
-    project_id: UUID, db: Database, actor: Actor, limit: Limit = 20, offset: Offset = 0
+    project_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 20,
+    offset: Offset = 0,
+    asset_type: AssetType | None = None,
 ) -> list[AssetRead]:
     require_project(db, project_id, actor)
+    kinds = (asset_type,) if asset_type is not None else DIRECTORY_TYPES
     rows = db.scalars(
         select(VisualAsset)
-        .where(VisualAsset.project_id == project_id, VisualAsset.asset_type.in_(DIRECTORY_TYPES))
+        .where(VisualAsset.project_id == project_id, VisualAsset.asset_type.in_(kinds))
         .order_by(VisualAsset.created_at, VisualAsset.id)
         .limit(limit)
         .offset(offset)
@@ -142,7 +151,13 @@ def get_asset(project_id: UUID, asset_id: UUID, db: Database, actor: Actor) -> A
     require_project(db, project_id, actor)
     return AssetRead.model_validate(
         find_asset(
-            db, project_id, asset_id, include_media=True, include_audio=True, include_subtitle=True
+            db,
+            project_id,
+            asset_id,
+            include_media=True,
+            include_audio=True,
+            include_subtitle=True,
+            include_music=True,
         )
     )
 
@@ -186,7 +201,7 @@ def update_character_profile(
     project_id: UUID, asset_id: UUID, payload: CharacterProfileUpdate, db: Database, actor: Actor
 ) -> AssetRead:
     require_project(db, project_id, actor, write=True)
-    row = find_asset(db, project_id, asset_id)
+    row = find_asset(db, project_id, asset_id, include_music=True)
     if row.asset_type != "CHARACTER":
         raise DomainError("INVALID_ASSET_TYPE", "只有角色资产可以维护角色特征", 422)
     if row.status in {"ARCHIVED", "LOCKED"}:
@@ -205,7 +220,7 @@ def update_character_profile(
 
 
 def editable_profile_asset(db: Session, project_id: UUID, asset_id: UUID, kind: str) -> VisualAsset:
-    row = find_asset(db, project_id, asset_id)
+    row = find_asset(db, project_id, asset_id, include_music=True)
     if row.asset_type != kind:
         raise DomainError("INVALID_ASSET_TYPE", "资产类型与设定类型不匹配", 422)
     if row.status in {"ARCHIVED", "LOCKED"}:
@@ -265,7 +280,7 @@ def rename_asset(
     project_id: UUID, asset_id: UUID, payload: AssetRename, db: Database, actor: Actor
 ) -> AssetRead:
     require_project(db, project_id, actor, write=True)
-    row = find_asset(db, project_id, asset_id)
+    row = find_asset(db, project_id, asset_id, include_music=True)
     if row.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定的资产不可编辑", 409)
     change_asset(db, row, payload.expected_revision, name=payload.name)
@@ -278,7 +293,7 @@ def update_metadata(
     project_id: UUID, asset_id: UUID, payload: AssetMetadataUpdate, db: Database, actor: Actor
 ) -> AssetRead:
     require_project(db, project_id, actor, write=True)
-    row = find_asset(db, project_id, asset_id)
+    row = find_asset(db, project_id, asset_id, include_music=True)
     if row.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定的资产不可编辑", 409)
     validate_scope(db, project_id, payload.metadata)
@@ -294,7 +309,7 @@ def archive_asset(
     project_id: UUID, asset_id: UUID, payload: AssetArchive, db: Database, actor: Actor
 ) -> AssetRead:
     require_project(db, project_id, actor, write=True)
-    row = find_asset(db, project_id, asset_id)
+    row = find_asset(db, project_id, asset_id, include_music=True)
     if row.status == "LOCKED":
         raise DomainError("ASSET_READ_ONLY", "锁定的资产不可归档", 409)
     if payload.archived == (row.status == "ARCHIVED"):

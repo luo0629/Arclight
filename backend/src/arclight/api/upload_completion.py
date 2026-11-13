@@ -9,13 +9,14 @@ from fastapi import APIRouter, Request
 from pydantic import Field
 from sqlalchemy import select
 
-from arclight.api.asset_versions import VersionCreate, VersionRead, create_version
+from arclight.api.asset_versions import VersionCreate, VersionRead, create_version, read_version
 from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
 from arclight.api.files import FileRead, find_file
 from arclight.api.rights import UsageDeclaration
 from arclight.api.schemas import Input
 from arclight.application.commands import require_project
+from arclight.application.music_assets import register_music
 from arclight.application.uploads import (
     COMPLETION_GRACE,
     find_upload,
@@ -23,6 +24,7 @@ from arclight.application.uploads import (
     validated_image,
 )
 from arclight.core.errors import DomainError
+from arclight.domain.music_assets import MusicImportCreate, MusicPurposeRole
 from arclight.persistence.models import FileRegistration, UploadCompletion
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["files"])
@@ -36,6 +38,7 @@ class FileRegister(Input):
     asset_id: UUID
     creation_key: UUID
     expected_revision: int = Field(strict=True, ge=0)
+    purpose_role: MusicPurposeRole | None = None
 
 
 @router.get("/uploads/{upload_id}")
@@ -81,6 +84,21 @@ def register_file(
 ) -> VersionRead:
     require_project(db, project_id, actor, write=True)
     row = find_file(db, project_id, file_id)
+    completion = db.scalar(select(UploadCompletion).where(UploadCompletion.file_id == row.id))
+    if payload.purpose_role is not None or (
+        completion is not None and completion.purpose == "MUSIC"
+    ):
+        if payload.purpose_role is None:
+            raise DomainError("MUSIC_ROLE_REQUIRED", "登记音乐或音效时必须声明用途", 422)
+        version = register_music(
+            db,
+            request.app.state.settings,
+            project_id,
+            file_id,
+            actor,
+            MusicImportCreate(**payload.model_dump()),
+        )
+        return read_version(version)
     image = validated_image(request.app.state.settings, row)
     result = create_version(
         project_id,

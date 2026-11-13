@@ -90,6 +90,7 @@ def rights_records(project_id: UUID):
             literal("FILE").label("record_type"),
             case(
                 (UploadCompletion.purpose.is_not(None), UploadCompletion.purpose),
+                (VisualAsset.asset_type == "MUSIC", "MUSIC"),
                 (StoredFile.media_type.like("image/%"), "REFERENCE_IMAGE"),
                 (StoredFile.media_type.like("text/%"), "STORY"),
                 (StoredFile.media_type.like("font/%"), "FONT"),
@@ -108,6 +109,8 @@ def rights_records(project_id: UUID):
             StoredFile.asset_version_id,
         )
         .outerjoin(UploadCompletion, UploadCompletion.file_id == StoredFile.id)
+        .outerjoin(AssetVersion, AssetVersion.id == StoredFile.asset_version_id)
+        .outerjoin(VisualAsset, VisualAsset.id == AssetVersion.asset_id)
         .where(StoredFile.project_id == project_id)
     )
     # Pre-file-ledger images still carry exact declarations in immutable version metadata.

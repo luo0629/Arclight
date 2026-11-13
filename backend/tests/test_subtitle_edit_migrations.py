@@ -64,16 +64,22 @@ def edit_track(client, case):
 
 def test_subtitle_edit_empty_guard_roundtrip_retains_schema(client, migrated):
     engine = client.app.state.session_factory.kw["bind"]
-    tables = sorted(inspect(engine).get_table_names())
+    head_tables = sorted(inspect(engine).get_table_names())
     command.check(migrated)
+    # Verify the historical guard-only boundary independently of later tables.
+    command.downgrade(migrated, "0067")
+    tables = sorted(inspect(engine).get_table_names())
     assert "subtitle-track/2" in insert_guard(engine)
     command.downgrade(migrated, "0066")
     assert "subtitle-track/2" not in insert_guard(engine)
     assert sorted(inspect(engine).get_table_names()) == tables
+    command.upgrade(migrated, "0067")
+    assert "subtitle-track/2" in insert_guard(engine)
+    assert sorted(inspect(engine).get_table_names()) == tables
     command.upgrade(migrated, "head")
     command.check(migrated)
     assert "subtitle-track/2" in insert_guard(engine)
-    assert sorted(inspect(engine).get_table_names()) == tables
+    assert sorted(inspect(engine).get_table_names()) == head_tables
 
 
 def test_subtitle_edit_guard_roundtrip_preserves_generated_history(client, subtitle_case, migrated):
@@ -92,6 +98,8 @@ def test_subtitle_edit_guard_roundtrip_preserves_generated_history(client, subti
 
 
 def test_subtitle_edit_history_blocks_downgrade_before_ddl(client, subtitle_case, migrated):
+    # The no-DDL guarantee belongs to 0067 itself, not intervening migrations.
+    command.downgrade(migrated, "0067")
     edited = edit_track(client, subtitle_case)
     engine = client.app.state.session_factory.kw["bind"]
     guard = insert_guard(engine)
@@ -112,6 +120,9 @@ def test_subtitle_edit_history_blocks_downgrade_before_ddl(client, subtitle_case
     with engine.connect() as db:
         assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0067"
         assert db.scalar(text("SELECT count(*) FROM subtitle_productions")) == 2
+    assert client.get(f"/api/v1/subtitle-tracks/{edited['id']}").status_code == 200
+    command.upgrade(migrated, "head")
+    command.check(migrated)
     assert client.get(f"/api/v1/subtitle-tracks/{edited['id']}").status_code == 200
 
 
