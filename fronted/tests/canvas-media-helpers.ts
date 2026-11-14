@@ -81,6 +81,7 @@ export async function canvasMediaFixture(page: Page) {
   image.preview_path = `/projects/${env.project.id}/assets/${image.asset_id}/versions/${image.resource_id}/image`;
   const history = version("SHOT_IMAGE", "红色箱子 · 历史选用", {
     ...image,
+    title: "红色箱子 · 历史选用",
     resource_id: id(),
     version_no: 2,
     current: true,
@@ -264,11 +265,7 @@ export async function canvasMediaFixture(page: Page) {
       name: "内容与媒体列表",
       exact: true,
     });
-    await list
-      .getByRole("button", {
-        name: new RegExp(node.title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-      })
-      .click();
+    await list.locator(`button[data-node-id="${node.id}"]`).click();
     return page.getByRole("region", { name: "画布资产详情", exact: true });
   };
   return {

@@ -48,6 +48,7 @@ test("UI-01：候选原图、正式选用和历史失效状态来自同一精确
   ).toBeGreaterThan(1);
   await expect(panel).toContainText(env.image.checksum!);
   await env.selectNode(env.history);
+  await expect(panel).toContainText("红色箱子 · 历史选用");
   await expect(panel).toContainText("正式选用");
   await expect(panel).toContainText("需更新");
   await expect(panel).toContainText(env.history.resource_id!);
@@ -57,7 +58,10 @@ test("UI-01：候选原图、正式选用和历史失效状态来自同一精确
 test("UI-01：精确依赖可跳转五轨时间轴且不产生业务写入", async ({ page }) => {
   const env = await canvasMediaFixture(page);
   const panel = await env.openCanvas(env.image);
-  await panel.getByRole("button", { name: /雨后街角 · 五轨剪辑/ }).click();
+  await page
+    .getByRole("region", { name: "精确版本依赖", exact: true })
+    .getByRole("button", { name: /雨后街角 · 五轨剪辑/ })
+    .click();
   const media = panel.getByRole("region", {
     name: "画布媒体预览",
     exact: true,

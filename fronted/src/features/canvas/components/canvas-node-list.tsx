@@ -59,6 +59,7 @@ export default function CanvasNodeList({
         <label className="flex flex-col gap-1 text-sm">
           内容类型
           <select
+            aria-label="内容类型"
             className="h-10 rounded-lg border bg-background px-3"
             value={group}
             onChange={(e) => {
@@ -102,15 +103,12 @@ export default function CanvasNodeList({
           <span className="min-w-0 flex-1">
             <strong className="block">{node.title}</strong>
             <small className="mt-1 block text-xs text-muted-foreground">
-              {nodeLabel(node)}
               {node.version_no ? (
                 <>
-                  {" "}
-                  · <span>版本 {node.version_no}</span>
+                  <span>版本 {node.version_no}</span> ·{" "}
                 </>
-              ) : (
-                ""
-              )}
+              ) : null}
+              {nodeLabel(node)}
               {selectionLabel(node) ? ` · ${selectionLabel(node)}` : ""}
             </small>
             {node.resource_id && (

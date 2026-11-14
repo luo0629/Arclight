@@ -264,6 +264,10 @@ test("TXT-07：跨100个历史版本追加和读取失败重试，基准保持�
   await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page
+    .getByRole("region", { name: "内容与媒体列表", exact: true })
+    .getByLabel("搜索名称或版本 ID", { exact: true })
+    .fill(previous);
+  await page
     .locator(".version-row")
     .filter({ hasText: "历史正文 102" })
     .click();
