@@ -262,6 +262,7 @@ export async function uploadRecording(
     url: string;
     method: string;
     body: string;
+    headers: Record<string, string>;
   }>(
     `${project(projectId)}/uploads`,
     {
@@ -276,10 +277,15 @@ export async function uploadRecording(
   );
   const url = new URL(ticket.url, window.location.origin);
   if (
-    url.origin !== window.location.origin ||
-    !url.pathname.startsWith("/api/v1/") ||
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.hash ||
+    url.search ||
+    !/^\/file-transfers\/[^/]+$/.test(url.pathname) ||
     ticket.method !== "POST" ||
-    ticket.body !== "raw"
+    ticket.body !== "raw" ||
+    ticket.headers?.["Content-Type"] !== mediaType
   )
     throw new Error("录音上传地址无效，请重新申请。");
   const uploaded = await fetch(url, {
@@ -287,7 +293,9 @@ export async function uploadRecording(
     headers: { "Content-Type": mediaType },
     body: file,
     signal,
-    credentials: "same-origin",
+    credentials: "omit",
+    redirect: "error",
+    cache: "no-store",
   });
   if (!uploaded.ok)
     throw new Error(`录音上传失败（${uploaded.status}），请重试。`);

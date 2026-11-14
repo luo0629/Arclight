@@ -61,9 +61,8 @@ export default function AudioLinePanel({
   const tasks = useAudioPage(scope, fetchTasks, jobId, unavailable);
   const [versionId, setVersionId] = useState("");
   const [selectedJob, setSelectedJob] = useState("");
-  const selected = versionId
-    ? history.rows.find((row) => row.version.id === versionId)
-    : history.rows[0];
+  const selected =
+    history.rows.find((row) => row.version.id === versionId) ?? history.rows[0];
   const assetId = selected?.version.asset_id ?? "";
   const fetchAsset = useCallback(
     (signal: AbortSignal) => audioApi.asset(projectId, assetId, signal),

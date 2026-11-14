@@ -342,7 +342,12 @@ test("AUDIO-07：鉴权精确文件试听，切句撤销Blob并拒绝损坏字�
   const content = env.audioReads.find((row) =>
     row.path.endsWith(`/files/${version.binding.file_id}/content`),
   )!;
-  expect(content.authorization).toBe(`Bearer ${env.session.access_token}`);
+  expect(content.authorization).toMatch(/^Bearer .+/);
+  const identity = await page.request.get("/api/v1/auth/me", {
+    headers: { Authorization: content.authorization },
+  });
+  expect(identity.status()).toBe(200);
+  expect(await identity.json()).toMatchObject({ id: env.session.user.id });
   await panel.getByRole("button", { name: /2 · 场景 1 · 旁白/ }).click();
   await expect(player).toHaveCount(0);
   await expect
@@ -467,7 +472,9 @@ test("AUDIO-07：上传后登记失败重试复用同一录音与幂等键", asy
     env.audioMutations.filter((row) => row.path.endsWith("/uploads")),
   ).toHaveLength(1);
   expect(
-    env.audioMutations.filter((row) => row.path.endsWith("/transfer")),
+    env.audioMutations.filter((row) =>
+      row.path.endsWith("/file-transfers/recording-upload"),
+    ),
   ).toHaveLength(1);
   const attempts = env.audioMutations.filter((row) =>
     row.path.endsWith("/imports"),
@@ -497,6 +504,7 @@ test("AUDIO-07：审核批准显式选用及锁定沿用版本与资产CAS", asy
   await expect(
     panel.getByRole("button", { name: "仅重生成本句配音", exact: true }),
   ).toBeDisabled();
+  await imported(panel).locator("summary").click();
   await expect(
     panel.getByRole("button", { name: "确认授权并导入本句录音", exact: true }),
   ).toBeDisabled();
@@ -628,6 +636,9 @@ test("AUDIO-07：台词与历史分页保留选择，刷新从头读取", async 
   await expect(
     panel.getByRole("button", { name: /31 · 场景 1 · 林舟/ }),
   ).toHaveCount(0);
+  await expect(
+    panel.getByRole("region", { name: "台词配音详情", exact: true }),
+  ).toContainText(env.lines[0].text);
 });
 
 for (const size of [
@@ -641,6 +652,10 @@ for (const size of [
     const env = await audioFixture(page);
     env.addHistory();
     const panel = await env.open();
+    await page.screenshot({
+      path: info.outputPath(`audio-workspace-source-${size.width}.png`),
+      fullPage: true,
+    });
     const voice = panel.getByLabel("林舟的音色版本", { exact: true });
     await voice.focus();
     await page.keyboard.press("Enter");

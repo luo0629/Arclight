@@ -36,7 +36,7 @@ export default function AudioWorkspace(props: Props) {
   return (
     <section
       aria-label="配音工作区"
-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto pb-8"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-5 overflow-y-auto p-4 pb-8 sm:p-6 sm:pb-8"
     >
       <header className="flex flex-col gap-2">
         <p className="text-xs text-muted-foreground">这一集的声音</p>
@@ -99,9 +99,8 @@ function AudioWorkspaceBody({
   );
   const [selectedId, setSelectedId] = useState("");
   const [scriptId, setScriptId] = useState("");
-  const selected = selectedId
-    ? snapshots.rows.find((row) => row.id === selectedId)
-    : snapshots.rows[0];
+  const selected =
+    snapshots.rows.find((row) => row.id === selectedId) ?? snapshots.rows[0];
   const creationScope = `${scope}:snapshot:${scriptId}`;
   const mutation = useRenderMutation(creationScope, writable, unavailable);
   async function create() {
@@ -239,9 +238,8 @@ function SnapshotLines({
   );
   const lines = useAudioPage(scope, fetchLines, lineId, unavailable);
   const [selectedId, setSelectedId] = useState("");
-  const selected = selectedId
-    ? lines.rows.find((row) => row.line_id === selectedId)
-    : lines.rows[0];
+  const selected =
+    lines.rows.find((row) => row.line_id === selectedId) ?? lines.rows[0];
   return (
     <>
       <details className="min-w-0 text-xs text-muted-foreground">

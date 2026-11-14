@@ -211,15 +211,17 @@ def _usage(db: Session, project_id: UUID, run_id: UUID) -> RunUsage:
         GatewayCall.project_id == project_id,
         GatewayCall.generation_attempt_id.is_(None),
     )
-    total = db.scalar(select(func.count()).select_from(GatewayCall).where(*scope)) or 0
-    calls = db.scalars(
-        select(GatewayCall)
+    # Workers can append calls between statements under READ COMMITTED (and SQLite's
+    # legacy read mode). Count the complete scope in the same snapshot as this page.
+    calls = db.execute(
+        select(GatewayCall, func.count().over())
         .where(*scope)
         .order_by(GatewayCall.created_at, GatewayCall.id)
         .limit(100)
-    )
+    ).all()
+    total = calls[0][1] if calls else 0
     result: list[GatewayCallUsage] = []
-    for call in calls:
+    for call, _ in calls:
         receipt = latest_receipt(db, call.id)
         usage = GatewayUsage.model_validate(receipt.usage_json) if receipt else GatewayUsage()
         result.append(

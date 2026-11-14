@@ -244,6 +244,15 @@ export async function audioFixture(page: Page) {
   const fail = (route: Route, status: number, code: string, message: string) =>
     route.fulfill({ status, json: { error: { code, message } } });
 
+  await page.route("**/file-transfers/**", async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("POST");
+    expect(request.headers().authorization).toBeUndefined();
+    expect(request.headers()["content-type"]).toBe("audio/wav");
+    expect(request.postDataBuffer()).toEqual(media);
+    mutations.push({ path: new URL(request.url()).pathname, body: {} });
+    return route.fulfill({ status: 204 });
+  });
   await page.route("**/api/v1/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -286,8 +295,12 @@ export async function audioFixture(page: Page) {
           configured: control.configured,
           enabled: control.configured,
           message: control.configured ? "已配置" : "请先配置语音服务",
-          model: "gpt-4o-mini-tts",
-          supported_parameters: control.supported,
+          ...(control.configured
+            ? {
+                model: "gpt-4o-mini-tts",
+                supported_parameters: control.supported,
+              }
+            : {}),
         },
       });
     if (path.endsWith("/audio-voices")) {
@@ -484,7 +497,7 @@ export async function audioFixture(page: Page) {
           method: "POST",
           body: "raw",
           headers: { "Content-Type": "audio/wav" },
-          url: `/api/v1/projects/${env.project.id}/uploads/recording-upload/transfer`,
+          url: "/file-transfers/recording-upload",
         },
       });
     if (path.endsWith("/transfer")) return route.fulfill({ status: 204 });
