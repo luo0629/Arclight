@@ -104,7 +104,11 @@ def admission_facts(db: Session, row: RenderManifest) -> RenderFacts:
         db,
         row.project_id,
         row.font_file_id,
-        required=any(track.clips for track in snapshot.timeline.tracks if track.kind == "SUBTITLE"),
+        required=any(
+            track.enabled and track.clips
+            for track in snapshot.timeline.tracks
+            if track.kind == "SUBTITLE"
+        ),
     )
     visuals = tuple(
         RenderVisual(clip_id=clip.id, settings=clip.visual or ClipVisual())

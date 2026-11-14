@@ -22,6 +22,9 @@ import useRenderMutation, {
 } from "../hooks/use-render-mutation";
 import DeliveryHistory from "./delivery-history";
 import DefaultTimeline from "./default-timeline";
+import TimelineEditor from "./timeline-editor";
+import SubtitleFontPicker from "./subtitle-font-picker";
+import { NumberField } from "./timeline-clip-fields";
 import LineAudioDecisions, {
   type LineAudioChoice,
 } from "./line-audio-decisions";
@@ -37,6 +40,7 @@ export default function RenderWorkspace(props: {
   writable: boolean;
   boards: ContentVersion[];
   boardPagination: ReactNode;
+  onOpenAudio?: () => void;
 }) {
   const search = useSearchParams();
   const [denied, setDenied] = useState("");
@@ -79,6 +83,7 @@ function RenderContent({
   writable,
   boards,
   boardPagination,
+  onOpenAudio,
   unavailable,
 }: {
   episode: Episode;
@@ -86,6 +91,7 @@ function RenderContent({
   writable: boolean;
   boards: ContentVersion[];
   boardPagination: ReactNode;
+  onOpenAudio?: () => void;
   unavailable: (cause: unknown) => void;
 }) {
   const fetchTimelines = useCallback(
@@ -259,11 +265,15 @@ function RenderContent({
           <TimelineManifests
             key={selected.id}
             timeline={selected}
+            projectId={episode.project_id}
             owner={owner}
             writable={writable}
             unavailable={unavailable}
             refresh={refresh}
             onRendered={rendered}
+            onSaved={created}
+            onRefresh={() => void timelines.load()}
+            onOpenAudio={onOpenAudio}
             initialManifest={
               exact.data?.timeline.id === selected.id
                 ? exact.data.manifest
@@ -290,6 +300,7 @@ function RenderContent({
 
 function TimelineManifests({
   timeline,
+  projectId,
   owner,
   writable,
   unavailable,
@@ -297,8 +308,12 @@ function TimelineManifests({
   onRendered,
   initialManifest,
   initialJob,
+  onSaved,
+  onRefresh,
+  onOpenAudio,
 }: {
   timeline: Timeline;
+  projectId: string;
   owner: boolean;
   writable: boolean;
   unavailable: (cause: unknown) => void;
@@ -306,6 +321,9 @@ function TimelineManifests({
   onRendered: () => void;
   initialManifest?: RenderManifest;
   initialJob?: RenderJob;
+  onSaved: (timeline: Timeline) => void;
+  onRefresh: () => void;
+  onOpenAudio?: () => void;
 }) {
   const fetchManifests = useCallback(
     (cursor: string | undefined, signal: AbortSignal) =>
@@ -322,6 +340,27 @@ function TimelineManifests({
     if (refresh) void manifests.load();
   }, [refresh, manifests.load]);
   const [profile, setProfile] = useState<RenderProfile>("PREVIEW");
+  const [draftDirty, setDraftDirty] = useState(false);
+  const [fontId, setFontId] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [fontSize, setFontSize] = useState(48);
+  const [marginBottom, setMarginBottom] = useState(64);
+  const [bold, setBold] = useState(false);
+  const needsFont = timeline.snapshot.tracks.some(
+    (track) =>
+      track.kind === "SUBTITLE" &&
+      track.enabled !== false &&
+      track.clips.length > 0,
+  );
+  const settingsValid =
+    !needsFont ||
+    (!!fontId &&
+      Number.isInteger(fontSize) &&
+      fontSize >= 6 &&
+      fontSize <= 144 &&
+      Number.isInteger(marginBottom) &&
+      marginBottom >= 0 &&
+      marginBottom <= 500);
   const manifestRows =
     initialManifest &&
     !manifests.rows.some((row) => row.id === initialManifest.id)
@@ -365,11 +404,25 @@ function TimelineManifests({
     !!audio.data &&
     !audio.loading &&
     lineAudioDecisions.length === audio.data.lines.length;
-  const manifestBody = { profile, line_audio_decisions: lineAudioDecisions };
+  const manifestBody = {
+    profile,
+    line_audio_decisions: lineAudioDecisions,
+    ...(needsFont
+      ? {
+          font_file_id: fontId,
+          subtitle_style: {
+            font_size: fontSize,
+            margin_bottom: marginBottom,
+            bold,
+          },
+        }
+      : {}),
+  };
   const creationScope = `manifest:${timeline.id}:${JSON.stringify(manifestBody)}`;
   const mutation = useRenderMutation(creationScope, writable, unavailable);
   async function createManifest() {
-    if (!audioComplete || timeline.stale) return;
+    if (!audioComplete || timeline.stale || draftDirty || !settingsValid)
+      return;
     const pending = pendingCreationKey(creationScope);
     await mutation.mutate(
       async (signal) => {
@@ -393,6 +446,23 @@ function TimelineManifests({
     .reduce((count, track) => count + track.clips.length, 0);
   return (
     <div className="flex min-w-0 flex-col gap-4 border-t pt-4">
+      <TimelineEditor
+        timeline={timeline}
+        projectId={projectId}
+        owner={owner}
+        writable={writable}
+        unavailable={unavailable}
+        onSaved={onSaved}
+        onRefresh={onRefresh}
+        onDirty={setDraftDirty}
+        onOpenAudio={onOpenAudio}
+        refresh={refresh}
+      />
+      {draftDirty && (
+        <Notice>
+          时间轴有未保存草稿。请先保存新版本，再创建本次修改的渲染清单；下方历史清单仍对应原保存版本。
+        </Notice>
+      )}
       <div className="flex flex-wrap items-baseline gap-3">
         <h4>时间轴 v{timeline.version_no}</h4>
         <p className="text-sm text-muted-foreground">
@@ -462,6 +532,54 @@ function TimelineManifests({
               }
             />
           )}
+          {needsFont && (
+            <details
+              open={settingsOpen}
+              onToggle={(event) => setSettingsOpen(event.currentTarget.open)}
+            >
+              <summary>字幕渲染设置与授权字体</summary>
+              {settingsOpen && (
+                <div className="mt-3 flex min-w-0 max-w-xl flex-col gap-3">
+                  <SubtitleFontPicker
+                    projectId={projectId}
+                    value={fontId}
+                    onChange={setFontId}
+                    disabled={mutation.busy}
+                    unavailable={unavailable}
+                  />
+                  <div className="grid grid-cols-2 gap-3">
+                    <NumberField
+                      label="字幕字号"
+                      min={6}
+                      max={144}
+                      value={fontSize}
+                      onChange={setFontSize}
+                      disabled={mutation.busy}
+                    />
+                    <NumberField
+                      label="字幕底部边距"
+                      max={500}
+                      value={marginBottom}
+                      onChange={setMarginBottom}
+                      disabled={mutation.busy}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={bold}
+                      disabled={mutation.busy}
+                      onChange={(e) => setBold(e.target.checked)}
+                    />
+                    字幕加粗
+                  </label>
+                  <p className="text-xs text-muted-foreground">
+                    字体与样式随本次清单冻结；输出尺寸和帧率沿用项目规格，正式版使用正式编码配置。
+                  </p>
+                </div>
+              )}
+            </details>
+          )}
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm font-medium sm:max-w-xs">
               输出用途
@@ -479,7 +597,13 @@ function TimelineManifests({
               </select>
             </label>
             <Button
-              disabled={mutation.busy || timeline.stale || !audioComplete}
+              disabled={
+                mutation.busy ||
+                timeline.stale ||
+                !audioComplete ||
+                draftDirty ||
+                !settingsValid
+              }
               onClick={() => void createManifest()}
             >
               {profile === "PREVIEW" ? "创建预览清单" : "创建正式清单"}

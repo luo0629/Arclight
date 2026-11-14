@@ -27,12 +27,14 @@ def validate_line_audio(
         raise DomainError("RENDER_INPUT_INVALID", "缺少本精确分镜的来源剧本", 409)
     content = ScriptContent.model_validate(script.content_json)
     lines = {(script.id, line.line_id) for scene in content.scenes for line in scene.dialogue}
-    tracks = {track.kind: track.clips for track in timeline.tracks}
-    voices: dict[tuple[UUID | None, str | None], set[UUID]] = {}
-    for clip in tracks["VOICE"]:
-        voices.setdefault((clip.script_version_id, clip.line_id), set()).add(
+    tracks = {track.kind: track.clips if track.enabled else [] for track in timeline.tracks}
+    source_voices: dict[tuple[UUID | None, str | None], set[UUID]] = {}
+    voice_track = next(track for track in timeline.tracks if track.kind == "VOICE")
+    for clip in voice_track.clips:
+        source_voices.setdefault((clip.script_version_id, clip.line_id), set()).add(
             clip.source_asset_version_id
         )
+    voices = source_voices if voice_track.enabled else {}
     subtitles = {(clip.script_version_id, clip.line_id) for clip in tracks["SUBTITLE"]}
     resolved = set()
     for item in decisions:
@@ -55,7 +57,8 @@ def validate_line_audio(
             "RENDER_AUDIO_INCOMPLETE", "全部对白和旁白须有配音或明确静音／仅字幕决定", 409
         )
     for clip in tracks["SUBTITLE"]:
-        audio_ids = voices.get((clip.script_version_id, clip.line_id), set())
+        # Muting playback retains the subtitle cue's frozen source association.
+        audio_ids = source_voices.get((clip.script_version_id, clip.line_id), set())
         if (audio_ids and clip.audio_version_id not in audio_ids) or (
             clip.audio_version_id is not None and clip.audio_version_id not in audio_ids
         ):

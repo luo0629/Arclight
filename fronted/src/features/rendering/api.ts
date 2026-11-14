@@ -21,6 +21,7 @@ import type {
   Timeline,
   TimelineCreate,
   TimelinePreparation,
+  TimelineSnapshot,
 } from "./types";
 
 export const PAGE_SIZE = 30;
@@ -51,6 +52,19 @@ export const renderingApi = {
     body: TimelineCreate,
     signal?: AbortSignal,
   ) => write<Timeline>(`/episodes/${id(episodeId)}/timelines`, body, signal),
+  saveTimeline: (
+    timelineId: string,
+    body: {
+      creation_key: string;
+      expected_version_no: number;
+      snapshot: TimelineSnapshot;
+    },
+    signal?: AbortSignal,
+  ) =>
+    api<Timeline>(`/timelines/${id(timelineId)}`, {
+      ...json("PATCH", body),
+      signal,
+    }),
   listManifests: (
     timelineId: string,
     beforeId?: string,
@@ -306,14 +320,14 @@ export async function prepareLineAudioDecisions(
   const scriptId = source.script_version_id;
   const voiceLines = new Set(
     timeline.snapshot.tracks
-      .filter((track) => track.kind === "VOICE")
+      .filter((track) => track.kind === "VOICE" && track.enabled !== false)
       .flatMap((track) => track.clips)
       .filter((clip) => clip.script_version_id === scriptId && clip.line_id)
       .map((clip) => clip.line_id),
   );
   const subtitleLines = new Set(
     timeline.snapshot.tracks
-      .filter((track) => track.kind === "SUBTITLE")
+      .filter((track) => track.kind === "SUBTITLE" && track.enabled !== false)
       .flatMap((track) => track.clips)
       .filter((clip) => clip.script_version_id === scriptId && clip.line_id)
       .map((clip) => clip.line_id),

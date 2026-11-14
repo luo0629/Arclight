@@ -64,6 +64,16 @@ def checked_timeline(db: Session, row: Timeline, project_id: UUID) -> TimelineRe
     }
     if len(audio) != version.metadata_json.get("timeline_audio_clip_count", 0):
         raise DomainError("TIMELINE_HISTORY_INVALID", "音频配置与冻结的片段数量不匹配", 409)
+    disabled = version.metadata_json.get("timeline_disabled_tracks", [])
+    if (
+        not isinstance(disabled, list)
+        or any(
+            not isinstance(kind, str) or kind not in {"VOICE", "MUSIC", "SFX", "SUBTITLE"}
+            for kind in disabled
+        )
+        or len(disabled) != len(set(disabled))
+    ):
+        raise DomainError("TIMELINE_HISTORY_INVALID", "冻结的轨道开关无效", 409)
     snapshot = TimelineSnapshot(
         schema_version=version.metadata_json.get("timeline_schema_version", 1),
         episode_id=row.episode_id,
@@ -75,6 +85,7 @@ def checked_timeline(db: Session, row: Timeline, project_id: UUID) -> TimelineRe
             TrackSnapshot(
                 id=track.id,
                 kind=track.kind,
+                enabled=track.kind not in disabled,
                 ordinal=track.ordinal,
                 clips=[
                     ClipSnapshot.model_validate(
@@ -202,6 +213,9 @@ def append_timeline(
         "dependency_manifest_id": str(manifest.id),
         "timeline_schema_version": snapshot.schema_version,
     }
+    disabled = sorted(track.kind for track in snapshot.tracks if not track.enabled)
+    if disabled:
+        metadata["timeline_disabled_tracks"] = disabled
     audio_count = sum(clip.audio is not None for track in snapshot.tracks for clip in track.clips)
     if audio_count:
         metadata["timeline_audio_clip_count"] = audio_count

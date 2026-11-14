@@ -1,5 +1,18 @@
 export type RenderProfile = "PREVIEW" | "FORMAL";
 
+export type CropRect = { x: number; y: number; width: number; height: number };
+export type ClipVisual = {
+  crop: CropRect;
+  motion: { kind: "STATIC" | "LINEAR"; end_crop: CropRect | null };
+  transition: { kind: "CUT" | "FADE"; duration_ms: number };
+};
+export type ClipAudio = {
+  purpose_role: "BACKGROUND" | "AMBIENCE" | "TRANSITION";
+  gain_milli: number;
+  fade_in_ms: number;
+  fade_out_ms: number;
+  envelope: { offset_ms: number; gain_milli: number }[];
+};
 export type TimelineClip = {
   id: string;
   ordinal: number;
@@ -15,7 +28,8 @@ export type TimelineClip = {
   review_id: string | null;
   review_storyboard_id: string | null;
   review_shot_id: string | null;
-  visual?: Record<string, unknown> | null;
+  visual?: ClipVisual | null;
+  audio?: ClipAudio | null;
 };
 export type TimelineSnapshot = {
   schema_version: 1 | 2;
@@ -28,6 +42,7 @@ export type TimelineSnapshot = {
     id: string;
     kind: "VIDEO" | "VOICE" | "SFX" | "MUSIC" | "SUBTITLE";
     ordinal: number;
+    enabled?: boolean;
     clips: TimelineClip[];
   }[];
 };
@@ -101,6 +116,7 @@ export type RenderSoftware = {
   renderer_version: string;
   pyav_version: string;
   ffmpeg_libraries: Record<string, string>;
+  caption_libraries?: Record<string, string>;
 };
 export type LineAudioDecision = {
   script_version_id: string;

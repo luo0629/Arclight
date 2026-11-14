@@ -13,12 +13,30 @@ export default function DeliveryPreview({
   episodeId,
   delivery,
   onUnavailable,
+  labelPrefix = "",
+  seekMs,
+  onTimeChange,
 }: {
   projectId: string;
   episodeId: string;
   delivery: RenderDelivery;
   onUnavailable: (cause: unknown) => void;
+  labelPrefix?: string;
+  seekMs?: { ms: number; request: number };
+  onTimeChange?: (ms: number) => void;
 }) {
+  const video = useRef<HTMLVideoElement | null>(null);
+  function seekToRequested() {
+    const player = video.current;
+    if (player && seekMs && Number.isFinite(player.duration))
+      player.currentTime = Math.max(
+        0,
+        Math.min(seekMs.ms / 1000, player.duration - 0.001),
+      );
+  }
+  useEffect(() => {
+    seekToRequested();
+  }, [seekMs]);
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
@@ -85,16 +103,21 @@ export default function DeliveryPreview({
   }
   return (
     <section
-      aria-label="成片预览与下载"
+      aria-label={`${labelPrefix}成片预览与下载`}
       className="flex min-w-0 flex-col gap-3"
     >
       {url ? (
         <video
+          ref={video}
+          onLoadedMetadata={seekToRequested}
+          onTimeUpdate={(event) =>
+            onTimeChange?.(Math.round(event.currentTarget.currentTime * 1000))
+          }
           src={url}
           controls
           playsInline
           preload="metadata"
-          aria-label={`成片版本 ${delivery.version_no} 预览`}
+          aria-label={`${labelPrefix}成片版本 ${delivery.version_no} 预览`}
           className="max-h-[32rem] w-full rounded-xl bg-black"
           onError={() =>
             setError(
@@ -117,14 +140,16 @@ export default function DeliveryPreview({
           disabled={!!busy}
           onClick={() => void read("preview")}
         >
-          {busy === "preview" ? "读取预览中…" : "读取成片预览"}
+          {busy === "preview" ? "读取预览中…" : `读取${labelPrefix}成片预览`}
         </Button>
         <Button
           variant="outline"
           disabled={!!busy}
           onClick={() => void read("download")}
         >
-          {busy === "download" ? "准备下载中…" : "下载 MP4"}
+          {busy === "download"
+            ? "准备下载中…"
+            : `下载${labelPrefix ? labelPrefix + " " : " "}MP4`}
         </Button>
       </div>
       {error && <Notice tone="error">{error}</Notice>}

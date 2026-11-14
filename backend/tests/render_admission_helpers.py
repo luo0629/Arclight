@@ -24,7 +24,7 @@ def line_decisions(client, timeline):
     voiced = {
         (clip["script_version_id"], clip["line_id"])
         for track in timeline["snapshot"]["tracks"]
-        if track["kind"] == "VOICE"
+        if track["kind"] == "VOICE" and track.get("enabled", True)
         for clip in track["clips"]
     }
     with client.app.state.session_factory() as db:

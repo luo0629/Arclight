@@ -161,7 +161,11 @@ def create_render_manifest(
         settings,
         episode.project_id,
         payload.font_file_id,
-        required=any(track.clips for track in timeline.snapshot.tracks if track.kind == "SUBTITLE"),
+        required=any(
+            track.enabled and track.clips
+            for track in timeline.snapshot.tracks
+            if track.kind == "SUBTITLE"
+        ),
     )
     now = utcnow()
     snapshot = RenderManifestSnapshot(

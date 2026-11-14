@@ -68,9 +68,12 @@ class TrackSnapshot(TimelineContract):
     kind: TrackKind
     ordinal: int = Field(strict=True, ge=0, le=4)
     clips: list[ClipSnapshot] = Field(default_factory=list, max_length=256)
+    enabled: bool = Field(default=True, strict=True, exclude_if=lambda value: value)
 
     @model_validator(mode="after")
     def precise_clips(self):
+        if self.kind == "VIDEO" and not self.enabled:
+            raise ValueError("画面轨必须保持启用")
         if len({item.ordinal for item in self.clips}) != len(self.clips):
             raise ValueError("同一轨道的片段序号不能重复")
         for clip in self.clips:

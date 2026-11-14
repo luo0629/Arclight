@@ -479,6 +479,7 @@ export default function EpisodeWorkspace({
         />
       ) : view === "render" ? (
         <RenderWorkspace
+          onOpenAudio={() => navigate({ view: "audio", stage: "audio" })}
           episode={episode}
           owner={owner}
           writable={writable}

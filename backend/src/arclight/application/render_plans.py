@@ -44,7 +44,7 @@ def check_support(snapshot: RenderManifestSnapshot) -> None:
     ranges = [
         (clip.start_ms, clip.duration_ms, clip.source_start_ms)
         for track in snapshot.timeline.tracks
-        if track.kind in {"VOICE", "MUSIC", "SFX"}
+        if track.enabled and track.kind in {"VOICE", "MUSIC", "SFX"}
         for clip in track.clips
     ]
     try:
@@ -57,7 +57,7 @@ def check_support(snapshot: RenderManifestSnapshot) -> None:
         ) from None
     end = 0
     for track in snapshot.timeline.tracks:
-        if track.kind != "SUBTITLE":
+        if track.kind != "SUBTITLE" or not track.enabled:
             continue
         for clip in sorted(track.clips, key=lambda item: item.ordinal):
             if clip.start_ms < end:
@@ -111,7 +111,8 @@ def build_subtitles(
     *,
     observer: MediaObserver | None = None,
 ) -> RenderSubtitles | None:
-    clips = next(track.clips for track in snapshot.timeline.tracks if track.kind == "SUBTITLE")
+    track = next(track for track in snapshot.timeline.tracks if track.kind == "SUBTITLE")
+    clips = track.clips if track.enabled else []
     if not clips:
         return None
     sources = {item.asset_version_id: item for item in snapshot.sources}
@@ -201,7 +202,7 @@ def build_plan(
     audio_clips = []
     try:
         for track in snapshot.timeline.tracks:
-            if track.kind not in {"VOICE", "MUSIC", "SFX"}:
+            if not track.enabled or track.kind not in {"VOICE", "MUSIC", "SFX"}:
                 continue
             for clip in sorted(track.clips, key=lambda item: item.ordinal):
                 if observer is not None:
