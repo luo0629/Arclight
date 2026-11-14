@@ -49,13 +49,24 @@ def create(
 
 @router.get("/episodes/{episode_id}/audio-snapshots")
 def snapshots(
-    episode_id: UUID, db: Database, actor: Actor, limit: Limit = 100, offset: Offset = 0
+    episode_id: UUID,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 100,
+    offset: Offset = 0,
+    newest_first: bool = False,
 ) -> list[AudioSnapshotRead]:
     require_episode(db, episode_id, actor)
     rows = db.scalars(
         select(AudioSnapshot)
         .where(AudioSnapshot.episode_id == episode_id)
-        .order_by(AudioSnapshot.created_at, AudioSnapshot.id)
+        .order_by(
+            *(
+                (AudioSnapshot.created_at.desc(), AudioSnapshot.id.desc())
+                if newest_first
+                else (AudioSnapshot.created_at, AudioSnapshot.id)
+            )
+        )
         .offset(offset)
         .limit(limit)
     )
@@ -135,6 +146,7 @@ def history(
     actor: Actor,
     limit: Limit = 100,
     offset: Offset = 0,
+    newest_first: bool = False,
 ) -> list[AudioHistoryRead]:
     snapshot = require_snapshot(db, snapshot_id, actor)
     require_line(snapshot, line_id)
@@ -146,7 +158,13 @@ def history(
                 AudioLineBinding.snapshot_id == snapshot.id,
                 AudioLineBinding.line_id == line_id,
             )
-            .order_by(AudioLineBinding.created_at, AudioLineBinding.id)
+            .order_by(
+                *(
+                    (AudioLineBinding.created_at.desc(), AudioLineBinding.id.desc())
+                    if newest_first
+                    else (AudioLineBinding.created_at, AudioLineBinding.id)
+                )
+            )
             .offset(offset)
             .limit(limit)
         )

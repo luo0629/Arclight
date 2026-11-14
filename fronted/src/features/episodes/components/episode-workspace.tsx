@@ -35,6 +35,7 @@ import ShotViewer from "@/features/editor/components/shot-viewer";
 
 import Tasks from "@/features/tasks/components/tasks";
 import RenderWorkspace from "@/features/rendering/components/render-workspace";
+import AudioWorkspace from "@/features/audio/components/audio-workspace";
 import ProductionStageNavigation from "./production-stage-navigation";
 import StorySources from "@/features/story/components/story-sources";
 import StoryAnalysis from "@/features/story/components/story-analysis";
@@ -300,6 +301,7 @@ export default function EpisodeWorkspace({
             ["library", "素材库"],
             ["list", "版本列表"],
             ["tasks", "任务与审核"],
+            ["audio", "配音与试听"],
             ["render", "渲染与成片"],
             ["sources", "故事来源"],
             ["analysis", "故事提炼"],
@@ -458,6 +460,22 @@ export default function EpisodeWorkspace({
             }
             setInspectorOpen(true);
           }}
+        />
+      ) : view === "audio" ? (
+        <AudioWorkspace
+          key={`${episode.id}:${owner}:${writable}`}
+          episode={episode}
+          scripts={scriptRows}
+          scriptPagination={
+            <ListPagination
+              {...scripts}
+              label="剧本版本"
+              count={scripts.rows.length}
+            />
+          }
+          owner={owner}
+          writable={writable}
+          onOpenRender={() => navigate({ view: "render", stage: "audio" })}
         />
       ) : view === "render" ? (
         <RenderWorkspace

@@ -16,6 +16,7 @@ export const episodeViews = [
   "library",
   "list",
   "tasks",
+  "audio",
   "render",
   "sources",
   "analysis",

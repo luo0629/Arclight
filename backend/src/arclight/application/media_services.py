@@ -190,6 +190,7 @@ def connection_for_job(
 def public_configuration(db: Session, actor: str, task_type: str) -> dict:
     selection = account_selection(db, actor, task_type)
     if selection is not None:
+        from arclight.providers.media_capabilities import resolve_parameters
         from arclight.providers.native_media_protocols import capabilities
 
         configuration = selection.configuration
@@ -200,6 +201,9 @@ def public_configuration(db: Session, actor: str, task_type: str) -> dict:
             **configuration,
             "configured": True,
             "enabled": priced,
+            "supported_parameters": sorted(
+                resolve_parameters(configuration["provider"], configuration["model"])
+            ),
             "credential_source": "ACCOUNT_SNAPSHOT",
             "capabilities": capabilities(configuration["provider"]).model_dump(mode="json"),
             "message": "已配置"

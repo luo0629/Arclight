@@ -7,6 +7,7 @@ from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import func, select, tuple_
 
 from arclight.api.dependencies import Actor, Database
+from arclight.application.audio_production import require_line, require_snapshot
 from arclight.application.audio_tts import (
     create_tts,
     read_result,
@@ -25,6 +26,7 @@ from arclight.domain.audio_tts import (
     AudioTTSResultRead,
 )
 from arclight.domain.audio_voices import AudioVoiceCreate, AudioVoiceRead
+from arclight.persistence.audio_tts import AudioTTSRequest
 from arclight.persistence.audio_voices import AudioVoiceVersion
 
 router = APIRouter(tags=["audio-production"])
@@ -78,6 +80,30 @@ def get_voice(
     project_id: UUID, voice_version_id: UUID, db: Database, actor: Actor
 ) -> AudioVoiceRead:
     return read_voice(require_voice(db, project_id, voice_version_id, actor))
+
+
+@router.get("/audio-snapshots/{snapshot_id}/lines/{line_id}/tts")
+def list_tts(
+    snapshot_id: UUID,
+    line_id: str,
+    db: Database,
+    actor: Actor,
+    limit: Limit = 30,
+    offset: Offset = 0,
+) -> list[AudioTTSRead]:
+    snapshot = require_snapshot(db, snapshot_id, actor)
+    require_line(snapshot, line_id)
+    rows = db.scalars(
+        select(AudioTTSRequest)
+        .where(
+            AudioTTSRequest.snapshot_id == snapshot.id,
+            AudioTTSRequest.line_id == line_id,
+        )
+        .order_by(AudioTTSRequest.created_at.desc(), AudioTTSRequest.id.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    return [read_tts(db, row) for row in rows]
 
 
 @router.post("/audio-snapshots/{snapshot_id}/lines/{line_id}/tts", status_code=202)

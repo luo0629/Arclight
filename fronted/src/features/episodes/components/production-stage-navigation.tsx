@@ -99,6 +99,7 @@ export default function ProductionStageNavigation({
         version && isResourceId(version) ? `${current}:${version}` : "",
       );
     else if (current === "media") onOpen("library");
+    else if (current === "audio") onOpen("audio");
     else onOpen("render");
   }
   return (
