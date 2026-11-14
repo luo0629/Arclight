@@ -298,6 +298,10 @@ test("RENDER-05：真实 MP4 可播放并按片段定位，未保存草稿明确
       video.evaluate((v: HTMLVideoElement) => Math.round(v.currentTime * 1000)),
     )
     .toBe(1500);
+  await video.scrollIntoViewIfNeeded();
+  await page.screenshot({
+    path: test.info().outputPath("render05-playing-preview.png"),
+  });
   await editor.getByLabel("片段时长（毫秒）").fill("1800");
   await expect(
     editor.getByRole("region", { name: "时间轴保存版本预览" }),
@@ -668,8 +672,21 @@ for (const viewport of [
         () => document.documentElement.scrollWidth <= window.innerWidth + 1,
       ),
     ).toBe(true);
-    await editor.screenshot({
+    await page.screenshot({
       path: info.outputPath(`render05-editor-${viewport.width}.png`),
+    });
+    const duration = editor.getByLabel("片段时长（毫秒）", { exact: true });
+    await duration.scrollIntoViewIfNeeded();
+    await duration.fill("1600");
+    await expect(duration).toHaveValue("1600");
+    await expect(duration).toBeFocused();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: info.outputPath(`render05-parameters-${viewport.width}.png`),
     });
   });
 }
