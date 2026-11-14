@@ -419,6 +419,41 @@ for (const size of [
       env.image,
       size.width > 500 ? "canvas" : "list",
     );
+    if (size.width > 500) {
+      const fit = page.getByRole("button", { name: "适应画布", exact: true });
+      const nodes = page.locator(".react-flow__node");
+      const tile = (id: string) =>
+        page.locator(`.react-flow__node[data-id="${id}"]`);
+      await fit.click();
+      await expect(nodes).toHaveCount(env.graph.nodes.length);
+      for (const node of env.graph.nodes)
+        await expect(tile(node.id)).toContainText(node.title);
+      await tile(env.timeline.id)
+        .getByRole("button", {
+          name: `查看时间轴：${env.timeline.title} v${env.timeline.version_no}`,
+          exact: true,
+        })
+        .click();
+      await expect(panel).toContainText(env.original.id);
+      await tile(env.image.id)
+        .getByRole("button", {
+          name: `查看镜头候选图：${env.image.title} v${env.image.version_no}`,
+          exact: true,
+        })
+        .click();
+      await fit.click();
+      await expect(nodes).toHaveCount(env.graph.nodes.length);
+      const images = nodes.locator("img");
+      await expect(images).toHaveCount(2);
+      for (const image of await images.all())
+        await expect
+          .poll(() =>
+            image.evaluate((img: HTMLImageElement) => img.naturalWidth),
+          )
+          .toBeGreaterThan(1);
+      expect(env.mutations).toHaveLength(0);
+      expect(env.layoutWrites).toHaveLength(0);
+    }
     await expect(
       panel.getByRole("img", { name: "精确资产版本原图", exact: true }),
     ).toBeVisible();
