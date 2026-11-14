@@ -13,11 +13,12 @@ import { cn } from "@/lib/utils";
 import useEpisodeNavigation from "@/features/episodes/hooks/use-episode-navigation";
 import { isResourceId, type EpisodeView } from "@/lib/routes";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import { Notice, EmptyState, StatusBadge } from "@/components/ui-kit";
+import { Notice, EmptyState } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, message } from "@/lib/api/client";
+import { ApiError, api, message } from "@/lib/api/client";
+import CanvasNodeList from "@/features/canvas/components/canvas-node-list";
 import type {
   ContentVersion,
   Episode,
@@ -86,20 +87,43 @@ export default function EpisodeWorkspace({
   }, []);
   const [inspectorOpen, setInspectorOpen] = useState(!!selectedId);
   const [error, setError] = useState("");
+  const [denied, setDenied] = useState("");
+  const onUnavailable = useCallback((cause: unknown) => {
+    if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) {
+      sequence.current++;
+      setData(null);
+      setDenied(message(cause));
+    }
+  }, []);
   const [busy, setBusy] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const mounted = useRef(true);
   const sequence = useRef(0);
+  const graphRequest = useRef<AbortController | null>(null);
   const reload = useCallback(async () => {
     const ticket = ++sequence.current;
     const prefix = `/episodes/${episode.id}`;
-    const [, , , graph] = await Promise.all([
-      loadScripts(),
-      loadBoards(),
-      loadRuns(),
-      api<Graph>(prefix + "/canvas"),
-    ]);
-    if (mounted.current && ticket === sequence.current) setData({ graph });
+    graphRequest.current?.abort();
+    const controller = new AbortController();
+    graphRequest.current = controller;
+    try {
+      const [, , , graph] = await Promise.all([
+        loadScripts(),
+        loadBoards(),
+        loadRuns(),
+        api<Graph>(prefix + "/canvas", { signal: controller.signal }),
+      ]);
+      if (
+        mounted.current &&
+        ticket === sequence.current &&
+        !controller.signal.aborted
+      )
+        setData({ graph });
+    } catch (cause) {
+      if (controller.signal.aborted || ticket !== sequence.current) return;
+      onUnavailable(cause);
+      throw cause;
+    }
   }, [
     episode.id,
     episode.title,
@@ -107,6 +131,7 @@ export default function EpisodeWorkspace({
     loadScripts,
     loadBoards,
     loadRuns,
+    onUnavailable,
   ]);
   useEffect(() => {
     mounted.current = true;
@@ -116,6 +141,7 @@ export default function EpisodeWorkspace({
     return () => {
       mounted.current = false;
       sequence.current++;
+      graphRequest.current?.abort();
     };
   }, [reload]);
   const active = runs.rows.some((run) =>
@@ -258,6 +284,24 @@ export default function EpisodeWorkspace({
       <ListPagination {...boards} label="分镜版本" count={boards.rows.length} />
     </>
   );
+  if (denied)
+    return (
+      <Notice tone="error" role="alert">
+        <h2>当前画布内容不可访问</h2>
+        <p>{denied}</p>
+        <p>已清空旧内容及私有预览。请确认项目权限后重新读取。</p>
+        <Button
+          variant="outline"
+          onClick={() => {
+            setDenied("");
+            setError("");
+            void refresh();
+          }}
+        >
+          重新读取工作区
+        </Button>
+      </Notice>
+    );
   return (
     <section
       className={cn(
@@ -568,6 +612,8 @@ export default function EpisodeWorkspace({
                     savedNode?.id === selected?.id ? savedNode?.id : undefined
                   }
                   episodeId={episode.id}
+                  projectId={episode.project_id}
+                  onUnavailable={onUnavailable}
                   writable={writable}
                   onOpenShot={(node) => setShotId(node.id)}
                   onSelect={(node: GraphNode) => {
@@ -577,55 +623,15 @@ export default function EpisodeWorkspace({
                 />
               </Suspense>
             ) : (
-              <div className="version-list flex min-w-0 flex-col gap-3 rounded-xl border bg-card p-4">
-                <div className="section-heading flex flex-wrap items-center justify-between gap-2">
-                  <h2>故事的每一稿</h2>
-                  <span className="muted text-sm text-muted-foreground">
-                    选择一项查看与编辑
-                  </span>
-                </div>
-                {visibleNodes.map((node) => (
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    key={node.id}
-                    className={cn(
-                      "version-row h-auto justify-start gap-3 py-4 text-left whitespace-normal [&>span:nth-child(2)]:min-w-0 [&>span:nth-child(2)]:flex-1 [&_strong]:block [&_small]:mt-1 [&_small]:block [&_small]:text-xs [&_small]:text-muted-foreground",
-                      selected?.id === node.id && "active ring-2 ring-ring",
-                    )}
-                    aria-pressed={selected?.id === node.id}
-                    onClick={() => {
-                      setSelectedId(node.id);
-                      setInspectorOpen(true);
-                    }}
-                  >
-                    <span
-                      className={cn(
-                        "kind-dot size-2.5 shrink-0 rounded-full bg-primary",
-                        node.kind,
-                        node.kind === "script" && "bg-secondary-foreground",
-                        node.kind === "shot" && "bg-success",
-                      )}
-                      aria-hidden="true"
-                    />
-                    <span>
-                      <strong>{node.title}</strong>
-                      <small>
-                        {node.version_no
-                          ? `版本 ${node.version_no}`
-                          : node.kind === "episode"
-                            ? "故事起点"
-                            : "镜头"}
-                      </small>
-                    </span>
-                    <StatusBadge status={node.status} />
-                    {node.stale && node.status !== "STALE" && (
-                      <StatusBadge status="STALE" />
-                    )}
-                  </Button>
-                ))}
-                {versionPagination}
-              </div>
+              <CanvasNodeList
+                nodes={visibleNodes}
+                selectedId={selected?.id}
+                pagination={versionPagination}
+                onSelect={(node) => {
+                  setSelectedId(node.id);
+                  setInspectorOpen(true);
+                }}
+              />
             )}
           </section>
           {(view !== "canvas" || inspectorOpen) && (
@@ -666,6 +672,7 @@ export default function EpisodeWorkspace({
                 node={view === "create" ? null : selected}
                 graph={data.graph}
                 onSelectNode={(node) => setSelectedId(node.id)}
+                onUnavailable={onUnavailable}
                 episode={episode}
                 scripts={scriptRows}
                 boards={boardRows}

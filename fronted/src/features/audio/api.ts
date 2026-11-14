@@ -223,12 +223,17 @@ export async function loadAudio(
   projectId: string,
   fileId: string,
   signal: AbortSignal,
+  expectedSha256?: string,
+  expectedVersionId?: string,
 ) {
   const path = `${project(projectId)}/files/${id(fileId)}`;
   const file = await read<AudioFile>(path, signal);
   if (
     file.id !== fileId ||
     file.project_id !== projectId ||
+    (expectedSha256 !== undefined && file.checksum !== expectedSha256) ||
+    (expectedVersionId !== undefined &&
+      file.asset_version_id !== expectedVersionId) ||
     !audioMediaTypes.includes(file.media_type)
   )
     throw new Error("音频文件来源或格式不匹配。");

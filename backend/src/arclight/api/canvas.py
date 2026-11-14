@@ -7,6 +7,7 @@ from sqlalchemy import select, update
 
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input
+from arclight.application.canvas_media import media_facts
 from arclight.application.commands import require_episode
 from arclight.application.dependencies import query_dependencies
 from arclight.application.project_reads import lock_project_snapshot
@@ -175,6 +176,7 @@ def add_asset_graph(db, episode, nodes, edges):
                 "status": asset.status,
             }
         )
+    media = media_facts(db, episode.project_id, versions)
     for version in versions:
         asset = by_asset[version.asset_id]
         node = by_version.get(str(version.id))
@@ -199,7 +201,7 @@ def add_asset_graph(db, episode, nodes, edges):
                     }
                 )
         local_image = (
-            asset.asset_type in {"CHARACTER", "SCENE", "PROP", "STYLE"}
+            asset.asset_type in {"CHARACTER", "SCENE", "PROP", "STYLE", "IMAGE", "SHOT_IMAGE"}
             and version.creation_key is not None
             and version.metadata_json.get("storage_backend") in {"LOCAL", "S3"}
         )
@@ -216,6 +218,9 @@ def add_asset_graph(db, episode, nodes, edges):
                 else None
             ),
         )
+        node.update(media.get(version.id, {}))
+        if local_image:
+            node["preview_kind"] = "IMAGE"
     # Upgrade a real text relationship instead of drawing two overlapping edges.
     by_pair = {(edge["source"], edge["target"]): edge for edge in edges}
     for dependency in dependencies:

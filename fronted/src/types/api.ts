@@ -222,6 +222,11 @@ export type GraphNode = {
   checksum?: string;
   dependency_manifest_id?: string | null;
   preview_path?: string | null;
+  preview_kind?: "IMAGE" | "AUDIO" | "TIMELINE" | "DELIVERY";
+  media_file_id?: string;
+  media_type?: string;
+  media_episode_id?: string;
+  delivery_id?: string;
 };
 export type Layout = {
   revision: number;

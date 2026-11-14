@@ -39,6 +39,7 @@ export default function Inspector({
   node,
   graph,
   onSelectNode,
+  onUnavailable,
   episode,
   scripts,
   boards,
@@ -58,6 +59,7 @@ export default function Inspector({
   node: GraphNode | null;
   graph: Graph;
   onSelectNode: (node: GraphNode) => void;
+  onUnavailable: (cause: unknown) => void;
   episode: Episode;
   scripts: ContentVersion[];
   boards: ContentVersion[];
@@ -307,6 +309,7 @@ export default function Inspector({
           onSelect={onSelectNode}
           projectId={episode.project_id}
           onChanged={reload}
+          onUnavailable={onUnavailable}
         />
       ) : node.kind === "shot" ? (
         <>

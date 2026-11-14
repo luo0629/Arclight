@@ -183,10 +183,34 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
   await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await expect(pager(page, "剧本版本")).toContainText("已加载 100 条");
-  await expect(page.locator(".version-row .kind-dot.script")).toHaveCount(100);
-  await expect(page.locator(".version-row .kind-dot.storyboard")).toHaveCount(
-    100,
-  );
+  const mediaList = page.getByRole("region", {
+    name: "内容与媒体列表",
+    exact: true,
+  });
+  const collected = {
+    script: new Set<string>(),
+    storyboard: new Set<string>(),
+  };
+  // The new 30-row presentation page must retain every loaded backend identity.
+  for (;;) {
+    expect(await mediaList.locator(".version-row").count()).toBeLessThanOrEqual(
+      30,
+    );
+    for (const kind of ["script", "storyboard"] as const) {
+      for (const identity of await mediaList
+        .locator(".version-row")
+        .filter({ has: page.locator(".kind-dot." + kind) })
+        .evaluateAll((rows) =>
+          rows.map((row) => row.getAttribute("data-node-id")!),
+        ))
+        collected[kind].add(identity);
+    }
+    const next = mediaList.getByRole("button", { name: "下一页", exact: true });
+    if (await next.isDisabled()) break;
+    await next.click();
+  }
+  expect(collected.script.size).toBe(100);
+  expect(collected.storyboard.size).toBe(100);
   await pager(page, "剧本版本")
     .getByRole("button", { name: "加载更多剧本版本", exact: true })
     .click();
@@ -199,6 +223,9 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
   await expect(pager(page, "分镜版本")).toContainText(
     "已加载 105 条 · 已全部加载",
   );
+  await mediaList
+    .getByLabel("搜索名称或版本 ID", { exact: true })
+    .fill(source.id);
   await page
     .locator(".version-row")
     .filter({ has: page.getByText("历史剧本1", { exact: true }) })
@@ -209,6 +236,9 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
   await expect(
     page.getByRole("button", { name: "从此版本生成分镜", exact: true }),
   ).toBeEnabled();
+  await mediaList
+    .getByLabel("搜索名称或版本 ID", { exact: true })
+    .fill("版本 1");
   await page
     .locator(".version-row")
     .filter({ has: page.locator(".kind-dot.storyboard") })

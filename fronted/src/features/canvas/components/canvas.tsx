@@ -7,6 +7,7 @@ import {
   Film,
   Image,
   Folder,
+  Volume2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatusBadge } from "@/components/ui-kit";
@@ -26,26 +27,33 @@ import {
 import { api, json, message } from "@/lib/api/client";
 import type { Graph, GraphNode, Layout } from "@/types/api";
 import VersionImage from "@/features/assets/components/version-image";
+import { imagePath, nodeGroup, nodeLabel, selectionLabel } from "../nodes";
 
-type Paper = Node<GraphNode & Record<string, unknown>, "paper">;
-const names: Record<string, string> = {
-  episode: "故事起点",
-  script: "剧本",
-  storyboard: "分镜",
-  shot: "镜头",
-  asset: "项目资产",
-  asset_version: "精确资产版本",
-};
+type Paper = Node<
+  GraphNode & {
+    projectId: string;
+    unavailable: (cause: unknown) => void;
+    selectNode: (node: GraphNode) => void;
+  } & Record<string, unknown>,
+  "paper"
+>;
 function PaperNode({ data, selected }: NodeProps<Paper>) {
+  const path = imagePath(data, data.projectId);
   const Icon =
-    {
-      episode: Sprout,
-      script: FileText,
-      storyboard: Clapperboard,
-      shot: Film,
-      asset: Folder,
-      asset_version: Image,
-    }[data.kind] ?? FileText;
+    data.preview_kind === "AUDIO"
+      ? Volume2
+      : data.preview_kind === "DELIVERY"
+        ? Film
+        : data.preview_kind === "TIMELINE"
+          ? Clapperboard
+          : ({
+              episode: Sprout,
+              script: FileText,
+              storyboard: Clapperboard,
+              shot: Film,
+              asset: Folder,
+              asset_version: Image,
+            }[data.kind] ?? FileText);
   return (
     <article
       className={cn(
@@ -61,40 +69,51 @@ function PaperNode({ data, selected }: NodeProps<Paper>) {
         <span className="flex size-7 items-center justify-center rounded-lg bg-background text-primary">
           <Icon className="size-4" />
         </span>
-        {names[data.kind]}
+        {nodeLabel(data)}
         {data.version_no ? ` / v${data.version_no}` : ""}
       </div>
       <strong>{data.title}</strong>
-      {data.preview_path && (
+      {path && (
         <VersionImage
-          key={data.preview_path}
-          path={data.preview_path}
+          key={path}
+          path={path}
+          onUnavailable={data.unavailable}
           compact
         />
       )}
       {data.description && <p>{data.description}</p>}
       <StatusBadge status={data.status} />
       {data.stale && data.status !== "STALE" && <StatusBadge status="STALE" />}
-      {data.asset_id && data.kind !== "asset" && (
-        <small>
-          {data.current
-            ? "正式选用"
-            : ["DRAFT", "READY_FOR_REVIEW"].includes(data.status)
-              ? "候选版本"
-              : "历史／未选用"}
-        </small>
-      )}
+      {selectionLabel(data) && <small>{selectionLabel(data)}</small>}
       {data.duration_ms && <small>{data.duration_ms / 1000} 秒</small>}
+      <Button
+        variant="outline"
+        size="sm"
+        className="nodrag nopan"
+        aria-label={`查看${nodeLabel(data)}：${data.title}${data.version_no ? ` v${data.version_no}` : ""}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          data.selectNode(data);
+        }}
+      >
+        查看内容与预览
+      </Button>
       <Handle type="source" position={Position.Right} isConnectable={false} />
     </article>
   );
 }
 const nodeTypes = { paper: PaperNode };
-function buildNodes(graph: Graph): Paper[] {
+function buildNodes(
+  graph: Graph,
+  projectId: string,
+  unavailable: (cause: unknown) => void,
+  selectNode: (node: GraphNode) => void,
+): Paper[] {
   const counts: Record<string, number> = {};
   return graph.nodes.map((data) => {
-    const index = counts[data.kind] ?? 0;
-    counts[data.kind] = index + 1;
+    const group = data.kind === "asset_version" ? nodeGroup(data) : data.kind;
+    const index = counts[group] ?? 0;
+    counts[group] = index + 1;
     const column =
       {
         episode: 0,
@@ -102,12 +121,17 @@ function buildNodes(graph: Graph): Paper[] {
         storyboard: 2,
         shot: 3,
         asset: -2,
-        asset_version: -1,
-      }[data.kind] ?? 0;
+        assets: -1,
+        images: 4,
+        audio: 5,
+        timelines: 6,
+        deliveries: 7,
+      }[group] ?? 0;
     return {
       id: data.id,
       type: "paper",
-      data: { ...data },
+      data: { ...data, projectId, unavailable, selectNode },
+      ariaLabel: `${nodeLabel(data)}：${data.title}${data.version_no ? ` v${data.version_no}` : ""}`,
       position: graph.layout.positions[data.id] ?? {
         x: 30 + column * 290,
         y: 45 + index * (data.kind === "asset_version" ? 320 : 210),
@@ -118,6 +142,8 @@ function buildNodes(graph: Graph): Paper[] {
 export default function Canvas({
   graph,
   episodeId,
+  projectId,
+  onUnavailable,
   writable,
   onSelect,
   onOpenShot,
@@ -128,12 +154,14 @@ export default function Canvas({
   focusId?: string;
   graph: Graph;
   episodeId: string;
+  projectId: string;
+  onUnavailable: (cause: unknown) => void;
   writable: boolean;
   onSelect: (node: GraphNode) => void;
   onOpenShot: (node: GraphNode) => void;
 }) {
   const [nodes, setNodes, onNodesChange] = useNodesState<Paper>(
-    buildNodes(graph).map((node) => ({
+    buildNodes(graph, projectId, onUnavailable, onSelect).map((node) => ({
       ...node,
       selected: node.id === selectedId,
     })),
@@ -148,7 +176,7 @@ export default function Canvas({
   const focused = useRef<string | undefined>(undefined);
   useEffect(() => {
     setNodes((current) =>
-      buildNodes(graph).map((node) => {
+      buildNodes(graph, projectId, onUnavailable, onSelect).map((node) => {
         const prior = current.find((item) => item.id === node.id);
         return {
           ...node,
@@ -159,7 +187,7 @@ export default function Canvas({
     );
     if (graph.layout.revision > revision.current)
       setNotice("布局已被其他成员更新；保存可能冲突，请先刷新页面。");
-  }, [graph, selectedId, setNodes]);
+  }, [graph, selectedId, setNodes, projectId, onUnavailable, onSelect]);
   useEffect(() => {
     if (!instance || !focusId || focused.current === focusId) return;
     const target = nodes.find((node) => node.id === focusId);
@@ -202,7 +230,8 @@ export default function Canvas({
         className="canvas-note pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-24px)] rounded-lg border bg-card/90 px-3 py-2 text-xs text-muted-foreground"
         role="status"
       >
-        {notice || "项目资产与本集文本 · 实线标注精确依赖，整理位置后可保存。"}
+        {notice ||
+          "文本与媒体精确版本 · 实线标注真实依赖；也可切换版本列表查看和预览。"}
       </div>
       <ReactFlow<Paper>
         nodes={nodes}
@@ -221,7 +250,7 @@ export default function Canvas({
         onNodeClick={(_, node) => onSelect(node.data)}
         onNodeDragStop={() => setDirty(true)}
         onMoveEnd={() => setDirty(true)}
-        nodesDraggable={writable}
+        nodesDraggable={writable && !saving}
         nodesConnectable={false}
         onlyRenderVisibleElements
         edgesReconnectable={false}

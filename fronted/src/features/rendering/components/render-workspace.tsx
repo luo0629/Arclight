@@ -68,7 +68,7 @@ export default function RenderWorkspace(props: {
         </Notice>
       ) : (
         <RenderContent
-          key={`${props.episode.id}:${props.owner}:${props.writable}:${epoch}:${search.get("render_job") ?? ""}:${search.get("render_manifest") ?? ""}`}
+          key={`${props.episode.id}:${props.owner}:${props.writable}:${epoch}:${search.get("render_job") ?? ""}:${search.get("render_manifest") ?? ""}:${search.get("timeline") ?? ""}`}
           {...props}
           unavailable={unavailable}
         />
@@ -108,14 +108,29 @@ function RenderContent({
   const search = useSearchParams();
   const requestedJob = search.get("render_job");
   const requestedManifest = search.get("render_manifest");
+  const requestedTimeline = search.get("timeline");
   const exactId =
     requestedJob && isResourceId(requestedJob)
       ? `job:${requestedJob}`
       : requestedManifest && isResourceId(requestedManifest)
         ? `manifest:${requestedManifest}`
-        : "";
+        : requestedTimeline && isResourceId(requestedTimeline)
+          ? `timeline:${requestedTimeline}`
+          : "";
   const fetchExact = useCallback(
     async (signal: AbortSignal) => {
+      if (exactId.startsWith("timeline:")) {
+        const timeline = await renderingApi.getTimeline(
+          exactId.slice(9),
+          signal,
+        );
+        if (
+          timeline.id !== exactId.slice(9) ||
+          timeline.snapshot.episode_id !== episode.id
+        )
+          throw new Error("时间轴不属于当前剧集。");
+        return { timeline, manifest: undefined, job: undefined };
+      }
       let job: RenderJob | undefined;
       if (exactId.startsWith("job:")) {
         job = await renderingApi.getJob(exactId.slice(4), signal);

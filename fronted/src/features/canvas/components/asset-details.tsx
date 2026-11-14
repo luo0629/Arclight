@@ -5,21 +5,8 @@ import { StatusBadge } from "@/components/ui-kit";
 import VersionImage from "@/features/assets/components/version-image";
 import ContinuityComparisonButton from "@/features/continuity/components/continuity-comparison";
 import type { Graph, GraphNode } from "@/types/api";
-
-const types: Record<string, string> = {
-  CHARACTER: "角色",
-  SCENE: "场景",
-  PROP: "道具",
-  STYLE: "风格",
-  SCRIPT: "剧本",
-  STORYBOARD: "分镜",
-  SHOT_IMAGE: "镜头画面",
-  SHOT_PREVIEW: "预览视频",
-  AUDIO: "音频",
-  SUBTITLE: "字幕",
-  TIMELINE: "时间轴",
-  RENDER: "成片",
-};
+import { assetTypeNames, imagePath, selectionLabel } from "../nodes";
+import MediaDetails from "./media-details";
 
 export function ExactDependencies({
   node,
@@ -84,13 +71,16 @@ export default function AssetDetails({
   onSelect,
   projectId,
   onChanged,
+  onUnavailable,
 }: {
   node: GraphNode;
   graph: Graph;
   onSelect: (node: GraphNode) => void;
   projectId: string;
   onChanged: () => Promise<void>;
+  onUnavailable: (cause: unknown) => void;
 }) {
+  const path = imagePath(node, projectId);
   return (
     <section
       aria-label="画布资产详情"
@@ -98,7 +88,7 @@ export default function AssetDetails({
     >
       <h2 className="text-lg font-semibold">{node.title}</h2>
       <p>
-        {types[node.asset_type ?? ""] ?? node.asset_type}
+        {assetTypeNames[node.asset_type ?? ""] ?? node.asset_type}
         {node.version_no ? ` · v${node.version_no}` : " · 资产目录"}
       </p>
       <div className="flex flex-wrap items-center gap-2">
@@ -106,15 +96,7 @@ export default function AssetDetails({
         {node.stale && node.status !== "STALE" && (
           <StatusBadge status="STALE" />
         )}
-        {node.kind === "asset_version" && (
-          <span>
-            {node.current
-              ? "正式选用"
-              : ["DRAFT", "READY_FOR_REVIEW"].includes(node.status)
-                ? "候选版本"
-                : "历史／未选用"}
-          </span>
-        )}
+        {selectionLabel(node) && <span>{selectionLabel(node)}</span>}
       </div>
       {node.kind === "asset_version" &&
         node.asset_id &&
@@ -128,8 +110,19 @@ export default function AssetDetails({
             onChanged={onChanged}
           />
         )}
-      {node.preview_path && (
-        <VersionImage key={node.preview_path} path={node.preview_path} />
+      {path && (
+        <VersionImage key={path} path={path} onUnavailable={onUnavailable} />
+      )}
+      {node.preview_path && !path && (
+        <p role="alert">图片来源与当前精确版本不匹配，已停止读取。</p>
+      )}
+      {node.kind === "asset_version" && (
+        <MediaDetails
+          key={`${projectId}:${node.id}:${node.checksum}`}
+          node={node}
+          projectId={projectId}
+          unavailable={onUnavailable}
+        />
       )}
       <dl className="grid min-w-0 grid-cols-1 gap-2 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:break-all">
         <dt>资产 ID</dt>
