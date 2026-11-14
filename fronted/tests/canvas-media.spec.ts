@@ -58,8 +58,12 @@ test("UI-01：候选原图、正式选用和历史失效状态来自同一精确
 test("UI-01：精确依赖可跳转五轨时间轴且不产生业务写入", async ({ page }) => {
   const env = await canvasMediaFixture(page);
   const panel = await env.openCanvas(env.image);
-  await page
-    .getByRole("region", { name: "精确版本依赖", exact: true })
+  const dependencies = page.getByRole("region", {
+    name: "精确版本依赖",
+    exact: true,
+  });
+  await expect(dependencies).toContainText(env.original.dependency_manifest_id);
+  await dependencies
     .getByRole("button", { name: /雨后街角 · 五轨剪辑/ })
     .click();
   const media = panel.getByRole("region", {
@@ -69,7 +73,7 @@ test("UI-01：精确依赖可跳转五轨时间轴且不产生业务写入", asy
   for (const track of ["画面", "配音", "音乐", "音效", "字幕"])
     await expect(media).toContainText(track);
   await expect(panel).toContainText(env.original.id);
-  await expect(panel).toContainText(env.original.dependency_manifest_id);
+  await expect(dependencies).toContainText(env.original.dependency_manifest_id);
   expect(env.mutations).toHaveLength(0);
   expect(env.layoutWrites).toHaveLength(0);
 });
