@@ -104,6 +104,13 @@ jobs:
           done
           docker logs arclight-test-minio
           exit 1
+      - name: Ensure independent FFprobe media verification
+        run: |
+          if ! command -v ffprobe >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffprobe -version
       - name: Database tests (${{ matrix.database }}, ${{ matrix.shard }}/${{ matrix.shards }})
         run: |
           # Partition whole files; the Redis broker tests must stay on one worker.

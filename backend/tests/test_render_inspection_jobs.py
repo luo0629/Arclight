@@ -94,6 +94,12 @@ def test_passed_receipt_binds_exact_file_manifest_inputs_and_authorized_api(clie
         ("wrong_size", "RENDER_OUTPUT_RESOLUTION"),
         ("short_video", "RENDER_OUTPUT_DURATION"),
         ("short_audio", "RENDER_OUTPUT_DURATION"),
+        ("missing_audio", "RENDER_OUTPUT_DECODING"),
+        ("missing_video", "RENDER_OUTPUT_DECODING"),
+        ("wrong_video_codec", "RENDER_OUTPUT_VIDEO_CODEC"),
+        ("wrong_audio_codec", "RENDER_INSPECTION_INVALID_MEDIA"),
+        ("truncated", "RENDER_INSPECTION_INVALID_MEDIA"),
+        ("corrupt_packets", "RENDER_INSPECTION_INVALID_MEDIA"),
     ],
 )
 def test_rejected_candidate_never_reaches_store_and_retry_keeps_failed_evidence(
@@ -107,7 +113,20 @@ def test_rejected_candidate_never_reaches_store_and_retry_keeps_failed_evidence(
         changes["frames"] = 59
     elif candidate == "short_audio":
         changes["audio_frames"] = 48
+    elif candidate == "missing_audio":
+        changes["audio"] = False
+    elif candidate == "missing_video":
+        changes["video"] = False
+    elif candidate == "wrong_video_codec":
+        changes["video_codec"] = "mpeg4"
+    elif candidate == "wrong_audio_codec":
+        changes["audio_codec"] = "alac"
     data = b"PRIVATE_NATIVE_ERROR:/private/source" if candidate == "damaged" else movie(**changes)
+    if candidate == "truncated":
+        data = data[:-40]
+    elif candidate == "corrupt_packets":
+        start, end = data.index(b"mdat") + 4, data.index(b"moov") - 4
+        data = data[:start] + bytes(end - start) + data[end:]
     writes = []
     original_put = ObjectStorage.put
 
@@ -125,6 +144,8 @@ def test_rejected_candidate_never_reaches_store_and_retry_keeps_failed_evidence(
     report = evidence[0]["inspection"]
     assert failed["error_code"] == report["error_code"] == code
     assert not report["passed"] and failed["output_file_id"] is None
+    if candidate in {"missing_audio", "missing_video"}:
+        assert not next(check["passed"] for check in report["checks"] if check["name"] == "tracks")
     assert failed["cleanup_status"] == "CLEANED" and writes == []
     assert report["output_sha256"] == hashlib.sha256(data).hexdigest()
     assert report["byte_size"] == len(data) and "PRIVATE_NATIVE_ERROR" not in str(evidence)
