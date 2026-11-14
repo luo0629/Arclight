@@ -1077,6 +1077,22 @@ test("RENDER-12：精确来源台词不得默认静音，每句显式处理及�
   page,
 }) => {
   const env = await renderFixture(page);
+  const fontId = crypto.randomUUID();
+  await page.route(`**/api/v1/projects/${env.project.id}/files?*`, (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: fontId,
+          project_id: env.project.id,
+          original_name: "licensed-subtitle.ttf",
+          media_type: "font/ttf",
+          rights_confirmed: true,
+          source_note: "本用例的受控字体",
+          rights_note: "测试授权",
+        },
+      ],
+    }),
+  );
   const source = env.sourceBoards[0];
   const scriptId = source.script_version_id!;
   const newer = {
@@ -1136,6 +1152,10 @@ test("RENDER-12：精确来源台词不得默认静音，每句显式处理及�
   await panel
     .getByLabel("台词 1 的处理原因", { exact: true })
     .fill("  本版叙事停顿，明确无声。  ");
+  await expect(create).toBeDisabled();
+  await panel.getByText("字幕渲染设置与授权字体", { exact: true }).click();
+  await panel.getByLabel("字幕字体", { exact: true }).selectOption(fontId);
+  await expect(create).toBeEnabled();
   await create.click();
   await expect
     .poll(
@@ -1149,6 +1169,8 @@ test("RENDER-12：精确来源台词不得默认静音，每句显式处理及�
   )!.body;
   expect(body).toMatchObject({
     profile: "PREVIEW",
+    font_file_id: fontId,
+    subtitle_style: { font_size: 48, margin_bottom: 64, bold: false },
     line_audio_decisions: [
       {
         script_version_id: scriptId,
