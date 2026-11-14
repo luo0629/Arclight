@@ -8,6 +8,15 @@ from typing import Literal
 MAX_AUDIO_SECONDS = 600
 
 
+AUDIO_FORMATS = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac"}
+AUDIO_CODECS = {
+    "audio/wav": {"pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"},
+    "audio/mpeg": {"mp3", "mp3float"},
+    "audio/ogg": {"vorbis", "opus"},
+    "audio/flac": {"flac"},
+}
+
+
 def check_wave(data: bytes) -> None:
     if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
         raise ValueError("Not RIFF/WAVE")
@@ -132,7 +141,6 @@ def check_ogg(data: bytes) -> None:
 def inspect_audio(data: bytes, media_type: str) -> dict:
     import av
 
-    formats = {"audio/wav": "wav", "audio/mpeg": "mp3", "audio/ogg": "ogg", "audio/flac": "flac"}
     expected_samples = None
     if media_type == "audio/flac":
         if (
@@ -152,7 +160,7 @@ def inspect_audio(data: bytes, media_type: str) -> dict:
 
     with av.open(
         BytesIO(data),
-        format=formats[media_type],
+        format=AUDIO_FORMATS[media_type],
         options={"protocol_whitelist": "pipe", "err_detect": "explode"},
         io_open=refuse_external,
     ) as container:
@@ -161,13 +169,7 @@ def inspect_audio(data: bytes, media_type: str) -> dict:
         if len(container.streams) != 1 or len(container.streams.audio) != 1:
             raise ValueError("Exactly one audio stream is required")
         stream = container.streams.audio[0]
-        allowed = {
-            "audio/wav": {"pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"},
-            "audio/mpeg": {"mp3", "mp3float"},
-            "audio/ogg": {"vorbis", "opus"},
-            "audio/flac": {"flac"},
-        }
-        if stream.codec_context.name not in allowed[media_type]:
+        if stream.codec_context.name not in AUDIO_CODECS[media_type]:
             raise ValueError("Unsupported audio codec")
         stream.codec_context.thread_count = 1
         codec = stream.codec_context.name

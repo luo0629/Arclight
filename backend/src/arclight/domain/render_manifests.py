@@ -121,6 +121,9 @@ class RenderSoftware(RenderContract):
     renderer_version: str = Field(min_length=1, max_length=160)
     pyav_version: str = Field(min_length=1, max_length=80)
     ffmpeg_libraries: dict[str, str]
+    caption_libraries: dict[str, str] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
 
     @model_validator(mode="after")
     def actual_libraries(self):

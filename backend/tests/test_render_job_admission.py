@@ -34,21 +34,70 @@ def rejected(client, manifest, code):
 
 
 @pytest.mark.parametrize("kind", ["VOICE", "MUSIC", "SFX", "SUBTITLE"])
-def test_each_nonempty_unimplemented_track_is_rejected_without_silent_export(
-    client, audio_case, kind
-):
+def test_each_nonempty_track_is_consumed_by_actual_public_render(client, audio_case, kind):
+    from render_job_helpers import read, run, submit
+
     original, font_id, _ = audio_case
     snapshot = deepcopy(original["snapshot"])
     for track in snapshot["tracks"]:
         if track["kind"] not in {"VIDEO", kind}:
             track["clips"] = []
         elif kind == "SUBTITLE" and track["kind"] == kind:
-            # A subtitle-only line has no consumed voice version.
-            for clip in track["clips"]:
-                clip["audio_version_id"] = None
+            for item in track["clips"]:
+                item["audio_version_id"] = None
     timeline = edited(client, original, snapshot)
     manifest, _ = ready_manifest(client, timeline, font_file_id=str(font_id))
-    rejected(client, manifest, "RENDER_TRACK_UNSUPPORTED")
+    with client.app.state.session_factory() as db:
+        plan = RenderPlan.model_validate_json(
+            build_plan(
+                db,
+                client.app.state.settings,
+                RenderManifestSnapshot.model_validate(manifest["snapshot"]),
+            )
+        )
+    assert len(plan.audio_clips) == (0 if kind == "SUBTITLE" else 1)
+    assert bool(plan.subtitles) == (kind == "SUBTITLE")
+    if plan.subtitles:
+        assert plan.subtitles.cues[0].text == "A"
+    job, _ = submit(client, manifest)
+    assert run(client, job) == "SUCCEEDED"
+    final = read(client, job)
+    assert final["progress"] == 100 and final["output_file_id"]
+    assert client.get(f"/api/v1/render-manifests/{manifest['id']}").json() == manifest
+
+
+@pytest.mark.parametrize("starts", [(0, 400), (900, 100)])
+def test_public_submission_rejects_global_subtitle_overlap_or_reversed_order(
+    client, audio_case, starts
+):
+    original, font_id, _ = audio_case
+    snapshot = deepcopy(original["snapshot"])
+    track = next(item for item in snapshot["tracks"] if item["kind"] == "SUBTITLE")
+    template = track["clips"][0]
+    track["clips"] = [
+        {
+            **template,
+            "id": str(uuid4()),
+            "ordinal": index,
+            "start_ms": start,
+            "duration_ms": 500 if starts[0] == 0 else 100,
+        }
+        for index, start in enumerate(starts)
+    ]
+    timeline = edited(client, original, snapshot)
+    manifest, _ = ready_manifest(client, timeline, font_file_id=str(font_id))
+    rejected(client, manifest, "RENDER_SUBTITLE_RANGE_INVALID")
+
+
+def test_public_submission_rejects_audio_decoder_work_before_creating_execution(client, audio_case):
+    original, font_id, _ = audio_case
+    snapshot = deepcopy(original["snapshot"])
+    track = next(item for item in snapshot["tracks"] if item["kind"] == "MUSIC")
+    template = track["clips"][0]
+    track["clips"] = [{**template, "id": str(uuid4()), "ordinal": index} for index in range(17)]
+    timeline = edited(client, original, snapshot)
+    manifest, _ = ready_manifest(client, timeline, font_file_id=str(font_id))
+    rejected(client, manifest, "RENDER_AUDIO_WORK_LIMIT")
 
 
 def test_historical_software_manifest_remains_readable_but_cannot_execute(
@@ -58,6 +107,22 @@ def test_historical_software_manifest_remains_readable_but_cannot_execute(
     with monkeypatch.context() as patch:
         patch.setattr(render_manifests, "renderer_software", lambda: old)
         manifest, _ = ready_manifest(client, render_case)
+    rejected(client, manifest, "RENDER_SOFTWARE_CHANGED")
+
+
+def test_caption_library_versions_are_frozen_and_changed_libraries_require_new_approval(
+    client, render_case, monkeypatch
+):
+    current = renderer_software()
+    assert current.caption_libraries["pillow"]
+    assert current.caption_libraries["freetype2"] != "unavailable"
+    old = current.model_copy(
+        update={"caption_libraries": {**current.caption_libraries, "pillow": "historical-version"}}
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(render_manifests, "renderer_software", lambda: old)
+        manifest, _ = ready_manifest(client, render_case)
+    assert manifest["snapshot"]["software"]["caption_libraries"]["pillow"] == "historical-version"
     rejected(client, manifest, "RENDER_SOFTWARE_CHANGED")
 
 

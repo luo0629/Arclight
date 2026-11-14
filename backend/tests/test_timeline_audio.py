@@ -13,7 +13,6 @@ from test_timelines import timeline_case
 
 from arclight.application.render_plans import check_support
 from arclight.application.timelines import save_timeline
-from arclight.core.errors import DomainError
 from arclight.domain.render_manifests import RenderManifestSnapshot
 from arclight.domain.timelines import TimelineSave
 from arclight.persistence.models import AssetDependency, AssetVersion
@@ -139,9 +138,13 @@ def test_audio_gain_edit_appends_an_independent_draft_and_stale_cas_has_no_effec
     assert audio_counts(client) == before
 
 
-def test_manifest_freezes_audio_automation_and_source_rights_while_encoder_rejects_mix(
+def test_manifest_freezes_audio_automation_and_source_rights_and_encoder_consumes_mix(
     client, audio_timeline_case
 ):
+    from arclight.application.render_plans import build_plan
+    from arclight.media.render_plan import RenderPlan
+    from arclight.media.timeline_mixer import AudioMixer
+
     original, body, identity = audio_timeline_case
     timeline = saved_timeline(client, original, body)
     value, _ = manifest(client, timeline)
@@ -152,9 +155,18 @@ def test_manifest_freezes_audio_automation_and_source_rights_while_encoder_rejec
     )
     assert source["file"]["source_note"] and source["file"]["rights_note"]
     assert source["file"]["rights_confirmed"] is True
-    with pytest.raises(DomainError) as error:
-        check_support(RenderManifestSnapshot.model_validate(snapshot))
-    assert error.value.code == "RENDER_TRACK_UNSUPPORTED"
+    parsed = RenderManifestSnapshot.model_validate(snapshot)
+    check_support(parsed)
+    with client.app.state.session_factory() as db:
+        plan = RenderPlan.model_validate_json(build_plan(db, client.app.state.settings, parsed))
+    assert [item.audio.model_dump(mode="json") for item in plan.audio_clips] == [
+        item["audio"]
+        for track in snapshot["timeline"]["tracks"]
+        for item in track["clips"]
+        if track["kind"] in {"MUSIC", "SFX"}
+    ]
+    with AudioMixer(plan) as mixer:
+        assert mixer.frame(0, 1024).samples == 1024
     changed = deepcopy(timeline["snapshot"])
     next(track for track in changed["tracks"] if track["kind"] == "MUSIC")["clips"][0]["audio"][
         "gain_milli"

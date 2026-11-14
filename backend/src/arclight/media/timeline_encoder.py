@@ -6,6 +6,9 @@ from fractions import Fraction
 from io import BytesIO
 
 from arclight.media.render_plan import RenderClip, RenderPlan
+from arclight.media.timeline_audio_output import checked_audio_output
+from arclight.media.timeline_captions import SubtitleBurner
+from arclight.media.timeline_mixer import AudioMixer
 
 
 def viewport(image, clip: RenderClip, local_ms: Fraction, size: tuple[int, int], fps: int):
@@ -39,7 +42,11 @@ def encode_timeline(data: bytes) -> bytes:
     plan = RenderPlan.model_validate_json(data)
     profile = plan.output
     output = BytesIO()
-    with av.open(output, mode="w", format="mp4") as container:
+    with (
+        av.open(output, mode="w", format="mp4") as container,
+        AudioMixer(plan) as mixer,
+        SubtitleBurner(plan) as captions,
+    ):
         video = container.add_stream("libx264", rate=profile.fps)
         video.width, video.height = profile.width, profile.height
         video.pix_fmt = profile.pixel_format
@@ -72,23 +79,20 @@ def encode_timeline(data: bytes) -> bytes:
             with viewport(
                 image, clip, stamp - clip.start_ms, (profile.width, profile.height), profile.fps
             ) as rendered:
+                captions.apply(rendered, stamp)
                 frame = av.VideoFrame.from_image(rendered)
             frame.pts, frame.time_base = index, Fraction(1, profile.fps)
             for packet in video.encode(frame):
                 container.mux(packet)
-            # Interleave a bounded amount of explicit silence with every video frame.
+            # Share the same sample clock for mixing, video interleaving and the silent tail.
             target = min(total_samples, ((index + 1) * 48000 + profile.fps - 1) // profile.fps)
             while sample < target:
                 count = min(1024, target - sample)
-                silence = av.AudioFrame(format="fltp", layout="stereo", samples=count)
-                for plane in silence.planes:
-                    plane.update(bytes(plane.buffer_size))
-                silence.sample_rate = 48000
-                silence.pts, silence.time_base = sample, Fraction(1, 48000)
-                for packet in audio.encode(silence):
+                mixed = mixer.frame(sample, count)
+                for packet in audio.encode(mixed):
                     container.mux(packet)
                 sample += count
-            progress = (index + 1) * 100 // plan.frames
+            progress = (index + 1) * (95 if plan.audio_clips else 100) // plan.frames
             if progress // 5 != last_progress:
                 last_progress = progress // 5
                 sys.stderr.write(f"ARCLIGHT_PROGRESS:{progress}\n")
@@ -98,4 +102,8 @@ def encode_timeline(data: bytes) -> bytes:
                 container.mux(packet)
         if image is not None:
             image.close()
-    return output.getvalue()
+    result = checked_audio_output(output.getvalue(), plan)
+    if plan.audio_clips:
+        sys.stderr.write("ARCLIGHT_PROGRESS:100\n")
+        sys.stderr.flush()
+    return result
