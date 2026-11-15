@@ -41,7 +41,8 @@ def validate_selected_shot(
 ) -> None:
     source = db.get(Shot, record.review.target.shot_id)
     assert source is not None  # require_shot_review already validated the exact target.
-    ignored = {"selected_visual_asset", "quality_review"}
+    # Sequence changes reuse the exact reviewed intent; the new timeline owns its order.
+    ignored = {"shot_no", "selected_visual_asset", "quality_review"}
     original = ShotContent.model_validate(source.content_json)
     if record.review.episode_id != episode_id or original.model_dump(
         mode="json", exclude=ignored

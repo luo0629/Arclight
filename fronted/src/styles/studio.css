@@ -190,6 +190,15 @@
   border: 0;
   border-radius: 0;
 }
+.canvas-layout #canvas-inspector:has([data-storyboard-table]) {
+  width: min(1120px, calc(100% - 24px));
+}
+@media (min-width: 1280px) {
+  .episode-studio:not(.is-canvas)
+    > .editor-layout:has([data-storyboard-table]) {
+    grid-template-columns: minmax(180px, 240px) minmax(0, 1fr);
+  }
+}
 .episode-studio.canvas-focused {
   position: fixed;
   inset: 0;

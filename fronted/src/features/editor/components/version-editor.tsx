@@ -16,9 +16,11 @@ import type { ContentVersion, Episode } from "@/types/api";
 import Dialog from "@/components/shared/app-dialog";
 import ShotDetails, {
   ContractMetadata,
-  type ShotExtensions,
 } from "@/features/editor/components/shot-details";
 import { useSessionDraft } from "@/providers/draft-provider";
+import StoryboardTable, {
+  type StoryboardTableShot,
+} from "@/features/editor/components/storyboard-table";
 
 export type VersionKind = "script" | "storyboard";
 export type VersionCreated = (
@@ -49,21 +51,7 @@ type Script = {
     }[];
   }[];
 };
-type Board = {
-  shots: (ShotExtensions & {
-    scene_asset?: unknown;
-    location_asset?: unknown;
-    props?: unknown[];
-    shot_no: number;
-    scene_no: number;
-    duration_ms: number;
-    shot_size: string;
-    visual_description: string;
-    characters: string[];
-    camera_movement: string;
-    subtitle: string;
-  })[];
-};
+type Board = { shots: StoryboardTableShot[] };
 
 function validContent(value: unknown, kind: VersionKind): boolean {
   if (!value || typeof value !== "object") return false;
@@ -193,6 +181,7 @@ export default function VersionEditor({
   const draft = local.value;
   const [editing, setEditing] = useState(!version || local.recovered);
   const [discarding, setDiscarding] = useState(false);
+  const [tableView, setTableView] = useState(false);
   function discard() {
     local.clear();
     local.update(structuredClone(initial));
@@ -257,6 +246,30 @@ export default function VersionEditor({
       disabled={busy || !writable || active}
       className="flex min-w-0 flex-col gap-4"
     >
+      {kind === "storyboard" && (
+        <legend className="mb-4">
+          <div
+            className="flex flex-wrap gap-2"
+            role="group"
+            aria-label="分镜显示方式"
+          >
+            <Button
+              variant="outline"
+              aria-pressed={!tableView}
+              onClick={() => setTableView(false)}
+            >
+              镜头详情
+            </Button>
+            <Button
+              variant="outline"
+              aria-pressed={tableView}
+              onClick={() => setTableView(true)}
+            >
+              分镜表格
+            </Button>
+          </div>
+        </legend>
+      )}
       {kind === "storyboard" && (
         <p className="text-sm text-muted-foreground" aria-live="polite">
           镜头总时长：
@@ -610,6 +623,17 @@ export default function VersionEditor({
             </Button>
           )}
         </div>
+      ) : tableView ? (
+        <StoryboardTable
+          key={editing ? "editing" : "reading"}
+          shots={board.shots}
+          editable={editing && writable && !busy && !active}
+          onChange={(shots) =>
+            mutate((value) => {
+              value.shots = shots;
+            })
+          }
+        />
       ) : (
         <div className="document flex min-w-0 flex-col gap-4 break-words">
           {board.shots.map((shot, index) => (

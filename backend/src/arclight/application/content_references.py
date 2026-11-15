@@ -57,6 +57,7 @@ def validate_storyboard_assets(
         for prop in shot.props:
             require_asset(db, project_id, prop, {"PROP"})
         require_asset(db, project_id, shot.selected_visual_asset, {"IMAGE", "SHOT_IMAGE"})
+        record = None
         if shot.selected_visual_asset is not None:
             from arclight.application.generation_candidates import require_candidate_review
 
@@ -68,6 +69,12 @@ def validate_storyboard_assets(
 
                 validate_selected_shot(db, record, shot, episode_id)
         if shot.quality_review is not None:
+            if record is not None:
+                if shot.quality_review.review_id != str(record.review.result_id):
+                    raise DomainError(
+                        "INVALID_QUALITY_REFERENCE", "质检引用必须匹配素材当前的精确审查记录", 422
+                    )
+                continue
             review = db.scalar(
                 select(Review)
                 .join(WorkflowRun, Review.run_id == WorkflowRun.id)
