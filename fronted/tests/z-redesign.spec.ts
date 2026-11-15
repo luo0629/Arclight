@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { controlledStreams, frame } from "./event-stream-helpers";
 
 async function setup(page: Page, withHistory = false) {
   const response = await page.request.post("/api/v1/auth/register", {
@@ -128,15 +129,64 @@ async function noOverflow(page: Page) {
 
 test("新版：画布为核心，目录与内容面板独立开关，创作及管理有独立入口", async ({
   page,
-}) => {
+}, info) => {
+  const streams = await controlledStreams(page);
   await page.setViewportSize({ width: 1440, height: 1000 });
-  await setup(page);
+  const env = await setup(page);
+  await streams.count(1);
+  const connection = page.getByLabel("实时更新连接", { exact: true });
+  const refreshStages = page
+    .getByRole("region", { name: "剧集生产阶段", exact: true })
+    .getByRole("button", { name: "刷新阶段状态", exact: true });
+  await expect(refreshStages).toBeEnabled();
+  async function ready(index: number) {
+    const read = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+          `/api/v1/episodes/${env.episode.id}/production-state` &&
+        response.request().method() === "GET",
+    );
+    await streams.push(index, [frame(env.project.id)]);
+    await expect(connection.getByRole("status")).toHaveText("实时更新已连接");
+    const response = await read;
+    expect(response.status()).toBe(200);
+    await response.finished();
+    await expect(refreshStages).toBeEnabled();
+  }
+  // Measure after the ready notification has reconciled authoritative state.
+  await ready(0);
+  await expect(page.locator(".paper-node.script").first()).toBeVisible();
   await expect(page.locator(".canvas-wrap")).toBeVisible();
   await expect(page.getByLabel("内容与属性", { exact: true })).toHaveCount(0);
   const before = await page.locator(".canvas-wrap").boundingBox();
   expect(before!.width).toBeGreaterThan(1100);
   expect(before!.height).toBeGreaterThan(600);
   expect(before!.y + before!.height).toBeLessThanOrEqual(1000);
+  await page.screenshot({
+    path: info.outputPath("canvas-connected-desktop.png"),
+    fullPage: true,
+  });
+
+  // Hold transport readiness explicitly; the server stream lifetime cannot
+  // decide which connection state is measured or captured.
+  await streams.end(0, true);
+  await expect(connection.getByRole("status")).toContainText("正在自动重连");
+  await expect(
+    connection.getByRole("button", { name: "重新连接", exact: true }),
+  ).toBeVisible();
+  const reconnecting = await page.locator(".canvas-wrap").boundingBox();
+  expect(reconnecting!.width).toBeGreaterThan(1100);
+  expect(reconnecting!.height).toBeGreaterThan(600);
+  expect(reconnecting!.y + reconnecting!.height).toBeLessThanOrEqual(1000);
+  expect(reconnecting).toEqual(before);
+  await page.screenshot({
+    path: info.outputPath("canvas-reconnecting-desktop.png"),
+    fullPage: true,
+  });
+
+  await streams.count(2);
+  await ready(1);
+  expect(await page.locator(".canvas-wrap").boundingBox()).toEqual(before);
   await expect(page.getByLabel("剧集列表", { exact: true })).not.toBeVisible();
   await page.getByRole("button", { name: "展开目录", exact: true }).click();
   await expect(page.getByLabel("剧集列表", { exact: true })).toBeVisible();
@@ -162,6 +212,11 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
   await expect(page.locator(".canvas-wrap")).toHaveCount(0);
   await page.getByRole("button", { name: "故事创作", exact: true }).click();
   await expect(page.locator(".canvas-wrap")).toBeVisible();
+  await noOverflow(page);
+  await page.setViewportSize({ width: 900, height: 1000 });
+  await expect(
+    page.getByText("让灵感慢慢生长", { exact: true }),
+  ).not.toBeVisible();
   await noOverflow(page);
 });
 

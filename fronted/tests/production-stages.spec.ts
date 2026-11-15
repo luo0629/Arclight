@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { closeDirectory, openDirectory } from "./workspace-helpers";
 import { deferred } from "./media-tasks-helpers";
+import { controlledStreams, frame } from "./event-stream-helpers";
 import type { ProductionState } from "../src/features/episodes/production-stages";
 import type { Episode } from "../src/types/api";
 
@@ -356,7 +357,10 @@ test("UI-09：实际时间轴装配数、来源与失效提示，不假称音频
 });
 
 test("UI-09：声音查询失败独立重试，空时间轴保持待核对", async ({ page }) => {
+  const streams = await controlledStreams(page);
   const env = await fixture(page);
+  await page.clock.install();
+  // Keep every timeline read failing until the explicit manual-retry step.
   let fail = true;
   await page.route(`**/episodes/${env.episodes[0].id}/timelines?*`, (route) =>
     route.fulfill(
@@ -366,6 +370,29 @@ test("UI-09：声音查询失败独立重试，空时间轴保持待核对", asy
     ),
   );
   await env.open();
+  await streams.count(1);
+  await page.clock.pauseAt(new Date());
+
+  // Finish ready reconciliation before opening audio. Keep periodic refresh
+  // paused so it cannot remount the failed audio query before manual retry.
+  const readyRead = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname ===
+        `/api/v1/episodes/${env.episodes[0].id}/production-state` &&
+      response.request().method() === "GET",
+  );
+  await streams.push(0, [frame(env.project.id)]);
+  await expect(page.getByLabel("实时更新连接", { exact: true })).toContainText(
+    "已连接",
+  );
+  await page.clock.runFor(150);
+  const response = await readyRead;
+  expect(response.status()).toBe(200);
+  await response.finished();
+  await expect(
+    env.panel.getByRole("button", { name: "刷新阶段状态", exact: true }),
+  ).toBeEnabled();
+
   await env.select(4);
   await expect(env.panel.getByRole("alert")).toContainText("不能判断完成情况");
   await expect(env.panel).not.toContainText(secret);

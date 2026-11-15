@@ -469,10 +469,13 @@ export default function ProjectWorkspace({
                     </div>
                   )}
                 </div>
-                <span className="hidden items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs text-accent-foreground md:flex">
-                  <Leaf className="size-3.5" />
-                  让灵感慢慢生长
-                </span>
+                <div className="flex min-w-0 flex-wrap items-center gap-3">
+                  <ProjectStreamStatus />
+                  <span className="hidden items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs text-accent-foreground min-[901px]:flex">
+                    <Leaf className="size-3.5" />
+                    让灵感慢慢生长
+                  </span>
+                </div>
               </div>
               {error && (
                 <Notice
@@ -492,7 +495,6 @@ export default function ProjectWorkspace({
                   </Button>
                 </Notice>
               )}
-              <ProjectStreamStatus />
               {children}
             </main>
           </div>

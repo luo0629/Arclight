@@ -233,7 +233,7 @@ export function ProjectStreamStatus() {
   return (
     <div
       aria-label="实时更新连接"
-      className="mb-4 flex flex-wrap items-center gap-2 text-xs text-muted-foreground"
+      className="flex min-w-0 max-w-full flex-wrap items-center gap-2 text-xs text-muted-foreground"
     >
       <span role="status">
         {context.status === "connected"
