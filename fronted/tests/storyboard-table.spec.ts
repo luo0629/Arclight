@@ -228,6 +228,8 @@ test("UI-02：列表打开真实表格，多选批改和单行编辑另存精确
   await expect(table.getByRole("row")).toHaveCount(4);
   await expect(table).toContainText("女孩站在桥边回望灯火");
   await expect(page.getByRole("checkbox")).toHaveCount(0);
+  await table.scrollIntoViewIfNeeded();
+  await expect(table).toBeInViewport();
   await page.screenshot({ path: "test-results/ui02-desktop.png" });
 });
 
