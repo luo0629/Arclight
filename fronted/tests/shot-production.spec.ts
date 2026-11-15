@@ -209,6 +209,7 @@ test("UI-03：服务端已接受但响应丢失，刷新后重放原请求不重
   const env = await shotProductionFixture(page);
   const keys: string[] = [];
   let lost = false;
+  let lossInjected = false;
   await page.route("**" + env.generationPath, async (route) => {
     if (route.request().method() !== "POST") return route.continue();
     keys.push(route.request().headers()["idempotency-key"]);
@@ -217,6 +218,7 @@ test("UI-03：服务端已接受但响应丢失，刷新后重放原请求不重
       const response = await route.fetch();
       expect(response.status()).toBe(201);
       await route.abort("connectionreset");
+      lossInjected = true;
       return;
     }
     await route.continue();
@@ -236,6 +238,10 @@ test("UI-03：服务端已接受但响应丢失，刷新后重放原请求不重
       .getByRole("region", { name: "批量提交预览与结果" })
       .getByRole("status"),
   ).toContainText("待确认 1 项");
+  await expect.poll(() => lossInjected).toBe(true);
+  await expect(
+    dialog.getByRole("button", { name: "继续未完成提交", exact: true }),
+  ).toBeEnabled();
   const first = await env.jobs();
   expect(first).toHaveLength(1);
   dialog = await env.open();
