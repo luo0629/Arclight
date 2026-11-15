@@ -143,7 +143,11 @@ async function setup(page: Page) {
     await page.goto(`/projects/${project.id}/episodes/${episode.id}`);
     await openWorkspacePanels(page);
     await page.getByRole("radio", { name: "版本列表", exact: true }).click();
-    await page.locator(".version-row").filter({ hasText: "分镜 v1" }).click();
+    const versionRow = page
+      .locator(".version-row")
+      .filter({ hasText: board.id });
+    await expect(versionRow).toHaveCount(1);
+    await versionRow.click();
     await expect(page.locator(".inspector .section-heading h3")).toHaveText(
       "分镜 v1",
     );
