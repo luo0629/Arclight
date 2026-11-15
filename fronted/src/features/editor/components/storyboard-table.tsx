@@ -157,6 +157,7 @@ export default function StoryboardTable({
               批量修改字段
               <NativeSelect
                 id={`${id}-field`}
+                aria-label="批量修改字段"
                 value={field}
                 onChange={(event) => {
                   const next = event.target.value as BulkField;
@@ -175,6 +176,7 @@ export default function StoryboardTable({
               {options ? (
                 <NativeSelect
                   id={`${id}-value`}
+                  aria-label="批量修改值"
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
                 >
@@ -183,6 +185,7 @@ export default function StoryboardTable({
               ) : field === "duration_ms" ? (
                 <Input
                   id={`${id}-value`}
+                  aria-label="批量修改值"
                   type="number"
                   min="0.5"
                   max="30"
@@ -194,6 +197,7 @@ export default function StoryboardTable({
               ) : (
                 <Textarea
                   id={`${id}-value`}
+                  aria-label="批量修改值"
                   value={value}
                   maxLength={field === "visual_description" ? 3000 : 2000}
                   aria-invalid={invalid}

@@ -239,9 +239,40 @@ test("UI-02：拖放重排保留精确引用和选择，键盘上移下移连续
   const env = await setup(page);
   await env.open();
   await page.getByLabel("选择镜头 1", { exact: true }).check();
-  await page
-    .getByRole("button", { name: "拖动镜头 1", exact: true })
-    .dragTo(page.locator('[data-shot-number="3"]'));
+  const table = page.getByRole("table", { name: "分镜镜头表" });
+  await table.evaluate((element) => {
+    element.addEventListener(
+      "dragstart",
+      (event) => {
+        element.dataset.nativeDragStart = String(event.isTrusted);
+      },
+      { once: true },
+    );
+    element.addEventListener(
+      "drop",
+      (event) => {
+        element.dataset.nativeDrop = String(event.isTrusted);
+      },
+      { once: true },
+    );
+  });
+  const handle = page.getByRole("button", { name: "拖动镜头 1", exact: true });
+  await handle.hover();
+  const box = await handle.boundingBox();
+  expect(box).not.toBeNull();
+  await page.mouse.down();
+  // Begin the native gesture while its source is visible, before the target scrolls.
+  await page.mouse.move(
+    box!.x + box!.width / 2 + 12,
+    box!.y + box!.height / 2 + 12,
+    { steps: 5 },
+  );
+  const destination = page.locator('[data-shot-number="3"]');
+  await destination.hover();
+  await destination.hover();
+  await page.mouse.up();
+  await expect(table).toHaveAttribute("data-native-drag-start", "true");
+  await expect(table).toHaveAttribute("data-native-drop", "true");
   await expect(page.getByLabel("镜头 1 画面描述", { exact: true })).toHaveValue(
     "在桥边回头",
   );
