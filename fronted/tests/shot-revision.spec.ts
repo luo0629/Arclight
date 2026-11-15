@@ -137,7 +137,11 @@ test("UI-04：丢失提交响应后刷新并用原幂等键和冻结请求恢复
   await dialog
     .getByRole("button", { name: "确认原修订提交结果", exact: true })
     .click();
-  await expect(dialog.getByRole("status")).toContainText("已受理修订任务");
+  await expect(
+    dialog
+      .getByRole("region", { name: "单镜头修订预览与结果", exact: true })
+      .getByRole("status"),
+  ).toContainText("已受理修订任务");
   expect(env.requests).toHaveLength(2);
   expect(env.requests[1]).toEqual(env.requests[0]);
   expect(env.receipts.size).toBe(1);
@@ -160,7 +164,11 @@ test("UI-04：受理后刷新失败保留回执，再次打开不会自动提交
   await dialog
     .getByRole("button", { name: "确认生成修订候选", exact: true })
     .click();
-  await expect(dialog.getByRole("status")).toContainText("已受理修订任务");
+  await expect(
+    dialog
+      .getByRole("region", { name: "单镜头修订预览与结果", exact: true })
+      .getByRole("status"),
+  ).toContainText("已受理修订任务");
   await dialog
     .getByRole("button", { name: "关闭局部修订", exact: true })
     .click();
@@ -174,7 +182,11 @@ test("UI-04：受理后刷新失败保留回执，再次打开不会自动提交
     route.fulfill({ json: env.model }),
   );
   dialog = await env.open();
-  await expect(dialog.getByRole("status")).toContainText("已受理修订任务");
+  await expect(
+    dialog
+      .getByRole("region", { name: "单镜头修订预览与结果", exact: true })
+      .getByRole("status"),
+  ).toContainText("已受理修订任务");
   expect(env.requests).toHaveLength(1);
   await dialog
     .getByRole("button", { name: "重新填写修订要求", exact: true })
@@ -259,6 +271,11 @@ test("UI-04：关闭上层工作区后迟到的预览不提交且不污染重开
   await started;
   // Navigating away closes both dialogs while a real async request remains in flight.
   await page.goto(`/projects/${env.project.id}`);
+  // Finish the intermediate refresh before another full navigation can abort its rotated cookie.
+  await expect(
+    page.getByRole("button", { name: "账号菜单", exact: true }),
+  ).toBeVisible();
+  await expect(dialog).toHaveCount(0);
   release();
   await ended;
   const reopened = await env.open();
@@ -307,6 +324,26 @@ test("UI-04：手机键盘填写与预算确认，原图可见且对话框无横
   await page.setViewportSize({ width: 390, height: 844 });
   const env = await shotRevisionFixture(page);
   const dialog = await env.open();
+  const sourceImage = dialog.getByRole("img", {
+    name: "修订来源镜头 1 原图",
+    exact: true,
+  });
+  await expect(sourceImage).toHaveJSProperty("complete", true);
+  await expect
+    .poll(() =>
+      sourceImage.evaluate(
+        (element) => (element as HTMLImageElement).naturalWidth,
+      ),
+    )
+    .toBeGreaterThan(0);
+  await dialog
+    .getByRole("heading", { name: "单镜头局部修订", exact: true })
+    .scrollIntoViewIfNeeded();
+  await expect(sourceImage).toBeInViewport();
+  await page.screenshot({
+    path: info.outputPath("ui04-mobile-source.png"),
+    fullPage: true,
+  });
   const operation = dialog.getByLabel("手部修复", { exact: true });
   await operation.focus();
   await page.keyboard.press("Space");
