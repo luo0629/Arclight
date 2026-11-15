@@ -386,7 +386,6 @@ test("UI-02：并发另存冲突保留表格草稿和全部旧版本", async ({ 
   await page.getByRole("button", { name: "应用到 3 个镜头" }).click();
   await page.route("**" + env.prefix + "/storyboards", async (route) => {
     if (route.request().method() !== "POST") return route.continue();
-    await page.unroute("**" + env.prefix + "/storyboards");
     const concurrent = await page.request.post(env.prefix + "/storyboards", {
       headers: env.headers,
       data: {
@@ -396,10 +395,12 @@ test("UI-02：并发另存冲突保留表格草稿和全部旧版本", async ({ 
         content: env.board.content_json,
       },
     });
-    expect(concurrent.status()).toBe(201);
+    expect(concurrent.status(), await concurrent.text()).toBe(201);
     const response = await route.fetch();
-    expect(response.status()).toBe(409);
+    expect(response.status(), await response.text()).toBe(409);
+    expect((await response.json()).error.code).toBe("VERSION_CONFLICT");
     await route.fulfill({ response });
+    await page.unroute("**" + env.prefix + "/storyboards");
   });
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click();
   await expect(page.getByLabel("镜头 1 景别", { exact: true })).toHaveValue(
