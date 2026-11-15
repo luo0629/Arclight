@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Run } from "../src/types/api";
-import { controlledStreams, frame } from "./event-stream-helpers";
+import { controlledStreams, frame, pauseClock } from "./event-stream-helpers";
 import { deferred, mediaFixture } from "./media-tasks-helpers";
 import {
   chooseProject,
@@ -61,7 +61,7 @@ test("UI-06：100 条不同项目回放通知合并刷新，ready 重读和去�
     "aria-busy",
     "false",
   );
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   const refreshes = await holdProjectRefreshes(page);
   try {
     await streams.push(0, [frame(env.project.id)]);
@@ -104,7 +104,7 @@ test("UI-06：目录慢刷新期间的 100 条不同通知最多保留一次尾�
     "aria-busy",
     "false",
   );
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   const refreshes = await holdProjectRefreshes(page);
   try {
     await streams.push(0, [frame(env.project.id)]);
@@ -160,7 +160,7 @@ test("UI-06：切项目后旧慢刷新完成不再启动尾随，目标项目仍
     "aria-busy",
     "false",
   );
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   const refreshes = await holdProjectRefreshes(page);
   try {
     await streams.push(0, [frame(env.project.id)]);
@@ -208,7 +208,7 @@ test("UI-06：退出后旧慢刷新和待合并项目通知不再启动请求", 
     "aria-busy",
     "false",
   );
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   const refreshes = await holdProjectRefreshes(page);
   try {
     await streams.push(0, [frame(env.project.id)]);
@@ -364,7 +364,7 @@ test("UI-06：连续断线按退避重连，中止后不残留重连计时器", 
     "已连接",
   );
   await page.clock.install();
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
   await streams.end(0, true);
   await expect(page.getByLabel("实时更新连接", { exact: true })).toContainText(
     "自动重连",

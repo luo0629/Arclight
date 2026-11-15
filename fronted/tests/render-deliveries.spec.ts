@@ -585,6 +585,8 @@ test("RENDER-12：归档剧集保持成片只读，禁止创建与提交", async
     panel.getByRole("button", { name: "下载 MP4", exact: true }),
   ).toBeEnabled();
   expect(env.mutations).toHaveLength(0);
+  // Finish stream.ready episode reads before this page is torn down.
+  await page.unrouteAll({ behavior: "wait" });
 });
 
 test("RENDER-12：撤权后的刷新清除旧成片和报告，并显示 request ID", async ({

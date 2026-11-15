@@ -1,5 +1,14 @@
 import { expect, type Page } from "@playwright/test";
 
+export async function pauseClock(page: Page) {
+  // Freeze wall time before pausing so the target cannot fall behind the browser.
+  // Restore advancing dates without firing polling or reconnect timers.
+  const pausedAt = await page.evaluate(() => Date.now());
+  await page.clock.setFixedTime(pausedAt);
+  await page.clock.pauseAt(pausedAt);
+  await page.clock.setSystemTime(pausedAt);
+}
+
 export async function controlledStreams(page: Page, statuses: number[] = []) {
   // Only transport is controlled. Real auth, project navigation, query APIs and
   // the production React application remain in use. Never record Bearer values.

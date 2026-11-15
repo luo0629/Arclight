@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { chooseProject, closeDirectory } from "./workspace-helpers";
-import { controlledStreams, frame } from "./event-stream-helpers";
+import { controlledStreams, frame, pauseClock } from "./event-stream-helpers";
 
 async function setup(page: Page, count = 1) {
   const registered = await page.request.post("/api/v1/auth/register", {
@@ -188,7 +188,7 @@ test("shows loading and retry, preserves stale data on refresh failure, and reco
   ).toContainText("总览暂不可用");
   await expect(surface(page)).toHaveAttribute("aria-busy", "false");
   await streams.count(1);
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
 
   // Finish the ready reconciliation while reads still fail, then exercise
   // manual retry without an automatic refresh removing its error button.

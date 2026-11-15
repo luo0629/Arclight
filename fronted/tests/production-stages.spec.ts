@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { closeDirectory, openDirectory } from "./workspace-helpers";
 import { deferred } from "./media-tasks-helpers";
-import { controlledStreams, frame } from "./event-stream-helpers";
+import { controlledStreams, frame, pauseClock } from "./event-stream-helpers";
 import type { ProductionState } from "../src/features/episodes/production-stages";
 import type { Episode } from "../src/types/api";
 
@@ -371,7 +371,7 @@ test("UI-09：声音查询失败独立重试，空时间轴保持待核对", asy
   );
   await env.open();
   await streams.count(1);
-  await page.clock.pauseAt(new Date());
+  await pauseClock(page);
 
   // Finish ready reconciliation before opening audio. Keep periodic refresh
   // paused so it cannot remount the failed audio query before manual retry.
