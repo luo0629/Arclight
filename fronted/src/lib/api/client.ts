@@ -91,6 +91,27 @@ export async function apiBlob(
   if (!response.ok) return parse<never>(response);
   return response.blob();
 }
+export async function apiEventStream(
+  path: string,
+  lastEventId: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const response = await request(path, {
+    signal,
+    cache: "no-store",
+    headers: {
+      Accept: "text/event-stream",
+      ...(lastEventId ? { "Last-Event-ID": lastEventId } : {}),
+    },
+  });
+  if (!response.ok) return parse<never>(response);
+  if (!response.headers.get("content-type")?.includes("text/event-stream")) {
+    await response.body?.cancel();
+    throw new Error("实时更新响应无效，请重新连接。");
+  }
+  return response;
+}
+
 export const json = (method: string, body?: unknown): RequestInit => ({
   method,
   ...(body === undefined ? {} : { body: JSON.stringify(body) }),

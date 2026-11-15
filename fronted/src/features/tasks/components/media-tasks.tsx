@@ -12,6 +12,7 @@ import {
   PagePanel,
 } from "@/components/ui-kit";
 import useMediaTasks from "../hooks/use-media-tasks";
+import { useProjectEvents } from "@/features/projects/project-events";
 import { MEDIA_PAGE_SIZE } from "../media-types";
 import type { MediaJob, MediaQueue } from "../media-types";
 import MediaTaskDetail, {
@@ -132,6 +133,7 @@ export default function MediaTasks({
     writable,
     owner,
   });
+  useProjectEvents(state.refresh);
   const requestedJob = useSearchParams().get("generation_job");
   const { selectJob } = state;
   useEffect(() => {

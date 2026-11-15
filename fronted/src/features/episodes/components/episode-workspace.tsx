@@ -42,6 +42,7 @@ import StorySources from "@/features/story/components/story-sources";
 import StoryAnalysis from "@/features/story/components/story-analysis";
 import StoryOutline from "@/features/story/components/story-outline";
 
+import { useProjectEvents } from "@/features/projects/project-events";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
 import type {
@@ -144,6 +145,11 @@ export default function EpisodeWorkspace({
       graphRequest.current?.abort();
     };
   }, [reload]);
+  useProjectEvents(() => {
+    void reload().catch((cause) => {
+      if (mounted.current) setError(message(cause));
+    });
+  });
   const active = runs.rows.some((run) =>
     ["QUEUED", "RUNNING", "WAITING_REVIEW"].includes(run.status),
   );

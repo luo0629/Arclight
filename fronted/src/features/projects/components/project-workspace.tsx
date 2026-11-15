@@ -46,6 +46,7 @@ import {
   type ProjectSection,
 } from "@/lib/routes";
 import { ProjectContext } from "@/features/projects/project-context";
+import { useProjectEvents, ProjectStreamStatus } from "../project-events";
 import { api, json, message } from "@/lib/api/client";
 import type { Episode, Project } from "@/types/api";
 
@@ -146,6 +147,9 @@ export default function ProjectWorkspace({
       live = false;
     };
   }, [reload, episodeId]);
+  useProjectEvents(() => {
+    void reload().catch((cause) => setError(message(cause)));
+  });
   const owner = role === "owner";
   const writable = role !== "viewer" && !project.archived;
   const episode =
@@ -488,6 +492,7 @@ export default function ProjectWorkspace({
                   </Button>
                 </Notice>
               )}
+              <ProjectStreamStatus />
               {children}
             </main>
           </div>

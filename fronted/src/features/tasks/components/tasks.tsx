@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isResourceId } from "@/lib/routes";
 import usePagedList from "@/hooks/use-paged-list";
+import { useProjectEvents } from "@/features/projects/project-events";
 import ListPagination from "@/components/shared/list-pagination";
 import { api, json, message } from "@/lib/api/client";
 import { runErrorMessage } from "@/lib/run-errors";
@@ -379,6 +380,9 @@ type RunEvent = {
 function EventHistory({ runId, close }: { runId: string; close: () => void }) {
   const events = usePagedList<RunEvent>("/runs/" + runId + "/events");
   const { reload } = events;
+  useProjectEvents(() => {
+    void reload().catch(() => {});
+  });
   useEffect(() => {
     void reload().catch(() => {});
   }, [reload]);

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -368,23 +369,166 @@ def execute(
     )
 
 
+def git_path(root: Path, name: str) -> Path:
+    return Path(git(root, "rev-parse", "--path-format=absolute", "--git-path", name))
+
+
+def save_summary(root: Path, folder: Path, summary: dict) -> None:
+    """Publish the latest attempt, including plans and failures, to the push guard."""
+    summary["report_hashes"] = {
+        path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in sorted(folder.iterdir())
+        if path.is_file() and path.name != "summary.json"
+    }
+    path = folder / "summary.json"
+    path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    receipt = git_path(root, "arclight-preflight.json")
+    temporary = receipt.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps({"summary": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}),
+        encoding="utf-8",
+    )
+    temporary.replace(receipt)
+
+
+def install_hook(root: Path) -> Path:
+    """Install a local hook without replacing a different existing push hook."""
+    marker = "# Arclight scoped preflight gate"
+    path = git_path(root, "hooks/pre-push")
+    if path.exists() and marker not in path.read_text(encoding="utf-8"):
+        raise ValueError("An existing pre-push hook must be integrated without overwriting it")
+    command = shlex.join(
+        [
+            Path(sys.executable).as_posix(),
+            (root / "backend/scripts/preflight.py").as_posix(),
+            "--verify-push",
+        ]
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f"#!/bin/sh\n{marker}\nexec {command}\n", encoding="utf-8", newline="\n")
+    path.chmod(path.stat().st_mode | 0o111)
+    return path
+
+
+def verify_push(root: Path, updates: str = "") -> None:
+    """Validate executed reports against the committed files and every pushed ref."""
+    refs = [line.split() for line in updates.splitlines() if line.strip()]
+    if any(len(ref) != 4 for ref in refs):
+        raise ValueError("Invalid pre-push ref input")
+    refs = [ref for ref in refs if set(ref[1]) != {"0"}]
+    if updates.strip() and not refs:
+        return  # Deleting a remote ref sends no new code.
+    head = git(root, "rev-parse", "HEAD")
+    if any(ref[1] != head for ref in refs):
+        raise ValueError("Validate and push the current HEAD; other refs need their own checkout")
+    receipt = json.loads(git_path(root, "arclight-preflight.json").read_text(encoding="utf-8"))
+    path = Path(receipt["summary"])
+    if hashlib.sha256(path.read_bytes()).hexdigest() != receipt["sha256"]:
+        raise ValueError("Preflight summary changed; rerun the checks")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("status") != "passed" or data.get("issues"):
+        raise ValueError(
+            "Preflight must be passed; planned, failed and incomplete cannot be pushed"
+        )
+    commands = data.get("commands", [])
+    if not commands or any(record.get("exit_code") != 0 for record in commands):
+        raise ValueError("Preflight has no successful command execution evidence")
+    pending = git(root, "diff", "--name-only", "-z", "HEAD", "--").split("\0")
+    pending += git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
+    if any(relevant(name) for name in pending):
+        raise ValueError("Commit the tested source and test files before pushing")
+    if fingerprints(root) != data.get("fingerprints"):
+        raise ValueError("Source changed since preflight; rerun the checks against the final files")
+    plan = make_plan(
+        root,
+        argparse.Namespace(
+            base=data["base"],
+            backend_test=data["backend_tests"],
+            web_test=data["web_tests"],
+            risk=data["risks"],
+        ),
+    )
+    if (
+        plan.issues
+        or plan.backend != tuple(data["backend_tests"])
+        or plan.web != tuple(data["web_tests"])
+    ):
+        raise ValueError(
+            "Preflight no longer covers all changed tests; regenerate and run the plan"
+        )
+    git(root, "merge-base", "--is-ancestor", plan.base, head)
+    git(root, "merge-base", "--is-ancestor", data["head"], head)
+    for ref in refs:
+        if set(ref[3]) != {"0"}:
+            try:
+                git(root, "merge-base", "--is-ancestor", plan.base, ref[3])
+            except ValueError as error:
+                raise ValueError(
+                    "Preflight base must precede the remote commit; fetch and use the task baseline"
+                ) from error
+    hashes = data.get("report_hashes", {})
+    required = []
+    if plan.backend:
+        required.append("pytest-sqlite.xml")
+        if set(plan.risks) & {"migration", "concurrency"}:
+            required.append("pytest-postgres.xml")
+    if plan.web:
+        required.append("playwright.json")
+    if not hashes or any(name not in hashes for name in required):
+        raise ValueError("Missing actual JUnit or browser execution reports")
+    for name, digest in hashes.items():
+        report = path.parent / name
+        if report.name != name or hashlib.sha256(report.read_bytes()).hexdigest() != digest:
+            raise ValueError("Execution report or command log changed; rerun the checks")
+    evidence = []
+    if plan.backend:
+        evidence.append(
+            junit_evidence(
+                [path.parent / name for name in required if name.endswith(".xml")], plan.backend
+            )
+        )
+    if plan.web:
+        evidence.append(browser_evidence(path.parent / "playwright.json", plan.web))
+    if not evidence or any(e.errors or e.missing or e.skipped or not e.passed for e in evidence):
+        raise ValueError("Execution evidence contains failures, missing cases or unresolved skips")
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
-    result.add_argument(
-        "--base", required=True, help="Commit before this change, not an empty post-push diff"
-    )
+    result.add_argument("--base", help="Commit before this change, not an empty post-push diff")
     result.add_argument("--backend-test", action="append", default=[], metavar="tests/test_file.py")
     result.add_argument("--web-test", action="append", default=[], metavar="tests/file.spec.ts")
     result.add_argument("--risk", action="append", choices=RISKS, default=[])
     result.add_argument("--output", default="backend/test-results/preflight")
-    result.add_argument(
+    mode = result.add_mutually_exclusive_group()
+    mode.add_argument(
         "--run", action="store_true", help="Execute checks, including temporary browser services"
+    )
+    mode.add_argument(
+        "--install-hook", action="store_true", help="Install the local pre-push guard"
+    )
+    mode.add_argument(
+        "--verify-push", action="store_true", help="Check fresh execution evidence only"
     )
     return result
 
 
 def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
     args = parser().parse_args(argv)
+    if args.install_hook or args.verify_push:
+        try:
+            if args.install_hook:
+                print(f"Installed pre-push guard: {install_hook(root)}")
+            else:
+                verify_push(root, "" if sys.stdin.isatty() else sys.stdin.read())
+                print("Pre-push execution evidence passed")
+            return 0
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+            print(
+                f"Push blocked: {error}. Run preflight with the task --base and --run.",
+                file=sys.stderr,
+            )
+            return 2
     folder = (root / args.output).resolve() / uuid4().hex
     folder.mkdir(parents=True, exist_ok=False)
     summary = {"status": "incomplete", "commands": [], "issues": []}
@@ -420,9 +564,11 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
         summary["issues"] = [str(error)]
     except KeyboardInterrupt:
         summary["issues"] = ["Preflight interrupted; execution evidence is incomplete"]
-    (folder / "summary.json").write_text(
-        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    try:
+        save_summary(root, folder, summary)
+    except (OSError, ValueError) as error:
+        print(f"Could not publish pre-push evidence: {error}", file=sys.stderr)
+        return 2
     print(f"Preflight {summary['status']}: {folder / 'summary.json'}")
     print("Backend:", ", ".join(summary.get("backend_tests", [])) or "none")
     print("Browser:", ", ".join(summary.get("web_tests", [])) or "none")

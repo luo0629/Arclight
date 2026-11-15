@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { chooseProject, closeDirectory } from "./workspace-helpers";
+import { controlledStreams, frame } from "./event-stream-helpers";
 
 async function setup(page: Page, count = 1) {
   const registered = await page.request.post("/api/v1/auth/register", {
@@ -169,7 +170,9 @@ test("paginates independently of the directory and opens an episode beyond its l
 test("shows loading and retry, preserves stale data on refresh failure, and recovers", async ({
   page,
 }) => {
+  const streams = await controlledStreams(page);
   const env = await setup(page);
+  await page.clock.install();
   let fail = true;
   await page.route("**/projects/*/overview?*", async (route) => {
     if (fail)
@@ -183,6 +186,29 @@ test("shows loading and retry, preserves stale data on refresh failure, and reco
   await expect(
     page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
   ).toContainText("总览暂不可用");
+  await expect(surface(page)).toHaveAttribute("aria-busy", "false");
+  await streams.count(1);
+  await page.clock.pauseAt(new Date());
+
+  // Finish the ready reconciliation while reads still fail, then exercise
+  // manual retry without an automatic refresh removing its error button.
+  const readyResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === env.url &&
+      response.request().method() === "GET",
+  );
+  await streams.push(0, [frame(env.project.id)]);
+  await expect(page.getByLabel("实时更新连接", { exact: true })).toContainText(
+    "已连接",
+  );
+  await page.clock.runFor(150);
+  const failedReadyRead = await readyResponse;
+  expect(failedReadyRead.status()).toBe(503);
+  await failedReadyRead.finished();
+  await expect(surface(page)).toHaveAttribute("aria-busy", "false");
+  await expect(
+    page.getByRole("button", { name: "重试总览", exact: true }),
+  ).toBeEnabled();
   fail = false;
   await page.getByRole("button", { name: "重试总览", exact: true }).click();
   await expect(

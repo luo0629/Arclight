@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api/client";
 import { isResourceId } from "@/lib/routes";
+import { useProjectEvents } from "../project-events";
 import { PRODUCTION_PAGE_SIZE, type ProductionPage } from "../production-types";
 
 type Resource = "tasks" | "pending-reviews" | "deliveries";
@@ -111,6 +112,7 @@ export default function useProductionList<T extends Row>({
     [scope],
   );
   const refresh = useCallback(() => setVersion((value) => value + 1), []);
+  useProjectEvents(refresh);
   const visible = result.key === key;
   return {
     items: visible ? result.items : [],

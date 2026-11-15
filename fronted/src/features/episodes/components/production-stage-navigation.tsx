@@ -5,6 +5,7 @@ import { useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
 import { api } from "@/lib/api/client";
+import { useProjectEvents } from "@/features/projects/project-events";
 import { cn } from "@/lib/utils";
 import { isResourceId, projectPath, type EpisodeView } from "@/lib/routes";
 import useEpisodeNavigation from "../hooks/use-episode-navigation";
@@ -63,6 +64,9 @@ export default function ProductionStageNavigation({
     read,
     ignore,
   );
+  useProjectEvents(() => {
+    void status.load();
+  });
   useEffect(() => {
     if (revision) void status.load();
   }, [revision, status.load]);

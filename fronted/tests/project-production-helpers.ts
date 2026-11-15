@@ -5,6 +5,7 @@ import type {
   ProductionTask,
 } from "../src/features/projects/production-types";
 import { mediaFixture } from "./media-tasks-helpers";
+import { controlledStreams } from "./event-stream-helpers";
 import { closeDirectory } from "./workspace-helpers";
 
 export const productionSecret = "UI07_PRIVATE_PROMPT_CREDENTIAL_STACK";
@@ -16,6 +17,9 @@ type Read = (route: Route, url: URL) => Promise<boolean>;
 // summaries are deterministic browser contracts; they do not prove DB ordering,
 // paid generation, rendered bytes or backend access checks.
 export async function productionFixture(page: Page) {
+  // REST mocks include a synthetic project. Keep this stream silent;
+  // real SSE, ready reconciliation and permissions are covered in event-stream.spec.
+  await controlledStreams(page);
   const media = await mediaFixture(page);
   const otherProject = {
     ...media.project,

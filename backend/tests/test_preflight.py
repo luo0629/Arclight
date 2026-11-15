@@ -430,3 +430,218 @@ def test_command_failure_prevents_green_even_if_an_old_report_passed(repo, monke
         == 1
     )
     assert summary(repo)["status"] == "failed"
+
+
+def commit(repo):
+    preflight.git(repo, "add", ".")
+    preflight.git(
+        repo,
+        "-c",
+        "user.name=Preflight",
+        "-c",
+        "user.email=preflight@example.invalid",
+        "commit",
+        "-m",
+        "guard fixture",
+    )
+    return preflight.git(repo, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def passed_preflight(repo, monkeypatch):
+    """Exercise the normal runner with controlled command output and execution reports."""
+
+    def run(command, cwd, environment, log):
+        log.write_text("controlled successful command\n", encoding="utf-8")
+        if "pytest" in command:
+            report = next(
+                arg.removeprefix("--junitxml=") for arg in command if arg.startswith("--junitxml=")
+            )
+            junit(repo, report, '<testcase classname="tests.test_existing" name="test_existing"/>')
+        if "test:e2e" in command:
+            Path(environment["PLAYWRIGHT_JSON_OUTPUT_FILE"]).write_text(
+                browser_report(repo).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+        return 0
+
+    monkeypatch.setattr(preflight, "run_command", run)
+
+    def complete(*extra, base="HEAD"):
+        assert (
+            preflight.main(
+                ["--base", base, "--backend-test", "tests/test_existing.py", "--run", *extra],
+                root=repo,
+            )
+            == 0
+        )
+        receipt = json.loads(
+            preflight.git_path(repo, "arclight-preflight.json").read_text(encoding="utf-8")
+        )
+        return Path(receipt["summary"])
+
+    return complete
+
+
+def test_push_guard_rejects_plan_and_cli_without_evidence(repo, monkeypatch, capsys):
+    import io
+
+    monkeypatch.setattr(preflight.sys, "stdin", io.StringIO(""))
+    assert preflight.main(["--verify-push"], root=repo) == 2
+    assert "Push blocked" in capsys.readouterr().err
+    assert (
+        preflight.main(["--base", "HEAD", "--backend-test", "tests/test_existing.py"], root=repo)
+        == 0
+    )
+    with pytest.raises(ValueError, match="planned"):
+        preflight.verify_push(repo)
+
+
+def test_push_guard_accepts_tested_files_after_commit(repo, passed_preflight):
+    base = preflight.git(repo, "rev-parse", "HEAD")
+    write(repo, "backend/src/example.py", "VALUE = 2\n")
+    passed_preflight()
+    head = commit(repo)
+    preflight.verify_push(repo, f"refs/heads/main {head} refs/heads/main {base}\n")
+
+
+@pytest.mark.parametrize("committed", [False, True])
+def test_push_guard_rejects_source_changes_after_execution(repo, passed_preflight, committed):
+    passed_preflight()
+    write(repo, "backend/src/example.py", "VALUE = 3\n")
+    if committed:
+        commit(repo)
+    with pytest.raises(ValueError, match="Source changed|Commit the tested"):
+        preflight.verify_push(repo)
+
+
+def test_push_guard_does_not_fall_back_after_a_later_plan_or_failure(
+    repo, passed_preflight, monkeypatch
+):
+    passed_preflight()
+    preflight.main(["--base", "HEAD", "--backend-test", "tests/test_existing.py"], root=repo)
+    with pytest.raises(ValueError, match="planned"):
+        preflight.verify_push(repo)
+    passed_preflight()
+    monkeypatch.setattr(preflight, "run_command", lambda *a: 1)
+    assert (
+        preflight.main(
+            ["--base", "HEAD", "--backend-test", "tests/test_existing.py", "--run"], root=repo
+        )
+        == 1
+    )
+    with pytest.raises(ValueError, match="failed"):
+        preflight.verify_push(repo)
+
+
+@pytest.mark.parametrize("filename", ["pytest-sqlite.xml", "command-1.log", "summary.json"])
+def test_push_guard_rejects_modified_execution_evidence(repo, passed_preflight, filename):
+    path = passed_preflight().parent / filename
+    path.write_text("modified", encoding="utf-8")
+    with pytest.raises(ValueError, match="changed"):
+        preflight.verify_push(repo)
+
+
+def test_push_guard_requires_postgres_report_for_concurrency(repo, passed_preflight, monkeypatch):
+    monkeypatch.setenv(
+        "ARCLIGHT_TEST_DATABASE_URL", "postgresql+psycopg://test:test@localhost/arclight_test"
+    )
+    path = passed_preflight("--risk", "concurrency")
+    (path.parent / "pytest-postgres.xml").unlink()
+    with pytest.raises(OSError):
+        preflight.verify_push(repo)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "",
+        (
+            '<testcase classname="tests.test_existing" name="test_existing">'
+            '<skipped message="missing S3"/></testcase>'
+        ),
+        (
+            '<testcase classname="tests.test_existing" name="test_existing">'
+            "<failure>regression</failure></testcase>"
+        ),
+        '<testcase classname="tests.test_other" name="test_other"/>',
+    ],
+)
+def test_push_guard_rechecks_actual_cases_instead_of_trusting_summary(repo, passed_preflight, body):
+    path = passed_preflight()
+    junit(repo, str(path.parent / "pytest-sqlite.xml"), body)
+    preflight.save_summary(repo, path.parent, json.loads(path.read_text(encoding="utf-8")))
+    with pytest.raises(ValueError, match="failures, missing cases or unresolved skips"):
+        preflight.verify_push(repo)
+
+
+def test_push_guard_rechecks_browser_results_and_report_presence(repo, passed_preflight):
+    path = passed_preflight("--web-test", "tests/existing.spec.ts")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    browser = path.parent / "playwright.json"
+    browser.write_text('{"suites": []}', encoding="utf-8")
+    preflight.save_summary(repo, path.parent, data)
+    with pytest.raises(ValueError, match="failures, missing cases or unresolved skips"):
+        preflight.verify_push(repo)
+    browser.unlink()
+    preflight.save_summary(repo, path.parent, data)
+    with pytest.raises(ValueError, match="Missing actual"):
+        preflight.verify_push(repo)
+
+
+def test_push_guard_rejects_using_current_commit_as_a_post_push_baseline(repo, passed_preflight):
+    remote = preflight.git(repo, "rev-parse", "HEAD")
+    write(repo, "backend/src/example.py", "VALUE = 2\n")
+    head = commit(repo)
+    passed_preflight(base=head)
+    with pytest.raises(ValueError, match="base must precede the remote"):
+        preflight.verify_push(repo, f"refs/heads/main {head} refs/heads/main {remote}\n")
+
+
+def test_push_guard_checks_every_ref_and_allows_deletion_without_new_code(repo):
+    zero = "0" * 40
+    head = preflight.git(repo, "rev-parse", "HEAD")
+    preflight.verify_push(repo, f"(delete) {zero} refs/heads/old {head}\n")
+    with pytest.raises(ValueError, match="other refs"):
+        preflight.verify_push(repo, f"refs/heads/other {'1' * 40} refs/heads/other {zero}\n")
+    with pytest.raises(ValueError, match="Invalid pre-push"):
+        preflight.verify_push(repo, "malformed input\n")
+
+
+def test_hook_installation_is_idempotent_and_preserves_existing_hooks(repo):
+    path = preflight.install_hook(repo)
+    original = path.read_bytes()
+    assert preflight.install_hook(repo) == path
+    assert path.read_bytes() == original
+    path.write_text("#!/bin/sh\nexit 17\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="without overwriting"):
+        preflight.install_hook(repo)
+    assert path.read_text(encoding="utf-8") == "#!/bin/sh\nexit 17\n"
+
+
+def test_real_git_push_blocks_plan_then_accepts_matching_executed_reports(repo, passed_preflight):
+    write(
+        repo, "backend/scripts/preflight.py", Path(preflight.__file__).read_text(encoding="utf-8")
+    )
+    base = commit(repo)
+    remote = repo.parent / (repo.name + "-remote.git")
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    preflight.git(repo, "remote", "add", "guard-test", str(remote))
+    preflight.git(repo, "push", "guard-test", "HEAD:refs/heads/main")
+    write(repo, "backend/src/example.py", "VALUE = 2\n")
+    head = commit(repo)
+    preflight.main(["--base", base, "--backend-test", "tests/test_existing.py"], root=repo)
+    preflight.install_hook(repo)
+    blocked = subprocess.run(
+        ["git", "push", "guard-test", "HEAD:refs/heads/main"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert blocked.returncode != 0
+    assert "planned" in blocked.stderr
+    assert preflight.git(repo, "ls-remote", "guard-test", "refs/heads/main").split()[0] == base
+    passed_preflight(base=base)
+    preflight.git(repo, "push", "guard-test", "HEAD:refs/heads/main")
+    assert preflight.git(repo, "ls-remote", "guard-test", "refs/heads/main").split()[0] == head

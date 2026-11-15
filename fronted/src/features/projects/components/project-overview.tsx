@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useProjectEvents } from "../project-events";
 import Link from "next/link";
 import { projectPath } from "@/lib/routes";
 import { RefreshCw } from "lucide-react";
@@ -97,6 +98,7 @@ export default function ProjectOverview({
   const [opening, setOpening] = useState("");
   const [showCosts, setShowCosts] = useState(false);
   const refresh = useRef<() => void>(() => {});
+  useProjectEvents(() => refresh.current());
   const navigation = useRef<AbortController | null>(null);
   const limit = 20;
   useEffect(() => {

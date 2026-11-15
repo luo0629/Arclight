@@ -28,6 +28,7 @@ from arclight.api.continuity_workflow import router as continuity_workflow_route
 from arclight.api.costs import router as costs_router
 from arclight.api.dependencies_graph import router as dependencies_router
 from arclight.api.director import router as director_router
+from arclight.api.event_streams import router as event_streams_router
 from arclight.api.file_transfers import router as file_transfers_router
 from arclight.api.files import router as files_router
 from arclight.api.generation import router as generation_router
@@ -165,6 +166,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(model_services_router)
     app.include_router(model_gateway_router)
     app.include_router(auth_router)
+    app.include_router(event_streams_router)
     app.include_router(assets_router)
     app.include_router(art_proposals_router)
     app.include_router(art_direction_router)
