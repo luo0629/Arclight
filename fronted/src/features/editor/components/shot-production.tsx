@@ -19,6 +19,7 @@ import VersionImage from "@/features/assets/components/version-image";
 import ContinuityComparisonButton from "@/features/continuity/components/continuity-comparison";
 import { api, message } from "@/lib/api/client";
 import useShotProduction from "../hooks/use-shot-production";
+import ShotRevisionButton from "./shot-revision";
 import {
   batchActions,
   budgetTotal,
@@ -306,6 +307,17 @@ function ProductionBody({
                               assetId={candidate.asset_id}
                               versionId={candidate.version_id}
                               onChanged={refresh}
+                            />
+                            <ShotRevisionButton
+                              projectId={projectId}
+                              episodeId={episodeId}
+                              storyboardId={storyboardId}
+                              shotId={shot.id}
+                              shotNo={shot.shot_no}
+                              candidate={candidate}
+                              disabled={disabled || !data.writable}
+                              onChanged={refresh}
+                              onUnavailable={unavailable}
                             />
                           </>
                         )}

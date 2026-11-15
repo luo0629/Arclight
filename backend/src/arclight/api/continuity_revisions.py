@@ -9,9 +9,16 @@ from arclight.api.dependencies import Actor, Database
 from arclight.application.commands import require_project
 from arclight.application.continuity_feedback_store import feedback_history
 from arclight.application.continuity_revision_store import revision_record
-from arclight.application.continuity_revisions import request_revision
+from arclight.application.continuity_revisions import request_revision, request_shot_revision
+from arclight.application.shot_revision_sources import prepare_shot_revision
 from arclight.domain.continuity_feedback import FeedbackRecord
 from arclight.domain.continuity_revisions import RevisionRecord, RevisionRequest
+from arclight.domain.shot_revisions import (
+    ShotRevisionCommand,
+    ShotRevisionIntent,
+    ShotRevisionPreview,
+    ShotRevisionReceipt,
+)
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/continuity-revisions", tags=["continuity"])
 
@@ -28,6 +35,38 @@ def create_revision(
 ) -> RevisionRecord:
     record, created = request_revision(
         db, request.app.state.settings, project_id, actor, idempotency_key, payload
+    )
+    response.status_code = 201 if created else 200
+    return record
+
+
+@router.post("/shots/preview")
+def preview_shot_revision(
+    project_id: UUID,
+    payload: ShotRevisionIntent,
+    db: Database,
+    actor: Actor,
+) -> ShotRevisionPreview:
+    return prepare_shot_revision(db, project_id, actor, payload).preview
+
+
+@router.post("/shots", status_code=201)
+def create_shot_revision(
+    project_id: UUID,
+    payload: ShotRevisionCommand,
+    request: Request,
+    response: Response,
+    db: Database,
+    actor: Actor,
+    idempotency_key: Annotated[str, Header(min_length=1, max_length=160, pattern=r"^[!-~]+$")],
+) -> ShotRevisionReceipt:
+    record, created = request_shot_revision(
+        db,
+        request.app.state.settings,
+        project_id,
+        actor,
+        idempotency_key,
+        payload,
     )
     response.status_code = 201 if created else 200
     return record

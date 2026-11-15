@@ -52,8 +52,9 @@ def replay_job(
     if source.project_id != project_id:
         raise DomainError("NOT_FOUND", "Generation job does not exist", 404)
     from arclight.application.continuity_revision_store import job_revision
+    from arclight.application.shot_revision_sources import human_revision_origin
 
-    if job_revision(db, source) is not None:
+    if job_revision(db, source) is not None or human_revision_origin(db, source) is not None:
         raise DomainError(
             "REVISION_REPLAY_UNSAFE",
             "审查修订不能通过死信重放重置次数；请处理原任务或重新审查",

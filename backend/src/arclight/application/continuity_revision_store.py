@@ -74,6 +74,9 @@ def candidate_revision(db: Session, project_id: UUID, candidate_id: UUID) -> Ver
 
 
 def require_revision_execution(db: Session, job: GenerationJob) -> None:
+    from arclight.application.shot_revision_sources import require_human_revision_execution
+
+    require_human_revision_execution(db, job)
     record = job_revision(db, job)
     if record is None:
         return
@@ -98,6 +101,15 @@ def require_revision_execution(db: Session, job: GenerationJob) -> None:
 
 
 def require_revision_target(db: Session, job: GenerationJob, target: ReviewTarget) -> None:
+    from arclight.application.shot_revision_sources import human_revision_origin
+
+    human = human_revision_origin(db, job)
+    if human is not None and (
+        target.asset_id != human.source.asset_id
+        or target.storyboard_id != human.source.storyboard_id
+        or target.shot_id != human.source.shot_id
+    ):
+        raise DomainError("REVISION_TARGET_CHANGED", "修订新图只能审查原精确镜头与分镜", 409)
     record = job_revision(db, job)
     if record is not None and (
         target.asset_id != record.target.asset_id

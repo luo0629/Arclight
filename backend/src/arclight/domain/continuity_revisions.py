@@ -95,7 +95,28 @@ class RevisionRecord(RevisionOrigin):
 def amend_prompt(
     original: GenerationSpec, composition: dict, request: RevisionRequest
 ) -> tuple[GenerationSpec, dict]:
-    """Append corrections to allowed blocks, retaining every original constraint and source."""
+    """Keep the existing Reviewer command and provenance contract unchanged."""
+    # This command has its own authoritative review origin. Preserve human prompt
+    # sources, while leaving the previous active command in its original manifest.
+    qa_composition = deepcopy(composition)
+    qa_composition.pop("human_shot_revision", None)
+    return append_prompt_amendments(
+        original,
+        qa_composition,
+        request.amendments,
+        {
+            "source_key": f"continuity_review:{request.review_id}",
+            "source_type": "CONTINUITY_REVIEW",
+            "review_id": str(request.review_id),
+            "issue_ids": [str(identity) for identity in request.issue_ids],
+        },
+    )
+
+
+def append_prompt_amendments(
+    original: GenerationSpec, composition: dict, amendments: list[PromptAmendment], source: dict
+) -> tuple[GenerationSpec, dict]:
+    """Append bounded changes while preserving every protected block and precise source."""
     value = deepcopy(composition)
     if (
         value.get("prompt_sha256") != digest(original.prompt)
@@ -103,8 +124,8 @@ def amend_prompt(
         or [block["key"] for block in value.get("blocks", [])] != list(PROMPT_BLOCK_ORDER)
     ):
         raise DomainError("REVISION_SOURCE_INVALID", "原提示词与组合清单不一致", 409)
-    source_key = f"continuity_review:{request.review_id}"
-    for amendment in request.amendments:
+    source_key = source["source_key"]
+    for amendment in amendments:
         block = next(block for block in value["blocks"] if block["key"] == amendment.block)
         block["content"] = "\n".join(
             part
@@ -120,7 +141,6 @@ def amend_prompt(
     negative = next(
         block["content"] for block in value["blocks"] if block["key"] == "negative_constraints"
     )
-    # Replace one problematic candidate, even when its source task generated a batch.
     spec = GenerationSpec.model_validate(
         original.model_dump(mode="json")
         | {"prompt": prompt, "negative_prompt": negative, "batch_size": 1}
@@ -131,14 +151,7 @@ def amend_prompt(
         negative_prompt_sha256=digest(negative),
         provider_parameters={**value["provider_parameters"], "batch_size": 1},
     )
-    value["sources"].append(
-        {
-            "source_key": source_key,
-            "source_type": "CONTINUITY_REVIEW",
-            "review_id": str(request.review_id),
-            "issue_ids": [str(identity) for identity in request.issue_ids],
-        }
-    )
+    value["sources"].append(deepcopy(source))
     if len(json.dumps(value, ensure_ascii=False).encode()) > 65536:
         raise DomainError("PROMPT_COMPOSITION_TOO_LARGE", "修订后的提示词组合清单超限", 422)
     return spec, value

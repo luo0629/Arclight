@@ -34,13 +34,26 @@ export default function useShotProduction(
   const scope = useRef(0);
   const readSequence = useRef(0);
 
-  const unavailable = useCallback((cause: unknown) => {
-    if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) {
-      readSequence.current += 1;
-      setData(null);
-      setBatch(null);
-    }
-  }, []);
+  const unavailable = useCallback(
+    (cause: unknown) => {
+      if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) {
+        readSequence.current += 1;
+        currentBatch.current = null;
+        try {
+          sessionStorage.removeItem(storageKey);
+          const revisionPrefix = `arclight:shot-revision:v1:${user.id}:${projectId}:${episodeId}:${storyboardId}:`;
+          for (const key of Object.keys(sessionStorage)) {
+            if (key.startsWith(revisionPrefix)) sessionStorage.removeItem(key);
+          }
+        } catch {
+          // Access is already blocked; no further command can be sent from this view.
+        }
+        setData(null);
+        setBatch(null);
+      }
+    },
+    [storageKey, user.id, projectId, episodeId, storyboardId],
+  );
   const load = useCallback(
     async (signal?: AbortSignal) => {
       const sequence = ++readSequence.current;

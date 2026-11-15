@@ -1,9 +1,11 @@
 """The sole continuity revision admission path into the existing GenerationService."""
 
+import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.application.audit import audit
@@ -32,6 +34,11 @@ from arclight.domain.continuity_revisions import (
     amend_prompt,
 )
 from arclight.domain.generation_requests import GenerationCreate, GenerationSpec
+from arclight.domain.shot_revisions import (
+    ShotRevisionCommand,
+    ShotRevisionIntent,
+    ShotRevisionReceipt,
+)
 from arclight.domain.versions import digest
 from arclight.persistence.generation_candidates import GenerationCandidate
 from arclight.persistence.models import DependencyManifest, GenerationJob, VisualAsset
@@ -237,3 +244,101 @@ def request_revision(
     )
     db.flush()
     return revision, True
+
+
+def request_shot_revision(
+    db: Session,
+    settings: Settings,
+    project_id: UUID,
+    actor: str,
+    key: str,
+    command: "ShotRevisionCommand",
+) -> tuple["ShotRevisionReceipt", bool]:
+    """Admit human revisions through the same generation, budget and Outbox service."""
+    from arclight.application.dependencies import lock_dependency_graph
+    from arclight.application.shot_revision_sources import (
+        human_revision_origin,
+        prepare_shot_revision,
+    )
+    from arclight.domain.shot_revisions import ShotRevisionOrigin, ShotRevisionReceipt
+
+    begin_serialized(db)
+    require_project(db, project_id, actor)
+    lock_dependency_graph(db, project_id)
+    require_project(db, project_id, actor, write=True)
+    command_digest = digest(command.model_dump(mode="json"))
+    job_key = "human-shot-revision:" + str(uuid5(project_id, key))
+    previous = db.scalar(
+        select(GenerationJob).where(
+            GenerationJob.project_id == project_id,
+            GenerationJob.idempotency_key == job_key,
+        )
+    )
+    if previous is not None:
+        origin = human_revision_origin(db, previous)
+        if origin is None or origin.created_by != actor or origin.command_digest != command_digest:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "修订幂等键已绑定其他请求或操作者", 409)
+        return ShotRevisionReceipt(
+            job_id=previous.id,
+            input_manifest_id=previous.input_manifest_id,
+            source=origin.source,
+            status=previous.status,
+        ), False
+    intent = ShotRevisionIntent.model_validate(
+        command.model_dump(mode="json", exclude={"confirmation_digest"})
+    )
+    prepared = prepare_shot_revision(db, project_id, actor, intent)
+    if prepared.preview.confirmation_digest != command.confirmation_digest:
+        raise DomainError(
+            "SHOT_REVISION_PREVIEW_CHANGED", "来源、规范、参数或报价已变化，请重新预览", 409
+        )
+    composition = deepcopy(prepared.composition)
+    composition["human_shot_revision"] = ShotRevisionOrigin(
+        intent=intent,
+        source=prepared.preview.source,
+        created_by=actor,
+        command_digest=command_digest,
+    ).model_dump(mode="json")
+    if len(json.dumps(composition, ensure_ascii=False).encode("utf-8")) > 65536:
+        raise DomainError("PROMPT_COMPOSITION_TOO_LARGE", "修订后的提示词组合清单超限", 422)
+    original_policy = source_policy_for(db, prepared.source_job)
+    policy = settings.media_execution_policy.model_copy(
+        update={
+            "max_attempts": min(
+                original_policy.max_attempts, settings.media_execution_policy.max_attempts
+            ),
+            "max_elapsed_seconds": min(
+                original_policy.max_elapsed_seconds,
+                settings.media_execution_policy.max_elapsed_seconds,
+            ),
+        }
+    )
+    job = create_job(
+        db,
+        project_id,
+        actor,
+        job_key,
+        prepared.payload,
+        execution_policy=policy,
+        frozen_prompt_composition=composition,
+        frozen_service=prepared.frozen_service,
+    )
+    audit(
+        db,
+        project_id,
+        actor,
+        "shot_revision.requested",
+        job.id,
+        {
+            "source_candidate_id": str(intent.candidate_id),
+            "source_version_id": str(prepared.preview.source.version_id),
+            "operation": intent.operation,
+            "confirmation_digest": command.confirmation_digest,
+        },
+    )
+    return ShotRevisionReceipt(
+        job_id=job.id,
+        input_manifest_id=job.input_manifest_id,
+        source=prepared.preview.source,
+        status=job.status,
+    ), True
