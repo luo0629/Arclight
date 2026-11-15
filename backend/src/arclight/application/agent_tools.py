@@ -575,6 +575,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         from arclight.application.director_checks import director_check_tool
         from arclight.application.director_collaboration import collaboration_tools
         from arclight.application.director_research import investigate_production
+        from arclight.application.producer_research import investigate_project
         from arclight.application.screenwriter_patch import patch_tool
         from arclight.application.screenwriter_research import investigate_story
         from arclight.domain.art_research import InvestigateArtParameters, InvestigateArtResult
@@ -587,6 +588,13 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
             RESEARCH_TOOL,
             InvestigateProductionParameters,
             InvestigateProductionResult,
+        )
+        from arclight.domain.producer_research import (
+            RESEARCH_TOOL as PRODUCER_RESEARCH_TOOL,
+        )
+        from arclight.domain.producer_research import (
+            InvestigateProjectParameters,
+            InvestigateProjectResult,
         )
         from arclight.domain.screenwriter_research import (
             InvestigateStoryParameters,
@@ -652,6 +660,35 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
                 result_model=InvestigateProductionResult,
                 scope_validator=lambda context, parameters: None,
                 handler=investigate_director,
+                requires_write=True,
+            )
+        )
+
+        def investigate_producer(context: AgentToolContext, parameters: AgentToolContract) -> dict:
+            assert isinstance(parameters, InvestigateProjectParameters)
+            run = context.db.get(WorkflowRun, context.run_id)
+            assert run is not None
+            return investigate_project(context.db, settings, run, context.actor_id, parameters)
+
+        registry.register(
+            AgentToolDefinition(
+                name=PRODUCER_RESEARCH_TOOL,
+                allowed_agents=frozenset({"producer"}),
+                allowed_steps=frozenset(
+                    {
+                        "analyze",
+                        "outline",
+                        "rewrite",
+                        "script",
+                        "script_review",
+                        "storyboard",
+                        "storyboard_review",
+                    }
+                ),
+                parameters_model=InvestigateProjectParameters,
+                result_model=InvestigateProjectResult,
+                scope_validator=lambda context, parameters: None,
+                handler=investigate_producer,
                 requires_write=True,
             )
         )
