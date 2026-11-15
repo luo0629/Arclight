@@ -58,6 +58,12 @@ def require_writable_target(db: Session, job: GenerationJob) -> None:
         ):
             raise DomainError("VERSION_CONFLICT", "目标资产已变化，请捕获新输入后生成", 409)
         require_available_target(db, asset.id, exclude_job_id=job.id)
+    manifest = db.get(DependencyManifest, job.input_manifest_id)
+    binding = manifest.snapshot_json["context"].get("continuity_review") if manifest else None
+    if binding is not None:
+        from arclight.application.generation_targets import require_available_shot
+
+        require_available_shot(db, job.project_id, binding, job.episode_id, exclude_job_id=job.id)
 
 
 def start_attempt(

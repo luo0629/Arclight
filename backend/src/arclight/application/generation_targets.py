@@ -24,3 +24,55 @@ def require_available_target(
         raise DomainError(
             "GENERATION_TARGET_BUSY", "此资产已有未结束的生成任务，请先完成或确认取消", 409
         )
+
+
+def require_available_shot(
+    db: Session,
+    project_id: UUID,
+    binding: dict,
+    episode_id: UUID | None,
+    *,
+    exclude_job_id: UUID | None = None,
+) -> None:
+    """Use the existing project write gate before checking an exact shot target."""
+    from arclight.application.continuity_workflow import require_shot_binding
+    from arclight.application.dependencies import exact_version
+    from arclight.domain.generation_requests import ShotReviewBinding
+    from arclight.persistence.models import DependencyManifest, Shot
+
+    target = ShotReviewBinding.model_validate(binding)
+    require_shot_binding(db, project_id, target, episode_id)
+    version, source = exact_version(db, project_id, target.storyboard_id)
+    if version.stale or version.status not in {"APPROVED", "LOCKED"} or source.status == "ARCHIVED":
+        raise DomainError("ASSET_NOT_USABLE", "分镜来源已失效或不可用于生产", 409)
+    shot = db.get(Shot, target.shot_id, populate_existing=True)
+    assert shot is not None
+    selected = shot.content_json.get("selected_visual_asset")
+    if selected is not None:
+        selected_version, selected_asset = exact_version(
+            db, project_id, UUID(selected["asset_version_id"])
+        )
+        if (
+            str(selected_asset.id) != selected["asset_id"]
+            or selected_asset.status in {"LOCKED", "ARCHIVED"}
+            or selected_version.status in {"LOCKED", "ARCHIVED"}
+        ):
+            raise DomainError("ASSET_READ_ONLY", "此镜头选用素材已锁定或归档，请先处理原素材", 409)
+    statement = (
+        select(GenerationJob.id)
+        .join(DependencyManifest, DependencyManifest.id == GenerationJob.input_manifest_id)
+        .where(
+            GenerationJob.project_id == project_id,
+            GenerationJob.status.in_(ACTIVE_STATUSES),
+            DependencyManifest.snapshot_json["context"]["continuity_review"][
+                "storyboard_id"
+            ].as_string()
+            == str(target.storyboard_id),
+            DependencyManifest.snapshot_json["context"]["continuity_review"]["shot_id"].as_string()
+            == str(target.shot_id),
+        )
+    )
+    if exclude_job_id is not None:
+        statement = statement.where(GenerationJob.id != exclude_job_id)
+    if db.scalar(statement.limit(1)) is not None:
+        raise DomainError("GENERATION_SHOT_BUSY", "此镜头已有未结束的任务，未知结果须先对账", 409)

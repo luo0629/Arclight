@@ -18,6 +18,7 @@ import ShotDetails, {
   ContractMetadata,
 } from "@/features/editor/components/shot-details";
 import { useSessionDraft } from "@/providers/draft-provider";
+import ShotProductionButton from "@/features/editor/components/shot-production";
 import StoryboardTable, {
   type StoryboardTableShot,
 } from "@/features/editor/components/storyboard-table";
@@ -267,6 +268,13 @@ export default function VersionEditor({
             >
               分镜表格
             </Button>
+            {version && !editing && (
+              <ShotProductionButton
+                projectId={episode.project_id}
+                episodeId={episode.id}
+                storyboardId={version.id}
+              />
+            )}
           </div>
         </legend>
       )}

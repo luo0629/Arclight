@@ -125,6 +125,10 @@ def create_job(
     from arclight.application.continuity_workflow import freeze_review_binding
 
     review_binding = freeze_review_binding(db, project_id, payload)
+    if review_binding is not None:
+        from arclight.application.generation_targets import require_available_shot
+
+        require_available_shot(db, project_id, review_binding, payload.episode_id)
     from arclight.application.media_services import bind_selection, select_for_spec
 
     service = select_for_spec(db, actor, payload.spec, payload.task_type, frozen_service)

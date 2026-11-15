@@ -50,6 +50,7 @@ from arclight.api.rights import router as rights_router
 from arclight.api.routes import router
 from arclight.api.screenwriter import router as screenwriter_router
 from arclight.api.script_rewrite import router as script_rewrite_router
+from arclight.api.shot_production import router as shot_production_router
 from arclight.api.storage_cleanup import router as storage_cleanup_router
 from arclight.api.story_analysis import router as story_analysis_router
 from arclight.api.story_bible import router as story_bible_router
@@ -169,6 +170,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(art_direction_router)
     app.include_router(files_router)
     app.include_router(generation_router)
+    app.include_router(shot_production_router)
     app.include_router(generation_candidates_router)
     app.include_router(continuity_revisions_router)
     app.include_router(continuity_workflow_router)
