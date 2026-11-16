@@ -150,6 +150,7 @@ def start_run(
     director_art_collaboration: bool = False,
     art_task: ArtDirectionTask | None = None,
     art_concept_plan: ArtConceptPlan | None = None,
+    producer_parent_run_id: UUID | None = None,
 ) -> WorkflowRun:
     options = ScreenwriterRevisionOptions(
         professional=professional or professional_director or art_task is not None,
@@ -178,6 +179,14 @@ def start_run(
         from arclight.application.model_gateway import lock_gate
 
         lock_gate(db)
+    if producer_parent_run_id is not None:
+        from arclight.application.producer_delegation import require_producer_parent
+
+        parent_control = require_producer_parent(db, producer_parent_run_id, episode_id, actor)
+        if options.frozen_limits().model_dump(mode="json") != parent_control.limits_json:
+            raise DomainError("AGENT_LIMITS_CONFLICT", "委派不得更换根运行限制", 409)
+        if not (professional or professional_director or art_task is not None):
+            raise DomainError("PRODUCER_TASK_INVALID", "委派须使用已注册的专业任务", 422)
     if professional and script_version_id is not None:
         raise DomainError("SCREENWRITER_TASK_INVALID", "专业编剧须从故事或大纲发起", 422)
     episode = require_episode(db, episode_id, actor, write=True)
@@ -221,6 +230,8 @@ def start_run(
         }
     if art_concept_plan is not None:
         payload["art_concept_plan"] = art_concept_plan.model_dump(mode="json")
+    if producer_parent_run_id is not None:
+        payload["producer_parent_run_id"] = str(producer_parent_run_id)
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -236,6 +247,7 @@ def start_run(
             WorkflowRun.episode_id == episode_id,
             WorkflowRun.status.in_([RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_REVIEW]),
             WorkflowRun.workflow_type != "continuity_review",
+            WorkflowRun.id != producer_parent_run_id if producer_parent_run_id else literal(True),
         )
     )
     if active:
@@ -375,6 +387,8 @@ def start_run(
         )
     else:
         version = WORKFLOW_VERSION if script_version_id is None else DIRECTOR_WORKFLOW_VERSION
+    if producer_parent_run_id is not None:
+        inputs["created_by"] = actor
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,
@@ -393,6 +407,12 @@ def start_run(
     from arclight.application.agent_runtime_state import initialize_run_state
 
     initialize_run_state(run, episode.project_id)
+    if producer_parent_run_id is not None:
+        from arclight.application.agent_limits import configure_agent_run
+
+        configure_agent_run(
+            db, run.id, actor, options.frozen_limits(), parent_run_id=producer_parent_run_id
+        )
     from arclight.application.production_versions import capture_text
 
     capture_text(db, episode.project_id, run, settings, actor=actor)

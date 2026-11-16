@@ -111,6 +111,8 @@ def start_candidate_review(
     candidate_id: UUID,
     actor: str,
     payload: CandidateReviewCreate,
+    *,
+    producer_parent_run_id: UUID | None = None,
 ) -> WorkflowRun:
     lock_gate(db)
     lock_dependency_graph(db, project_id)
@@ -140,6 +142,10 @@ def start_candidate_review(
     ):
         raise DomainError("REVIEW_TASK_CONFLICT", "送审不能更换生成或替换来源的精确镜头", 409)
     board = require_shot_binding(db, project_id, payload, job.episode_id)
+    if producer_parent_run_id is not None:
+        from arclight.application.producer_delegation import require_producer_parent
+
+        require_producer_parent(db, producer_parent_run_id, board.episode_id, actor)
     version = db.get(AssetVersion, candidate.asset_version_id)
     assert version is not None
     target = ReviewTarget(
@@ -158,6 +164,14 @@ def start_candidate_review(
             raise DomainError("REVIEW_TASK_CONFLICT", "同一候选不能更换精确送审目标", 409)
         run = db.get(WorkflowRun, previous.run_id)
         assert run is not None
+        if producer_parent_run_id is not None:
+            from arclight.persistence.agent_limits import AgentRunLimit
+
+            control = db.get(AgentRunLimit, run.id)
+            if control is None or control.parent_run_id != producer_parent_run_id:
+                raise DomainError(
+                    "PRODUCER_DELEGATION_CONFLICT", "已有审查不能绑定另一生产运行", 409
+                )
         if previous.revision_id is None and run.input_json["continuity_review"][
             "agent_limits"
         ] != payload.agent_limits.model_dump(mode="json"):
@@ -192,6 +206,14 @@ def start_candidate_review(
         run = db.get(WorkflowRun, source_route.run_id, with_for_update=True)
         if run is None or run.workflow_type != "continuity_review":
             raise DomainError("REVIEW_RUN_REQUIRED", "修订须沿用原连续性审查运行", 409)
+        if producer_parent_run_id is not None:
+            from arclight.persistence.agent_limits import AgentRunLimit
+
+            control = db.get(AgentRunLimit, run.id)
+            if control is None or control.parent_run_id != producer_parent_run_id:
+                raise DomainError(
+                    "PRODUCER_DELEGATION_CONFLICT", "已有审查不能绑定另一生产运行", 409
+                )
         if run.status not in {"QUEUED", "RUNNING", "WAITING_REVIEW"}:
             raise DomainError("REVIEW_RUN_INACTIVE", "原审查运行已停止，不能重置修订限制", 409)
         # Append work and its wake-up atomically, including a running executor
@@ -229,6 +251,12 @@ def start_candidate_review(
         db.add(run)
         db.flush()
         initialize_run_state(run, project_id)
+        if producer_parent_run_id is not None:
+            from arclight.application.agent_limits import configure_agent_run
+
+            configure_agent_run(
+                db, run.id, actor, payload.agent_limits, parent_run_id=producer_parent_run_id
+            )
         capture_text(db, project_id, run, settings, actor=actor)
         grant_agent_tools(
             db,

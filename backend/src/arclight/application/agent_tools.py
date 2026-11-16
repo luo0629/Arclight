@@ -69,6 +69,7 @@ class AgentToolDefinition:
     handler: Callable[[AgentToolContext, AgentToolContract], Any]
     requires_write: bool = False
     is_ready: Callable[[AgentToolContext, AgentToolContract], bool] | None = None
+    replay_validator: Callable[[AgentToolContext, AgentToolContract], None] | None = None
 
 
 class AgentToolRegistry:
@@ -390,6 +391,18 @@ def execute_agent_tool(
                 "IDEMPOTENCY_CONFLICT",
                 "相同幂等键不能用于不同工具请求",
             )
+        if tool.replay_validator is not None and previous.status == "SUCCEEDED":
+            try:
+                tool.replay_validator(
+                    AgentToolContext(
+                        db, run.id, episode.project_id, episode.id, grant.actor_id, agent_name
+                    ),
+                    tool.parameters_model.model_validate(request.arguments),
+                )
+            except DomainError as exc:
+                return _context_error(request, exc)
+            except ValidationError:
+                return _failure(request, "INVALID_ARGUMENTS", "工具参数不符合合同")
         try:
             feedback = AgentToolFeedback.model_validate(previous.feedback_json)
             if (
@@ -676,6 +689,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
                 allowed_agents=frozenset({"producer"}),
                 allowed_steps=frozenset(
                     {
+                        "producer",
                         "analyze",
                         "outline",
                         "rewrite",
@@ -692,6 +706,11 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
                 requires_write=True,
             )
         )
+
+        from arclight.application.producer_delegation import delegation_tools
+
+        for definition in delegation_tools(settings):
+            registry.register(definition)
 
         def investigate(context: AgentToolContext, parameters: AgentToolContract) -> dict:
             assert isinstance(parameters, InvestigateStoryParameters)

@@ -34,6 +34,7 @@ from arclight.persistence.models import (
 )
 
 STAGES = {
+    "producer": ("producer",),
     "script_storyboard": ("script", "storyboard"),
     "storyboard": ("storyboard",),
     "art_proposal": ("storyboard",),
@@ -46,6 +47,8 @@ STAGES = {
 
 def startup_input(run: WorkflowRun, stage: str) -> dict:
     inputs = run.input_json
+    if stage == "producer":
+        return {"goal": inputs["goal"], "goal_sha256": inputs["goal_sha256"]}
     if stage == "analyze":
         return {"story": inputs["story"]}
     if stage == "outline":

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, m
 from arclight.domain.generation_requests import safe_metadata
 
 AgentStepId = Literal[
+    "producer",
     "analyze",
     "outline",
     "rewrite",
@@ -35,6 +36,7 @@ AgentTerminationReason = Literal["COMPLETED", "REVIEW_REJECTED", "EXECUTION_FAIL
 Checksum = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 
 PLAN_OPERATIONS: dict[AgentStepId, str] = {
+    "producer": "PLAN_PRODUCTION",
     "analyze": "ANALYZE_STORY",
     "outline": "PLAN_OUTLINE",
     "rewrite": "REWRITE_SCRIPT",
@@ -45,6 +47,7 @@ PLAN_OPERATIONS: dict[AgentStepId, str] = {
 }
 
 WORKFLOW_PLANS: dict[str, tuple[AgentStepId, ...]] = {
+    "producer": ("producer",),
     "story_analysis": ("analyze",),
     "story_outline": ("outline",),
     "script_rewrite": ("rewrite", "script_review"),

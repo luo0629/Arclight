@@ -46,6 +46,7 @@ from arclight.persistence.models import (
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
 TEXT_STAGES = {
+    "producer": ("producer",),
     "script_storyboard": ("script", "storyboard"),
     "storyboard": ("storyboard",),
     "art_proposal": ("storyboard",),
@@ -143,6 +144,16 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    if stage == "producer":
+        from arclight.domain import producer_planning as producer
+
+        if workflow_version != producer.WORKFLOW_VERSION:
+            raise DomainError("PRODUCER_VERSION_INVALID", "不兼容的 Producer 版本", 409)
+        return [
+            ("AGENT", producer.WORKFLOW_VERSION, {"workflow_version": producer.WORKFLOW_VERSION}),
+            ("PROMPT", producer.PLAN_VERSION, {"instruction": producer.PLANNING_PROMPT}),
+            ("SCHEMA", producer.PLAN_VERSION, producer.ProducerPlan.model_json_schema()),
+        ]
     from arclight.domain.art_concepts import (
         CONCEPT_DIRECTION_VERSION,
         CONCEPT_PROMPT,
