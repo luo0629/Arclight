@@ -587,10 +587,32 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
         if any(loop.status == "STOPPED" for loop in creation_loops(db, run.id, "art_director")):
             raise DomainError("ART_TASK_STOPPED", "美术决策已停止，请修正目标后新建任务", 409)
     db.execute(select(Episode).where(Episode.id == run.episode_id).with_for_update(key_share=True))
+    from arclight.application.gateway_text import execution_actor
+    from arclight.application.producer_delegation import require_producer_parent
+    from arclight.persistence.agent_limits import AgentRunLimit
+
+    producer_parent_run_id = None
+    control = db.get(AgentRunLimit, run.id)
+    if control is not None and control.parent_run_id is not None:
+        parent = db.get(WorkflowRun, control.parent_run_id, populate_existing=True)
+        if parent is not None and parent.workflow_type == "producer":
+            actor = execution_actor(db, run)
+            parent_control = require_producer_parent(db, parent.id, run.episode_id, actor)
+            if (
+                control.actor_id != actor
+                or control.root_run_id != parent_control.run_id
+                or control.project_id != parent_control.project_id
+                or control.depth != parent_control.depth + 1
+                or control.limits_json != parent_control.limits_json
+                or control.deadline_at != parent_control.deadline_at
+            ):
+                raise DomainError("AGENT_SCOPE_INVALID", "Agent 委派作用范围不匹配", 409)
+            producer_parent_run_id = parent.id
     active = db.scalar(
         select(WorkflowRun).where(
             WorkflowRun.episode_id == run.episode_id,
             WorkflowRun.id != run.id,
+            WorkflowRun.id != producer_parent_run_id if producer_parent_run_id else literal(True),
             literal(run.workflow_type != "continuity_review"),
             WorkflowRun.status.in_([RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_REVIEW]),
             WorkflowRun.workflow_type != "continuity_review",

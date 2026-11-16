@@ -2,8 +2,6 @@
 
 from uuid import UUID, uuid5
 
-from pydantic import ValidationError
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import ScriptContent
@@ -12,14 +10,17 @@ from arclight.application.agent_limits import (
     delegation_count,
     validate_agent_execution,
 )
-from arclight.application.agent_loop_store import checked_loop
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolContext, AgentToolDefinition
 from arclight.application.commands import require_episode, start_run
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import validate_script_assets
 from arclight.application.gateway_text import execution_actor
-from arclight.application.production_versions import find_binding
+from arclight.application.producer_plan_history import (
+    canonical_task,
+    find_task_delegation,
+    read_plan_record,
+)
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -39,7 +40,7 @@ from arclight.domain.producer_planning import (
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.generation_candidates import GenerationCandidate
-from arclight.persistence.models import AgentToolInvocation, Script, WorkflowRun
+from arclight.persistence.models import Script, WorkflowRun
 
 
 def require_producer_parent(
@@ -68,7 +69,7 @@ def require_producer_parent(
     return control
 
 
-def _validate_task(
+def validate_producer_task(
     db: Session, root: WorkflowRun, planned: ProducerTask, actor: str, settings: Settings
 ) -> None:
     episode = require_episode(db, root.episode_id, actor, write=True)
@@ -144,72 +145,30 @@ def validate_plan_tasks(
     """Validate existing exact inputs without creating or running a professional task."""
     require_producer_parent(db, root.id, root.episode_id, actor)
     for planned in plan.tasks:
-        _validate_task(db, root, planned, actor, settings)
+        validate_producer_task(db, root, planned, actor, settings)
 
 
 def _plan(
     context: AgentToolContext, request: DelegationRequest
 ) -> tuple[WorkflowRun, ProducerPlan, ProducerTask]:
-    from arclight.application.producer_planning import require_completed_plan
-
-    db = context.db
-    root = db.get(WorkflowRun, context.run_id, populate_existing=True)
-    assert root is not None
-    require_producer_parent(db, root.id, context.episode_id, context.actor_id)
-    binding = find_binding(db, context.project_id, "PRODUCER_PLAN", request.plan_id)
-    if binding is None:
-        raise DomainError("PRODUCER_PLAN_INVALID", "生产计划版本不存在", 409)
-    value = binding.snapshot_json
-    try:
-        plan = ProducerPlan.model_validate(value["plan"])
-        if (
-            value["schema_version"] != 1
-            or value["version_no"] != 1
-            or value["run_id"] != str(root.id)
-            or value["goal_sha256"] != root.input_json["goal_sha256"]
-            or plan.goal_sha256 != value["goal_sha256"]
-            or value["plan_sha256"] != request.plan_sha256
-            or digest(plan.model_dump(mode="json")) != request.plan_sha256
-        ):
-            raise ValueError("Plan binding changed")
-        loop = checked_loop(db, request.plan_id, actor=context.actor_id)
-        outcome = require_completed_plan(loop)
-        if loop.run_id != root.id or outcome.result != plan:
-            raise ValueError("Plan has no original completed Producer loop")
-        task = next(item for item in plan.tasks if item.task_key == request.task_key)
-    except (KeyError, StopIteration, ValidationError, ValueError, TypeError) as exc:
-        raise DomainError(
-            "PRODUCER_PLAN_INVALID", "生产计划须绑定原完成循环和精确版本", 409
-        ) from exc
-    return root, plan, task
+    record = read_plan_record(
+        context.db, context.project_id, request.plan_id, context.actor_id, require_current=True
+    )
+    if record.root.id != context.run_id or record.plan_sha256 != request.plan_sha256:
+        raise DomainError("PRODUCER_PLAN_INVALID", "生产计划作用范围或精确哈希无效", 409)
+    planned = next((item for item in record.plan.tasks if item.task_key == request.task_key), None)
+    if planned is None:
+        raise DomainError("PRODUCER_PLAN_INVALID", "生产计划中不存在指定任务", 409)
+    return record.root, record.plan, planned
 
 
 def _saved(context: AgentToolContext, request: DelegationRequest) -> DelegationResult | None:
-    rows = context.db.scalars(
-        select(AgentToolInvocation).where(
-            AgentToolInvocation.run_id == context.run_id,
-            AgentToolInvocation.tool_name == DELEGATE_TOOL,
-            AgentToolInvocation.status == "SUCCEEDED",
-        )
-    )
-    matches: list[DelegationResult] = []
-    try:
-        for row in rows:
-            result = DelegationResult.model_validate((row.feedback_json or {})["result"])
-            if result.plan_id == request.plan_id and result.task_key == request.task_key:
-                if result.plan_sha256 != request.plan_sha256:
-                    raise ValueError("Delegation plan hash changed")
-                matches.append(result)
-    except (KeyError, ValidationError, ValueError) as exc:
-        raise DomainError("PRODUCER_DELEGATION_CONFLICT", "生产委派历史合同无效", 409) from exc
-    if not matches:
-        return None
-    if any(item != matches[0] for item in matches):
-        raise DomainError("PRODUCER_DELEGATION_CONFLICT", "同一生产任务委派不一致", 409)
-    return matches[0]
+    record = read_plan_record(context.db, context.project_id, request.plan_id, context.actor_id)
+    origin = canonical_task(record, request.task_key)
+    return find_task_delegation(context.db, context.run_id, origin)
 
 
-def _validate_saved_child(
+def validate_saved_child(
     context: AgentToolContext,
     root: WorkflowRun,
     planned: ProducerTask,
@@ -221,7 +180,7 @@ def _validate_saved_child(
     child = context.db.get(WorkflowRun, previous.child_run_id, populate_existing=True)
     child_control = context.db.get(AgentRunLimit, previous.child_run_id)
     identity = uuid5(
-        root.id, "producer-delegation:" + str(previous.plan_id) + ":" + planned.task_key
+        root.id, "producer-delegation:" + str(previous.plan_id) + ":" + previous.task_key
     )
     expected_type = {
         "screenwriter": "script_storyboard",
@@ -250,34 +209,46 @@ def _validate_saved_child(
         raise DomainError("PRODUCER_DELEGATION_CONFLICT", "原生产子任务作用范围无效", 409)
 
 
+def _validate_reusable_output(context: AgentToolContext, previous: DelegationResult) -> None:
+    from arclight.application.producer_observation import validate_child_outputs
+
+    child = context.db.get(WorkflowRun, previous.child_run_id, populate_existing=True)
+    assert child is not None
+    if child.status == "SUCCEEDED":
+        validate_child_outputs(context.db, child)
+
+
 def validate_delegation_scope(
     context: AgentToolContext, request: DelegationRequest, settings: Settings
 ) -> None:
     """Revalidate exact authority and child history, including successful tool replay."""
     root, _, planned = _plan(context, request)
-    _validate_task(context.db, root, planned, context.actor_id, settings)
+    validate_producer_task(context.db, root, planned, context.actor_id, settings)
     control = require_producer_parent(context.db, root.id, root.episode_id, context.actor_id)
     previous = _saved(context, request)
     if previous is not None:
-        _validate_saved_child(context, root, planned, previous, control)
+        validate_saved_child(context, root, planned, previous, control)
+        _validate_reusable_output(context, previous)
 
 
 def _delegate(context: AgentToolContext, request: DelegationRequest, settings: Settings) -> dict:
     db = context.db
     root, plan, planned = _plan(context, request)
-    _validate_task(db, root, planned, context.actor_id, settings)
+    validate_producer_task(db, root, planned, context.actor_id, settings)
     control = require_producer_parent(db, root.id, root.episode_id, context.actor_id)
     previous = _saved(context, request)
     if previous is not None:
-        _validate_saved_child(context, root, planned, previous, control)
-        return previous.model_dump(mode="json")
+        validate_saved_child(context, root, planned, previous, control)
+        _validate_reusable_output(context, previous)
+        return previous.model_copy(update=request.model_dump()).model_dump(mode="json")
     for prerequisite in planned.depends_on:
         saved = _saved(context, request.model_copy(update={"task_key": prerequisite}))
         child = db.get(WorkflowRun, saved.child_run_id) if saved else None
         if saved is not None:
             prerequisite_task = next(item for item in plan.tasks if item.task_key == prerequisite)
-            _validate_saved_child(context, root, prerequisite_task, saved, control)
-            _validate_task(db, root, prerequisite_task, context.actor_id, settings)
+            validate_saved_child(context, root, prerequisite_task, saved, control)
+            _validate_reusable_output(context, saved)
+            validate_producer_task(db, root, prerequisite_task, context.actor_id, settings)
         if child is None or child.status != "SUCCEEDED":
             raise DomainError("PRODUCER_PREREQUISITE_PENDING", "前置生产任务尚未成功", 409)
     limits = AgentRunLimits.model_validate(control.limits_json)
@@ -291,9 +262,9 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
         or usage["actual_cost"] + usage["pending_estimate"] > limits.maximum_cost
     ):
         raise DomainError("AGENT_COST_LIMIT", "已有用量不允许新生产委派", 409)
-    identity = uuid5(
-        root.id, "producer-delegation:" + str(request.plan_id) + ":" + planned.task_key
-    )
+    record = read_plan_record(db, context.project_id, request.plan_id, context.actor_id)
+    origin = canonical_task(record, planned.task_key)
+    identity = uuid5(root.id, "producer-delegation:" + str(origin.plan_id) + ":" + origin.task_key)
     task = planned.task
     if task.kind == "screenwriter":
         child = start_run(
