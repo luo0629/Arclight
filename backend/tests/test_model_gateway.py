@@ -499,7 +499,8 @@ def test_database_enforces_immutable_calls_and_receipts(client, episode, action)
         or action == "truncate"
         and dialect != "postgresql"
     ):
-        pytest.skip("database-specific immutable operation")
+        required = "SQLite" if action == "replace" else "PostgreSQL"
+        pytest.skip(f"{required} is required for immutable {action}")
     for table in ("model_gateway_calls", "model_gateway_receipts"):
         statement = {
             "update": f"UPDATE {table} SET actor='rewritten'",

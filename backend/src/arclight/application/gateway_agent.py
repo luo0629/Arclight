@@ -10,7 +10,7 @@ from arclight.application.agent_tools import AgentToolRegistry, available_agent_
 from arclight.application.context_evidence import read_trace
 from arclight.application.context_images import load_context_images
 from arclight.application.gateway_text import execution_actor
-from arclight.application.model_gateway import invoke, route_id
+from arclight.application.model_gateway import invoke, lock_gate, route_id
 from arclight.application.model_services import run_settings
 from arclight.application.production_versions import text_settings
 from arclight.core.config import Settings
@@ -48,6 +48,7 @@ def invoke_agent[T: BaseModel](
     ):
         raise DomainError("AGENT_SCOPE_INVALID", "Agent 通信与执行器行动标识不匹配", 409)
     with factory() as db:
+        lock_gate(db)
         run = db.get(WorkflowRun, request.run_id)
         if run is None:
             raise DomainError("NOT_FOUND", "工作流不存在", 404)
