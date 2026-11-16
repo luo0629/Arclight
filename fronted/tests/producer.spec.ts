@@ -149,6 +149,7 @@ test("Producer answers the exact saved question by keyboard after refresh and re
   await page.reload();
   await closeDirectory(page);
   const replay = panel.getByRole("button", { name: "重发原操作", exact: true });
+  await expect(replay).toBeEnabled();
   await replay.focus();
   await expect(replay).toBeFocused();
   await page.keyboard.press("Enter");
