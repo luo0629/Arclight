@@ -140,6 +140,10 @@ def _respond(request):
             ),
         )
     seed = data["data"]
+    if "goal_sha256" in seed:
+        from e2e_producer import respond
+
+        return respond(payload)
     if seed.get("schema_version") == "art-direction/1":
         from e2e_art import respond
 
@@ -289,7 +293,11 @@ def install():
         if run.workflow_version in {
             SCREENWRITER_VERSION,
             SCREENWRITER_OUTLINE_VERSION,
-        } | REVISION_WORKFLOWS | DIRECTOR_VERSIONS | {"art-proposal/1.0", "art-proposal/2.0"}:
+        } | REVISION_WORKFLOWS | DIRECTOR_VERSIONS | {
+            "art-proposal/1.0",
+            "art-proposal/2.0",
+            "producer/1",
+        }:
             settings = settings.model_copy(
                 update={
                     "provider": "openai_compatible",
@@ -316,6 +324,10 @@ def install():
         return original_capture(db, project_id, run, settings, actor=actor)
 
     production_versions.capture_text = capture
+    # Producer deliberately imported the capture function for its trusted application entry.
+    from arclight.application import producer_planning
+
+    producer_planning.capture_text = capture
     for module in (agent_model, text):
         original_transport = module.PublicHTTPTransport
 

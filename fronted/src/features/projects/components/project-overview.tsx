@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useProjectEvents } from "../project-events";
 import Link from "next/link";
-import { projectPath } from "@/lib/routes";
+import { productionTaskPath, projectPath } from "@/lib/routes";
 import { RefreshCw } from "lucide-react";
 import { api, message } from "@/lib/api/client";
 import type { Episode } from "@/types/api";
@@ -72,6 +72,7 @@ const stages: Record<string, string> = {
   ARCHIVED: "已归档",
 };
 const workflows: Record<string, string> = {
+  producer: "Producer 生产协作",
   script_storyboard: "编剧与分镜",
   storyboard: "分镜创作",
   story_analysis: "故事提炼",
@@ -431,13 +432,29 @@ export default function ProjectOverview({
                         {time(task.updated_at)}
                       </p>
                     </div>
-                    <Button
-                      variant="outline"
-                      disabled={!!opening}
-                      onClick={() => void openTask(task.episode_id)}
-                    >
-                      查看该集任务
-                    </Button>
+                    {task.workflow_type === "producer" ? (
+                      <Button asChild variant="outline">
+                        <Link
+                          href={
+                            productionTaskPath({
+                              ...task,
+                              family: "WORKFLOW",
+                              project_id: projectId,
+                            }) ?? projectPath(projectId, "tasks")
+                          }
+                        >
+                          查看生产协作
+                        </Link>
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="outline"
+                        disabled={!!opening}
+                        onClick={() => void openTask(task.episode_id)}
+                      >
+                        查看该集任务
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>

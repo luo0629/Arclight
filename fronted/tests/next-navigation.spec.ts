@@ -219,34 +219,38 @@ test("不存在和跨项目剧集链接显示错误，禁止加载错误资源�
 
 test("目录首批之外的项目和剧集可按 URL 精确读取", async ({ page }) => {
   const env = await setup(page);
-  await page.route("**/api/v1/projects?*", async (route) => {
-    const response = await route.fetch();
-    await route.fulfill({
-      response,
-      json: (await response.json()).filter(
-        (row: { id: string }) => row.id !== env.projects[1].id,
-      ),
-    });
-  });
-  await page.route(
-    `**/api/v1/projects/${env.projects[1].id}/episodes?*`,
-    async (route) => {
+  try {
+    await page.route("**/api/v1/projects?*", async (route) => {
       const response = await route.fetch();
       await route.fulfill({
         response,
         json: (await response.json()).filter(
-          (row: { id: string }) => row.id !== env.episodes[3].id,
+          (row: { id: string }) => row.id !== env.projects[1].id,
         ),
       });
-    },
-  );
-  await page.goto(env.path(3) + "?view=tasks");
-  await expect(
-    page.getByRole("heading", { name: "第 2 集 · 项目2剧集2", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("radio", { name: "任务与审核", exact: true }),
-  ).toHaveAttribute("aria-checked", "true");
+    });
+    await page.route(
+      `**/api/v1/projects/${env.projects[1].id}/episodes?*`,
+      async (route) => {
+        const response = await route.fetch();
+        await route.fulfill({
+          response,
+          json: (await response.json()).filter(
+            (row: { id: string }) => row.id !== env.episodes[3].id,
+          ),
+        });
+      },
+    );
+    await page.goto(env.path(3) + "?view=tasks");
+    await expect(
+      page.getByRole("heading", { name: "第 2 集 · 项目2剧集2", exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: "任务与审核", exact: true }),
+    ).toHaveAttribute("aria-checked", "true");
+  } finally {
+    await page.unrouteAll({ behavior: "wait" });
+  }
 });
 
 test("直达链接遵守项目成员和 Owner 权限", async ({ page }) => {

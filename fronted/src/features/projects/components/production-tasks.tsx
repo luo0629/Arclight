@@ -281,7 +281,9 @@ export default function ProductionTasks() {
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <h3 className="font-semibold">
-                        {taskTypes[task.task_type] ?? "生产任务"}
+                        {task.workflow_type === "producer"
+                          ? "Producer 生产协作"
+                          : (taskTypes[task.task_type] ?? "生产任务")}
                       </h3>
                       <span aria-label="任务状态摘要">
                         <StatusBadge status={task.status} />

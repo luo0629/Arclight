@@ -526,6 +526,8 @@ def resume_run(
 
 
 def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
+    if run.workflow_type == "producer":
+        raise DomainError("PRODUCER_CONTROL_REQUIRED", "请通过生产协作入口停止原运行", 409)
     from arclight.application.agent_external_waits import cancel_concepts, waiting_for_external
     from arclight.application.screenwriter_creation import waiting_for_answer
 
@@ -577,6 +579,8 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
 
 
 def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
+    if run.workflow_type == "producer":
+        raise DomainError("PRODUCER_CONTROL_REQUIRED", "请通过生产协作入口恢复原命令", 409)
     if run.status != RunStatus.FAILED:
         raise DomainError("NOT_RETRYABLE", "只有失败的工作流可以显式重试")
     from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS

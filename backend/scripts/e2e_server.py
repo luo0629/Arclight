@@ -14,7 +14,7 @@ from sqlalchemy import select
 from arclight.application.runtime import execute_run
 from arclight.core.config import Settings
 from arclight.main import create_app
-from arclight.persistence.models import WorkflowRun
+from arclight.persistence.models import Episode, WorkflowRun
 from arclight.persistence.session import build_engine, session_factory
 from arclight.storage.objects import ObjectStorage, initialize
 
@@ -61,6 +61,16 @@ def main():
                         select(WorkflowRun).where(WorkflowRun.status == "QUEUED").limit(10)
                     )
                 ]
+                from arclight.application.producer_interaction import pending_commands
+
+                for row in db.scalars(
+                    select(WorkflowRun).where(
+                        WorkflowRun.workflow_type == "producer", WorkflowRun.status == "RUNNING"
+                    )
+                ):
+                    episode = db.get(Episode, row.episode_id)
+                    if episode and pending_commands(db, row, episode.project_id):
+                        jobs.append((row.id, row.revision))
             for run_id, revision in jobs:
                 execute_run(factory, settings, run_id, revision)
             from e2e_art import advance_concepts

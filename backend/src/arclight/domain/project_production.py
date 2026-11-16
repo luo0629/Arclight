@@ -37,6 +37,7 @@ WorkflowType = Literal[
     "story_outline",
     "art_proposal",
     "continuity_review",
+    "producer",
     "unknown",
 ]
 PublicError = Literal[

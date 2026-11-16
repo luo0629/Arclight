@@ -23,6 +23,8 @@ import ImpactButton from "@/features/dependencies/components/impact-button";
 import ScreenwriterProgress from "@/features/tasks/components/screenwriter-progress";
 import ArtProgress from "./art-progress";
 import MediaTasks from "./media-tasks";
+import ProducerStart from "./producer-start";
+import ProducerProgress from "./producer-progress";
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 export default function Tasks({
@@ -84,6 +86,7 @@ export default function Tasks({
     decision?: string,
     impact_digest?: string,
   ) {
+    if (run.workflow_type === "producer") return false;
     const payload =
       command === "resume"
         ? {
@@ -132,6 +135,13 @@ export default function Tasks({
         writable={writable}
         busy={busy}
       />
+      <ProducerStart
+        projectId={projectId}
+        episodeId={episodeId}
+        writable={writable}
+        busy={busy}
+        reload={reload}
+      />
       <PagePanel
         eyebrow="每一步都有迹可循"
         title="创作任务与审核"
@@ -147,7 +157,7 @@ export default function Tasks({
           <div className="task-list grid min-w-0 gap-4 lg:grid-cols-2">
             {visibleRuns.map((run) => (
               <article
-                className="task flex min-w-0 flex-col gap-3 rounded-xl border bg-background/60 p-4"
+                className={`task flex min-w-0 flex-col gap-3 rounded-xl border bg-background/60 p-4${run.workflow_type === "producer" ? " lg:col-span-2" : ""}`}
                 key={run.id}
                 id={`run-${run.id}`}
                 aria-label={
@@ -156,19 +166,21 @@ export default function Tasks({
               >
                 <div className="task-heading flex flex-wrap items-center justify-between gap-2">
                   <strong>
-                    {run.workflow_type === "continuity_review"
-                      ? "画面连续性审查"
-                      : run.workflow_type === "art_proposal"
-                        ? "美术提案生成"
-                        : run.workflow_type === "script_rewrite"
-                          ? "剧本局部改写"
-                          : run.workflow_type === "story_outline"
-                            ? "分集大纲"
-                            : run.workflow_type === "story_analysis"
-                              ? "故事提炼"
-                              : run.workflow_type === "storyboard"
-                                ? "分镜创作"
-                                : "剧本与分镜创作"}
+                    {run.workflow_type === "producer"
+                      ? "Producer 生产协作"
+                      : run.workflow_type === "continuity_review"
+                        ? "画面连续性审查"
+                        : run.workflow_type === "art_proposal"
+                          ? "美术提案生成"
+                          : run.workflow_type === "script_rewrite"
+                            ? "剧本局部改写"
+                            : run.workflow_type === "story_outline"
+                              ? "分集大纲"
+                              : run.workflow_type === "story_analysis"
+                                ? "故事提炼"
+                                : run.workflow_type === "storyboard"
+                                  ? "分镜创作"
+                                  : "剧本与分镜创作"}
                   </strong>
                   <StatusBadge status={run.status} />
                 </div>
@@ -177,6 +189,15 @@ export default function Tasks({
                   {run.revision}
                 </p>
                 <code className="task-id text-muted-foreground">{run.id}</code>
+                {run.workflow_type === "producer" && (
+                  <ProducerProgress
+                    projectId={projectId}
+                    run={run}
+                    writable={writable}
+                    busy={busy}
+                    reload={reload}
+                  />
+                )}
                 {[
                   "screenwriter/1.0",
                   "screenwriter-outline/1.0",
@@ -226,11 +247,12 @@ export default function Tasks({
                     reload={reload}
                   />
                 )}
-                {run.error_code && run.workflow_type !== "art_proposal" && (
-                  <Notice tone="error" className="error" role="alert">
-                    {runErrorMessage(run.error_code)}
-                  </Notice>
-                )}
+                {run.error_code &&
+                  !["art_proposal", "producer"].includes(run.workflow_type) && (
+                    <Notice tone="error" className="error" role="alert">
+                      {runErrorMessage(run.error_code)}
+                    </Notice>
+                  )}
                 {run.pending_review &&
                   ["script", "storyboard"].includes(
                     run.pending_review.resource_type,
@@ -305,6 +327,7 @@ export default function Tasks({
                 )}
                 <div className="button-row flex flex-wrap items-center gap-2">
                   {writable &&
+                    run.workflow_type !== "producer" &&
                     ["QUEUED", "WAITING_REVIEW"].includes(run.status) && (
                       <Button
                         variant="outline"
@@ -320,7 +343,9 @@ export default function Tasks({
                     )}
                   {writable &&
                     run.status === "FAILED" &&
-                    run.workflow_type !== "art_proposal" && (
+                    !["art_proposal", "producer"].includes(
+                      run.workflow_type,
+                    ) && (
                       <Button
                         variant="outline"
                         size="lg"
@@ -330,16 +355,18 @@ export default function Tasks({
                         重试任务
                       </Button>
                     )}
-                  {writable && run.status === "FAILED" && (
-                    <Button
-                      variant="outline"
-                      size="lg"
-                      disabled={busy}
-                      onClick={() => void action(run, "restart")}
-                    >
-                      使用当前配置重新发起
-                    </Button>
-                  )}
+                  {writable &&
+                    run.workflow_type !== "producer" &&
+                    run.status === "FAILED" && (
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        disabled={busy}
+                        onClick={() => void action(run, "restart")}
+                      >
+                        使用当前配置重新发起
+                      </Button>
+                    )}
                   <Button
                     variant="outline"
                     size="lg"
@@ -349,11 +376,13 @@ export default function Tasks({
                     查看执行记录
                   </Button>
                 </div>
-                {writable && run.status === "FAILED" && (
-                  <p className="text-xs text-muted-foreground">
-                    重试沿用原配置；重新发起会保留原业务输入，使用当前账号配置创建新任务。原调用结果未知时须先核验。
-                  </p>
-                )}
+                {writable &&
+                  run.workflow_type !== "producer" &&
+                  run.status === "FAILED" && (
+                    <p className="text-xs text-muted-foreground">
+                      重试沿用原配置；重新发起会保留原业务输入，使用当前账号配置创建新任务。原调用结果未知时须先核验。
+                    </p>
+                  )}
               </article>
             ))}
           </div>
