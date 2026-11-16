@@ -2,44 +2,64 @@ name: Arclight CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Run the full regression checkpoint (module completion or delivery)
+        type: boolean
+        default: true
 permissions:
   contents: read
+  actions: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  scope:
+    name: Select verification scope
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      mode: ${{ steps.plan.outputs.mode }}
+      backend: ${{ steps.plan.outputs.backend }}
+      web: ${{ steps.plan.outputs.web }}
+      backend_tests: ${{ steps.plan.outputs.backend_tests }}
+      web_tests: ${{ steps.plan.outputs.web_tests }}
+      backend_matrix: ${{ steps.plan.outputs.backend_matrix }}
+      web_matrix: ${{ steps.plan.outputs.web_matrix }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: plan
+        name: Select changed tests or full checkpoint
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          ARCLIGHT_FORCE_FULL: ${{ github.event_name == 'workflow_dispatch' && inputs.full || startsWith(github.ref, 'refs/tags/') }}
+        run: python backend/scripts/ci_scope.py --base "$BASE_SHA" --head "$HEAD_SHA"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verification-scope
+          path: backend/test-results/ci-scope.json
+          if-no-files-found: error
+          retention-days: 7
+
   check:
+    needs: scope
+    if: needs.scope.outputs.mode == 'full' || needs.scope.outputs.backend == 'true'
     name: check (${{ matrix.database }}, ${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - database: sqlite
-            database_url: ""
-            shard: 1
-            shards: 2
-          - database: sqlite
-            database_url: ""
-            shard: 2
-            shards: 2
-          - database: postgres
-            database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
-            shard: 1
-            shards: 4
-          - database: postgres
-            database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
-            shard: 2
-            shards: 4
-          - database: postgres
-            database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
-            shard: 3
-            shards: 4
-          - database: postgres
-            database_url: postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test
-            shard: 4
-            shards: 4
+      matrix: ${{ fromJSON(needs.scope.outputs.backend_matrix) }}
     defaults:
       run:
         working-directory: backend
@@ -69,6 +89,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -80,11 +101,11 @@ jobs:
           save-cache: ${{ matrix.database == 'sqlite' && matrix.shard == 1 }}
       - run: uv sync --frozen
       - run: uv run ruff check .
-        if: matrix.database == 'sqlite' && matrix.shard == 1
+        if: matrix.shard == 1 && (matrix.database == 'sqlite' || needs.scope.outputs.mode == 'fast')
       - run: uv run ruff format --check .
-        if: matrix.database == 'sqlite' && matrix.shard == 1
+        if: matrix.shard == 1 && (matrix.database == 'sqlite' || needs.scope.outputs.mode == 'fast')
       - run: uv run mypy
-        if: matrix.database == 'sqlite' && matrix.shard == 1
+        if: matrix.shard == 1 && (matrix.database == 'sqlite' || needs.scope.outputs.mode == 'fast')
       - uses: docker/setup-buildx-action@v4
       - name: Build isolated S3 test service
         uses: docker/build-push-action@v7
@@ -114,7 +135,11 @@ jobs:
       - name: Database tests (${{ matrix.database }}, ${{ matrix.shard }}/${{ matrix.shards }})
         run: |
           # Partition whole files; the Redis broker tests must stay on one worker.
-          mapfile -d '' -t test_files < <(find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print0 | LC_ALL=C sort -z)
+          if [[ "$CI_MODE" == full ]]; then
+            mapfile -d '' -t test_files < <(find tests -type f \( -name 'test_*.py' -o -name '*_test.py' \) -print0 | LC_ALL=C sort -z)
+          else
+            mapfile -t test_files < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["SELECTED_TESTS"])))')
+          fi
           shard_files=()
           for ((index = SHARD - 1; index < ${#test_files[@]}; index += SHARDS)); do
             shard_files+=("${test_files[index]}")
@@ -128,11 +153,18 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ matrix.shards }}
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          SELECTED_TESTS: ${{ needs.scope.outputs.backend_tests }}
           ARCLIGHT_TEST_S3_ENDPOINT: http://127.0.0.1:19000
-          ARCLIGHT_TEST_DATABASE_URL: ${{ matrix.database_url }}
+          ARCLIGHT_TEST_DATABASE_URL: ${{ matrix.database == 'postgres' && 'postgresql+psycopg://arclight:ci-only-password@localhost:5432/arclight_test' || '' }}
           ARCLIGHT_TEST_REDIS_URL: redis://127.0.0.1:16379/15
+      - name: Verify fast backend cases actually passed
+        if: needs.scope.outputs.mode == 'fast'
+        run: python scripts/ci_scope.py --verify-report backend --report test-results/pytest.xml
+        env:
+          ARCLIGHT_CI_SELECTED_TESTS: ${{ needs.scope.outputs.backend_tests }}
       - run: docker compose config --quiet
-        if: matrix.database == 'sqlite' && matrix.shard == 1
+        if: matrix.shard == 1 && (matrix.database == 'sqlite' || needs.scope.outputs.mode == 'fast')
         working-directory: .
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
@@ -142,17 +174,19 @@ jobs:
           retention-days: 7
 
   web:
-    name: web (${{ matrix.shard }}/2)
+    needs: scope
+    if: needs.scope.outputs.mode == 'full' || needs.scope.outputs.web == 'true'
+    name: web (${{ matrix.shard }}/${{ matrix.shards }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
-      matrix:
-        shard: [1, 2]
+      matrix: ${{ fromJSON(needs.scope.outputs.web_matrix) }}
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -174,11 +208,27 @@ jobs:
         working-directory: fronted
       - run: npx playwright install --with-deps chromium
         working-directory: fronted
-      - run: npm run test:e2e -- --shard="$SHARD/2"
+      - name: Browser tests for selected scope
+        run: |
+          test_files=()
+          if [[ "$CI_MODE" == fast ]]; then
+            mapfile -t test_files < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["SELECTED_TESTS"])))')
+            if ((${#test_files[@]} == 0)); then exit 1; fi
+          fi
+          npm run test:e2e -- --forbid-only --shard="$SHARD/$SHARDS" "${test_files[@]}"
         working-directory: fronted
         env:
           SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ matrix.shards }}
+          CI_MODE: ${{ needs.scope.outputs.mode }}
+          SELECTED_TESTS: ${{ needs.scope.outputs.web_tests }}
           ARCLIGHT_E2E_PRODUCTION: "1"
+      - name: Verify fast browser cases actually passed
+        if: needs.scope.outputs.mode == 'fast'
+        working-directory: fronted
+        run: python ../backend/scripts/ci_scope.py --verify-report web --report test-results/playwright-report.json
+        env:
+          ARCLIGHT_CI_SELECTED_TESTS: ${{ needs.scope.outputs.web_tests }}
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
@@ -186,15 +236,49 @@ jobs:
           path: fronted/test-results/
           retention-days: 7
 
-  ci:
-    name: Arclight CI passed
-    if: ${{ always() }}
-    needs: [check, web]
+  full_checkpoint:
+    name: Full regression checkpoint
+    if: ${{ always() && needs.scope.result == 'success' && needs.scope.outputs.mode == 'full' }}
+    needs: [scope, check, web]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Require every database and browser shard
+      - name: Record only a successful complete regression
         env:
           BACKEND_RESULT: ${{ needs.check.result }}
           WEB_RESULT: ${{ needs.web.result }}
         run: test "$BACKEND_RESULT" = success && test "$WEB_RESULT" = success
+
+  ci:
+    name: Arclight CI passed
+    if: ${{ always() }}
+    needs: [scope, check, web, full_checkpoint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every check selected by the scope
+        env:
+          SCOPE_RESULT: ${{ needs.scope.result }}
+          MODE: ${{ needs.scope.outputs.mode }}
+          BACKEND_REQUIRED: ${{ needs.scope.outputs.backend }}
+          WEB_REQUIRED: ${{ needs.scope.outputs.web }}
+          BACKEND_RESULT: ${{ needs.check.result }}
+          WEB_RESULT: ${{ needs.web.result }}
+          CHECKPOINT_RESULT: ${{ needs.full_checkpoint.result }}
+        run: |
+          test "$SCOPE_RESULT" = success || exit 1
+          case "$MODE" in
+            full)
+              test "$BACKEND_RESULT" = success && test "$WEB_RESULT" = success && test "$CHECKPOINT_RESULT" = success
+              ;;
+            fast)
+              test "$CHECKPOINT_RESULT" = skipped || exit 1
+              if [[ "$BACKEND_REQUIRED" == true ]]; then test "$BACKEND_RESULT" = success || exit 1
+              elif [[ "$BACKEND_REQUIRED" == false ]]; then test "$BACKEND_RESULT" = skipped || exit 1
+              else exit 1; fi
+              if [[ "$WEB_REQUIRED" == true ]]; then test "$WEB_RESULT" = success || exit 1
+              elif [[ "$WEB_REQUIRED" == false ]]; then test "$WEB_RESULT" = skipped || exit 1
+              else exit 1; fi
+              ;;
+            *) exit 1 ;;
+          esac

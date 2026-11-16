@@ -171,6 +171,8 @@ def test_missing_required_service_stops_before_commands(repo, monkeypatch):
                 "tests/test_existing.py",
                 "--risk",
                 "concurrency",
+                "--database",
+                "postgres",
                 "--run",
             ],
             root=repo,
@@ -225,11 +227,23 @@ def junit(repo, name, body):
 
 def test_postgres_pass_can_supply_sqlite_skip_evidence(repo):
     case = '<testcase classname="tests.test_existing" name="test_pg">'
-    sqlite = junit(repo, "sqlite.xml", case + '<skipped message="Requires PG"/></testcase>')
+    sqlite = junit(repo, "sqlite.xml", case + '<skipped message="Requires PostgreSQL"/></testcase>')
     postgres = junit(repo, "postgres.xml", case + "</testcase>")
     result = preflight.junit_evidence([sqlite, postgres], ("backend/tests/test_existing.py",))
     assert result.passed == {"tests.test_existing::test_pg"}
     assert not result.skipped and not result.errors
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["Known PostgreSQL bug; disabled", "Unknown skip", "PostgreSQL-specific"],
+)
+def test_other_database_pass_does_not_hide_an_invalid_skip(repo, reason):
+    case = '<testcase classname="tests.test_existing" name="test_existing">'
+    sqlite = junit(repo, "sqlite.xml", case + "</testcase>")
+    postgres = junit(repo, "postgres.xml", case + f'<skipped message="{reason}"/></testcase>')
+    evidence = preflight.junit_evidence([sqlite, postgres], ("backend/tests/test_existing.py",))
+    assert evidence.skipped == {"tests.test_existing::test_existing": reason}
 
 
 def test_unresolved_skip_retains_reason(repo):
@@ -351,6 +365,10 @@ def test_execution_uses_whole_files_isolated_env_and_fresh_reports(repo, monkeyp
         "tests/existing.spec.ts",
         "--risk",
         "concurrency",
+        "--database",
+        "both",
+        "--web-mode",
+        "production",
         "--run",
     ]
     assert preflight.main(command, root=repo) == 0
@@ -370,7 +388,7 @@ def test_execution_uses_whole_files_isolated_env_and_fresh_reports(repo, monkeyp
     assert "--reporter=line,json" in web[0]
     assert "--forbid-only" in web[0]
     assert all(argv[argv.index("-o") + 1] == "addopts=" for argv, _ in pytest_calls)
-    assert len(result["commands"]) == 7
+    assert len(result["commands"]) == 8
     before = set((repo / "backend/test-results/preflight").iterdir())
     assert preflight.main(command, root=repo) == 0
     assert len(set((repo / "backend/test-results/preflight").iterdir()) - before) == 1
@@ -576,7 +594,7 @@ def test_push_guard_rechecks_actual_cases_instead_of_trusting_summary(repo, pass
 
 
 def test_push_guard_rechecks_browser_results_and_report_presence(repo, passed_preflight):
-    path = passed_preflight("--web-test", "tests/existing.spec.ts")
+    path = passed_preflight("--web-test", "tests/existing.spec.ts", "--web-mode", "production")
     data = json.loads(path.read_text(encoding="utf-8"))
     browser = path.parent / "playwright.json"
     browser.write_text('{"suites": []}', encoding="utf-8")
@@ -619,6 +637,25 @@ def test_hook_installation_is_idempotent_and_preserves_existing_hooks(repo):
     assert path.read_text(encoding="utf-8") == "#!/bin/sh\nexit 17\n"
 
 
+def test_shared_push_hook_uses_the_active_linked_worktree(repo):
+    write(repo, "backend/scripts/preflight.py", "raise SystemExit(17)\n")
+    commit(repo)
+    linked = repo.parent / (repo.name + "-linked")
+    preflight.git(repo, "worktree", "add", "--detach", str(linked), "HEAD")
+    write(
+        linked,
+        "backend/scripts/preflight.py",
+        "from pathlib import Path\nPath('worktree-hook-ran').write_text('ok')\n",
+    )
+    remote = repo.parent / (repo.name + "-linked-remote.git")
+    subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+    preflight.git(repo, "remote", "add", "linked-test", str(remote))
+    preflight.install_hook(repo)
+    preflight.git(linked, "push", "linked-test", "HEAD:refs/heads/main")
+    assert (linked / "worktree-hook-ran").read_text() == "ok"
+    assert not (repo / "worktree-hook-ran").exists()
+
+
 def test_real_git_push_blocks_plan_then_accepts_matching_executed_reports(repo, passed_preflight):
     write(
         repo, "backend/scripts/preflight.py", Path(preflight.__file__).read_text(encoding="utf-8")
@@ -645,3 +682,210 @@ def test_real_git_push_blocks_plan_then_accepts_matching_executed_reports(repo, 
     passed_preflight(base=base)
     preflight.git(repo, "push", "guard-test", "HEAD:refs/heads/main")
     assert preflight.git(repo, "ls-remote", "guard-test", "refs/heads/main").split()[0] == head
+
+
+@pytest.mark.parametrize(
+    "database,risk,configured,expected",
+    [
+        ("auto", None, False, ("sqlite",)),
+        ("auto", "concurrency", True, ("postgres",)),
+        ("auto", "migration", False, ("sqlite",)),
+        ("sqlite", "concurrency", True, ("sqlite",)),
+        ("postgres", None, True, ("postgres",)),
+        ("both", None, True, ("sqlite", "postgres")),
+    ],
+)
+def test_database_selection_avoids_implicit_dual_runs(repo, database, risk, configured, expected):
+    flags = ["--backend-test", "tests/test_existing.py", "--database", database]
+    if risk:
+        flags.extend(("--risk", risk))
+    plan = preflight.make_plan(repo, args(*flags))
+    environment = {"ARCLIGHT_TEST_DATABASE_URL": "configured"} if configured else {}
+    assert preflight.selected_databases(plan, environment) == expected
+
+
+def test_auto_concurrency_executes_postgres_once(repo, passed_preflight, monkeypatch):
+    monkeypatch.setenv(
+        "ARCLIGHT_TEST_DATABASE_URL", "postgresql+psycopg://test:test@localhost/arclight_test"
+    )
+    path = passed_preflight("--risk", "concurrency")
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["evidence"]["databases"] == ["postgres"]
+    assert not (path.parent / "pytest-sqlite.xml").exists()
+    preflight.verify_push(repo)
+
+
+def test_missing_optional_database_defers_real_validation_to_ci(
+    repo, passed_preflight, monkeypatch
+):
+    monkeypatch.delenv("ARCLIGHT_TEST_DATABASE_URL", raising=False)
+    path = passed_preflight("--risk", "concurrency")
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["status"] == "passed" and result["ci_required"] is True
+    assert result["evidence"]["databases"] == ["sqlite"]
+    assert "postgres" in result["deferred_checks"]
+    preflight.verify_push(repo)
+    result["deferred_checks"].pop("postgres")
+    preflight.save_summary(repo, path.parent, result)
+    with pytest.raises(ValueError, match="deferral for PostgreSQL"):
+        preflight.verify_push(repo)
+
+
+def test_default_browser_mode_typechecks_and_records_ci_deferral(repo, passed_preflight):
+    path = passed_preflight("--web-test", "tests/existing.spec.ts")
+    result = json.loads(path.read_text(encoding="utf-8"))
+    commands = [record["argv"] for record in result["commands"]]
+    assert any(command[1:] == ["run", "typecheck"] for command in commands)
+    assert not any("build" in command or "test:e2e" in command for command in commands)
+    assert "browser:fronted/tests/existing.spec.ts" in result["deferred_checks"]
+    assert not (path.parent / "playwright.json").exists()
+    preflight.verify_push(repo)
+    result["deferred_checks"] = {}
+    preflight.save_summary(repo, path.parent, result)
+    with pytest.raises(ValueError, match="deferral for browser"):
+        preflight.verify_push(repo)
+
+
+def test_development_browser_mode_executes_without_production_build(repo, passed_preflight):
+    path = passed_preflight("--web-test", "tests/existing.spec.ts", "--web-mode", "development")
+    result = json.loads(path.read_text(encoding="utf-8"))
+    commands = [record["argv"] for record in result["commands"]]
+    assert any("test:e2e" in command for command in commands)
+    assert not any("build" in command for command in commands)
+    assert not result["deferred_checks"]
+    assert (path.parent / "playwright.json").is_file()
+    preflight.verify_push(repo)
+
+
+def test_environment_skip_is_recorded_and_cannot_be_silently_dropped(
+    repo, passed_preflight, monkeypatch
+):
+    def run(command, cwd, environment, log):
+        log.write_text("controlled environment-specific run\n", encoding="utf-8")
+        if "pytest" in command:
+            report = next(
+                arg.removeprefix("--junitxml=") for arg in command if arg.startswith("--junitxml=")
+            )
+            junit(
+                repo,
+                report,
+                '<testcase classname="tests.test_existing" name="test_existing">'
+                '<skipped message="Requires isolated S3 test service"/></testcase>',
+            )
+        return 0
+
+    monkeypatch.setattr(preflight, "run_command", run)
+    monkeypatch.delenv("ARCLIGHT_TEST_S3_ENDPOINT", raising=False)
+    path = passed_preflight("--risk", "storage")
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["evidence"]["passed"] == 0
+    identity = "case:tests.test_existing::test_existing"
+    assert result["deferred_checks"][identity] == "Requires isolated S3 test service"
+    preflight.verify_push(repo)
+    result["deferred_checks"].pop(identity)
+    preflight.save_summary(repo, path.parent, result)
+    with pytest.raises(ValueError, match="unresolved skips"):
+        preflight.verify_push(repo)
+
+
+@pytest.mark.parametrize(
+    "reason,databases,services,expected",
+    [
+        ("Requires isolated S3 test service", ("sqlite",), {"storage": False}, True),
+        ("Requires isolated S3 test service", ("sqlite",), {"storage": True}, False),
+        ("Requires isolated S3 test service", ("sqlite",), {}, False),
+        ("Known S3 regression; disabled until fixed", ("sqlite",), {"storage": False}, False),
+        ("PostgreSQL regression", ("sqlite",), {}, False),
+        ("PostgreSQL-specific", ("sqlite",), {}, True),
+        ("PostgreSQL-specific", ("postgres",), {}, False),
+        ("SQLite-specific", ("sqlite", "postgres"), {}, False),
+        ("SQLite REPLACE bypass regression", ("postgres",), {}, True),
+        ("Missing unknown ARCLIGHT_TEST_SERVICE", ("sqlite",), {}, False),
+    ],
+)
+def test_environment_skip_requires_a_recorded_gap(reason, databases, services, expected):
+    assert preflight.environment_skip(reason, databases, services) is expected
+
+
+def test_push_guard_requires_recorded_service_availability(repo, passed_preflight, monkeypatch):
+    monkeypatch.delenv("ARCLIGHT_TEST_S3_ENDPOINT", raising=False)
+
+    def run(command, cwd, environment, log):
+        log.write_text("controlled service gap\n", encoding="utf-8")
+        if "pytest" in command:
+            report = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+            junit(
+                repo,
+                report,
+                '<testcase classname="tests.test_existing" name="test_existing">'
+                '<skipped message="Requires isolated S3 test service"/></testcase>',
+            )
+        return 0
+
+    monkeypatch.setattr(preflight, "run_command", run)
+    path = passed_preflight("--risk", "storage")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["evidence"].pop("services")
+    preflight.save_summary(repo, path.parent, data)
+    with pytest.raises(ValueError, match="unresolved skips"):
+        preflight.verify_push(repo)
+
+
+def test_dual_database_bug_skip_blocks_execution_and_push(repo, monkeypatch):
+    monkeypatch.setenv(
+        "ARCLIGHT_TEST_DATABASE_URL", "postgresql+psycopg://test:test@localhost/arclight_test"
+    )
+
+    def run(command, cwd, environment, log):
+        log.write_text("controlled dual database result\n", encoding="utf-8")
+        if "pytest" in command:
+            report = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+            skip = (
+                '<skipped message="Known PostgreSQL bug; disabled"/>'
+                if environment.get("ARCLIGHT_TEST_DATABASE_URL")
+                else ""
+            )
+            junit(
+                repo,
+                report,
+                '<testcase classname="tests.test_existing" name="test_existing">'
+                + skip
+                + "</testcase>",
+            )
+        return 0
+
+    monkeypatch.setattr(preflight, "run_command", run)
+    assert (
+        preflight.main(
+            [
+                "--base",
+                "HEAD",
+                "--backend-test",
+                "tests/test_existing.py",
+                "--database",
+                "both",
+                "--run",
+            ],
+            root=repo,
+        )
+        == 2
+    )
+    receipt = json.loads(preflight.git_path(repo, "arclight-preflight.json").read_text())
+    path = Path(receipt["summary"])
+    data = json.loads(path.read_text())
+    assert data["evidence"]["skipped"]
+    data.update(status="passed", issues=[])
+    preflight.save_summary(repo, path.parent, data)
+    with pytest.raises(ValueError, match="unresolved skips"):
+        preflight.verify_push(repo)
+
+
+def test_browser_typecheck_failure_blocks_deferred_mode(repo, monkeypatch):
+    monkeypatch.setattr(preflight, "run_command", lambda *args: 1)
+    assert (
+        preflight.main(
+            ["--base", "HEAD", "--web-test", "tests/existing.spec.ts", "--run"], root=repo
+        )
+        == 1
+    )
+    assert summary(repo)["status"] == "failed"

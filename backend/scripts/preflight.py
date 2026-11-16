@@ -30,6 +30,8 @@ class Plan:
     web: tuple[str, ...]
     risks: tuple[str, ...]
     issues: tuple[str, ...]
+    database: str = "auto"
+    web_mode: str = "defer"
 
 
 @dataclass
@@ -147,6 +149,8 @@ def make_plan(root: Path, args: argparse.Namespace) -> Plan:
         tuple(sorted(web)),
         tuple(sorted(risks)),
         tuple(issues),
+        getattr(args, "database", "auto"),
+        getattr(args, "web_mode", "defer"),
     )
 
 
@@ -159,7 +163,7 @@ def test_environment(plan: Plan) -> tuple[dict[str, str], list[str]]:
     environment.update(PYTEST_ADDOPTS="", ARCLIGHT_PROVIDER="mock", ARCLIGHT_ENVIRONMENT="test")
     issues = []
     requirements = {}
-    if set(plan.risks) & {"migration", "concurrency"}:
+    if set(plan.risks) & {"migration", "concurrency"} or plan.database in {"postgres", "both"}:
         requirements["ARCLIGHT_TEST_DATABASE_URL"] = "PostgreSQL arclight_test database"
     if "storage" in plan.risks:
         requirements["ARCLIGHT_TEST_S3_ENDPOINT"] = "dedicated S3 test service"
@@ -168,7 +172,10 @@ def test_environment(plan: Plan) -> tuple[dict[str, str], list[str]]:
     for name, label in requirements.items():
         value = os.environ.get(name, "")
         if not value:
-            issues.append(f"Missing {name}: {label}; no test services are started automatically")
+            if name == "ARCLIGHT_TEST_DATABASE_URL" and plan.database in {"postgres", "both"}:
+                issues.append(
+                    f"Missing {name}: {label}; no test services are started automatically"
+                )
             continue
         parsed = urlsplit(value)
         if name == "ARCLIGHT_TEST_DATABASE_URL" and (
@@ -181,15 +188,93 @@ def test_environment(plan: Plan) -> tuple[dict[str, str], list[str]]:
             issues.append("Redis checks require loopback and dedicated database /15")
         else:
             environment[name] = value
-    if "media" in plan.risks and not shutil.which("ffprobe"):
-        issues.append("Missing ffprobe: independent media verification remains incomplete")
     return environment, issues
+
+
+def selected_databases(plan: Plan, environment: dict[str, str]) -> tuple[str, ...]:
+    """Use one appropriate database locally unless both were explicitly requested."""
+    if not plan.backend:
+        return ()
+    if plan.database == "both":
+        return ("sqlite", "postgres")
+    if plan.database != "auto":
+        return (plan.database,)
+    if set(plan.risks) & {"migration", "concurrency"} and environment.get(
+        "ARCLIGHT_TEST_DATABASE_URL"
+    ):
+        return ("postgres",)
+    return ("sqlite",)
+
+
+def service_availability(environment: dict[str, str]) -> dict[str, bool]:
+    """Record availability flags without retaining test connection secrets."""
+    return {
+        "storage": bool(environment.get("ARCLIGHT_TEST_S3_ENDPOINT")),
+        "broker": bool(environment.get("ARCLIGHT_TEST_REDIS_URL")),
+        "media": bool(shutil.which("ffprobe")),
+    }
+
+
+def environment_skip(reason: str, databases: tuple[str, ...], services: dict[str, bool]) -> bool:
+    """Defer only recognized environment gaps recorded at execution time."""
+    lowered = reason.lower()
+    if any(
+        marker in lowered for marker in ("bug", "disabled", "todo", "broken", "not implemented")
+    ) or ("regression" in lowered and lowered != "sqlite replace bypass regression"):
+        return False
+    service_reasons = {
+        "requires isolated s3 test service": "storage",
+        "requires dedicated s3": "storage",
+        "real redis requires arclight_test_redis_url on dedicated database 15": "broker",
+        "independent ffprobe cli unavailable locally; required in final ci": "media",
+    }
+    if service := service_reasons.get(lowered):
+        return services.get(service) is False
+    dialect = re.search(r"postgres(?:ql)?|sqlite", lowered)
+    if not dialect:
+        return False
+    database = "sqlite" if dialect.group() == "sqlite" else "postgres"
+    if database in databases:
+        return False
+    return bool(
+        re.match(r"(?:real |requires (?:real |isolated )?)?(?:postgresql|sqlite)\b", lowered)
+        or re.search(r"(?:is |only on )(?:postgresql|sqlite)", lowered)
+        or "需要真实 postgresql" in lowered
+        or "必须使用真实 postgresql" in lowered
+        or lowered == "production row-lock concurrency requires isolated postgresql"
+        or lowered == "live harness deliberately requires an isolated sqlite fixture"
+    )
+
+
+def deferred_checks(
+    plan: Plan, environment: dict[str, str], databases: tuple[str, ...]
+) -> dict[str, str]:
+    deferred = {}
+    if set(plan.risks) & {"migration", "concurrency"} and "postgres" not in databases:
+        deferred["postgres"] = "Real PostgreSQL validation is required in exact-SHA CI"
+    for risk, variable in (
+        ("storage", "ARCLIGHT_TEST_S3_ENDPOINT"),
+        ("broker", "ARCLIGHT_TEST_REDIS_URL"),
+    ):
+        if risk in plan.risks and not environment.get(variable):
+            deferred[risk] = "Dedicated test service validation is required in exact-SHA CI"
+    if "media" in plan.risks and not shutil.which("ffprobe"):
+        deferred["media"] = "Independent FFprobe validation is required in exact-SHA CI"
+    if plan.web_mode == "defer":
+        deferred.update(
+            (f"browser:{name}", "Production Chromium execution is required in exact-SHA CI")
+            for name in plan.web
+        )
+    return deferred
 
 
 def junit_evidence(paths: list[Path], selected: tuple[str, ...]) -> Evidence:
     evidence = Evidence()
-    seen = set()
+    seen: set[str] = set()
+    passed_by_database: dict[str, set[str]] = {}
+    skipped_cases = []
     for path in paths:
+        database = path.stem.removeprefix("pytest-")
         try:
             cases = list(ET.parse(path).getroot().iter("testcase"))
             if not cases:
@@ -203,19 +288,29 @@ def junit_evidence(paths: list[Path], selected: tuple[str, ...]) -> Evidence:
                 if case.find("failure") is not None or case.find("error") is not None:
                     evidence.errors.append(name)
                 elif (skip := case.find("skipped")) is not None:
-                    evidence.skipped[name] = skip.get("message", "Skipped without a reason")
+                    skipped_cases.append(
+                        (name, skip.get("message", "Skipped without a reason"), database)
+                    )
                 else:
                     evidence.passed.add(name)
+                    passed_by_database.setdefault(database, set()).add(name)
         except (OSError, ET.ParseError):
             evidence.missing.append(f"{path.name}: missing or invalid JUnit report")
     evidence.missing.extend(f"No execution evidence for {p}" for p in selected if p not in seen)
-    evidence.skipped = {k: v for k, v in evidence.skipped.items() if k not in evidence.passed}
+    for name, reason, database in skipped_cases:
+        counterpart = "postgres" if database == "sqlite" else "sqlite"
+        if not (
+            database in {"sqlite", "postgres"}
+            and environment_skip(reason, (database,), {})
+            and name in passed_by_database.get(counterpart, set())
+        ):
+            evidence.skipped[name] = reason
     return evidence
 
 
 def browser_evidence(path: Path, selected: tuple[str, ...]) -> Evidence:
     evidence = Evidence()
-    seen = set()
+    seen: set[str] = set()
 
     def visit(suites):
         for suite in suites:
@@ -282,14 +377,13 @@ def execute(
     reports = []
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm") or "npm"
     checks = []
+    databases = selected_databases(plan, environment)
+    deferred = deferred_checks(plan, environment, databases)
+    services = service_availability(environment)
     if plan.backend:
         for args in (("ruff", "check", "."), ("ruff", "format", "--check", "."), ("mypy",)):
             checks.append((list(("uv", "run", "--frozen", *args)), "backend", environment))
-        for database in (
-            ("sqlite", "postgres")
-            if set(plan.risks) & {"migration", "concurrency"}
-            else ("sqlite",)
-        ):
+        for database in databases:
             report = folder / f"pytest-{database}.xml"
             reports.append(report)
             env = environment | {
@@ -318,14 +412,16 @@ def execute(
                 (command + [p.removeprefix("backend/") for p in plan.backend], "backend", env)
             )
     if plan.web:
-        env = environment | {
-            "CI": "1",
-            "ARCLIGHT_E2E_PRODUCTION": "1",
-            "PLAYWRIGHT_JSON_OUTPUT_FILE": str(folder / "playwright.json"),
-        }
-        checks.extend(
-            (
-                ([npm, "run", "build"], "fronted", env),
+        checks.append(([npm, "run", "typecheck"], "fronted", environment))
+        if plan.web_mode != "defer":
+            env = environment | {
+                "CI": "1",
+                "ARCLIGHT_E2E_PRODUCTION": "1" if plan.web_mode == "production" else "0",
+                "PLAYWRIGHT_JSON_OUTPUT_FILE": str(folder / "playwright.json"),
+            }
+            if plan.web_mode == "production":
+                checks.append(([npm, "run", "build"], "fronted", env))
+            checks.append(
                 (
                     [
                         npm,
@@ -338,9 +434,8 @@ def execute(
                     ],
                     "fronted",
                     env,
-                ),
+                )
             )
-        )
     for index, (command, package, env) in enumerate(checks):
         print(f"[{index + 1}/{len(checks)}] {package}: {' '.join(command)}", flush=True)
         code = run_command(command, plan.root / package, env, folder / f"command-{index + 1}.log")
@@ -349,8 +444,13 @@ def execute(
             return "failed", records, ["A required command failed; see its log"], {}
     evidence = []
     if plan.backend:
-        evidence.append(junit_evidence(reports, plan.backend))
-    if plan.web:
+        result = junit_evidence(reports, plan.backend)
+        for name, reason in list(result.skipped.items()):
+            if environment_skip(reason, databases, services):
+                deferred[f"case:{name}"] = reason
+                del result.skipped[name]
+        evidence.append(result)
+    if plan.web and plan.web_mode != "defer":
         evidence.append(browser_evidence(folder / "playwright.json", plan.web))
     errors = [error for result in evidence for error in result.errors]
     missing = [item for result in evidence for item in result.missing]
@@ -365,7 +465,13 @@ def execute(
         status,
         records,
         issues,
-        {"passed": sum(len(e.passed) for e in evidence), "skipped": skips},
+        {
+            "passed": sum(len(e.passed) for e in evidence),
+            "skipped": skips,
+            "databases": databases,
+            "services": services,
+            "deferred_checks": deferred,
+        },
     )
 
 
@@ -392,20 +498,20 @@ def save_summary(root: Path, folder: Path, summary: dict) -> None:
 
 
 def install_hook(root: Path) -> Path:
-    """Install a local hook without replacing a different existing push hook."""
+    """Install a worktree-aware hook without replacing an unrelated hook."""
     marker = "# Arclight scoped preflight gate"
     path = git_path(root, "hooks/pre-push")
     if path.exists() and marker not in path.read_text(encoding="utf-8"):
         raise ValueError("An existing pre-push hook must be integrated without overwriting it")
-    command = shlex.join(
-        [
-            Path(sys.executable).as_posix(),
-            (root / "backend/scripts/preflight.py").as_posix(),
-            "--verify-push",
-        ]
-    )
+    interpreter = shlex.quote(Path(sys.executable).as_posix())
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"#!/bin/sh\n{marker}\nexec {command}\n", encoding="utf-8", newline="\n")
+    path.write_text(
+        f"#!/bin/sh\n{marker}\n"
+        "worktree_root=$(git rev-parse --show-toplevel) || exit 2\n"
+        f'exec {interpreter} "$worktree_root/backend/scripts/preflight.py" --verify-push\n',
+        encoding="utf-8",
+        newline="\n",
+    )
     path.chmod(path.stat().st_mode | 0o111)
     return path
 
@@ -446,6 +552,8 @@ def verify_push(root: Path, updates: str = "") -> None:
             backend_test=data["backend_tests"],
             web_test=data["web_tests"],
             risk=data["risks"],
+            database=data.get("database", "auto"),
+            web_mode=data.get("web_mode", "defer"),
         ),
     )
     if (
@@ -467,29 +575,55 @@ def verify_push(root: Path, updates: str = "") -> None:
                     "Preflight base must precede the remote commit; fetch and use the task baseline"
                 ) from error
     hashes = data.get("report_hashes", {})
-    required = []
-    if plan.backend:
-        required.append("pytest-sqlite.xml")
-        if set(plan.risks) & {"migration", "concurrency"}:
-            required.append("pytest-postgres.xml")
+    databases = tuple(data.get("evidence", {}).get("databases", ()))
+    if plan.database not in {"auto", "sqlite", "postgres", "both"} or plan.web_mode not in {
+        "defer",
+        "development",
+        "production",
+    }:
+        raise ValueError("Invalid local verification mode; rerun preflight")
+    expected = ("sqlite", "postgres") if plan.database == "both" else (plan.database,)
+    if plan.backend and (
+        (plan.database == "auto" and databases not in {("sqlite",), ("postgres",)})
+        or (plan.database != "auto" and databases != expected)
+    ):
+        raise ValueError("Missing actual local database execution scope")
+    required = [f"pytest-{database}.xml" for database in databases]
     if plan.web:
-        required.append("playwright.json")
+        if not any(record["argv"][1:] == ["run", "typecheck"] for record in commands):
+            raise ValueError("Missing frontend typecheck execution")
+        if plan.web_mode != "defer":
+            required.append("playwright.json")
     if not hashes or any(name not in hashes for name in required):
         raise ValueError("Missing actual JUnit or browser execution reports")
     for name, digest in hashes.items():
         report = path.parent / name
         if report.name != name or hashlib.sha256(report.read_bytes()).hexdigest() != digest:
             raise ValueError("Execution report or command log changed; rerun the checks")
+    deferred = data.get("deferred_checks", {})
+    if plan.web_mode == "defer" and any(f"browser:{name}" not in deferred for name in plan.web):
+        raise ValueError("Missing exact-SHA CI deferral for browser tests")
+    if (
+        set(plan.risks) & {"migration", "concurrency"}
+        and "postgres" not in databases
+        and "postgres" not in deferred
+    ):
+        raise ValueError("Missing exact-SHA CI deferral for PostgreSQL")
     evidence = []
     if plan.backend:
-        evidence.append(
-            junit_evidence(
-                [path.parent / name for name in required if name.endswith(".xml")], plan.backend
-            )
+        result = junit_evidence(
+            [path.parent / name for name in required if name.endswith(".xml")], plan.backend
         )
-    if plan.web:
+        for name, reason in list(result.skipped.items()):
+            if (
+                environment_skip(reason, databases, data.get("evidence", {}).get("services", {}))
+                and deferred.get(f"case:{name}") == reason
+            ):
+                del result.skipped[name]
+        evidence.append(result)
+    if plan.web and plan.web_mode != "defer":
         evidence.append(browser_evidence(path.parent / "playwright.json", plan.web))
-    if not evidence or any(e.errors or e.missing or e.skipped or not e.passed for e in evidence):
+    if any(e.errors or e.missing or e.skipped for e in evidence):
         raise ValueError("Execution evidence contains failures, missing cases or unresolved skips")
 
 
@@ -499,6 +633,18 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--backend-test", action="append", default=[], metavar="tests/test_file.py")
     result.add_argument("--web-test", action="append", default=[], metavar="tests/file.spec.ts")
     result.add_argument("--risk", action="append", choices=RISKS, default=[])
+    result.add_argument(
+        "--database",
+        choices=("auto", "sqlite", "postgres", "both"),
+        default="auto",
+        help="Local database; auto prefers PostgreSQL for migration/concurrency when configured",
+    )
+    result.add_argument(
+        "--web-mode",
+        choices=("defer", "development", "production"),
+        default="defer",
+        help="Default runs local typecheck and defers production browser execution to exact-SHA CI",
+    )
     result.add_argument("--output", default="backend/test-results/preflight")
     mode = result.add_mutually_exclusive_group()
     mode.add_argument(
@@ -531,7 +677,7 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
             return 2
     folder = (root / args.output).resolve() / uuid4().hex
     folder.mkdir(parents=True, exist_ok=False)
-    summary = {"status": "incomplete", "commands": [], "issues": []}
+    summary: dict = {"status": "incomplete", "commands": [], "issues": []}
     try:
         plan = make_plan(root, args)
         environment, missing = test_environment(plan)
@@ -544,13 +690,19 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
             web_tests=plan.web,
             risks=plan.risks,
             issues=[*plan.issues, *missing],
-            browser_mode="production/chromium",
+            database=plan.database,
+            web_mode=plan.web_mode,
+            ci_required=True,
+            deferred_checks=deferred_checks(
+                plan, environment, selected_databases(plan, environment)
+            ),
         )
         if not args.run:
             summary["status"] = "planned"
         elif not summary["issues"]:
             status, records, errors, evidence = execute(plan, folder, environment)
             summary.update(status=status, commands=records, issues=errors, evidence=evidence)
+            summary["deferred_checks"].update(evidence.get("deferred_checks", {}))
             if (
                 fingerprints(root) != plan.fingerprints
                 or git(root, "rev-parse", "HEAD") != plan.head
@@ -575,6 +727,8 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
     print("Risks:", ", ".join(summary.get("risks", [])) or "none")
     for issue in summary["issues"]:
         print(issue)
+    for name, reason in summary.get("deferred_checks", {}).items():
+        print(f"Deferred to exact-SHA CI: {name}: {reason}")
     return {"planned": 0, "passed": 0, "failed": 1, "incomplete": 2}[summary["status"]]
 
 
