@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Page, type TestInfo } from "@playwright/test";
 import type { StoryEntry } from "../src/types/api";
 import type {
   LegacyOutlineContent,
@@ -425,6 +425,131 @@ async function reloadVersion(page: Page, version: number) {
     .click();
 }
 
+type VisibleField = [label: string, value: string, choice?: true];
+
+async function planningScreenshots(
+  page: Page,
+  info: TestInfo,
+  prefix: string,
+  content: SeriesOutlineContent,
+  characters: StoryEntry[],
+  readOnly = false,
+) {
+  const capture = async (name: string, fields: VisibleField[]) => {
+    const inputs = fields.map(([label]) =>
+      page.getByLabel(label, { exact: true }),
+    );
+    const ids = await Promise.all(
+      inputs.map((input) => input.getAttribute("id")),
+    );
+    await page.evaluate(() => document.fonts.ready);
+    // Center only these adjacent fields inside the real studio scrollport.
+    // A giant section screenshot extends past this scrollport and loses its content.
+    await page.locator(".episode-studio").evaluate((scrollport, ids) => {
+      const bounds = ids.map((id) => {
+        if (!id) throw new Error("Screenshot field has no id");
+        const field = document.getElementById(id)?.parentElement;
+        if (!field) throw new Error("Screenshot field is not mounted");
+        return field.getBoundingClientRect();
+      });
+      const top = Math.min(...bounds.map((bound) => bound.top));
+      const bottom = Math.max(...bounds.map((bound) => bound.bottom));
+      const viewport = scrollport.getBoundingClientRect();
+      scrollport.scrollTop +=
+        (top + bottom - viewport.top - viewport.bottom) / 2;
+    }, ids);
+    for (const [index, [, value, choice]] of fields.entries()) {
+      const input = inputs[index];
+      if (choice) await expect(input).toContainText(value);
+      else await expect(input).toHaveValue(value);
+      if (readOnly) await expect(input).toBeDisabled();
+      await expect(input).toBeVisible();
+      await expect(input.locator("..")).toBeInViewport({ ratio: 1 });
+    }
+    await page.screenshot({
+      path: info.outputPath(`${prefix}-${name}.png`),
+      fullPage: false,
+      animations: "disabled",
+    });
+  };
+  const plan = content.series_plan;
+  const characterName = (id: string) =>
+    characters.find((character) => character.id === id)!.name;
+  for (const [index, thread] of plan.threads.entries()) {
+    await capture(`thread-${index + 1}`, [
+      [`线索${index + 1}类型`, thread.kind === "MAIN" ? "主线" : "支线", true],
+      [`线索${index + 1}标题`, thread.title],
+      [`线索${index + 1}关键冲突`, thread.central_conflict],
+      [`线索${index + 1}预定收束`, thread.planned_resolution],
+    ]);
+  }
+  for (const [index, character] of plan.character_arcs.entries()) {
+    await capture(`character-${index + 1}`, [
+      [`人物${index + 1}角色`, characterName(character.character_id), true],
+      [`人物${index + 1}初始目标`, character.starting_goal],
+      [`人物${index + 1}内在冲突`, character.internal_conflict],
+      [`人物${index + 1}预定成长`, character.planned_growth],
+    ]);
+  }
+  const relationships = page
+    .locator('section[aria-label="全剧规划"] details')
+    .filter({ has: page.locator("summary").filter({ hasText: /^关系发展$/ }) });
+  if ((await relationships.getAttribute("open")) === null)
+    await relationships.locator("summary").click();
+  for (const [index, relationship] of plan.relationship_arcs.entries()) {
+    await capture(`relationship-${index + 1}`, [
+      [
+        `关系${index + 1}一方`,
+        characterName(relationship.source_character_id),
+        true,
+      ],
+      [
+        `关系${index + 1}另一方`,
+        characterName(relationship.target_character_id),
+        true,
+      ],
+      [`关系${index + 1}初始关系`, relationship.initial_relationship],
+      [`关系${index + 1}预定发展`, relationship.planned_development],
+    ]);
+  }
+  for (const [index, foreshadow] of plan.foreshadowing.entries()) {
+    await capture(`foreshadow-${index + 1}`, [
+      [
+        `伏笔${index + 1}所属线索`,
+        plan.threads.find((thread) => thread.id === foreshadow.thread_id)!
+          .title,
+        true,
+      ],
+      [`伏笔${index + 1}设置集`, String(foreshadow.setup_episode_no)],
+      [
+        `伏笔${index + 1}预计回收集`,
+        String(foreshadow.expected_payoff_episode_no),
+      ],
+      [`伏笔${index + 1}设置说明`, foreshadow.setup],
+      [`伏笔${index + 1}预定回收说明`, foreshadow.planned_payoff],
+    ]);
+  }
+  for (const episode of plan.episode_progressions) {
+    const label = `第${episode.episode_no}集`;
+    const causes: VisibleField[] = episode.caused_by_episode_nos.map(
+      (source, index) => [`${label}因果来源${index + 1}集号`, String(source)],
+    );
+    await capture(`episode-${episode.episode_no}-causality`, [
+      ...causes,
+      [`${label}因果说明`, episode.causal_link],
+      [`${label}结尾承接`, episode.ending_handoff],
+    ]);
+  }
+  for (const episode of content.episodes) {
+    const label = `第${episode.episode_no}集`;
+    await capture(`episode-${episode.episode_no}-outline`, [
+      [`${label}目标`, episode.goal],
+      [`${label}转折`, episode.turning_point],
+      [`${label}结尾钩子`, episode.ending_hook],
+    ]);
+  }
+}
+
 test("SERIES-01 plans three episodes, confirms an exact version and revises only a planned payoff", async ({
   page,
 }, testInfo) => {
@@ -503,9 +628,13 @@ test("SERIES-01 plans three episodes, confirms an exact version and revises only
       { exact: true },
     ),
   ).toBeVisible();
-  await page
-    .locator('section[aria-label="全剧规划"]')
-    .screenshot({ path: testInfo.outputPath("series-plan-desktop.png") });
+  await planningScreenshots(
+    page,
+    testInfo,
+    "series-plan-desktop",
+    approved.content,
+    data.characters,
+  );
   const changedPayoff = "第三集将红印与旧物并置，请石岚自行辨认母亲的笔迹。";
   await page
     .getByLabel("伏笔1预定回收说明", { exact: true })
@@ -832,9 +961,14 @@ test("SERIES-01 mobile Viewer reads approved planning with frozen character name
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBe(true);
-  await page
-    .locator('section[aria-label="全剧规划"]')
-    .screenshot({ path: testInfo.outputPath("series-plan-mobile-viewer.png") });
+  await planningScreenshots(
+    page,
+    testInfo,
+    "series-plan-mobile-viewer",
+    plannedContent(data),
+    data.characters,
+    true,
+  );
   const forbidden = await page.request.post(data.path + "/story-outlines", {
     headers: {
       Authorization: "Bearer " + viewer.access_token,

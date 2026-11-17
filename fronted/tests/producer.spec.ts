@@ -100,8 +100,57 @@ test("Producer answers the exact saved question by keyboard after refresh and re
     path: info.outputPath("producer-saved-question-desktop.png"),
   });
 
-  await page.reload();
-  await closeDirectory(page);
+  const { controlledStreams, frame } = await import("./event-stream-helpers");
+  const streams = await controlledStreams(page);
+  async function reloadReadyProducer() {
+    await page.reload();
+    await closeDirectory(page);
+    const refresh = panel.getByRole("button", {
+      name: "刷新生产状态",
+      exact: true,
+    });
+    await expect(refresh).toBeEnabled();
+    let streamIndex = -1;
+    await expect
+      .poll(async () => {
+        const requests = (await streams.snapshot()) as {
+          project: string;
+          authorized: boolean;
+          aborted: boolean;
+          cancelled: boolean;
+        }[];
+        const active = requests
+          .map((stream, index) => ({ ...stream, index }))
+          .filter(
+            (stream) =>
+              stream.project === env.project.id &&
+              stream.authorized &&
+              !stream.aborted &&
+              !stream.cancelled,
+          );
+        streamIndex = active[0]?.index ?? -1;
+        return active.length;
+      })
+      .toBe(1);
+    // A connected stream schedules another read. Wait for that read rather than
+    // focusing during the briefly enabled state before stream.ready reconciles.
+    const refreshed = page.waitForRequest(
+      (request) =>
+        request.method() === "GET" &&
+        new URL(request.url()).pathname === `/api/v1/runs/${runId}/producer`,
+    );
+    await streams.push(streamIndex, [frame(env.project.id)]);
+    const response = await (await refreshed).response();
+    expect(response?.status()).toBe(200);
+    expect(await response!.json()).toMatchObject({
+      run_id: runId,
+      project_id: env.project.id,
+      episode_id: env.episode.id,
+    });
+    await expect(refresh).toBeEnabled();
+  }
+
+  await reloadReadyProducer();
   await expect(
     panel.getByText("先制作本集剧本吗？", { exact: true }),
   ).toBeVisible();
@@ -128,6 +177,7 @@ test("Producer answers the exact saved question by keyboard after refresh and re
     name: "提交回答并继续",
     exact: true,
   });
+  await expect(answer).toBeEnabled();
   await answer.focus();
   await expect(answer).toBeFocused();
   await page.keyboard.press("Space");
@@ -146,8 +196,7 @@ test("Producer answers the exact saved question by keyboard after refresh and re
     })
     .toEqual({ plans: 1, pending: false });
   const committed = await readProgress(page, runId, env.headers);
-  await page.reload();
-  await closeDirectory(page);
+  await reloadReadyProducer();
   const replay = panel.getByRole("button", { name: "重发原操作", exact: true });
   await expect(replay).toBeEnabled();
   await replay.focus();
