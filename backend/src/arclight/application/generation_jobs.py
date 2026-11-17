@@ -16,6 +16,7 @@ from arclight.application.generation_budget import enforce_budget, quote_job
 from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_scheduling import schedule_for
 from arclight.application.generation_targets import require_available_target
+from arclight.application.generation_video_inputs import freeze_video_images
 from arclight.application.visual_bible import state as visual_bible_state
 from arclight.core.errors import DomainError
 from arclight.domain.dependencies import validate_dependency_type
@@ -241,6 +242,11 @@ def create_job(
                 "PROMPT_COMPOSITION_INVALID", "组合后的提示词不符合媒体输入合同", 422
             ) from error
     validate_capabilities(capabilities, effective_spec, payload.task_type, reference_count(inputs))
+    video_images = []
+    if payload.task_type == "VIDEO":
+        if "video_images" in payload.spec.context:
+            raise DomainError("VIDEO_INPUT_INVALID", "视频首帧须使用精确参考依赖", 422)
+        video_images = freeze_video_images(db, project_id, actor, payload.episode_id, inputs)
     manifest = DependencyManifest(
         project_id=project_id,
         target_asset_id=asset.id if asset else None,
@@ -266,6 +272,7 @@ def create_job(
             "inputs": inputs,
             "context": {
                 "generation": effective_spec.model_dump(mode="json"),
+                **({"video_images": video_images} if video_images else {}),
                 **(
                     {
                         "provider_configuration": db.info[

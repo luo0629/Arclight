@@ -48,7 +48,7 @@ def resolve_capabilities(provider: str, model: str) -> MediaCapabilities:
     from arclight.providers.native_media_protocols import KINDS, capabilities
 
     if provider in KINDS:
-        return capabilities(provider)
+        return capabilities(provider, model)
     if provider == "openai" and model in OPENAI_IMAGE_MODELS:
         return OPENAI_IMAGE_CAPABILITIES
     # Mock models are symbolic; real adapters must resolve their own model-specific profile.

@@ -34,7 +34,11 @@ from arclight.domain.media_capabilities import MediaCapabilities, validate_capab
 from arclight.persistence.generation import GenerationAttempt, GenerationJob
 from arclight.persistence.models import DependencyManifest
 from arclight.providers.media_cancel import CancellationReceipt
-from arclight.providers.media_capabilities import MOCK_CAPABILITIES, resolve_parameters
+from arclight.providers.media_capabilities import (
+    MOCK_CAPABILITIES,
+    resolve_capabilities,
+    resolve_parameters,
+)
 from arclight.providers.media_query import QueryReceipt
 from arclight.providers.media_submission import MockMediaSubmissionProvider, SubmissionReceipt
 
@@ -109,6 +113,33 @@ def test_native_tts_gateway_parameter_declaration_obeys_known_model_support(
     parameters = resolve_parameters("openai_tts", model)
     assert {"voice", "speed"} <= parameters
     assert ("instructions" in parameters) is instructions_supported
+
+
+@pytest.mark.parametrize(
+    "model,expected",
+    [
+        ("doubao-seedance-1-0-pro-250528", 1),
+        ("doubao-seedance-1-0-pro", 0),
+        ("doubao-seedance-1-0-pro-250529", 0),
+        ("doubao-seedance-1-0-pro-compatible", 0),
+        ("doubao-seedance-1-0-lite-i2v", 0),
+        ("doubao-seedance-2-0", 0),
+        ("doubao-seedance-2-5", 0),
+        ("ep-private-endpoint", 0),
+    ],
+)
+def test_seedance_first_frame_capability_is_exact_and_public(client, episode, model, expected):
+    capability = resolve_capabilities("seedance", model)
+    assert capability.max_reference_images == expected
+    assert capability.version == "seedance:2"
+    assert capability.max_video_seconds == (12 if "seedance-1-" in model else 15)
+    assert capability.supports_query and not capability.supports_cancel
+    assert not capability.supports_idempotency
+    response = client.get(
+        base(episode["project_id"]) + "/providers/seedance/capabilities", params={"model": model}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == capability.model_dump(mode="json")
 
 
 @pytest.mark.parametrize(

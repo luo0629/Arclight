@@ -205,7 +205,9 @@ def public_configuration(db: Session, actor: str, task_type: str) -> dict:
                 resolve_parameters(configuration["provider"], configuration["model"])
             ),
             "credential_source": "ACCOUNT_SNAPSHOT",
-            "capabilities": capabilities(configuration["provider"]).model_dump(mode="json"),
+            "capabilities": capabilities(
+                configuration["provider"], configuration["model"]
+            ).model_dump(mode="json"),
             "message": "已配置"
             if priced
             else "账号配置已保存；生成前需要部署侧登记该精确模型的可信报价",

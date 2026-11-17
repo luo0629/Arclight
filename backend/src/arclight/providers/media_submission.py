@@ -1,6 +1,6 @@
 """Normalized, bounded media submissions selected from installed adapters."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Literal, Protocol
 from uuid import UUID
@@ -14,12 +14,22 @@ from arclight.providers.media_capabilities import MOCK_CAPABILITIES
 
 
 @dataclass(frozen=True)
+class MediaImageInput:
+    """Transient image bytes; never part of a persisted generation snapshot."""
+
+    role: str
+    media_type: str
+    data: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
 class MediaSubmission:
     job_id: UUID
     attempt_id: UUID
     input_manifest_id: UUID
     snapshot: dict
     idempotency_key: str | None
+    image_inputs: tuple[MediaImageInput, ...] = ()
 
 
 class SubmissionReceipt(MediaInput):

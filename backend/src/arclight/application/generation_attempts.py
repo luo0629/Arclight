@@ -15,6 +15,7 @@ from arclight.application.commands import require_project
 from arclight.application.generation_scheduling import release_generation, retry_after_failure
 from arclight.application.generation_state import check_revision, find_job, transition
 from arclight.application.generation_targets import require_available_target
+from arclight.application.generation_video_inputs import validate_video_images
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec, MediaErrorCode
@@ -132,6 +133,7 @@ def start_attempt(
             MediaCapabilities.model_validate(captured), spec, row.task_type, references
         )
     validate_capabilities(live, spec, row.task_type, references)
+    validate_video_images(db, row, snapshot)
     from arclight.application.continuity_revision_store import require_revision_execution
     from arclight.application.generation_budget import check_execution
 

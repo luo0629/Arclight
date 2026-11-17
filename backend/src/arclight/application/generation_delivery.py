@@ -21,13 +21,16 @@ from arclight.application.generation_attempts import (
 )
 from arclight.application.generation_reconciliation import mark_result_unknown
 from arclight.application.generation_state import find_job, transition
+from arclight.application.generation_video_inputs import load_video_images
 from arclight.core.errors import DomainError
 from arclight.domain.generation import GenerationStatus as Status
 from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.persistence.base import utcnow
 from arclight.persistence.generation import GenerationAttempt, GenerationDispatch
+from arclight.persistence.models import DependencyManifest
 from arclight.providers.media_submission import (
+    MediaImageInput,
     MediaSubmission,
     MediaSubmissionProvider,
     SubmissionReceipt,
@@ -152,6 +155,12 @@ def consume_dispatch(
                 raise DomainError(
                     "PROVIDER_CAPABILITY_CONFLICT", "Adapter idempotency declaration conflicts", 409
                 )
+            image_inputs: tuple[MediaImageInput, ...] = ()
+            if job.task_type == "VIDEO":
+                manifest = db.get(DependencyManifest, job.input_manifest_id)
+                if manifest is None:
+                    raise DomainError("INVALID_GENERATION_INPUT", "媒体输入清单不匹配", 409)
+                image_inputs = load_video_images(db, job, manifest.snapshot_json)
             attempt = start_attempt(
                 db, job.id, event.expected_revision, capabilities=provider.capabilities
             )
@@ -197,6 +206,7 @@ def consume_dispatch(
             attempt.input_manifest_id,
             deepcopy(attempt.input_snapshot_json),
             event.provider_idempotency_key,
+            image_inputs=image_inputs,
         )
         db.flush()
 

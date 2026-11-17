@@ -13,13 +13,14 @@ from pydantic import JsonValue
 
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.dependencies import IMAGE_KINDS
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
 from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
 from arclight.providers.chat import raise_for_provider_status
 from arclight.providers.media_cancel import CancellationReceipt
 from arclight.providers.media_outputs import MediaOutput
 from arclight.providers.media_query import ProviderLookup, QueryReceipt
-from arclight.providers.media_submission import MediaSubmission, SubmissionReceipt
+from arclight.providers.media_submission import MediaImageInput, MediaSubmission, SubmissionReceipt
 from arclight.providers.native_media_protocols import (
     ASYNC,
     KINDS,
@@ -72,7 +73,7 @@ class NativeMediaProvider:
         self.settings = settings
         self.connection = connection
         self.name = connection.configuration["protocol"]
-        self.capabilities = capabilities(self.name)
+        self.capabilities = capabilities(self.name, connection.configuration["model"])
         self.transport = transport
         self.store = ObjectStorage(settings)
 
@@ -235,13 +236,54 @@ class NativeMediaProvider:
         )
         return [(item.get("b64_json") or item.get("url", ""), "image/png") for item in items]
 
+    def _image_inputs(self, request: MediaSubmission) -> tuple[MediaImageInput, ...]:
+        references = request.snapshot["context"].get("video_images", [])
+        inputs = request.snapshot.get("inputs", [])
+        if not isinstance(references, list) or not isinstance(inputs, list):
+            raise DomainError("INVALID_GENERATION_INPUT", "媒体参考图缺少冻结引用", 409)
+        sources: dict[str, str] = {}
+        for item in inputs:
+            if not isinstance(item, dict):
+                raise DomainError("INVALID_GENERATION_INPUT", "媒体输入清单无效", 409)
+            if item.get("asset_type") in IMAGE_KINDS:
+                identity = item["source_asset_version_id"]
+                if identity in sources and sources[identity] != item["checksum"]:
+                    raise DomainError("INVALID_GENERATION_INPUT", "媒体参考图版本不一致", 409)
+                sources[identity] = item["checksum"]
+        if (
+            not isinstance(request.image_inputs, tuple)
+            or len(references) != len(sources)
+            or len(references) != len(request.image_inputs)
+        ):
+            raise DomainError("INVALID_GENERATION_INPUT", "媒体参考图数量与冻结输入不匹配", 409)
+        seen = set()
+        for reference, image in zip(references, request.image_inputs, strict=True):
+            if not isinstance(reference, dict) or not isinstance(image, MediaImageInput):
+                raise DomainError("INVALID_GENERATION_INPUT", "媒体参考图引用无效", 409)
+            identity = reference.get("asset_version_id")
+            if (
+                reference.get("kind") != "CONTROLLED_IMAGE"
+                or identity in seen
+                or identity not in sources
+                or reference.get("checksum") != sources[identity]
+                or reference.get("role") != image.role
+                or reference.get("media_type") != image.media_type
+                or not isinstance(image.data, bytes)
+                or type(reference.get("byte_size")) is not int
+                or reference["byte_size"] != len(image.data)
+                or reference["checksum"] != hashlib.sha256(image.data).hexdigest()
+            ):
+                raise DomainError("INVALID_GENERATION_INPUT", "媒体参考图与冻结版本不匹配", 409)
+            seen.add(identity)
+        return request.image_inputs
+
     def submit(self, request: MediaSubmission) -> SubmissionReceipt:
         completed = False
         try:
             spec = self._spec(request)
-            path, body, extra = submission(spec)
+            path, body, extra = submission(spec, self._image_inputs(request))
             self.store.check()
-        except (DomainError, KeyError, ValueError):
+        except (DomainError, KeyError, TypeError, ValueError):
             raise GatewayFailure("INPUT_INVALID", not_accepted=True) from None
         try:
             if self.name in {"openai_tts", "siliconflow_tts"}:

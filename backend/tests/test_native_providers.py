@@ -1,7 +1,10 @@
 """Actual native wire adapters exercised with HTTP transports and private objects."""
 
 import base64
+import hashlib
 import json
+from copy import deepcopy
+from dataclasses import replace
 from uuid import uuid4
 
 import httpx
@@ -15,9 +18,10 @@ from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.generation_requests import GenerationSpec
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.versions import digest
+from arclight.providers import native_media_protocols
 from arclight.providers.agent_model import OpenAICompatibleAgentProvider
 from arclight.providers.media_query import ProviderLookup
-from arclight.providers.media_submission import MediaSubmission
+from arclight.providers.media_submission import MediaImageInput, MediaSubmission
 from arclight.providers.native_media import MediaConnection, NativeMediaProvider
 from arclight.providers.native_media_protocols import ASYNC, KINDS
 from arclight.providers.native_media_protocols import submission as media_submission
@@ -615,3 +619,273 @@ def test_wan27_uses_current_native_resolution_and_ratio():
     _, body, headers = submission(spec)
     assert body["parameters"] == {"resolution": "720P", "ratio": "16:9", "duration": 6}
     assert headers["X-DashScope-Async"] == "enable"
+
+
+def first_frame_request(
+    settings,
+    tmp_path,
+    *,
+    data=None,
+    media_type="image/png",
+    protocol="seedance",
+    model="doubao-seedance-1-0-pro-250528",
+):
+    connection, request = native_request(settings, tmp_path, protocol)
+    configuration = dict(connection.configuration)
+    configuration.pop("configuration_version")
+    configuration["model"] = model
+    configuration["configuration_version"] = digest(configuration)
+    snapshot = deepcopy(request.snapshot)
+    snapshot["context"]["provider_configuration"] = configuration
+    snapshot["context"]["generation"].update(
+        model=model,
+        model_config_version=configuration["configuration_version"],
+        prompt="角色抬手并转身与另一角色交谈。",
+    )
+    if data is None:
+        data = image_bytes("PNG", (600, 400))
+    identity = str(uuid4())
+    checksum = hashlib.sha256(data).hexdigest()
+    snapshot["inputs"] = [
+        {
+            "asset_type": "SHOT_IMAGE",
+            "source_asset_version_id": identity,
+            "checksum": checksum,
+            "dependency_type": "REFERENCE_DEPENDENCY",
+        }
+    ]
+    snapshot["context"]["video_images"] = [
+        {
+            "kind": "CONTROLLED_IMAGE",
+            "file_id": str(uuid4()),
+            "asset_version_id": identity,
+            "checksum": checksum,
+            "byte_size": len(data),
+            "media_type": media_type,
+            "role": "first_frame",
+            "metadata_sha256": "0" * 64,
+            "scope_sha256": "0" * 64,
+        }
+    ]
+    return MediaConnection(configuration, CANARY), replace(
+        request,
+        snapshot=snapshot,
+        image_inputs=(MediaImageInput("first_frame", media_type, data),),
+    )
+
+
+@pytest.mark.parametrize("kind,media_type", [("PNG", "image/png"), ("JPEG", "image/jpeg")])
+def test_seedance_first_frame_wire_uses_exact_controlled_bytes(
+    settings, tmp_path, kind, media_type
+):
+    data = image_bytes(kind, (600, 400))
+    connection, request = first_frame_request(settings, tmp_path, data=data, media_type=media_type)
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        assert req.method == "POST"
+        assert req.url.path == "/v1/contents/generations/tasks"
+        assert req.headers["authorization"] == f"Bearer {CANARY}"
+        assert json.loads(req.content) == {
+            "model": "doubao-seedance-1-0-pro-250528",
+            "content": [
+                {"type": "text", "text": "角色抬手并转身与另一角色交谈。"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{media_type};base64," + base64.b64encode(data).decode()
+                    },
+                    "role": "first_frame",
+                },
+            ],
+            "ratio": "16:9",
+            "resolution": "720p",
+            "duration": 6,
+        }
+        return httpx.Response(200, json={"id": "task_1"})
+
+    provider = NativeMediaProvider(settings, connection, transport=httpx.MockTransport(handler))
+    assert provider.capabilities.max_reference_images == 1
+    receipt = provider.submit(request)
+    assert receipt.status == "SUBMITTED" and receipt.request_id == "task_1"
+    assert len(calls) == 1
+    assert base64.b64encode(data).decode() not in json.dumps(request.snapshot)
+    assert "data=" not in repr(request.image_inputs[0])
+    assert "data:image/" not in receipt.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "missing_image",
+        "missing_references",
+        "missing_source",
+        "wrong_version",
+        "wrong_checksum",
+        "wrong_byte_size",
+        "wrong_media_type",
+        "unsupported_role",
+        "different_bytes",
+        "duplicate_reference",
+        "second_frame",
+        "unapproved_model",
+        "different_protocol",
+    ],
+)
+def test_seedance_first_frame_mismatches_are_rejected_before_http(settings, tmp_path, bad):
+    options = {}
+    if bad == "unapproved_model":
+        options["model"] = "doubao-seedance-1-0-pro-unknown"
+    elif bad == "different_protocol":
+        options = {"protocol": "wan", "model": "wan2.6-i2v"}
+    connection, request = first_frame_request(settings, tmp_path, **options)
+    references = request.snapshot["context"]["video_images"]
+    if bad == "missing_image":
+        request = replace(request, image_inputs=())
+    elif bad == "missing_references":
+        request.snapshot["context"].pop("video_images")
+    elif bad == "missing_source":
+        request.snapshot["inputs"] = []
+    elif bad == "wrong_version":
+        references[0]["asset_version_id"] = str(uuid4())
+    elif bad == "wrong_checksum":
+        references[0]["checksum"] = "f" * 64
+    elif bad == "wrong_byte_size":
+        references[0]["byte_size"] += 1
+    elif bad == "wrong_media_type":
+        references[0]["media_type"] = "image/jpeg"
+    elif bad == "unsupported_role":
+        references[0]["role"] = "last_frame"
+        request = replace(
+            request, image_inputs=(replace(request.image_inputs[0], role="last_frame"),)
+        )
+    elif bad == "different_bytes":
+        request = replace(
+            request,
+            image_inputs=(
+                replace(request.image_inputs[0], data=image_bytes("PNG", (600, 400), "red")),
+            ),
+        )
+    elif bad == "duplicate_reference":
+        references.append(deepcopy(references[0]))
+    elif bad == "second_frame":
+        another = deepcopy(references[0])
+        another["asset_version_id"] = str(uuid4())
+        references.append(another)
+        source = deepcopy(request.snapshot["inputs"][0])
+        source["source_asset_version_id"] = another["asset_version_id"]
+        request.snapshot["inputs"].append(source)
+        request = replace(request, image_inputs=request.image_inputs * 2)
+
+    def unexpected_http(_):
+        pytest.fail("Invalid frozen first-frame input must not reach the provider")
+
+    provider = NativeMediaProvider(
+        settings, connection, transport=httpx.MockTransport(unexpected_http)
+    )
+    with pytest.raises(GatewayFailure) as error:
+        provider.submit(request)
+    assert error.value.code == "INPUT_INVALID" and error.value.not_accepted
+
+
+@pytest.mark.parametrize(
+    "size,valid",
+    [
+        ((300, 300), True),
+        ((300, 750), True),
+        ((750, 300), True),
+        ((2000, 2000), True),
+        ((299, 400), False),
+        ((300, 751), False),
+        ((751, 300), False),
+        ((4097, 300), False),
+        ((2001, 2000), False),
+    ],
+)
+def test_seedance_first_frame_geometry_and_safe_image_boundaries(settings, tmp_path, size, valid):
+    _, request = first_frame_request(settings, tmp_path, data=image_bytes("PNG", size))
+    spec = GenerationSpec.model_validate(request.snapshot["context"]["generation"])
+    if not valid:
+        with pytest.raises(DomainError) as error:
+            media_submission(spec, request.image_inputs)
+        assert error.value.code == "PROVIDER_REFERENCES_UNSUPPORTED"
+    else:
+        _, body, _ = media_submission(spec, request.image_inputs)
+        assert body["content"][1]["role"] == "first_frame"
+
+
+@pytest.mark.parametrize("bad", ["truncated_png", "truncated_jpeg", "mime_mismatch", "empty"])
+def test_seedance_first_frame_invalid_encoding_never_reaches_http(settings, tmp_path, bad):
+    if bad == "truncated_jpeg":
+        data = image_bytes("JPEG", (600, 400))[:-2]
+    elif bad == "empty":
+        data = b""
+    elif bad == "truncated_png":
+        data = image_bytes("PNG", (600, 400))[:-10]
+    else:
+        data = image_bytes("JPEG", (600, 400))
+    connection, request = first_frame_request(settings, tmp_path, data=data)
+
+    def unexpected_http(_):
+        pytest.fail("Invalid image encoding must not reach the provider")
+
+    provider = NativeMediaProvider(
+        settings, connection, transport=httpx.MockTransport(unexpected_http)
+    )
+    with pytest.raises(GatewayFailure) as error:
+        provider.submit(request)
+    assert error.value.code == "INPUT_INVALID" and error.value.not_accepted
+
+
+def test_seedance_first_frame_byte_and_request_limits_are_strict(settings, tmp_path, monkeypatch):
+    _, request = first_frame_request(settings, tmp_path)
+    spec = GenerationSpec.model_validate(request.snapshot["context"]["generation"])
+    image = request.image_inputs[0]
+    monkeypatch.setattr(native_media_protocols, "SEEDANCE_MAX_IMAGE_BYTES", len(image.data))
+    with pytest.raises(DomainError, match="30 MiB"):
+        media_submission(spec, request.image_inputs)
+    monkeypatch.setattr(native_media_protocols, "SEEDANCE_MAX_IMAGE_BYTES", len(image.data) + 1)
+    _, body, _ = media_submission(spec, request.image_inputs)
+    wire_size = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode())
+    monkeypatch.setattr(native_media_protocols, "SEEDANCE_MAX_REQUEST_BYTES", wire_size)
+    assert media_submission(spec, request.image_inputs)[1] == body
+    monkeypatch.setattr(native_media_protocols, "SEEDANCE_MAX_REQUEST_BYTES", wire_size - 1)
+    with pytest.raises(DomainError, match="64 MiB"):
+        media_submission(spec, request.image_inputs)
+
+
+def test_seedance_first_frame_declares_and_enforces_twelve_second_maximum(settings, tmp_path):
+    connection, request = first_frame_request(settings, tmp_path)
+    provider = NativeMediaProvider(settings, connection)
+    assert provider.capabilities.max_video_seconds == 12
+    spec = GenerationSpec.model_validate(request.snapshot["context"]["generation"])
+    spec = spec.model_copy(update={"output_spec": spec.output_spec | {"duration_seconds": 13}})
+    with pytest.raises(DomainError) as error:
+        media_submission(spec, request.image_inputs)
+    assert error.value.code == "PROVIDER_DURATION_UNSUPPORTED"
+
+
+def test_seedance_first_frame_query_does_not_require_image_bytes(settings, tmp_path):
+    connection, request = first_frame_request(settings, tmp_path)
+    query_request = replace(request, image_inputs=())
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        assert req.method == "GET"
+        assert req.url.path.endswith("/contents/generations/tasks/task_1")
+        assert not req.content
+        return httpx.Response(200, json={"status": "running"})
+
+    provider = NativeMediaProvider(settings, connection, transport=httpx.MockTransport(handler))
+    receipt = provider.query(
+        ProviderLookup("seedance", connection.configuration["model"], "task_1", query_request)
+    )
+    assert receipt.status == "RUNNING" and len(calls) == 1
+    assert (
+        provider.cancel(
+            ProviderLookup("seedance", connection.configuration["model"], "task_1", query_request)
+        ).status
+        == "UNSUPPORTED"
+    )

@@ -1,14 +1,19 @@
 """Native media request shapes and conservative installed adapter capabilities."""
 
 import base64
+import json
 import re
 from math import gcd
 from typing import Literal, cast
 from urllib.parse import quote
 
+from PIL import Image
+
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationSpec
 from arclight.domain.media_capabilities import MediaCapabilities, validate_capabilities
+from arclight.media.probe import inspect_image
+from arclight.providers.media_submission import MediaImageInput
 
 KINDS: dict[str, Literal["IMAGE", "VIDEO", "AUDIO"]] = {
     "openai_image": "IMAGE",
@@ -45,13 +50,18 @@ PARAMETERS = {
 }
 
 
-def capabilities(protocol: str) -> MediaCapabilities:
+SEEDANCE_FIRST_FRAME_MODELS = frozenset({"doubao-seedance-1-0-pro-250528"})
+SEEDANCE_MAX_IMAGE_BYTES = 30 * 1024 * 1024
+SEEDANCE_MAX_REQUEST_BYTES = 64 * 1024 * 1024
+
+
+def capabilities(protocol: str, model: str | None = None) -> MediaCapabilities:
     task = KINDS[protocol]
     return MediaCapabilities(
         provider=protocol,
-        version=f"{protocol}:1",
+        version=f"{protocol}:2" if protocol == "seedance" else f"{protocol}:1",
         task_types=frozenset({task}),
-        max_reference_images=0,
+        max_reference_images=int(protocol == "seedance" and model in SEEDANCE_FIRST_FRAME_MODELS),
         supports_seed=False,
         min_width=256,
         min_height=256,
@@ -63,15 +73,17 @@ def capabilities(protocol: str) -> MediaCapabilities:
         supports_cancel=False,
         supports_idempotency=False,
         execution_mode="ASYNC" if protocol in ASYNC else "SYNC",
-        max_video_seconds=15 if task == "VIDEO" else None,
+        max_video_seconds=(12 if protocol == "seedance" and "seedance-1-" in (model or "") else 15)
+        if task == "VIDEO"
+        else None,
     )
 
 
-def validate_spec(spec: GenerationSpec) -> None:
+def validate_spec(spec: GenerationSpec, reference_count: int = 0) -> None:
     from arclight.providers.media_capabilities import resolve_parameters
 
     task = KINDS[spec.provider]
-    validate_capabilities(capabilities(spec.provider), spec, task, 0)
+    validate_capabilities(capabilities(spec.provider, spec.model), spec, task, reference_count)
     output = spec.output_spec
     allowed = {"format"} | (
         {"width", "height"}
@@ -209,9 +221,59 @@ def validate_spec(spec: GenerationSpec) -> None:
         raise DomainError("PROVIDER_PARAMETERS_UNSUPPORTED", "图像输出仅支持 PNG 或 JPEG", 422)
 
 
-def submission(spec: GenerationSpec) -> tuple[str, dict, dict]:
-    """Return a relative API path, body and non-secret protocol headers."""
-    validate_spec(spec)
+def image_content(image_inputs: tuple[MediaImageInput, ...]) -> list[dict]:
+    """Validate transient first-frame bytes before constructing a native HTTP body."""
+    result = []
+    for image in image_inputs:
+        if (
+            not isinstance(image, MediaImageInput)
+            or image.role != "first_frame"
+            or image.media_type not in {"image/png", "image/jpeg"}
+            or not isinstance(image.data, bytes)
+            or not 0 < len(image.data) < SEEDANCE_MAX_IMAGE_BYTES
+        ):
+            raise DomainError(
+                "PROVIDER_REFERENCES_UNSUPPORTED", "首帧需要一张小于 30 MiB 的静态 PNG/JPEG", 422
+            )
+        try:
+            details = inspect_image(image.data, image.media_type)
+        except (ValueError, OSError, Image.DecompressionBombError, Image.DecompressionBombWarning):
+            raise DomainError(
+                "PROVIDER_REFERENCES_UNSUPPORTED",
+                "首帧须完整、静态，最长边不超过 4096 且最多 400 万像素",
+                422,
+            ) from None
+        width, height = details["width"], details["height"]
+        if not (
+            300 <= width <= 6000
+            and 300 <= height <= 6000
+            and 2 * height <= 5 * width
+            and 2 * width <= 5 * height
+        ):
+            raise DomainError(
+                "PROVIDER_REFERENCES_UNSUPPORTED",
+                "首帧宽高须至少 300 像素，比例介于 0.4 与 2.5",
+                422,
+            )
+        result.append(
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:{image.media_type};base64,"
+                    + base64.b64encode(image.data).decode()
+                },
+                "role": image.role,
+            }
+        )
+    return result
+
+
+def submission(
+    spec: GenerationSpec, image_inputs: tuple[MediaImageInput, ...] = ()
+) -> tuple[str, dict, dict]:
+    """Return a relative API path, ephemeral body and non-secret protocol headers."""
+    validate_spec(spec, len(image_inputs))
+    images = image_content(image_inputs)
     protocol, output = spec.provider, spec.output_spec
     prompt = spec.prompt + ("\nAvoid:\n" + spec.negative_prompt if spec.negative_prompt else "")
     model = quote(spec.model.removeprefix("models/"), safe="")
@@ -261,18 +323,19 @@ def submission(spec: GenerationSpec) -> tuple[str, dict, dict]:
     resolution = "1080p" if min(width, height) == 1080 else "720p"
     duration = output["duration_seconds"]
     if protocol == "seedance":
-        return (
-            "/contents/generations/tasks",
-            {
-                "model": spec.model,
-                "content": [{"type": "text", "text": prompt}],
-                "ratio": ratio,
-                "resolution": resolution,
-                "duration": duration,
-                **params,
-            },
-            {},
-        )
+        body = {
+            "model": spec.model,
+            "content": [{"type": "text", "text": prompt}, *images],
+            "ratio": ratio,
+            "resolution": resolution,
+            "duration": duration,
+            **params,
+        }
+        if len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode()) > (
+            SEEDANCE_MAX_REQUEST_BYTES
+        ):
+            raise DomainError("PROVIDER_REFERENCES_UNSUPPORTED", "视频请求超出 64 MiB 上限", 422)
+        return "/contents/generations/tasks", body, {}
     if protocol == "cogvideo":
         return (
             "/videos/generations",

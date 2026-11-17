@@ -51,7 +51,10 @@ def validate_dependency_type(source_kind: str, target_kind: str, dependency_type
             IMAGE_KINDS | {"SCRIPT", "STORYBOARD", "SHOT_PREVIEW"}
         )
     elif dependency_type == "REFERENCE_DEPENDENCY":
-        allowed = source_kind in IMAGE_KINDS and target_kind in IMAGE_KINDS | {"SHOT_PREVIEW"}
+        allowed = source_kind in IMAGE_KINDS and target_kind in IMAGE_KINDS | {
+            "SHOT_PREVIEW",
+            "VIDEO",
+        }
     elif dependency_type == "SEQUENCE_DEPENDENCY":
         allowed = (
             source_kind in {"STORYBOARD", "TIMELINE"} and target_kind in {"TIMELINE", "RENDER"}
