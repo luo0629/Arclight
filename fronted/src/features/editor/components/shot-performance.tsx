@@ -87,7 +87,7 @@ export default function ShotPerformanceDetails({
           : "省略／跳切"}
       </p>
       {editing ? (
-        <FieldGroup>
+        <FieldGroup style={{ containerType: "normal" }}>
           <TextField
             label="场景目的"
             value={performance.scene_purpose}

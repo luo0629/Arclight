@@ -417,6 +417,7 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
     page.getByRole("region", { name: "表演分镜制作路线" }),
   ).toContainText("表演分镜 · 3.0");
   const details = page.locator("details.shot-details");
+  await expect(details).toHaveCount(3);
   for (const detail of await details.all())
     await detail.locator("summary").click();
   await expect(details.nth(0)).toContainText("必须动态");
@@ -436,6 +437,7 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   await page.getByRole("button", { name: "下移镜头 1", exact: true }).click();
   await page.getByRole("button", { name: "上移镜头 2", exact: true }).click();
   await page.getByRole("button", { name: "镜头详情", exact: true }).click();
+  await expect(details).toHaveCount(3);
   for (const detail of await details.all())
     if ((await detail.getAttribute("open")) === null)
       await detail.locator("summary").click();
@@ -500,10 +502,25 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
     .nth(0)
     .getByRole("combobox", { name: "动态要求", exact: true })
     .selectOption("dynamic_required");
+  await expect(
+    details.nth(0).getByRole("combobox", { name: "动态要求", exact: true }),
+  ).toHaveValue("dynamic_required");
+  await details
+    .nth(0)
+    .getByRole("heading", { name: "表演与接续计划", exact: true })
+    .scrollIntoViewIfNeeded();
+  await expect(
+    details.nth(0).getByRole("textbox", { name: "镜头叙事目的", exact: true }),
+  ).toBeVisible();
+  await page.screenshot({
+    path: info.outputPath("performance-editor-desktop.png"),
+    fullPage: true,
+  });
   await page.reload();
   await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page.locator(".version-row").filter({ hasText: board.id }).click();
+  await expect(details).toHaveCount(3);
   for (const detail of await details.all())
     if ((await detail.getAttribute("open")) === null)
       await detail.locator("summary").click();
@@ -519,6 +536,13 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
       () => document.documentElement.scrollWidth <= window.innerWidth,
     ),
   ).toBeTruthy();
+  await details
+    .nth(0)
+    .getByRole("heading", { name: "表演与接续计划", exact: true })
+    .scrollIntoViewIfNeeded();
+  await expect(
+    details.nth(0).getByRole("textbox", { name: "镜头叙事目的", exact: true }),
+  ).toBeVisible();
   await page.screenshot({
     path: info.outputPath("performance-mobile.png"),
     fullPage: true,
@@ -559,7 +583,7 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   expect(await rejected.json()).toMatchObject({
     error: { code: "PERFORMANCE_NOT_READY" },
   });
-  await expect(page.getByRole("alert")).toContainText(
+  await expect(page.locator(".workspace-error")).toContainText(
     "表演分镜尚不具备制作条件",
   );
   expect(
@@ -600,6 +624,7 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   );
   expect(member.status(), await member.text()).toBe(201);
   await env.openVersion(versions[0].id);
+  await expect(details).toHaveCount(3);
   for (const detail of await details.all())
     if ((await detail.getAttribute("open")) === null)
       await detail.locator("summary").click();
@@ -611,6 +636,13 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
     page.getByRole("button", { name: "批准该版本", exact: true }),
   ).toHaveCount(0);
   await expect(details.getByRole("textbox")).toHaveCount(0);
+  await details
+    .nth(0)
+    .getByRole("heading", { name: "表演与接续计划", exact: true })
+    .scrollIntoViewIfNeeded();
+  await expect(
+    details.nth(0).getByText("保留冲突，明确人物要求", { exact: false }),
+  ).toBeVisible();
   await page.screenshot({
     path: info.outputPath("performance-viewer-desktop.png"),
     fullPage: true,
