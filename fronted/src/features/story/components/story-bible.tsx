@@ -13,6 +13,7 @@ import type { StoryEntry, StoryKind, StoryRelation } from "@/types/api";
 import Dialog from "@/components/shared/app-dialog";
 import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
+import StoryLedger from "./story-ledger";
 
 const kinds: Record<StoryKind, string> = {
   WORLD: "世界观",
@@ -42,8 +43,8 @@ const links: Record<
   },
   uses: { label: "使用", sources: ["CHARACTER", "SCENE"], targets: ["PROP"] },
 };
-type Props = { projectId: string; writable: boolean };
-export default function StoryBible({ projectId, writable }: Props) {
+type Props = { projectId: string; writable: boolean; owner: boolean };
+export default function StoryBible({ projectId, writable, owner }: Props) {
   const path = "/projects/" + projectId + "/story-entries";
   const list = usePagedList<StoryEntry>(path);
   const [selected, setSelected] = useState<StoryEntry | null>(null);
@@ -52,6 +53,7 @@ export default function StoryBible({ projectId, writable }: Props) {
   const [pending, setPending] = useState<(() => void) | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState("");
+  const [ledgerOpen, setLedgerOpen] = useState(false);
   useEffect(() => {
     void list.reload().catch(() => {});
   }, [list.reload]);
@@ -166,6 +168,20 @@ export default function StoryBible({ projectId, writable }: Props) {
           }}
         />
       </div>
+      <details
+        className="studio-disclosure"
+        onToggle={(event) => setLedgerOpen(event.currentTarget.open)}
+      >
+        <summary>剧情事件与状态账本</summary>
+        {ledgerOpen && (
+          <StoryLedger
+            key={projectId}
+            projectId={projectId}
+            owner={owner}
+            writable={writable}
+          />
+        )}
+      </details>
       {pending && (
         <Dialog
           labelledBy="story-discard-title"

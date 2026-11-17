@@ -76,7 +76,12 @@ export default function ProjectPage() {
       writable={writable}
     />
   ) : page === "story" ? (
-    <StoryBible key={project.id} projectId={project.id} writable={writable} />
+    <StoryBible
+      key={project.id}
+      projectId={project.id}
+      writable={writable}
+      owner={owner}
+    />
   ) : page === "settings" ? (
     <Settings
       onDeleted={onDeleted}
