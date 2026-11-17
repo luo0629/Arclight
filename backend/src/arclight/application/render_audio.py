@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent, ShotContent
+from arclight.agents.contracts import ShotContent, read_script_content
 from arclight.core.errors import DomainError
 from arclight.domain.render_manifests import LineAudioDecision
 from arclight.domain.timelines import TimelineSnapshot
@@ -25,7 +25,7 @@ def validate_line_audio(
     script = db.get(Script, board.script_version_id)
     if script is None or script.episode_id != timeline.episode_id:
         raise DomainError("RENDER_INPUT_INVALID", "缺少本精确分镜的来源剧本", 409)
-    content = ScriptContent.model_validate(script.content_json)
+    content = read_script_content(script.content_json)
     lines = {(script.id, line.line_id) for scene in content.scenes for line in scene.dialogue}
     tracks = {track.kind: track.clips if track.enabled else [] for track in timeline.tracks}
     source_voices: dict[tuple[UUID | None, str | None], set[UUID]] = {}

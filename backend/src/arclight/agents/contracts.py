@@ -3,9 +3,11 @@
 import copy
 import json
 from typing import Annotated, Literal
-from uuid import NAMESPACE_URL, uuid4, uuid5
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from arclight.domain.script_narrative import DramaticBeat, NarrativeContext, StateChangeProposal
 
 Identifier = Annotated[
     str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
@@ -136,6 +138,83 @@ class ScriptContent(Contract):
         return self
 
 
+class SceneV3(Scene):
+    dramatic_beat: DramaticBeat
+    state_changes: list[StateChangeProposal] = Field(max_length=100)
+
+    @model_validator(mode="after")
+    def exact_interactions(self) -> "SceneV3":
+        lines = {UUID(line.line_id) for line in self.dialogue}
+        cited = {
+            identity
+            for item in self.dramatic_beat.dialogue_interactions
+            for identity in item.line_ids
+        }
+        if not cited <= lines or (lines and cited != lines):
+            raise ValueError("Every dialogue line must have a scene-local interaction")
+        if len({item.id for item in self.state_changes}) != len(self.state_changes):
+            raise ValueError("State proposal identities must be unique")
+        return self
+
+
+class ScriptContentV3(ScriptContent):
+    # Explicit subclasses leave legacy JSON schemas and archived component hashes intact.
+    schema_version: Literal["3.0"] = "3.0"  # type: ignore[assignment]
+    narrative_context: NarrativeContext
+    scenes: list[SceneV3] = Field(min_length=1, max_length=50)  # type: ignore[assignment]
+
+    @model_validator(mode="after")
+    def exact_narrative(self) -> "ScriptContentV3":
+        identities = [item.id for scene in self.scenes for item in scene.state_changes]
+        if len(identities) != len(set(identities)):
+            raise ValueError("State proposal identities must be unique across the script")
+        allowed = set(self.narrative_context.character_ids)
+        target = next(
+            (
+                scene
+                for scene in self.scenes
+                if scene.scene_no == self.narrative_context.target_scene_no
+            ),
+            None,
+        )
+        if (
+            target is None
+            or target.dramatic_beat.story_time != self.narrative_context.target_story_time
+        ):
+            raise ValueError("The writing anchor must match the exact delivered scene story time")
+        for scene in self.scenes:
+            if any(
+                item.character_id not in allowed
+                for item in scene.dramatic_beat.character_objectives
+            ):
+                raise ValueError("Scene characters must occur in the frozen writing perspectives")
+        return self
+
+
+def read_script_content(value: dict | ScriptContent) -> ScriptContent:
+    """Dispatch stored text explicitly without changing legacy embedded schemas."""
+    if isinstance(value, ScriptContentV3) or (
+        isinstance(value, dict) and value.get("schema_version") == "3.0"
+    ):
+        return ScriptContentV3.model_validate(value)
+    return ScriptContent.model_validate(value)
+
+
+def legacy_script_view(content: ScriptContent) -> ScriptContent:
+    """Project text for a frozen v2 consumer; never use this view to save a script."""
+    if not isinstance(content, ScriptContentV3):
+        return content
+    value = content.model_dump(
+        mode="json",
+        exclude={
+            "narrative_context": True,
+            "scenes": {"__all__": {"dramatic_beat", "state_changes"}},
+        },
+    )
+    value["schema_version"] = "2.0"
+    return ScriptContent.model_validate(value)
+
+
 class ShotContent(Contract):
     shot_no: int = Field(gt=0)
     scene_no: int = Field(gt=0)
@@ -219,5 +298,7 @@ class StoryboardContent(Contract):
 
 
 def read_content(value: dict) -> dict:
-    contract = ScriptContent if "scenes" in value else StoryboardContent
-    return contract.model_validate(value).model_dump(mode="json")
+    parsed = (
+        read_script_content(value) if "scenes" in value else StoryboardContent.model_validate(value)
+    )
+    return parsed.model_dump(mode="json")

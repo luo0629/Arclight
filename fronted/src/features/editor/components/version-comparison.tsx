@@ -31,6 +31,7 @@ import type { ContentVersion } from "@/types/api";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
 import type { VersionKind } from "@/features/editor/components/version-editor";
+import { ScriptNarrativeSummary } from "./script-narrative";
 
 type Reference = { id: string; version_no: number; status: string };
 type Snapshot = Reference & {
@@ -61,6 +62,24 @@ type Snapshot = Reference & {
 type Comparison = { base: Snapshot | null; target: Snapshot };
 
 const names: Record<string, string> = {
+  narrative_context: "冻结写作依据",
+  dramatic_beat: "场景叙事",
+  story_time: "故事时点",
+  character_objectives: "人物目的与情绪",
+  purpose: "人物目的",
+  emotion_start: "起始情绪",
+  emotion_end: "结束情绪",
+  conflict: "关键冲突",
+  dialogue_interactions: "对白互动",
+  line_ids: "互动台词",
+  character_ids: "互动人物",
+  state_changes: "状态变更提案",
+  state_key: "状态名称",
+  story_start: "生效时点",
+  story_end: "结束时点",
+  known_by: "角色知情范围",
+  causes: "前因",
+  supersedes_entry_id: "替代状态",
   title: "标题",
   summary: "梗概",
   estimated_duration_ms: "剧本估算时长（毫秒）",
@@ -216,6 +235,9 @@ function Metadata({
           </p>
         )}
         {row.run_id && <p>生成任务：{row.run_id}</p>}
+        {kind === "script" && (
+          <ScriptNarrativeSummary content={row.content_json} />
+        )}
         {row.rewrite && (
           <details>
             <summary>局部改写来源与指令</summary>

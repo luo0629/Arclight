@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent, StoryboardContent
+from arclight.agents.contracts import ScriptContent, StoryboardContent, read_script_content
 from arclight.application.audit import audit
 from arclight.application.content_dependencies import reference_ids, review_registry
 from arclight.application.content_duration import validate_duration
@@ -160,7 +160,7 @@ def validate_manual_approval(
     assert episode is not None
     parsed: ScriptContent | StoryboardContent
     if isinstance(artifact, Script):
-        parsed = ScriptContent.model_validate(artifact.content_json)
+        parsed = read_script_content(artifact.content_json)
         validate_script_assets(db, episode.project_id, parsed)
     else:
         source = db.get(Script, artifact.script_version_id, populate_existing=True)
@@ -187,6 +187,11 @@ def apply_manual_content(
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):
             shot.status = artifact.status
     review_registry(db, artifact, actor, payload.impact_digest)
+    state_receipt = None
+    if isinstance(artifact, Script) and payload.decision == "APPROVE":
+        from arclight.application.script_state_commit import commit_script_state
+
+        state_receipt = commit_script_state(db, artifact, actor)
     kind = "scripts" if isinstance(artifact, Script) else "storyboards"
     audit(
         db,
@@ -200,7 +205,10 @@ def apply_manual_content(
             "impact_digest": payload.impact_digest,
         },
     )
-    return {"version_id": str(artifact.id), "status": artifact.status}
+    result: dict[str, object] = {"version_id": str(artifact.id), "status": artifact.status}
+    if state_receipt is not None:
+        result["story_state_receipt"] = state_receipt
+    return result
 
 
 def apply_text(
@@ -268,7 +276,9 @@ def complete_manual_review(
     result = apply_manual_content(
         db, artifact, actor, HumanDecision.model_validate(decision_record.decision_json), settings
     )
-    record_resume(db, row, decision_record, actor, result)
+    # The state receipt lives in the ledger and response; keep the legacy handoff shape.
+    handoff = {key: value for key, value in result.items() if key != "story_state_receipt"}
+    record_resume(db, row, decision_record, actor, handoff)
     return result
 
 

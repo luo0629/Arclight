@@ -54,7 +54,10 @@ def startup_input(run: WorkflowRun, stage: str) -> dict:
     if stage == "outline":
         return inputs["source_snapshot"]
     if stage == "rewrite":
-        return inputs["rewrite_input"]["context"]
+        value = deepcopy(inputs["rewrite_input"]["context"])
+        if "narrative_context" in inputs:
+            value["narrative_context"] = deepcopy(inputs["narrative_context"])
+        return value
     if stage == "script":
         return {
             name: deepcopy(inputs[name])
@@ -64,6 +67,7 @@ def startup_input(run: WorkflowRun, stage: str) -> dict:
                 "story_settings",
                 "story_context",
                 "outline_context",
+                "narrative_context",
                 "target_duration_ms",
             )
             if name in inputs

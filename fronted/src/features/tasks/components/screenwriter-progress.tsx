@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import AgentAnswer from "./agent-answer";
+import { ScriptNarrativeSummary } from "@/features/editor/components/script-narrative";
+import type {
+  DramaticBeat,
+  StateChange,
+} from "@/features/editor/script-narrative";
 import { Notice } from "@/components/ui-kit";
 import { api, json, message } from "@/lib/api/client";
 import type { Run } from "@/types/api";
@@ -16,9 +21,12 @@ type Scene = {
   scene_no: number;
   title: string;
   action: string;
+  dramatic_beat?: DramaticBeat;
+  state_changes?: StateChange[];
   dialogue: { line_id: string; speaker: string; text: string }[];
 };
 type Working = {
+  narrative_context?: Record<string, unknown>;
   scenes?: {
     scene_id: string;
     dramatic_goal: string;
@@ -59,6 +67,8 @@ type Working = {
       scene_id: string;
       title: string;
       goal: string;
+      story_time?: number;
+      character_ids?: string[];
       beats: string[];
       estimated_duration_ms: number;
     }[];
@@ -78,6 +88,7 @@ type Working = {
   evidence?: {
     manifest_id: string;
     source_id: string;
+    source_kind?: string;
     content_sha256: string;
   }[];
 };
@@ -96,7 +107,13 @@ type Revision = {
   source_sha256: string;
   deterministic_issues: RuleIssue[];
   previous_issues: Issue[];
-  working_script: { title: string; scenes: Scene[] };
+  working_script: {
+    title: string;
+    scenes: Scene[];
+    schema_version?: string;
+    narrative_context?: Record<string, unknown>;
+  };
+  narrative_projections?: unknown[];
   patch_checks: {
     accepted: boolean;
     patch_sha256: string;
@@ -316,6 +333,7 @@ export default function ScreenwriterProgress({
                           {(
                             {
                               SCRIPT: "精确剧本",
+                              NARRATIVE_QUERY: "时点事实调查",
                               VISUAL: "视觉规范",
                               ASSET: "精确资产",
                               CAPABILITY: "生产能力声明",
@@ -347,6 +365,12 @@ export default function ScreenwriterProgress({
                     <strong>{scene.title}</strong> ·{" "}
                     {scene.estimated_duration_ms / 1000} 秒<p>{scene.goal}</p>
                     <p>{scene.beats.join("；")}</p>
+                    {scene.story_time !== undefined && (
+                      <p>
+                        故事时点：{scene.story_time} · 角色范围：
+                        {scene.character_ids?.length ?? 0} 位
+                      </p>
+                    )}
                   </li>
                 ))}
               </ol>
@@ -368,6 +392,15 @@ export default function ScreenwriterProgress({
               <>
                 <strong>{operation.result.scene.title}</strong>
                 <p>{operation.result.scene.action}</p>
+                {operation.result.scene.dramatic_beat && (
+                  <ScriptNarrativeSummary
+                    content={{
+                      schema_version: "3.0",
+                      narrative_context: operation.result.narrative_context,
+                      scenes: [operation.result.scene],
+                    }}
+                  />
+                )}
                 {operation.result.scene.dialogue.map((line) => (
                   <p key={line.line_id}>
                     {line.speaker}：{line.text}
@@ -455,6 +488,17 @@ function RevisionDetails({ operation }: { operation: Operation }) {
   return (
     <>
       <p>剩余自动修订：{revision.remaining_patches} 轮</p>
+      {revision.working_script.schema_version === "3.0" && (
+        <ScriptNarrativeSummary content={revision.working_script} />
+      )}
+      {!!revision.narrative_projections?.length && (
+        <details>
+          <summary>本轮作者与角色事实证据</summary>
+          <pre className="max-h-80 min-w-0 overflow-auto whitespace-pre-wrap break-all text-xs">
+            {JSON.stringify(revision.narrative_projections, null, 2)}
+          </pre>
+        </details>
+      )}
       {operation.result?.checks && (
         <p>
           已检查：

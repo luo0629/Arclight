@@ -9,7 +9,7 @@ import {
 } from "@/components/ui-kit";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isResourceId } from "@/lib/routes";
 import usePagedList from "@/hooks/use-paged-list";
@@ -21,6 +21,7 @@ import type { Run } from "@/types/api";
 import CharacterMatching from "@/features/story/components/character-matching";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import ScreenwriterProgress from "@/features/tasks/components/screenwriter-progress";
+import { NarrativeApproval } from "@/features/editor/components/script-narrative";
 import ArtProgress from "./art-progress";
 import MediaTasks from "./media-tasks";
 import ProducerStart from "./producer-start";
@@ -50,6 +51,12 @@ export default function Tasks({
 }) {
   const [eventRun, setEventRun] = useState("");
   const [comment, setComment] = useState("");
+  const [readyCandidates, setReadyCandidates] = useState<string[]>([]);
+  const candidateReady = useCallback(
+    (id: string) =>
+      setReadyCandidates((ids) => (ids.includes(id) ? ids : [...ids, id])),
+    [],
+  );
   const requestedRun = useSearchParams().get("run");
   const pinScope = `${episodeId}:${requestedRun ?? ""}`;
   const currentPinScope = useRef(pinScope);
@@ -203,6 +210,8 @@ export default function Tasks({
                   "screenwriter-outline/1.0",
                   "screenwriter/2.0",
                   "screenwriter-rewrite/1.0",
+                  "screenwriter-series/1.0",
+                  "screenwriter-series-rewrite/1.0",
                   "production/1.0",
                   "production/2.0",
                   "production/3.0",
@@ -274,6 +283,14 @@ export default function Tasks({
                   ) &&
                   "version_id" in run.pending_review && (
                     <>
+                      {run.pending_review.resource_type === "script" && (
+                        <NarrativeApproval
+                          key={run.pending_review.version_id}
+                          episodeId={run.episode_id}
+                          versionId={run.pending_review.version_id}
+                          onReady={candidateReady}
+                        />
+                      )}
                       <FormLabel>
                         审核意见
                         <Textarea
@@ -288,7 +305,13 @@ export default function Tasks({
                           variant="default"
                           size="lg"
                           className=""
-                          disabled={busy}
+                          disabled={
+                            busy ||
+                            (run.pending_review.resource_type === "script" &&
+                              !readyCandidates.includes(
+                                run.pending_review.version_id,
+                              ))
+                          }
                           endpoint={`/episodes/${run.episode_id}/${run.pending_review.resource_type}s/${run.pending_review.version_id}/dependency-impact`}
                           onConfirm={(digest) =>
                             action(run, "resume", "APPROVE", digest)

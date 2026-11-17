@@ -23,7 +23,7 @@ from arclight.application.story_ledger import (
     version_data,
     version_summary,
 )
-from arclight.domain.story_ledger import LedgerQuery, StoryLedgerContent
+from arclight.domain.story_ledger import LedgerQuery, StoryLedgerContent, StoryLedgerContentV2
 from arclight.persistence.models import StoryLedgerVersion
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/story-ledger", tags=["story-ledger"])
@@ -33,7 +33,7 @@ Key = Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=12
 class LedgerCreate(Input):
     expected_revision: int = Field(strict=True, ge=0)
     base_version_id: UUID | None = None
-    content: StoryLedgerContent
+    content: StoryLedgerContent | StoryLedgerContentV2
 
 
 class LedgerApprove(Input):

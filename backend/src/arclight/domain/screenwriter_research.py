@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from arclight.domain.agent_tools import AgentToolContract
+from arclight.domain.story_ledger import StoryTime
 
 SourceKind = Literal["STORY_SOURCE", "STORY_ENTRY", "OUTLINE", "ANALYSIS", "SCRIPT"]
 EntryKind = Literal["WORLD", "CHARACTER", "LOCATION", "PROP", "SCENE"]
@@ -123,3 +124,28 @@ class InvestigateStoryResult(AgentToolContract):
     missing: list[ResearchMissing] = Field(max_length=8)
     has_more: bool
     reused_binding: bool
+
+
+SERIES_RESEARCH_TOOL = "investigate_series_story"
+
+
+class InvestigateSeriesStoryParameters(AgentToolContract):
+    story_time: StoryTime | None = None
+    scene_no: int | None = Field(default=None, strict=True, ge=1, le=50)
+    character_id: UUID | None = None
+    causal_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    limit: int = Field(default=20, strict=True, ge=1, le=20)
+    offset: int = Field(default=0, strict=True, ge=0, le=1000)
+    refresh: bool = Field(
+        default=False,
+        strict=True,
+        description="Bind current approved sources in a new round; keep prior evidence unchanged.",
+    )
+
+
+class SeriesResearchMaterial(ResearchMaterial):
+    source_kind: Literal["NARRATIVE_QUERY"]  # type: ignore[assignment]
+
+
+class InvestigateSeriesStoryResult(InvestigateStoryResult):
+    materials: list[SeriesResearchMaterial] = Field(max_length=8)  # type: ignore[assignment]

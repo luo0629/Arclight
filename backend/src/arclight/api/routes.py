@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Header, Query, Request
 from sqlalchemy import or_, select
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import read_script_content
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import (
     AcceptedRun,
@@ -145,6 +145,7 @@ def create_script_run(
         settings=request.app.state.settings,
         outline_version_id=payload.outline_version_id,
         source_id=payload.source_id,
+        narrative=payload.narrative,
         professional=payload.professional,
         agent_limits=payload.agent_limits,
         revision_rounds=payload.revision_rounds,
@@ -261,7 +262,7 @@ def get_dialogue_lines(
     script = db.get(Script, script_version_id)
     if script is None or script.episode_id != episode_id:
         raise DomainError("NOT_FOUND", "剧本版本不存在", 404)
-    content = ScriptContent.model_validate(script.content_json)
+    content = read_script_content(script.content_json)
     lines = [
         {
             "script_version_id": str(script.id),

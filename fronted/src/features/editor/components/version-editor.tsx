@@ -11,6 +11,23 @@ import {
 import { Field } from "@/components/ui/field";
 import { useId, useRef, useState } from "react";
 import { api, json } from "@/lib/api/client";
+import NarrativeInputs from "./narrative-inputs";
+import {
+  ScriptNarrativeEditor,
+  ScriptNarrativeSummary,
+} from "./script-narrative";
+import {
+  emptyBeat,
+  emptyNarrativeRequest,
+  isNarrativeRequest,
+  isNarrativeSceneDraft,
+  narrativeRequestProblem,
+  requestFromContext,
+  type DramaticBeat,
+  type StateChange,
+  type NarrativeRequest,
+  type NarrativeCapture,
+} from "../script-narrative";
 import type { ContentVersion, Episode } from "@/types/api";
 
 import Dialog from "@/components/shared/app-dialog";
@@ -30,6 +47,10 @@ export type VersionCreated = (
 ) => Promise<void>;
 export type Act = (action: () => Promise<unknown>) => Promise<boolean>;
 type Script = {
+  schema_version?: string;
+  narrative_context?: Record<string, unknown>;
+  _narrative_request?: NarrativeRequest;
+  _capture_signature?: string;
   title: string;
   summary: string;
   estimated_duration_ms?: number | null;
@@ -38,6 +59,8 @@ type Script = {
   scenes: {
     scene_no: number;
     scene_id?: string;
+    dramatic_beat?: DramaticBeat;
+    state_changes?: StateChange[];
     scene_asset?: unknown;
     location_asset?: unknown;
     props?: unknown[];
@@ -65,6 +88,11 @@ function validContent(value: unknown, kind: VersionKind): boolean {
     return (
       text(row.title) &&
       text(row.summary) &&
+      (row.schema_version !== "3.0" ||
+        ((row._narrative_request === undefined ||
+          isNarrativeRequest(row._narrative_request)) &&
+          Array.isArray(row.scenes) &&
+          row.scenes.every(isNarrativeSceneDraft))) &&
       strings(row.characters) &&
       Array.isArray(row.scenes) &&
       row.scenes.length > 0 &&
@@ -219,12 +247,46 @@ export default function VersionEditor({
     saving.current = true;
     try {
       await act(async () => {
+        let content = draft;
+        if (kind === "script" && script.schema_version === "3.0") {
+          const request =
+            script._narrative_request ??
+            requestFromContext(script.narrative_context ?? {});
+          if (!request || narrativeRequestProblem(request))
+            throw new Error(
+              request
+                ? narrativeRequestProblem(request)
+                : "请先选择连续剧写作依据。",
+            );
+          let context = script.narrative_context;
+          const signature = JSON.stringify(request);
+          if (!context || script._capture_signature !== signature) {
+            const captured = await api<NarrativeCapture>(
+              `/episodes/${episode.id}/writing-context`,
+              json("POST", request),
+            );
+            context = captured.context;
+            local.update({
+              ...draft,
+              narrative_context: context,
+              _narrative_request: request,
+              _capture_signature: signature,
+            });
+          }
+          const clean: Record<string, unknown> = {
+            ...draft,
+            narrative_context: context,
+          };
+          delete clean._narrative_request;
+          delete clean._capture_signature;
+          content = clean;
+        }
         const created = await api<ContentVersion>(
           `/episodes/${episode.id}/${kind === "script" ? "scripts" : "storyboards"}`,
           json("POST", {
             expected_version_no: latestNo,
             ...(version ? { base_version_id: version.id } : {}),
-            content: draft,
+            content,
             ...(kind === "storyboard"
               ? {
                   script_version_id:
@@ -623,6 +685,12 @@ export default function VersionEditor({
                     title: "",
                     action: "",
                     dialogue: [],
+                    ...(script.schema_version === "3.0"
+                      ? {
+                          dramatic_beat: emptyBeat(value.scenes.length + 1),
+                          state_changes: [],
+                        }
+                      : {}),
                   });
                 })
               }
@@ -895,6 +963,58 @@ export default function VersionEditor({
             </Button>
           )}
         </div>
+      )}
+      {kind === "script" && editing && script.schema_version !== "3.0" && (
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() =>
+            mutate((value) => {
+              value.schema_version = "3.0";
+              value.narrative_context = {};
+              value._narrative_request = emptyNarrativeRequest();
+              value.scenes.forEach((scene, index) => {
+                scene.dramatic_beat = emptyBeat(index + 1);
+                scene.state_changes = [];
+              });
+            })
+          }
+        >
+          升级为连续剧剧本
+        </Button>
+      )}
+      {kind === "script" && script.schema_version === "3.0" && editing && (
+        <>
+          <NarrativeInputs
+            episode={episode}
+            required
+            value={
+              script._narrative_request ??
+              requestFromContext(script.narrative_context ?? {}) ??
+              emptyNarrativeRequest()
+            }
+            disabled={busy || active || !writable}
+            onChange={(request) =>
+              mutate((value) => {
+                value._narrative_request = request ?? emptyNarrativeRequest();
+                value.narrative_context = {};
+                delete value._capture_signature;
+              })
+            }
+          />
+          <ScriptNarrativeEditor
+            projectId={episode.project_id}
+            scenes={script.scenes}
+            onChange={(index, scene) =>
+              mutate((value) => {
+                value.scenes[index] = { ...value.scenes[index], ...scene };
+              })
+            }
+          />
+        </>
+      )}
+      {kind === "script" && !editing && (
+        <ScriptNarrativeSummary content={draft} />
       )}
       <ContractMetadata content={draft} />
       {editing && invalidBoard && (

@@ -144,6 +144,10 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    from arclight.domain.screenwriter_revision import SERIES_WORKFLOWS
+
+    if workflow_version in SERIES_WORKFLOWS and stage in {"script", "rewrite"}:
+        return series_text_definitions(stage, workflow_version)
     if stage == "producer":
         from arclight.domain import producer_planning as producer
 
@@ -423,6 +427,93 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
         ("AGENT", workflow_version, {"operation": stage, "workflow_version": workflow_version}),
         ("PROMPT", "1", {"system_template": TEXT_PROMPTS[stage]}),
         ("SCHEMA", schema_version, SCHEMAS[stage].model_json_schema()),
+    ]
+
+
+def series_text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    """New definitions never change component fingerprints of archived professional runs."""
+    from arclight.agents.contracts import ScriptContentV3
+    from arclight.domain.screenwriter_creation import (
+        SERIES_FRAGMENT_PROMPT,
+        SERIES_FRAGMENT_VERSION,
+        SeriesFragmentSeed,
+        SeriesScriptFragment,
+    )
+    from arclight.domain.screenwriter_planning import (
+        SERIES_PLAN_VERSION,
+        SERIES_PLANNING_PROMPT,
+        SeriesPlanningSeed,
+        SeriesScreenwriterPlan,
+    )
+    from arclight.domain.screenwriter_research import (
+        InvestigateSeriesStoryParameters,
+        InvestigateSeriesStoryResult,
+    )
+    from arclight.domain.screenwriter_revision import (
+        SERIES_PATCH_TOOL,
+        SERIES_REVISION_PROMPT,
+        SERIES_REVISION_VERSION,
+        CheckSeriesPatchParameters,
+        SeriesRevisionSeed,
+        SeriesScriptCritique,
+    )
+    from arclight.domain.script_narrative import NarrativeContext
+
+    return [
+        (
+            "AGENT",
+            workflow_version,
+            {
+                "operation": stage,
+                "workflow_version": workflow_version,
+                "runtime": "persistent-agent/1",
+                "planning_version": SERIES_PLAN_VERSION,
+                "revision_version": SERIES_REVISION_VERSION,
+                "patch_tool": SERIES_PATCH_TOOL,
+                "plan_max_tokens": 16000,
+                "revision_max_tokens": 8000,
+                "repair_policy": "frozen-bounded-series-receipts/1",
+                "human_escalation": "server-initial-question/1",
+                **(
+                    {"fragment_version": SERIES_FRAGMENT_VERSION, "fragment_max_tokens": 6000}
+                    if stage == "script"
+                    else {}
+                ),
+            },
+        ),
+        (
+            "PROMPT",
+            workflow_version,
+            {
+                "planning": SERIES_PLANNING_PROMPT,
+                "revision": SERIES_REVISION_PROMPT,
+                **({"fragment": SERIES_FRAGMENT_PROMPT} if stage == "script" else {}),
+            },
+        ),
+        (
+            "SCHEMA",
+            workflow_version,
+            {
+                "planning": SeriesScreenwriterPlan.model_json_schema(),
+                "planning_seed": SeriesPlanningSeed.model_json_schema(),
+                "revision": SeriesScriptCritique.model_json_schema(),
+                "revision_seed": SeriesRevisionSeed.model_json_schema(),
+                "patch_parameters": CheckSeriesPatchParameters.model_json_schema(),
+                "patch_result": CheckPatchResult.model_json_schema(),
+                "candidate": ScriptContentV3.model_json_schema(),
+                "narrative_context": NarrativeContext.model_json_schema(),
+                "research_parameters": InvestigateSeriesStoryParameters.model_json_schema(),
+                "research_result": InvestigateSeriesStoryResult.model_json_schema(),
+                **(
+                    {
+                        "fragment": SeriesScriptFragment.model_json_schema(),
+                        "fragment_seed": SeriesFragmentSeed.model_json_schema(),
+                    }
+                    if stage == "script"
+                    else {}
+                ),
+            },
+        ),
     ]
 
 

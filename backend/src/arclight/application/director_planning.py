@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import read_script_content
 from arclight.application.agent_loop_recovery import resume_agent_loop, run_persistent_agent_loop
 from arclight.application.agent_loop_store import checked_loop
 from arclight.application.agent_runtime_state import scope_for_run
@@ -207,9 +207,7 @@ def plan_director(
                                 script_sha256=digest(script.content_json),
                                 scene_ids=[
                                     scene.scene_id
-                                    for scene in ScriptContent.model_validate(
-                                        script.content_json
-                                    ).scenes
+                                    for scene in read_script_content(script.content_json).scenes
                                 ],
                                 target_duration_ms=run.input_json["target_duration_ms"],
                                 duration_tolerance_percent=settings.text_duration_tolerance_percent,

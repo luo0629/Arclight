@@ -16,6 +16,7 @@ from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_co
 from arclight.domain.director_revision import DirectorRevisionOptions
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.domain.screenwriter_revision import ScreenwriterRevisionOptions
+from arclight.domain.script_narrative import NarrativeRequest
 from arclight.domain.workflow_contracts import WorkflowRunContract
 
 
@@ -61,9 +62,12 @@ class RunCreate(Input, ScreenwriterRevisionOptions, DirectorRevisionOptions):
     )
     outline_version_id: UUID | None = None
     source_id: UUID | None = None
+    narrative: NarrativeRequest | None = None
 
     @model_validator(mode="after")
     def one_source(self) -> "RunCreate":
+        if self.narrative is not None and (not self.professional or self.professional_director):
+            raise ValueError("连续剧情创作须选择独立专业编剧")
         if self.professional_director and not self.professional:
             raise ValueError("专业双审核须选择专业编剧；独立导演使用storyboard-runs入口")
         if self.director_art_collaboration and not self.professional_director:

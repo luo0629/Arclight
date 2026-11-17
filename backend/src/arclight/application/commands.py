@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent, StoryboardContent
+from arclight.agents.contracts import StoryboardContent, read_script_content
 from arclight.api.schemas import ReviewCreate
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
@@ -41,11 +41,12 @@ from arclight.domain.director_creation import (
 from arclight.domain.director_revision import DirectorRevisionOptions
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
-from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION
+from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION, SERIES_SCREENWRITER_VERSION
 from arclight.domain.screenwriter_revision import (
     REVISED_SCREENWRITER_VERSION,
     ScreenwriterRevisionOptions,
 )
+from arclight.domain.script_narrative import NarrativeRequest
 from arclight.persistence.models import (
     AuditEvent,
     Episode,
@@ -141,6 +142,7 @@ def start_run(
     script_version_id: UUID | None = None,
     outline_version_id: UUID | None = None,
     source_id: UUID | None = None,
+    narrative: NarrativeRequest | None = None,
     rebuild_from_version_id: UUID | None = None,
     professional: bool = False,
     agent_limits: AgentRunLimits | None = None,
@@ -162,6 +164,13 @@ def start_run(
         director_revision_rounds=director_revision_rounds,
         director_art_collaboration=director_art_collaboration,
     )
+    if narrative is not None and (
+        not professional
+        or professional_director
+        or script_version_id is not None
+        or art_task is not None
+    ):
+        raise DomainError("SCREENWRITER_TASK_INVALID", "连续剧情须从独立专业编剧入口发起", 422)
     if art_concept_plan is not None and art_task is None:
         raise DomainError("ART_TASK_INVALID", "概念图须属于独立美术任务", 422)
     if art_task is not None and (
@@ -230,6 +239,8 @@ def start_run(
         }
     if art_concept_plan is not None:
         payload["art_concept_plan"] = art_concept_plan.model_dump(mode="json")
+    if narrative is not None:
+        payload["narrative"] = narrative.model_dump(mode="json")
     if producer_parent_run_id is not None:
         payload["producer_parent_run_id"] = str(producer_parent_run_id)
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
@@ -283,7 +294,7 @@ def start_run(
                 if art_task is not None
                 else "只能从已批准的剧本版本生成分镜",
             )
-        source = ScriptContent.model_validate(script.content_json)
+        source = read_script_content(script.content_json)
         validate_script_assets(db, project.id, source)
         validate_duration(
             source, episode.target_duration_ms, settings.text_duration_tolerance_percent
@@ -317,6 +328,10 @@ def start_run(
         if story_source is None:
             story_source = capture_inline(db, episode, actor, inputs["story"], settings=settings)
         inputs["source_revision"] = provenance(db, story_source)
+    if narrative is not None:
+        from arclight.application.writing_context import capture_narrative_context
+
+        inputs["narrative_context"] = capture_narrative_context(db, episode, actor, narrative)
     snapshot = text_snapshot(db, actor)
     if rebuild_from_version_id is not None:
         inputs["rebuild_from_version_id"] = str(rebuild_from_version_id)
@@ -324,8 +339,10 @@ def start_run(
         inputs["_text_service"] = snapshot
     if professional:
         inputs["screenwriter"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
-        if revision_rounds is not None:
-            inputs["screenwriter"]["revision_rounds"] = revision_rounds
+        if revision_rounds is not None or narrative is not None:
+            inputs["screenwriter"]["revision_rounds"] = (
+                revision_rounds if revision_rounds is not None else 3
+            )
     if professional_director:
         inputs["director"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
         if director_revision_rounds is not None:
@@ -383,7 +400,13 @@ def start_run(
             )
     elif professional:
         version = (
-            REVISED_SCREENWRITER_VERSION if revision_rounds is not None else SCREENWRITER_VERSION
+            SERIES_SCREENWRITER_VERSION
+            if narrative is not None
+            else (
+                REVISED_SCREENWRITER_VERSION
+                if revision_rounds is not None
+                else SCREENWRITER_VERSION
+            )
         )
     else:
         version = WORKFLOW_VERSION if script_version_id is None else DIRECTOR_WORKFLOW_VERSION
@@ -469,7 +492,7 @@ def resume_run(
         episode = require_episode(db, run.episode_id, actor)
         if isinstance(artifact, Script):
             validate_script_assets(
-                db, episode.project_id, ScriptContent.model_validate(artifact.content_json)
+                db, episode.project_id, read_script_content(artifact.content_json)
             )
         else:
             validate_storyboard_assets(
@@ -479,8 +502,10 @@ def resume_run(
                 episode_id=episode.id,
             )
         parsed = (
-            ScriptContent if isinstance(artifact, Script) else StoryboardContent
-        ).model_validate(artifact.content_json)
+            read_script_content(artifact.content_json)
+            if isinstance(artifact, Script)
+            else StoryboardContent.model_validate(artifact.content_json)
+        )
         validate_duration(
             parsed, run.input_json["target_duration_ms"], settings.text_duration_tolerance_percent
         )
@@ -494,6 +519,11 @@ def resume_run(
     from arclight.application.content_dependencies import review_registry
 
     review_registry(db, artifact, actor, review.impact_digest)
+    state_receipt = None
+    if isinstance(artifact, Script) and review.decision == "APPROVE":
+        from arclight.application.script_state_commit import commit_script_state
+
+        state_receipt = commit_script_state(db, artifact, actor)
     db.add(
         Review(
             run_id=run.id,
@@ -509,7 +539,10 @@ def resume_run(
     run.status = RunStatus.QUEUED
     run.revision += 1
     db.add(OutboxEvent(run_id=run.id, revision=run.revision))
-    emit(db, run, "review.submitted", review.model_dump(mode="json"))
+    review_event = review.model_dump(mode="json")
+    if state_receipt is not None:
+        review_event["story_state_receipt"] = state_receipt
+    emit(db, run, "review.submitted", review_event)
     record_resume(
         db,
         review_request,

@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.agents.contracts import StoryboardContent
+from arclight.agents.contracts import StoryboardContent, legacy_script_view
 from arclight.application.agent_loop_recovery import (
     run_persistent_agent_loop,
     with_initial_question,
@@ -148,7 +148,7 @@ def _round(
                 remaining_patches=remaining,
                 source_sha256=parameters.source_sha256,
                 source=source,
-                script=script,
+                script=legacy_script_view(script),
                 plan=plan,
                 checks=checks,
                 previous_reason=previous,

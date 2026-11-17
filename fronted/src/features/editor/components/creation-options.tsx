@@ -1,6 +1,13 @@
 "use client";
 
 import { useId } from "react";
+import type { Episode } from "@/types/api";
+import NarrativeInputs from "./narrative-inputs";
+import {
+  isNarrativeRequest,
+  narrativeRequestProblem,
+  type NarrativeRequest,
+} from "../script-narrative";
 import {
   Field,
   FieldGroup,
@@ -13,6 +20,7 @@ import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type CreationOptions = {
+  narrative?: NarrativeRequest | null;
   professional: boolean;
   professionalDirector?: boolean;
   directorReview?: boolean;
@@ -39,7 +47,10 @@ export const initialCreationOptions: CreationOptions = {
 export function validCreationOptions(value: CreationOptions) {
   return (
     !value.professional ||
-    (Number.isInteger(Number(value.seconds)) &&
+    ((!value.narrative ||
+      (!value.professionalDirector &&
+        !narrativeRequestProblem(value.narrative))) &&
+      Number.isInteger(Number(value.seconds)) &&
       Number(value.seconds) >= 1 &&
       Number(value.seconds) <= 86400 &&
       Number.isInteger(Number(value.calls)) &&
@@ -63,6 +74,7 @@ export function creationPayload(value: CreationOptions, directorOnly = false) {
   return value.professional
     ? {
         professional: true,
+        ...(value.narrative ? { narrative: value.narrative } : {}),
         ...(value.professionalDirector ? { professional_director: true } : {}),
         ...((directorOnly
           ? value.review
@@ -96,6 +108,9 @@ export function isCreationOptions(value: unknown): value is CreationOptions {
   const row = value as Record<string, unknown>;
   return (
     typeof row.professional === "boolean" &&
+    (row.narrative === undefined ||
+      row.narrative === null ||
+      isNarrativeRequest(row.narrative)) &&
     (row.professionalDirector === undefined ||
       typeof row.professionalDirector === "boolean") &&
     (row.artCollaboration === undefined ||
@@ -118,6 +133,7 @@ export default function CreationOptionsFields({
   rewrite = false,
   allowDirector = false,
   directorOnly = false,
+  narrativeEpisode,
 }: {
   value: CreationOptions;
   onChange: (value: CreationOptions) => void;
@@ -126,6 +142,7 @@ export default function CreationOptionsFields({
   rewrite?: boolean;
   allowDirector?: boolean;
   directorOnly?: boolean;
+  narrativeEpisode?: Episode;
 }) {
   const id = useId();
   return (
@@ -134,6 +151,22 @@ export default function CreationOptionsFields({
         {directorOnly ? "分镜方式" : "创作方式"}
       </FieldLegend>
       <FieldGroup>
+        {value.professional && !directorOnly && narrativeEpisode && (
+          <NarrativeInputs
+            episode={narrativeEpisode}
+            value={value.narrative ?? null}
+            onChange={(narrative) =>
+              onChange({
+                ...value,
+                narrative,
+                ...(narrative
+                  ? { professionalDirector: false, directorReview: false }
+                  : {}),
+              })
+            }
+            disabled={disabled}
+          />
+        )}
         <Field>
           <ToggleGroup
             className="w-full flex-wrap"
@@ -213,15 +246,20 @@ export default function CreationOptionsFields({
                   }}
                 >
                   <ToggleGroupItem value="standard">直接拆镜</ToggleGroupItem>
-                  <ToggleGroupItem value="professional">
+                  <ToggleGroupItem
+                    value="professional"
+                    disabled={!!value.narrative}
+                  >
                     调查、规划与逐场景拆镜
                   </ToggleGroupItem>
-                  <ToggleGroupItem value="checked">
+                  <ToggleGroupItem value="checked" disabled={!!value.narrative}>
                     拆镜、检查与局部修订
                   </ToggleGroupItem>
                 </ToggleGroup>
                 <FieldDescription>
-                  先审核剧本，再审核完整分镜；两个阶段共用本次执行限制。
+                  {value.narrative
+                    ? "连续剧剧本批准后可直接拆镜；连续剧专业导演接入将在后续任务开放。"
+                    : "先审核剧本，再审核完整分镜；两个阶段共用本次执行限制。"}
                 </FieldDescription>
               </Field>
             )}

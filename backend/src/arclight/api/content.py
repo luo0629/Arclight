@@ -5,7 +5,12 @@ from fastapi import APIRouter, Request
 from pydantic import Field
 from sqlalchemy import func, select
 
-from arclight.agents.contracts import ScriptContent, StoryboardContent
+from arclight.agents.contracts import (
+    ScriptContent,
+    ScriptContentV3,
+    StoryboardContent,
+    read_script_content,
+)
 from arclight.api.collaboration import audit, require_idle
 from arclight.api.content_history import require_version
 from arclight.api.content_history import router as history_router
@@ -34,7 +39,7 @@ router.include_router(history_router)
 class ScriptVersionInput(Input):
     expected_version_no: int = Field(ge=0)
     base_version_id: UUID | None = None
-    content: ScriptContent
+    content: ScriptContent | ScriptContentV3
 
 
 class StoryboardVersionInput(Input):
@@ -88,6 +93,11 @@ def save_script(
     if payload.base_version_id:
         require_version(db, Script, episode_id, payload.base_version_id)
     validate_script_assets(db, episode.project_id, payload.content)
+    if isinstance(payload.content, ScriptContentV3):
+        from arclight.application.script_state_commit import validate_narrative_script
+
+        validate_narrative_script(db, episode, actor, payload.content)
+
     validate_duration(
         payload.content,
         episode.target_duration_ms,
@@ -97,7 +107,7 @@ def save_script(
         episode_id=episode_id,
         run_id=None,
         version_no=next_version(db, Script, episode_id, payload.expected_version_no),
-        content_json=payload.content.model_dump(),
+        content_json=payload.content.model_dump(mode="json"),
         status="READY_FOR_REVIEW",
     )
     db.add(version)
@@ -125,7 +135,7 @@ def save_storyboard(
         raise DomainError("NOT_FOUND", "剧本版本不存在", 404)
     if script.status != "APPROVED":
         raise DomainError("SCRIPT_NOT_APPROVED", "分镜必须引用已批准的剧本版本", 409)
-    source = ScriptContent.model_validate(script.content_json)
+    source = read_script_content(script.content_json)
     validate_script_assets(db, episode.project_id, source)
     validate_duration(
         source,
@@ -149,7 +159,7 @@ def save_storyboard(
         run_id=None,
         script_version_id=script.id,
         version_no=next_version(db, Storyboard, episode_id, payload.expected_version_no),
-        content_json=payload.content.model_dump(),
+        content_json=payload.content.model_dump(mode="json"),
         status="READY_FOR_REVIEW",
     )
     db.add(version)

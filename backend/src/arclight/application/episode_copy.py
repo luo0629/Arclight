@@ -1,12 +1,17 @@
 """Copy an episode's usable text, never its workflow, approval or rendered results."""
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import AssetReference, ScriptContent, StoryboardContent
+from arclight.agents.contracts import (
+    AssetReference,
+    ScriptContentV3,
+    StoryboardContent,
+    read_script_content,
+)
 from arclight.application.content_references import require_asset
 from arclight.core.errors import DomainError
 from arclight.persistence.models import AuditEvent, Episode, Script, Shot, Storyboard
@@ -53,7 +58,7 @@ def copy_episode(
         return reference
 
     try:
-        text = ScriptContent.model_validate(script.content_json) if script else None
+        text = read_script_content(script.content_json) if script else None
         shots = StoryboardContent.model_validate(board.content_json) if board else None
         if text and shots:
             shots.validate_against(text)
@@ -83,6 +88,22 @@ def copy_episode(
             scene.scene_asset = asset(scene.scene_asset, {"SCENE"})
             scene.location_asset = asset(scene.location_asset, {"LOCATION", "SCENE"})
             scene.props = [ref for item in scene.props if (ref := asset(item, {"PROP"}))]
+        if isinstance(text, ScriptContentV3):
+            proposal_ids = {
+                proposal.id: uuid4() for scene in text.scenes for proposal in scene.state_changes
+            }
+            for scene in text.scenes:
+                for interaction in scene.dramatic_beat.dialogue_interactions:
+                    interaction.line_ids = [
+                        UUID(lines[str(identity)]) for identity in interaction.line_ids
+                    ]
+                for proposal in scene.state_changes:
+                    proposal.id = proposal_ids[proposal.id]
+                    proposal.causes = [
+                        proposal_ids.get(identity, identity) for identity in proposal.causes
+                    ]
+            # The original context is retained as evidence only. Approving this copied
+            # draft requires explicitly saving a new context for the target episode.
         if shots:
             for shot in shots.shots:
                 shot.scene_id = scenes[shot.scene_id] if shot.scene_id else None

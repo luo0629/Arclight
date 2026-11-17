@@ -4,7 +4,11 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.agents.contracts import ScriptContent, ShotContent, StoryboardContent
+from arclight.agents.contracts import (
+    ShotContent,
+    StoryboardContent,
+    read_script_content,
+)
 from arclight.application import director_planning as planning
 from arclight.application.agent_loop_recovery import run_persistent_agent_loop
 from arclight.application.agent_tools import build_agent_tool_registry, grant_agent_tools
@@ -112,7 +116,7 @@ def _validate_fragment(
     run = db.get(WorkflowRun, run_id)
     assert run is not None
     script, _ = approved_input(db, run, execution_actor(db, run), settings)
-    source = ScriptContent.model_validate(script.content_json)
+    source = read_script_content(script.content_json)
     scene = plan.scenes[scene_no - 1]
     if (
         fragment.plan_loop_id != plan_loop_id
@@ -152,7 +156,7 @@ def create_fragment(
         run = db.get(WorkflowRun, run_id)
         assert run is not None
         script, _ = approved_input(db, run, execution_actor(db, run), settings)
-        source = ScriptContent.model_validate(script.content_json)
+        source = read_script_content(script.content_json)
         prefix = f"{FRAGMENT_VERSION}:scene:{scene_no}:attempt:"
         loops = [
             loop

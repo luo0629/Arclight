@@ -5,7 +5,7 @@ from uuid import UUID
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from arclight.agents.contracts import ScriptContent, StoryboardContent
+from arclight.agents.contracts import StoryboardContent, read_script_content
 from arclight.domain.agent_state import (
     AgentRunScope,
     AgentRunState,
@@ -176,7 +176,7 @@ def build_graph(
             record_step(state, step_id="storyboard", target="RUNNING", stage="storyboard")
 
         def generate() -> dict:
-            script = ScriptContent.model_validate(state["script"])
+            script = read_script_content(state["script"])
             content = (
                 director_generate()
                 if director_generate is not None

@@ -64,6 +64,7 @@ from arclight.api.timelines import router as timelines_router
 from arclight.api.transfer_authorization import router as transfer_authorization_router
 from arclight.api.upload_completion import router as upload_completion_router
 from arclight.api.visual_bible import router as visual_bible_router
+from arclight.api.writing_context import router as writing_context_router
 from arclight.core.config import Settings, get_settings
 from arclight.core.errors import DomainError
 from arclight.persistence.session import build_engine, session_factory
@@ -207,6 +208,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(canvas_router)
     app.include_router(story_bible_router)
     app.include_router(story_ledger_router)
+    app.include_router(writing_context_router)
     app.include_router(project_deletion_router)
     app.include_router(story_sources_router)
     app.include_router(story_analysis_router)

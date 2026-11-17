@@ -38,7 +38,7 @@ export type LedgerEntry = {
   causes: string[];
 };
 export type LedgerContent = {
-  schema_version: "1.0";
+  schema_version: "1.0" | "2.0";
   scene_times: SceneTime[];
   entries: LedgerEntry[];
 };
@@ -154,7 +154,7 @@ export function isLedgerContent(value: unknown): value is LedgerContent {
   const optionalString = (v: unknown) => v === null || typeof v === "string";
   const optionalInteger = (v: unknown) => v === null || Number.isInteger(v);
   return (
-    row.schema_version === "1.0" &&
+    (row.schema_version === "1.0" || row.schema_version === "2.0") &&
     Array.isArray(row.scene_times) &&
     row.scene_times.every(
       (scene) =>

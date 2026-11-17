@@ -5,7 +5,12 @@ from typing import TypedDict
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent, ShotContent, StoryboardContent
+from arclight.agents.contracts import (
+    ScriptContent,
+    ShotContent,
+    StoryboardContent,
+    read_script_content,
+)
 from arclight.application.content_duration import duration_bounds
 from arclight.application.content_references import validate_storyboard_assets
 from arclight.application.director_research import approved_input
@@ -35,7 +40,7 @@ def revision_input(
     script, _ = approved_input(db, run, execution_actor(db, run), settings)
     if script.id != plan.script_version_id or digest(script.content_json) != plan.script_sha256:
         raise DomainError("DIRECTOR_REVISION_SCOPE", "检查须保留原精确批准剧本和计划", 409)
-    return ScriptContent.model_validate(script.content_json)
+    return read_script_content(script.content_json)
 
 
 def check_work(

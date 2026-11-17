@@ -22,6 +22,8 @@ from arclight.domain.screenwriter_research import (
     CatalogQuery,
     EntrySearchQuery,
     ExactQuery,
+    InvestigateSeriesStoryParameters,
+    InvestigateSeriesStoryResult,
     InvestigateStoryParameters,
     InvestigateStoryResult,
     NeighborQuery,
@@ -499,3 +501,105 @@ def investigate_story(
         "evidence_round": row.snapshot_json["context"]["round"],
         **{name: value[name] for name in ("materials", "missing", "has_more", "reused_binding")},
     }
+
+
+def investigate_series_story(
+    db: Session,
+    settings: Settings,
+    run: WorkflowRun,
+    stage: str,
+    actor: str,
+    parameters: InvestigateSeriesStoryParameters,
+) -> dict:
+    """Resolve only the run's frozen narrative baseline through the evidence journal."""
+    from arclight.application.context_evidence import round_key
+    from arclight.application.writing_context import load_narrative_projection
+
+    if "narrative_context" not in run.input_json:
+        raise DomainError("SCREENWRITER_TASK_INVALID", "此运行没有冻结的连续剧情上下文", 422)
+    trace = read_trace(db, run, stage, actor)
+    query = parameters.model_dump(mode="json", exclude={"refresh"})
+    context = run.input_json["narrative_context"]
+    query["story_time"] = (
+        context["target_story_time"] if parameters.story_time is None else parameters.story_time
+    )
+    query["scene_no"] = (
+        context["target_scene_no"] if parameters.scene_no is None else parameters.scene_no
+    )
+    query["causal_ids"] = sorted(set(query["causal_ids"]))
+
+    def resolve(root, rounds, limits):
+        if not parameters.refresh:
+            for previous in reversed(rounds):
+                captured = previous.snapshot_json["context"]
+                investigation = captured.get("investigation", {})
+                if (
+                    investigation.get("schema_version") == "screenwriter-series-research/1"
+                    and investigation.get("query") == query
+                ):
+                    return {
+                        "sources": deepcopy(captured["sources"]),
+                        "assets": [],
+                        "investigation": {
+                            **deepcopy(investigation),
+                            "refresh": False,
+                            "reused_binding": True,
+                        },
+                    }
+        projection = load_narrative_projection(
+            db,
+            root.project_id,
+            actor,
+            run.input_json["narrative_context"],
+            story_time=parameters.story_time,
+            scene_no=parameters.scene_no,
+            character_id=parameters.character_id,
+            causal_ids=parameters.causal_ids,
+            limit=parameters.limit,
+            offset=parameters.offset,
+        )
+        identity = round_key(root.id, len(rounds) + 1)
+        material = {
+            "source_kind": "NARRATIVE_QUERY",
+            "source_id": str(identity),
+            "bound_manifest_id": str(identity),
+            "source": next(
+                source for source in projection["sources"] if source["kind"] == "NARRATIVE_QUERY"
+            ),
+            "content": projection,
+            "content_sha256": digest(projection),
+        }
+        return {
+            "sources": projection["sources"],
+            "assets": [],
+            "investigation": {
+                "schema_version": "screenwriter-series-research/1",
+                "query": query,
+                "refresh": parameters.refresh,
+                "materials": [material],
+                "missing": [],
+                "has_more": any(
+                    projection.get(key, False)
+                    for key in ("truncated", "index_truncated", "related_truncated")
+                ),
+                "reused_binding": False,
+            },
+        }
+
+    row, _ = append_resolved_evidence(
+        db,
+        run,
+        stage,
+        actor,
+        creation_key=uuid4(),
+        expected_round=len(trace["evidence"]),
+        request_sha256=digest(parameters.model_dump(mode="json")),
+        resolve=resolve,
+    )
+    value = row.snapshot_json["context"]["investigation"]
+    return InvestigateSeriesStoryResult(
+        manifest_id=row.id,
+        startup_manifest_id=UUID(trace["startup_manifest_id"]),
+        evidence_round=row.snapshot_json["context"]["round"],
+        **{name: value[name] for name in ("materials", "missing", "has_more", "reused_binding")},
+    ).model_dump(mode="json")

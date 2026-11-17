@@ -25,6 +25,11 @@ import VersionEditor, {
 import ManualStoryboard from "@/features/editor/components/manual-storyboard";
 import VersionComparison from "@/features/editor/components/version-comparison";
 import ScriptRewrite from "@/features/editor/components/script-rewrite";
+import {
+  ScriptNarrativeSummary,
+  StoryStateReceiptSummary,
+} from "./script-narrative";
+import type { StoryStateReceipt } from "../script-narrative";
 import CharacterMatching from "@/features/story/components/character-matching";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
 import ImpactButton from "@/features/dependencies/components/impact-button";
@@ -77,6 +82,9 @@ export default function Inspector({
   draftId?: string;
 }) {
   const storyId = useId();
+  const [stateReceipt, setStateReceipt] = useState<StoryStateReceipt | null>(
+    null,
+  );
   const storyDraft = useSessionDraft({
     id: JSON.stringify([episode.id, "story"]),
     episodeId: episode.id,
@@ -263,6 +271,7 @@ export default function Inspector({
             {story.length} / 20000
           </p>
           <CreationOptionsFields
+            narrativeEpisode={episode}
             allowDirector
             value={creation}
             onChange={setCreation}
@@ -363,6 +372,10 @@ export default function Inspector({
             )}
             active={active}
           />
+          {node.kind === "script" &&
+            stateReceipt?.script_version_id === version.id && (
+              <StoryStateReceiptSummary receipt={stateReceipt} />
+            )}
           {node.kind === "script" && (
             <CharacterMatching
               episodeId={episode.id}
@@ -426,6 +439,12 @@ export default function Inspector({
               writable && (
                 <div className="manual-review flex flex-col gap-3 rounded-lg bg-accent p-4">
                   <p>该版本由人工编辑创建，可在这里独立审核。</p>
+                  {node.kind === "script" && (
+                    <ScriptNarrativeSummary
+                      content={version.content_json}
+                      approving
+                    />
+                  )}
                   <div className="button-row flex flex-wrap items-center gap-2">
                     {["APPROVE", "REJECT"].map((decision) => (
                       <ImpactButton
@@ -440,10 +459,14 @@ export default function Inspector({
                         }
                         onConfirm={(impact_digest) =>
                           act(async () => {
-                            await api(
+                            const result = await api<{
+                              story_state_receipt?: StoryStateReceipt;
+                            }>(
                               `/episodes/${episode.id}/${node.kind === "script" ? "scripts" : "storyboards"}/${version.id}/review`,
                               json("POST", { decision, impact_digest }),
                             );
+                            if (result.story_state_receipt)
+                              setStateReceipt(result.story_state_receipt);
                             await reload();
                           })
                         }

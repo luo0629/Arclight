@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import Dialogue, ScriptContent
+from arclight.agents.contracts import Dialogue, ScriptContent, ScriptContentV3
 from arclight.agents.script_rewrite import (
     ParagraphTarget,
     RewriteRequest,
@@ -26,10 +26,14 @@ from arclight.core.errors import DomainError
 from arclight.domain.screenwriter_revision import (
     PATCH_TOOL,
     REVISION_WORKFLOWS,
+    SERIES_PATCH_TOOL,
+    SERIES_WORKFLOWS,
     CheckPatchParameters,
     CheckPatchResult,
+    CheckSeriesPatchParameters,
     DeterministicIssue,
     RevisionSeed,
+    SeriesRevisionSeed,
 )
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop
@@ -69,6 +73,14 @@ def deterministic_issues(
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
         validate_script_assets(db, episode.project_id, source)
+        if run.workflow_version in SERIES_WORKFLOWS and (
+            not isinstance(source, ScriptContentV3)
+            or source.narrative_context.model_dump(mode="json")
+            != run.input_json["narrative_context"]
+        ):
+            raise DomainError(
+                "SCREENWRITER_NARRATIVE_CHANGED", "工作稿必须保留运行冻结的叙事来源", 422
+            )
         if "rewrite_input" in run.input_json:
             request = RewriteRequest.model_validate(run.input_json["rewrite_input"]["request"])
             scenes = selected_scenes(source, request.target)
@@ -103,7 +115,10 @@ def patch_seed(db: Session, run: WorkflowRun, operation_key: str) -> tuple[Agent
     if loop is None:
         raise DomainError("SCREENWRITER_PATCH_SCOPE", "补丁必须引用当前持久评价操作", 422)
     try:
-        seed = RevisionSeed.model_validate(loop.seed_json["messages"][0]["data"])
+        seed_model = (
+            SeriesRevisionSeed if run.workflow_version in SERIES_WORKFLOWS else RevisionSeed
+        )
+        seed = seed_model.model_validate(loop.seed_json["messages"][0]["data"])
     except (ValidationError, KeyError, IndexError):
         raise DomainError("SCREENWRITER_PATCH_SCOPE", "此操作不是评价工作稿", 422) from None
     return loop, seed
@@ -116,6 +131,10 @@ def merge_checked_patch(
     parameters: CheckPatchParameters,
     settings: Settings,
 ) -> ScriptContent:
+    if (run.workflow_version in SERIES_WORKFLOWS) != isinstance(
+        parameters, CheckSeriesPatchParameters
+    ):
+        raise DomainError("SCREENWRITER_PATCH_SCOPE", "补丁合同必须属于当前精确工作流版本", 422)
     if parameters.operation_key != seed.operation_key:
         raise DomainError("SCREENWRITER_PATCH_SCOPE", "补丁不能借用其他评价操作的回执", 422)
     if parameters.source_sha256 != seed.source_sha256 or (
@@ -145,6 +164,11 @@ def merge_checked_patch(
         {
             "source_script": seed.source_script.model_dump(mode="json"),
             "request": request.model_dump(mode="json"),
+            **(
+                {"narrative_context": run.input_json["narrative_context"]}
+                if run.workflow_version in SERIES_WORKFLOWS
+                else {}
+            ),
         },
         parameters.patch,
     )
@@ -154,7 +178,7 @@ def merge_checked_patch(
     return content
 
 
-def patch_tool(settings: Settings) -> AgentToolDefinition:
+def patch_tool(settings: Settings, *, series: bool = False) -> AgentToolDefinition:
     def check(context: AgentToolContext, parameters) -> dict:
         assert isinstance(parameters, CheckPatchParameters)
         run = context.db.get(WorkflowRun, context.run_id)
@@ -185,10 +209,10 @@ def patch_tool(settings: Settings) -> AgentToolDefinition:
         return result.model_dump(mode="json")
 
     return AgentToolDefinition(
-        name=PATCH_TOOL,
+        name=SERIES_PATCH_TOOL if series else PATCH_TOOL,
         allowed_agents=frozenset({"screenwriter"}),
         allowed_steps=frozenset({"script", "rewrite"}),
-        parameters_model=CheckPatchParameters,
+        parameters_model=CheckSeriesPatchParameters if series else CheckPatchParameters,
         result_model=CheckPatchResult,
         scope_validator=lambda context, parameters: None,
         handler=check,

@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import ScriptContentV3, read_script_content
 from arclight.agents.script_rewrite import RewriteRequest, RewriteResult
 from arclight.application.commands import emit, require_episode, require_project
 from arclight.application.content_duration import duration_bounds, validate_duration
@@ -19,8 +19,10 @@ from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.enums import RunStatus
 from arclight.domain.screenwriter_revision import (
     REWRITE_SCREENWRITER_VERSION,
+    SERIES_REWRITE_SCREENWRITER_VERSION,
     ScreenwriterRevisionOptions,
 )
+from arclight.domain.script_narrative import NarrativeRequest
 from arclight.persistence.models import AuditEvent, OutboxEvent, Script, WorkflowRun
 from arclight.providers.text import build_provider
 from arclight.workflows.rewrite import REWRITE_VERSION
@@ -38,10 +40,13 @@ def start_rewrite(
     professional: bool = False,
     agent_limits: AgentRunLimits | None = None,
     revision_rounds: int | None = None,
+    narrative: NarrativeRequest | None = None,
 ) -> WorkflowRun:
     options = ScreenwriterRevisionOptions(
         professional=professional, agent_limits=agent_limits, revision_rounds=revision_rounds
     )
+    if narrative is not None and not professional:
+        raise DomainError("SCREENWRITER_TASK_INVALID", "连续剧情改写须选择专业编剧", 422)
     if professional:
         from arclight.application.model_gateway import lock_gate
 
@@ -57,6 +62,8 @@ def start_rewrite(
             "agent_limits": options.frozen_limits().model_dump(mode="json"),
             "revision_rounds": revision_rounds if revision_rounds is not None else 3,
         }
+    if narrative is not None:
+        payload["narrative"] = narrative.model_dump(mode="json")
     fingerprint = content_hash(payload)
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -79,7 +86,31 @@ def start_rewrite(
         raise DomainError("NOT_FOUND", "来源剧本版本不存在", 404)
     if base.status not in {"READY_FOR_REVIEW", "APPROVED", "REJECTED"}:
         raise DomainError("INVALID_REWRITE_SOURCE", "此版本不能用于新改写", 409)
-    source = ScriptContent.model_validate(base.content_json)
+    source = read_script_content(base.content_json)
+    if isinstance(source, ScriptContentV3) and narrative is None:
+        raise DomainError(
+            "NARRATIVE_CONTEXT_REQUIRED", "连续剧情改写须明确选择新的精确叙事基准", 422
+        )
+    if narrative is not None and not isinstance(source, ScriptContentV3):
+        raise DomainError(
+            "LEGACY_SCRIPT_READ_ONLY", "旧剧本未记录场景叙事交付，请经人工另存完整3.0版本", 409
+        )
+    if narrative is not None:
+        from arclight.application.rewrite_content import selected_scenes
+
+        assert isinstance(source, ScriptContentV3)
+        selected_ids = {scene.scene_id for scene in selected_scenes(source, request.target)}
+        anchor = next(
+            (scene for scene in source.scenes if scene.scene_no == narrative.target_scene_no),
+            None,
+        )
+        if anchor is None or (
+            anchor.scene_id not in selected_ids
+            and anchor.dramatic_beat.story_time != narrative.target_story_time
+        ):
+            raise DomainError(
+                "NARRATIVE_TARGET_INVALID", "写作锚点须存在，范围外锚点须保持原稿故事时点", 422
+            )
     validate_script_assets(db, episode.project_id, source)
     validate_duration(source, episode.target_duration_ms, settings.text_duration_tolerance_percent)
     project = require_project(db, episode.project_id, actor)
@@ -108,6 +139,10 @@ def start_rewrite(
             "context": context,
         },
     }
+    if narrative is not None:
+        from arclight.application.writing_context import capture_narrative_context
+
+        inputs["narrative_context"] = capture_narrative_context(db, episode, actor, narrative)
     service = text_snapshot(db, actor)
     if service:
         inputs["_text_service"] = service
@@ -122,7 +157,11 @@ def start_rewrite(
         idempotency_key=key,
         request_fingerprint=fingerprint,
         workflow_type="script_rewrite",
-        workflow_version=REWRITE_SCREENWRITER_VERSION if professional else REWRITE_VERSION,
+        workflow_version=SERIES_REWRITE_SCREENWRITER_VERSION
+        if narrative is not None
+        else REWRITE_SCREENWRITER_VERSION
+        if professional
+        else REWRITE_VERSION,
         input_json=inputs,
     )
     db.add(run)

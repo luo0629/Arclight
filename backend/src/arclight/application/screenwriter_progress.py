@@ -14,12 +14,16 @@ from arclight.application.screenwriter_creation import (
     waiting_for_answer,
 )
 from arclight.core.errors import DomainError
-from arclight.domain.screenwriter_creation import FRAGMENT_VERSION
+from arclight.domain.screenwriter_creation import FRAGMENT_VERSION, SERIES_FRAGMENT_VERSION
 from arclight.domain.screenwriter_revision import (
     PATCH_TOOL,
     REVISION_VERSION,
+    SERIES_PATCH_TOOL,
+    SERIES_REVISION_VERSION,
+    SERIES_WORKFLOWS,
     CheckPatchResult,
     RevisionSeed,
+    SeriesRevisionSeed,
 )
 from arclight.persistence.agent_loops import (
     AgentLoopAction,
@@ -33,11 +37,20 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
     values = []
     for loop in creation_loops(db, run.id):
         key = operation(loop)
-        fragment = key.startswith(FRAGMENT_VERSION + ":scene:")
-        critique = key.startswith(REVISION_VERSION + ":round:")
+        fragment = any(
+            key.startswith(version + ":scene:")
+            for version in (FRAGMENT_VERSION, SERIES_FRAGMENT_VERSION)
+        )
+        critique = any(
+            key.startswith(version + ":round:")
+            for version in (REVISION_VERSION, SERIES_REVISION_VERSION)
+        )
         revision = {}
         if critique:
-            seed = RevisionSeed.model_validate(loop.seed_json["messages"][0]["data"])
+            seed_model = (
+                SeriesRevisionSeed if run.workflow_version in SERIES_WORKFLOWS else RevisionSeed
+            )
+            seed = seed_model.model_validate(loop.seed_json["messages"][0]["data"])
             checks = [
                 CheckPatchResult.model_validate(action.result_json["result"]).model_dump(
                     mode="json"
@@ -46,7 +59,7 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
                     select(AgentLoopAction).where(AgentLoopAction.loop_id == loop.id)
                 )
                 if action.kind == "TOOL"
-                and action.request_json.get("tool_name") == PATCH_TOOL
+                and action.request_json.get("tool_name") in {PATCH_TOOL, SERIES_PATCH_TOOL}
                 and action.result_json
                 and action.result_json.get("status") == "SUCCEEDED"
             ]
@@ -60,6 +73,11 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
                 "previous_issues": [item.model_dump(mode="json") for item in seed.previous_issues],
                 "working_script": seed.source_script.model_dump(mode="json"),
                 "patch_checks": checks,
+                **(
+                    {"narrative_projections": seed.narrative_projections}
+                    if isinstance(seed, SeriesRevisionSeed)
+                    else {}
+                ),
             }
         outcome = loop.outcome_json or {}
         # Never project the seed, system prompt, provider configuration or tool arguments.

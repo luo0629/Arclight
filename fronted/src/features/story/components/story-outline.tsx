@@ -14,6 +14,7 @@ import type { Episode, Run } from "@/types/api";
 import { useSessionDraft } from "@/providers/draft-provider";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
+import NarrativeInputs from "@/features/editor/components/narrative-inputs";
 import CreationOptionsFields, {
   creationPayload,
   initialCreationOptions,
@@ -240,11 +241,12 @@ export default function StoryOutline({
   }
   async function submit(event: FormEvent) {
     event.preventDefault();
+    const outlineCreation = { ...creation, narrative: null };
     if (
       saving.current ||
       !writable ||
       active(run) ||
-      !validCreationOptions(creation)
+      !validCreationOptions(outlineCreation)
     )
       return;
     saving.current = true;
@@ -255,7 +257,7 @@ export default function StoryOutline({
     const key = value.key || crypto.randomUUID();
     if (!value.key) draft.update({ ...value, key });
     const body = {
-      ...creationPayload(creation),
+      ...creationPayload(outlineCreation),
       ...(value.mode === "manual"
         ? { story: value.story }
         : value.mode === "source"
@@ -514,7 +516,7 @@ export default function StoryOutline({
                 disabled={
                   !writable ||
                   blocked ||
-                  !validCreationOptions(creation) ||
+                  !validCreationOptions({ ...creation, narrative: null }) ||
                   !(value.mode === "manual"
                     ? value.story.trim()
                     : value.mode === "source"
@@ -622,6 +624,16 @@ export default function StoryOutline({
                   {detail.source_snapshot.story}
                 </pre>
               </details>
+              {detail.status === "APPROVED" && creation.professional && (
+                <NarrativeInputs
+                  episode={episode}
+                  value={creation.narrative ?? null}
+                  onChange={(narrative) =>
+                    setCreation({ ...creation, narrative })
+                  }
+                  disabled={!writable || blocked}
+                />
+              )}
               <div className="mb-5 flex flex-wrap gap-2">
                 {detail.status === "DRAFT" && (
                   <Button

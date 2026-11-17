@@ -120,6 +120,11 @@ def capture_sources(db: Session, project_id: UUID, inputs: dict, context: dict) 
     from arclight.application.agent_preferences import preference_source
 
     sources.extend(preference_source(value) for value in context["required"].get("preferences", []))
+    narrative = inputs.get("narrative_context")
+    if narrative is not None:
+        from arclight.application.writing_context import narrative_sources
+
+        sources.extend(narrative_sources(narrative))
     containers = [inputs]
     outline = inputs.get("outline_context")
     if outline:
@@ -215,6 +220,10 @@ def validate_sources(db: Session, project_id: UUID, sources: list[dict]) -> None
                     or digest(manifest.snapshot_json) != source["dependency_manifest_sha256"]
                 ):
                     invalid()
+        elif kind in {"SERIES_PLAN", "STORY_LEDGER", "WRITING_TARGET", "NARRATIVE_QUERY"}:
+            from arclight.application.writing_context import validate_narrative_source
+
+            validate_narrative_source(db, project_id, source)
         elif kind == "STORY_SOURCE":
             if source_snapshot(db, project_id, UUID(source["source_id"])) != source:
                 invalid()

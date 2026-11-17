@@ -5,16 +5,21 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from arclight.agents.contracts import ScriptContent
-from arclight.agents.script_rewrite import RewriteInstructions, RewriteResult, RewriteTarget
+from arclight.agents.contracts import ScriptContent, ScriptContentV3
+from arclight.agents.script_rewrite import (
+    RewriteInstructions,
+    RewriteResult,
+    RewriteTarget,
+    SeriesRewriteResult,
+)
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.director_creation import (
     REVISED_COLLABORATIVE_PRODUCTION_VERSION,
     REVISED_ITERATIVE_PRODUCTION_VERSION,
     REVISED_PRODUCTION_VERSION,
 )
-from arclight.domain.screenwriter_creation import ScreenwriterOptions
-from arclight.domain.screenwriter_planning import PlanEvidence, PlanningValue
+from arclight.domain.screenwriter_creation import SERIES_SCREENWRITER_VERSION, ScreenwriterOptions
+from arclight.domain.screenwriter_planning import PlanEvidence, PlanningValue, SeriesPlanEvidence
 
 REVISED_SCREENWRITER_VERSION = "screenwriter/2.0"
 REWRITE_SCREENWRITER_VERSION = "screenwriter-rewrite/1.0"
@@ -124,3 +129,35 @@ class CheckPatchResult(AgentToolContract):
     patch_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     content_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     issues: list[DeterministicIssue] = Field(max_length=16)
+
+
+SERIES_REWRITE_SCREENWRITER_VERSION = "screenwriter-series-rewrite/1.0"
+SERIES_WORKFLOWS = {SERIES_SCREENWRITER_VERSION, SERIES_REWRITE_SCREENWRITER_VERSION}
+REVISION_WORKFLOWS.update(SERIES_WORKFLOWS)
+SERIES_REVISION_VERSION = "screenwriter-revision/2"
+SERIES_PATCH_TOOL = "check_series_screenwriter_patch"
+SERIES_REVISION_PROMPT = (
+    REVISION_PROMPT.replace(PATCH_TOOL, SERIES_PATCH_TOOL)
+    + """
+本次评价3.0连续剧情：核对冻结规划、故事时点、远集因果、逐角色所知、
+人物目的／情绪／对白互动与行动，以及state_changes是否仅为有据提案。
+不得把未来计划、未知事实或未批准提案当成角色已知／已发生。
+局部补丁的narrative_updates必须逐一对应选定场景；段落修改仍保留选区外正文。
+修改后重新核对该场景的状态提案和对白line_id，不得沿用已不符合正文的提案。
+narrative_context不可更换；新基准须另建明确授权的改写任务。
+"""
+)
+
+
+class SeriesScriptCritique(ScriptCritique):
+    schema_version: Literal["screenwriter-revision/2"] = SERIES_REVISION_VERSION  # type: ignore[assignment]
+
+
+class SeriesRevisionSeed(RevisionSeed):
+    source_script: ScriptContentV3
+    evidence: list[SeriesPlanEvidence] = Field(min_length=1, max_length=32)  # type: ignore[assignment]
+    narrative_projections: list[dict] = Field(min_length=1, max_length=51)
+
+
+class CheckSeriesPatchParameters(CheckPatchParameters):
+    patch: SeriesRewriteResult

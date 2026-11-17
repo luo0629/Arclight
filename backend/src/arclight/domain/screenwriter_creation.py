@@ -6,10 +6,17 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
-from arclight.agents.contracts import CharacterAsset, Scene, ScriptContent
+from arclight.agents.contracts import CharacterAsset, Scene, SceneV3, ScriptContent, ScriptContentV3
 from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.generation_requests import safe_metadata
-from arclight.domain.screenwriter_planning import PlanEvidence, PlanningValue, ScreenwriterPlan
+from arclight.domain.screenwriter_planning import (
+    PlanEvidence,
+    PlanningValue,
+    ScreenwriterPlan,
+    SeriesPlanEvidence,
+    SeriesScreenwriterPlan,
+)
+from arclight.domain.script_narrative import NarrativeContext
 
 SCREENWRITER_VERSION = "screenwriter/1.0"
 SCREENWRITER_OUTLINE_VERSION = "screenwriter-outline/1.0"
@@ -81,3 +88,49 @@ class FragmentSeed(PlanningValue):
     scene_no: int = Field(strict=True, ge=1, le=50)
     previous: list[ScriptFragment] = Field(max_length=2)
     prior_scene_ids: list[UUID] = Field(max_length=49)
+
+
+SERIES_SCREENWRITER_VERSION = "screenwriter-series/1.0"
+SERIES_FRAGMENT_VERSION = "screenwriter-fragment/2"
+SERIES_FRAGMENT_PROMPT = (
+    FRAGMENT_PROMPT
+    + """
+这是3.0连续剧情场景。narrative_context须逐字保留；按narrative_projections中的AUTHOR
+规划与事实创作，人物只能使用对应CHARACTER投影的所知。远集资料有精确来源，不编造因果。
+scene必须包含dramatic_beat，逐人写目的、情绪起止和冲突，写出对白互动与具体行动，
+dialogue_interactions逐条覆盖实际line_id。story_time与计划一致。
+state_changes仅提出有稳定UUID的状态变化，无status或source字段；可以为空。
+未批准提案不是事实，不能借模型自评或人工澄清跳过正式批准。
+"""
+)
+
+
+class SeriesScriptFragment(ScriptFragment):
+    schema_version: Literal["screenwriter-fragment/2"] = SERIES_FRAGMENT_VERSION  # type: ignore[assignment]
+    scene: SceneV3
+    narrative_context: NarrativeContext
+    evidence: list[SeriesPlanEvidence] = Field(min_length=1, max_length=32)  # type: ignore[assignment]
+
+    @model_validator(mode="after")
+    def complete_series_scene(self):
+        ScriptContentV3(
+            title="工作片段",
+            summary="工作片段",
+            characters=self.characters,
+            character_assets=self.character_assets,
+            narrative_context=self.narrative_context.model_copy(
+                update={
+                    "target_scene_no": 1,
+                    "target_story_time": self.scene.dramatic_beat.story_time,
+                }
+            ),
+            scenes=[self.scene.model_copy(update={"scene_no": 1})],
+            estimated_duration_ms=self.estimated_duration_ms,
+        )
+        return self
+
+
+class SeriesFragmentSeed(FragmentSeed):
+    plan: SeriesScreenwriterPlan
+    previous: list[SeriesScriptFragment] = Field(max_length=2)  # type: ignore[assignment]
+    narrative_projections: list[dict] = Field(min_length=1, max_length=51)

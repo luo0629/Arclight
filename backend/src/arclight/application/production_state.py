@@ -6,7 +6,12 @@ from pydantic import TypeAdapter, ValidationError
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent, ShotContent, StoryboardContent
+from arclight.agents.contracts import (
+    ScriptContent,
+    ShotContent,
+    StoryboardContent,
+    read_script_content,
+)
 from arclight.application.commands import require_episode
 from arclight.application.content_dependencies import reference_ids
 from arclight.application.content_references import (
@@ -145,7 +150,7 @@ def input_issues(
         try:
             checked_content: ScriptContent | StoryboardContent
             if isinstance(row, Script):
-                script_content = ScriptContent.model_validate(row.content_json)
+                script_content = read_script_content(row.content_json)
                 checked_content = script_content
                 validate_script_assets(db, episode.project_id, script_content)
             else:

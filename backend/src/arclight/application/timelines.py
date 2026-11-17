@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent, ShotContent
+from arclight.agents.contracts import ShotContent, read_script_content
 from arclight.application.asset_objects import read_object
 from arclight.application.commands import require_episode
 from arclight.application.continuity_selection import require_shot_review, validate_selected_shot
@@ -275,7 +275,7 @@ def validate_snapshot_facts(
     shots_by_id = {shot.id: shot for shot in shots}
     script = db.get(Script, board.script_version_id)
     assert script is not None
-    script_content = ScriptContent.model_validate(script.content_json)
+    script_content = read_script_content(script.content_json)
     line_ids = {line.line_id for scene in script_content.scenes for line in scene.dialogue}
     for track in value.tracks:
         for clip in track.clips:

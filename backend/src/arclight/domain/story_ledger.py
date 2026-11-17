@@ -2,7 +2,7 @@
 
 import json
 from collections import defaultdict
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal, Protocol, Self
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
@@ -121,7 +121,7 @@ class StoryLedgerContent(LedgerValue):
             (item.episode_id, item.script_version_id, item.scene_id, item.segment_no)
             for item in self.scene_times
         ]
-        if len(set(presentations)) != len(presentations):
+        if self.schema_version == "1.0" and len(set(presentations)) != len(presentations):
             raise ValueError("A presentation position cannot identify multiple exact scenes")
         if len(set(exact_scenes)) != len(exact_scenes):
             raise ValueError("Each exact scene segment has one story-time mapping")
@@ -170,6 +170,27 @@ class StoryLedgerContent(LedgerValue):
         ):
             raise ValueError("The story ledger snapshot exceeds its byte limit")
         return self
+
+
+class StoryLedgerContentV2(StoryLedgerContent):
+    """Preserve immutable source mappings across revisions of one presentation scene."""
+
+    schema_version: Literal["2.0"] = "2.0"  # type: ignore[assignment]
+
+    @model_validator(mode="after")
+    def unique_version_positions(self) -> Self:
+        positions = [(item.script_version_id, item.presentation) for item in self.scene_times]
+        if len(positions) != len(set(positions)):
+            raise ValueError("An exact script has one scene per presentation position")
+        return self
+
+
+def read_ledger_content(value: dict | StoryLedgerContent) -> StoryLedgerContent:
+    if isinstance(value, StoryLedgerContentV2) or (
+        isinstance(value, dict) and value.get("schema_version") == "2.0"
+    ):
+        return StoryLedgerContentV2.model_validate(value)
+    return StoryLedgerContent.model_validate(value)
 
 
 def validate_causality(entries: list[LedgerEntry]) -> None:
@@ -243,8 +264,16 @@ class LedgerQuery(LedgerValue):
         return self
 
 
+class StoryPosition(Protocol):
+    @property
+    def story_time(self) -> int: ...
+
+    @property
+    def presentation(self) -> Position: ...
+
+
 def entry_visible(
-    entry: LedgerEntry, target: LedgerSceneTime, mappings: dict[UUID, LedgerSceneTime]
+    entry: LedgerEntry, target: StoryPosition, mappings: dict[UUID, LedgerSceneTime]
 ) -> bool:
     return (
         entry.story_start <= target.story_time
@@ -259,7 +288,7 @@ def entry_visible(
 
 def query_ledger(content: StoryLedgerContent, query: LedgerQuery, *, approved_root: bool) -> dict:
     """Project narrative data; only the service may supply approval authority."""
-    content = StoryLedgerContent.model_validate(content)
+    content = read_ledger_content(content)
     query = LedgerQuery.model_validate(query)
     target = next(
         (

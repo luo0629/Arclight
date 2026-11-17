@@ -590,7 +590,10 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         from arclight.application.director_research import investigate_production
         from arclight.application.producer_research import investigate_project
         from arclight.application.screenwriter_patch import patch_tool
-        from arclight.application.screenwriter_research import investigate_story
+        from arclight.application.screenwriter_research import (
+            investigate_series_story,
+            investigate_story,
+        )
         from arclight.domain.art_research import InvestigateArtParameters, InvestigateArtResult
         from arclight.domain.context_trace import EvidenceRequest
         from arclight.domain.continuity_research import (
@@ -610,6 +613,9 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
             InvestigateProjectResult,
         )
         from arclight.domain.screenwriter_research import (
+            SERIES_RESEARCH_TOOL,
+            InvestigateSeriesStoryParameters,
+            InvestigateSeriesStoryResult,
             InvestigateStoryParameters,
             InvestigateStoryResult,
         )
@@ -635,6 +641,7 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
         registry.register(continuity_rules_tool(settings))
         registry.register(comparison_tool(settings))
         registry.register(patch_tool(settings))
+        registry.register(patch_tool(settings, series=True))
         registry.register(director_check_tool(settings))
         for tool in collaboration_tools(settings):
             registry.register(tool)
@@ -719,6 +726,29 @@ def build_agent_tool_registry(*, settings: Settings | None = None) -> AgentToolR
             state = state_for_scope(run.agent_state_json, scope_for_run(run, context.project_id))
             stage = next(step.step_id for step in state.steps if step.status == "RUNNING")
             return investigate_story(context.db, settings, run, stage, context.actor_id, parameters)
+
+        def investigate_series(context: AgentToolContext, parameters: AgentToolContract) -> dict:
+            assert isinstance(parameters, InvestigateSeriesStoryParameters)
+            run = context.db.get(WorkflowRun, context.run_id)
+            assert run is not None and run.agent_state_json is not None
+            state = state_for_scope(run.agent_state_json, scope_for_run(run, context.project_id))
+            stage = next(step.step_id for step in state.steps if step.status == "RUNNING")
+            return investigate_series_story(
+                context.db, settings, run, stage, context.actor_id, parameters
+            )
+
+        registry.register(
+            AgentToolDefinition(
+                name=SERIES_RESEARCH_TOOL,
+                allowed_agents=frozenset({"screenwriter"}),
+                allowed_steps=frozenset({"script", "rewrite"}),
+                parameters_model=InvestigateSeriesStoryParameters,
+                result_model=InvestigateSeriesStoryResult,
+                scope_validator=lambda context, parameters: None,
+                handler=investigate_series,
+                requires_write=True,
+            )
+        )
 
         registry.register(
             AgentToolDefinition(

@@ -23,6 +23,7 @@ import { api, json, message } from "@/lib/api/client";
 import type { ContentVersion, Episode } from "@/types/api";
 import Dialog from "@/components/shared/app-dialog";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
+import { requestFromContext } from "../script-narrative";
 import CreationOptionsFields, {
   creationPayload,
   initialCreationOptions,
@@ -117,7 +118,20 @@ export default function ScriptRewrite({
       narrationLimit: "",
       fingerprint: "",
       key: "",
-      creation: initialCreationOptions,
+      creation:
+        version.content_json.schema_version === "3.0"
+          ? {
+              ...initialCreationOptions,
+              professional: true,
+              review: true,
+              narrative: requestFromContext(
+                (version.content_json.narrative_context ?? {}) as Record<
+                  string,
+                  unknown
+                >,
+              ),
+            }
+          : initialCreationOptions,
     },
     validate: validDraft,
   });
@@ -153,6 +167,10 @@ export default function ScriptRewrite({
         draft.start >= 0 &&
         draft.end <= Array.from(text).length));
   const disabled = !writable || busy || submitting || active || !!accepted;
+  const narrativeRequired = version.content_json.schema_version === "3.0";
+  const validNarrative = narrativeRequired
+    ? creation.professional && !!creation.narrative
+    : !creation.narrative;
   const onSelectionChange = useEffectEvent(() => {
     const input = selectionRef.current;
     if (input && document.activeElement === input && !disabled)
@@ -193,6 +211,7 @@ export default function ScriptRewrite({
       disabled ||
       saving.current ||
       !validSelection ||
+      !validNarrative ||
       !validCreationOptions(creation)
     )
       return;
@@ -495,9 +514,26 @@ export default function ScriptRewrite({
                   </FieldDescription>
                 </Field>
               </FieldGroup>
+              {narrativeRequired && (
+                <Notice>
+                  此连续剧改稿须使用专业编剧，并显式核对新的账本基准与故事时点。来源剧本及其原绑定保留。
+                </Notice>
+              )}
+              {!narrativeRequired && (
+                <p className="text-xs text-muted-foreground">
+                  需要连续剧写作依据时，请先将此旧版剧本人工另存并显式升级。
+                </p>
+              )}
               <CreationOptionsFields
+                narrativeEpisode={narrativeRequired ? episode : undefined}
                 value={creation}
-                onChange={(value) => update({ creation: value })}
+                onChange={(value) =>
+                  update({
+                    creation: narrativeRequired
+                      ? value
+                      : { ...value, narrative: null },
+                  })
+                }
                 disabled={disabled}
                 rewrite
               />
@@ -515,6 +551,7 @@ export default function ScriptRewrite({
                 disabled={
                   disabled ||
                   !validSelection ||
+                  !validNarrative ||
                   !validCreationOptions(creation) ||
                   !(
                     draft.instruction.trim() ||

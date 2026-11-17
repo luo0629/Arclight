@@ -11,6 +11,8 @@ from arclight.agents.script_rewrite import RewriteTarget
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.screenwriter_research import SourceKind
+from arclight.domain.script_narrative import NarrativeContext
+from arclight.domain.story_ledger import StoryTime
 
 PLAN_VERSION: Literal["screenwriter-plan/1"] = "screenwriter-plan/1"
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
@@ -143,3 +145,57 @@ class ScreenwriterPlan(PlanningValue):
         if len(json.dumps(value, ensure_ascii=False).encode()) > 65536:
             raise ValueError("Plan exceeds its byte limit; request a smaller task")
         return self
+
+
+# Separate models preserve the schemas embedded in already frozen legacy runs.
+SERIES_PLAN_VERSION = "screenwriter-plan/2"
+SERIES_PLANNING_PROMPT = (
+    PLANNING_PROMPT.replace("investigate_story", "investigate_series_story")
+    + """
+本次为连续剧情创作，只能消费冻结narrative_context的全剧规划和批准事实。
+先调查AUTHOR视角的有界规划、远集因果和已发生事实，再按character_id调查各人物所知；
+未来规划始终标记PLANNED，不能当成已经发生或人物已经知道的事实。
+新场景须给出明确story_time和参与的稳定character_ids；第一场采用冻结写作目标时点。
+各场的故事时点可以倒叙／插叙，不用播放集号推测角色所知。
+不能更换narrative_context、来源版本或账本基准，缺证据或目标矛盾时交人工澄清。
+"""
+)
+
+
+class SeriesPlanEvidence(PlanEvidence):
+    source_kind: Literal["NARRATIVE_QUERY"]  # type: ignore[assignment]
+
+
+class SeriesSceneGoal(SceneGoal):
+    story_time: StoryTime
+    character_ids: list[UUID] = Field(min_length=1, max_length=50)
+
+    @model_validator(mode="after")
+    def unique_characters(self):
+        if len(set(self.character_ids)) != len(self.character_ids):
+            raise ValueError("Scene character identities must be unique")
+        return self
+
+
+class SeriesPlannedScene(SeriesSceneGoal):
+    title: str = Field(min_length=1, max_length=200)
+    estimated_duration_ms: int = Field(strict=True, gt=0, le=1800000)
+
+
+class SeriesEpisodePlan(EpisodePlan):
+    scenes: list[SeriesPlannedScene] = Field(min_length=1, max_length=50)  # type: ignore[assignment]
+
+
+class SeriesRewritePlan(RewritePlan):
+    scenes: list[SeriesSceneGoal] = Field(min_length=1, max_length=50)  # type: ignore[assignment]
+
+
+class SeriesScreenwriterPlan(ScreenwriterPlan):
+    schema_version: Literal["screenwriter-plan/2"] = SERIES_PLAN_VERSION  # type: ignore[assignment]
+    narrative_context: NarrativeContext
+    plan: Annotated[SeriesEpisodePlan | SeriesRewritePlan, Field(discriminator="mode")]
+    evidence: list[SeriesPlanEvidence] = Field(min_length=1, max_length=32)  # type: ignore[assignment]
+
+
+class SeriesPlanningSeed(PlanningSeed):
+    narrative_context: NarrativeContext

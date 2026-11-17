@@ -6,6 +6,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from arclight.agents.contracts import Contract, Dialogue, Identifier
+from arclight.domain.script_narrative import DramaticBeat, StateChangeProposal
 
 
 class ChapterTarget(Contract):
@@ -74,3 +75,14 @@ class RewriteResult(Contract):
     estimated_duration_ms: int = Field(strict=True, gt=0)
     scenes: list[RewriteScene] = Field(max_length=50)
     text: str | None = Field(max_length=5000)
+
+
+class SceneNarrativePatch(Contract):
+    scene_id: Identifier
+    dramatic_beat: DramaticBeat
+    state_changes: list[StateChangeProposal] = Field(max_length=100)
+
+
+class SeriesRewriteResult(RewriteResult):
+    schema_version: Literal["series-rewrite/1"] = "series-rewrite/1"
+    narrative_updates: list[SceneNarrativePatch] = Field(min_length=1, max_length=50)

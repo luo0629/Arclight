@@ -279,11 +279,15 @@ def execute_screenwriter(
                 return True
             assert outcome.loop_id is not None and outcome.result is not None
             if stage == "rewrite":
-                from arclight.agents.contracts import ScriptContent
+                from arclight.agents.contracts import read_script_content
 
-                content = ScriptContent.model_validate(
-                    run.input_json["rewrite_input"]["source_script"]
-                )
+                content = read_script_content(run.input_json["rewrite_input"]["source_script"])
+                if "narrative_context" in run.input_json:
+                    from arclight.agents.contracts import ScriptContentV3
+
+                    value = content.model_dump(mode="json")
+                    value["narrative_context"] = run.input_json["narrative_context"]
+                    content = ScriptContentV3.model_validate(value)
             else:
                 assert isinstance(outcome.result.plan, EpisodePlan)
                 fragments: list[ScriptFragment] = []

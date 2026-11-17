@@ -11,7 +11,7 @@ from pydantic import ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import read_script_content
 from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.api.collaboration import audit
 from arclight.api.schemas import Input
@@ -66,7 +66,7 @@ def load_source(db: Session, episode_id: UUID, source_type: SourceType, version_
     if source is None or source.episode_id != episode_id:
         raise DomainError("NOT_FOUND", "角色来源版本不存在", 404)
     if isinstance(source, Script):
-        parsed = ScriptContent.model_validate(source.content_json)
+        parsed = read_script_content(source.content_json)
         assets = {item.character: item.asset.model_dump() for item in parsed.character_assets}
         candidates = [Candidate(name, [], assets.get(name)) for name in parsed.characters]
     else:

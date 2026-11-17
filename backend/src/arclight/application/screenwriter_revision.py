@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import ScriptContent, ScriptContentV3, read_script_content
 from arclight.agents.script_rewrite import RewriteRequest
 from arclight.application.agent_loop_recovery import (
     run_persistent_agent_loop,
@@ -13,7 +13,12 @@ from arclight.application.agent_loop_recovery import (
 )
 from arclight.application.agent_tools import AgentToolRegistry, build_agent_tool_registry
 from arclight.application.rewrite_content import content_hash
-from arclight.application.screenwriter_creation import creation_attempt, creation_loops, operation
+from arclight.application.screenwriter_creation import (
+    creation_attempt,
+    creation_loops,
+    operation,
+    scene_narrative_projections,
+)
 from arclight.application.screenwriter_patch import (
     deterministic_issues,
     effective_target,
@@ -25,24 +30,35 @@ from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentLoopResult, HumanDecisionRequest
 from arclight.domain.screenwriter_planning import ScreenwriterPlan
+from arclight.domain.screenwriter_research import SERIES_RESEARCH_TOOL
 from arclight.domain.screenwriter_revision import (
     PATCH_TOOL,
     REVISION_PROMPT,
     REVISION_VERSION,
+    SERIES_PATCH_TOOL,
+    SERIES_REVISION_PROMPT,
+    SERIES_REVISION_VERSION,
+    SERIES_WORKFLOWS,
     CheckPatchParameters,
     CheckPatchResult,
+    CheckSeriesPatchParameters,
     CritiqueIssue,
     RevisionSeed,
     ScriptCritique,
+    SeriesRevisionSeed,
+    SeriesScriptCritique,
 )
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import WorkflowRun
 
 
-def _registry(settings: Settings) -> AgentToolRegistry:
+def _registry(settings: Settings, *, series: bool = False) -> AgentToolRegistry:
     catalog = build_agent_tool_registry(settings=settings)
-    tools = [catalog.get(name) for name in ("investigate_story", PATCH_TOOL)]
+    names = (
+        (SERIES_RESEARCH_TOOL, SERIES_PATCH_TOOL) if series else ("investigate_story", PATCH_TOOL)
+    )
+    tools = [catalog.get(name) for name in names]
     assert all(tool is not None for tool in tools)
     return AgentToolRegistry(tool for tool in tools if tool is not None)
 
@@ -52,13 +68,18 @@ def _patch(db: Session, loop: AgentLoop, checksum: str) -> CheckPatchParameters:
         feedback = action.result_json or {}
         if (
             action.kind != "TOOL"
-            or action.request_json.get("tool_name") != PATCH_TOOL
+            or action.request_json.get("tool_name") not in {PATCH_TOOL, SERIES_PATCH_TOOL}
             or feedback.get("status") != "SUCCEEDED"
         ):
             continue
         result = CheckPatchResult.model_validate(feedback["result"])
         if result.patch_sha256 == checksum and result.accepted:
-            parameters = CheckPatchParameters.model_validate(action.request_json["arguments"])
+            model = (
+                CheckSeriesPatchParameters
+                if action.request_json["tool_name"] == SERIES_PATCH_TOOL
+                else CheckPatchParameters
+            )
+            parameters = model.model_validate(action.request_json["arguments"])
             if digest(parameters.model_dump(mode="json")) == checksum:
                 return parameters
     raise DomainError("SCREENWRITER_PATCH_UNCHECKED", "修订必须引用本轮成功的精确工具回执", 422)
@@ -111,10 +132,12 @@ def _round(
     *,
     human: bool = False,
 ) -> AgentLoopResult[ScriptCritique]:
-    with factory() as db:
+    with factory.begin() as db:
         run = db.get(WorkflowRun, run_id)
         assert run is not None
-        prefix = f"{REVISION_VERSION}:round:{round_no}:" + ("human:" if human else "critique:")
+        series = run.workflow_version in SERIES_WORKFLOWS
+        version = SERIES_REVISION_VERSION if series else REVISION_VERSION
+        prefix = f"{version}:round:{round_no}:" + ("human:" if human else "critique:")
         key = prefix + f"attempt:{creation_attempt(run)}"
         candidates = [
             loop for loop in creation_loops(db, run_id) if operation(loop).startswith(prefix)
@@ -126,7 +149,8 @@ def _round(
             key = request.operation_key
             first = request.messages[0]
             assert isinstance(first, AgentUserMessage)
-            saved = RevisionSeed.model_validate(first.data)
+            seed_model = SeriesRevisionSeed if series else RevisionSeed
+            saved = seed_model.model_validate(first.data)
             if saved.source_sha256 != content_hash(source.model_dump(mode="json")):
                 raise DomainError("SCREENWRITER_CRITIQUE_SCOPE", "重入不能更换已评价工作稿", 409)
         else:
@@ -134,24 +158,47 @@ def _round(
             original = RewriteRequest.model_validate(rewrite["request"]) if rewrite else None
             target = (
                 effective_target(
-                    ScriptContent.model_validate(rewrite["source_script"]), source, original.target
+                    read_script_content(rewrite["source_script"]), source, original.target
                 )
                 if original and rewrite
                 else None
             )
-            seed = RevisionSeed(
-                operation_key=key,
-                round=round_no,
-                remaining_patches=remaining,
-                initial_rewrite_required=bool(rewrite and round_no == 0),
-                source_sha256=content_hash(source.model_dump(mode="json")),
-                source_script=source,
-                evidence=plan.evidence,
-                objective=plan.objective,
-                permitted_target=target,
-                instructions=original.instructions if original else None,
-                deterministic_issues=deterministic_issues(db, run, source, settings),
-                previous_issues=previous,
+            extra: dict = {}
+            if isinstance(source, ScriptContentV3):
+                extra["narrative_projections"] = [
+                    {
+                        "scene_id": scene.scene_id,
+                        "views": scene_narrative_projections(
+                            db,
+                            settings,
+                            run,
+                            scene.dramatic_beat.story_time,
+                            scene.scene_no,
+                            [
+                                item.character_id
+                                for item in scene.dramatic_beat.character_objectives
+                            ],
+                        ),
+                    }
+                    for scene in source.scenes
+                ]
+            seed_model = SeriesRevisionSeed if series else RevisionSeed
+            seed = seed_model.model_validate(
+                {
+                    **extra,
+                    "operation_key": key,
+                    "round": round_no,
+                    "remaining_patches": remaining,
+                    "initial_rewrite_required": bool(rewrite and round_no == 0),
+                    "source_sha256": content_hash(source.model_dump(mode="json")),
+                    "source_script": source.model_dump(mode="json"),
+                    "evidence": [item.model_dump(mode="json") for item in plan.evidence],
+                    "objective": plan.objective,
+                    "permitted_target": target,
+                    "instructions": original.instructions if original else None,
+                    "deterministic_issues": deterministic_issues(db, run, source, settings),
+                    "previous_issues": previous,
+                }
             )
             request = AgentModelRequest(
                 run_id=run.id,
@@ -159,9 +206,9 @@ def _round(
                 stage="rewrite" if rewrite else "script",
                 operation_key=key,
                 agent_version=run.workflow_version,
-                prompt_version=REVISION_VERSION,
-                result_schema_version=REVISION_VERSION,
-                system_instruction=REVISION_PROMPT,
+                prompt_version=version,
+                result_schema_version=version,
+                system_instruction=SERIES_REVISION_PROMPT if series else REVISION_PROMPT,
                 messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
                 max_tokens=8000,
             )
@@ -182,8 +229,8 @@ def _round(
         factory,
         settings,
         request,
-        _registry(settings),
-        ScriptCritique,
+        _registry(settings, series=series),
+        SeriesScriptCritique if series else ScriptCritique,
         validate_result=lambda db, report: _validate(db, run_id, key, report, settings, human),
     )
 
@@ -234,7 +281,10 @@ def revise_script(
             run = db.get(WorkflowRun, run_id)
             loop = db.get(AgentLoop, outcome.loop_id)
             assert run is not None and loop is not None
-            seed = RevisionSeed.model_validate(loop.seed_json["messages"][0]["data"])
+            seed_model = (
+                SeriesRevisionSeed if run.workflow_version in SERIES_WORKFLOWS else RevisionSeed
+            )
+            seed = seed_model.model_validate(loop.seed_json["messages"][0]["data"])
             content = merge_checked_patch(
                 db, run, seed, _patch(db, loop, report.patch_sha256), settings
             )

@@ -4,7 +4,7 @@ from uuid import UUID, uuid5
 
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import read_script_content
 from arclight.application.agent_limits import (
     action_usage,
     delegation_count,
@@ -100,7 +100,7 @@ def validate_producer_task(
             raise DomainError("NOT_FOUND", "指定剧本版本不存在", 404)
         if script.status != "APPROVED":
             raise DomainError("SCRIPT_NOT_APPROVED", "委派须引用已批准的精确剧本", 409)
-        content = ScriptContent.model_validate(script.content_json)
+        content = read_script_content(script.content_json)
         validate_script_assets(db, episode.project_id, content)
         validate_duration(
             content, episode.target_duration_ms, settings.text_duration_tolerance_percent

@@ -3,7 +3,14 @@
 import hashlib
 import json
 
-from arclight.agents.contracts import Dialogue, Scene, ScriptContent
+from arclight.agents.contracts import (
+    Dialogue,
+    Scene,
+    SceneV3,
+    ScriptContent,
+    ScriptContentV3,
+    read_script_content,
+)
 from arclight.agents.script_rewrite import (
     ChapterTarget,
     ParagraphTarget,
@@ -11,8 +18,10 @@ from arclight.agents.script_rewrite import (
     RewriteRequest,
     RewriteResult,
     RewriteTarget,
+    SeriesRewriteResult,
 )
 from arclight.core.errors import DomainError
+from arclight.domain.script_narrative import NarrativeContext
 
 
 def content_hash(content: dict) -> str:
@@ -81,7 +90,7 @@ def provider_context(source: ScriptContent, target: RewriteTarget) -> dict:
 
 
 def merge_rewrite(inputs: dict, result: RewriteResult) -> ScriptContent:
-    source = ScriptContent.model_validate(inputs["source_script"])
+    source = read_script_content(inputs["source_script"])
     request = RewriteRequest.model_validate(inputs["request"])
     target = request.target
     scenes = selected_scenes(source, target)
@@ -121,8 +130,26 @@ def merge_rewrite(inputs: dict, result: RewriteResult) -> ScriptContent:
         ]
     check_instructions(request.instructions, selected_lines)
     merged.estimated_duration_ms = result.estimated_duration_ms
+    if isinstance(source, ScriptContentV3):
+        if not isinstance(result, SeriesRewriteResult):
+            raise ValueError("连续剧情补丁必须更新精确选定场景的叙事交付")
+        updates = result.narrative_updates
+        if [item.scene_id for item in updates] != [scene.scene_id for scene in scenes]:
+            raise ValueError("叙事补丁必须逐一对应选定场景，不能修改选区外提案")
+        by_id = {item.scene_id: item for item in updates}
+        for scene in merged.scenes:
+            if scene.scene_id in by_id:
+                assert isinstance(scene, SceneV3)
+                scene.dramatic_beat = by_id[scene.scene_id].dramatic_beat
+                scene.state_changes = by_id[scene.scene_id].state_changes
+        # The refreshed baseline is a top-level explicit input; untouched scenes stay exact.
+        if inputs.get("narrative_context") is not None:
+            assert isinstance(merged, ScriptContentV3)
+            merged.narrative_context = NarrativeContext.model_validate(inputs["narrative_context"])
+    elif isinstance(result, SeriesRewriteResult):
+        raise ValueError("旧剧本不能通过局部补丁补造连续剧情交付")
     # Validate after merging, including untouched references, length limits and global line IDs.
-    return ScriptContent.model_validate(merged.model_dump())
+    return read_script_content(merged.model_dump(mode="json"))
 
 
 def check_instructions(instructions: RewriteInstructions, selected: list[Dialogue]) -> None:

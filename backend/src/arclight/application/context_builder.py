@@ -8,7 +8,7 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import read_script_content
 from arclight.application.agent_preferences import snapshot_preferences
 from arclight.application.commands import require_project
 from arclight.application.content_dependencies import reference_ids
@@ -99,7 +99,7 @@ def load_local(db: Session, project_id: UUID, request: ContextRequest) -> tuple[
         content["script_version_id"] = str(script.id)
         if request.task == "rewrite":
             assert request.rewrite_target is not None
-            parsed = ScriptContent.model_validate(script.content_json)
+            parsed = read_script_content(script.content_json)
             selection = selected_scenes(parsed, request.rewrite_target)
             content["selection"] = provider_context(parsed, request.rewrite_target)
             versions.update(reference_ids([scene.model_dump(mode="json") for scene in selection]))

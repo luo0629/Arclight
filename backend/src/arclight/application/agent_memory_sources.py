@@ -38,6 +38,12 @@ def capture_memory_sources(
             version, _ = exact_version(db, project_id, identity)
             if version.status in {"APPROVED", "LOCKED"}:
                 rule = "APPROVED_ASSET_VERSION"
+        elif source["kind"] in {"SERIES_PLAN", "STORY_LEDGER", "WRITING_TARGET", "NARRATIVE_QUERY"}:
+            from arclight.application.writing_context import validate_narrative_source
+
+            validate_narrative_source(db, project_id, source)
+            # The new versioned narrative contracts retain explicit fact/plan groups.
+            # Do not broaden the confirmation rules of frozen legacy memory schemas.
         elif source["kind"] == "STORY_ENTRY":
             entry = db.get(StoryEntry, identity)
             if entry is not None and entry.project_id == project_id:

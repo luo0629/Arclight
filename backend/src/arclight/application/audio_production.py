@@ -7,7 +7,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import read_script_content
 from arclight.application.audit import audit
 from arclight.application.commands import require_episode
 from arclight.application.content_dependencies import register_content
@@ -60,9 +60,7 @@ def approved_script(db: Session, episode: Episode, identity: UUID, actor: str) -
         or version.checksum != checksum
     ):
         raise DomainError("AUDIO_SCRIPT_NOT_USABLE", "剧本来源已失效或批准内容不符", 409)
-    validate_script_assets(
-        db, episode.project_id, ScriptContent.model_validate(script.content_json)
-    )
+    validate_script_assets(db, episode.project_id, read_script_content(script.content_json))
     return script
 
 
@@ -81,7 +79,7 @@ def capture_snapshot(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一抽取键不能用于不同剧本", 409)
         return previous
     script = approved_script(db, episode, payload.script_version_id, actor)
-    content = ScriptContent.model_validate(script.content_json)
+    content = read_script_content(script.content_json)
     lines = [
         AudioLine(
             **line.model_dump(),

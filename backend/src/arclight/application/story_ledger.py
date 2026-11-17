@@ -9,13 +9,18 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent
+from arclight.agents.contracts import ScriptContent, read_script_content
 from arclight.api.collaboration import require_idle
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.production_events import begin_serialized
 from arclight.core.errors import DomainError
-from arclight.domain.story_ledger import LedgerQuery, StoryLedgerContent, query_ledger
+from arclight.domain.story_ledger import (
+    LedgerQuery,
+    StoryLedgerContent,
+    query_ledger,
+    read_ledger_content,
+)
 from arclight.domain.versions import digest
 from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
 from arclight.persistence.models import (
@@ -178,7 +183,7 @@ def script_source(db: Session, project_id: UUID, script_id: UUID) -> tuple[dict,
         or decision.decision_json.get("request_sha256") != request.request_sha256
     ):
         raise source_error()
-    content = ScriptContent.model_validate(script.content_json)
+    content = read_script_content(script.content_json)
     return {
         "script_version_id": str(script.id),
         "episode_id": str(episode.id),
@@ -411,7 +416,7 @@ def approve_version(
         raise DomainError("VERSION_CONFLICT", "只能批准当前精确账本版本", 409)
     if version_approval(db, row) is not None:
         raise DomainError("ALREADY_APPROVED", "该精确账本版本已经批准", 409)
-    current = capture_sources(db, project_id, StoryLedgerContent.model_validate(row.content_json))
+    current = capture_sources(db, project_id, read_ledger_content(row.content_json))
     if current != row.source_manifest_json:
         raise source_error()
     identity = uuid4()
@@ -470,7 +475,7 @@ def query_version(
 ) -> dict:
     require_project(db, project_id, actor)
     row = require_version(db, project_id, version_id)
-    content = StoryLedgerContent.model_validate(row.content_json)
+    content = read_ledger_content(row.content_json)
     episode = db.get(Episode, query.episode_id)
     script = db.get(Script, query.script_version_id)
     if (
@@ -480,7 +485,7 @@ def query_version(
         or script.episode_id != episode.id
         or not any(
             str(item.scene_id) == str(query.scene_id)
-            for item in ScriptContent.model_validate(script.content_json).scenes
+            for item in read_script_content(script.content_json).scenes
         )
     ):
         raise DomainError("STORY_LEDGER_TARGET_INVALID", "目标场景不属于当前项目", 422)

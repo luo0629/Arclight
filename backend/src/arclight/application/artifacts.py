@@ -4,7 +4,13 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.agents.contracts import ScriptContent, StoryboardContent, read_content
+from arclight.agents.contracts import (
+    ScriptContent,
+    ScriptContentV3,
+    StoryboardContent,
+    read_content,
+    read_script_content,
+)
 from arclight.application.content_dependencies import register_content
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
@@ -44,7 +50,7 @@ class ArtifactStore(Artifacts):
             existing = db.scalar(select(Script).where(Script.run_id == self.run_id))
             if existing:
                 return str(existing.id), read_content(existing.content_json)
-        parsed = ScriptContent.model_validate(generate())
+        parsed = read_script_content(generate())
         with self.factory.begin() as db:
             lock_dependency_graph(db, project_id)
             validate_publication(db, self.run_id)
@@ -76,7 +82,7 @@ class ArtifactStore(Artifacts):
             episode = db.get(Episode, self.episode_id)
             if script is None or episode is None or script.episode_id != self.episode_id:
                 raise ValueError("分镜必须引用当前剧集的剧本版本")
-            source = ScriptContent.model_validate(script.content_json)
+            source = read_script_content(script.content_json)
             validate_script_assets(db, episode.project_id, source)
             validate_duration(source, self.target_duration_ms, self.tolerance_percent)
         parsed = StoryboardContent.model_validate(generate())
@@ -90,7 +96,7 @@ class ArtifactStore(Artifacts):
             episode = db.get(Episode, self.episode_id, populate_existing=True)
             if script is None or episode is None or script.episode_id != episode.id:
                 raise ValueError("分镜必须引用当前剧集的剧本版本")
-            source = ScriptContent.model_validate(script.content_json)
+            source = read_script_content(script.content_json)
             validate_script_assets(db, episode.project_id, source)
             validate_duration(source, self.target_duration_ms, self.tolerance_percent)
             parsed.validate_against(source)
@@ -141,6 +147,17 @@ def save_script_candidate(
     if episode is None:
         raise ValueError("剧集不存在")
     validate_script_assets(db, episode.project_id, parsed)
+    if isinstance(parsed, ScriptContentV3):
+        from arclight.application.gateway_text import execution_actor
+        from arclight.application.script_state_commit import validate_narrative_script
+        from arclight.persistence.models import WorkflowRun
+
+        run = db.get(WorkflowRun, run_id)
+        if run is None or run.input_json.get(
+            "narrative_context"
+        ) != parsed.narrative_context.model_dump(mode="json"):
+            raise ValueError("连续剧稿件与冻结写作依据不匹配")
+        validate_narrative_script(db, episode, execution_actor(db, run), parsed)
     validate_duration(parsed, target_duration_ms, tolerance_percent)
     content = parsed.model_dump(mode="json")
     version = (
