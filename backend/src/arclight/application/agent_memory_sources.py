@@ -53,6 +53,7 @@ def capture_memory_sources(
                 outline is not None
                 and outline.project_id == project_id
                 and outline.status == "APPROVED"
+                and outline.content_json.get("schema_version") != "2.0"
             ):
                 rule, actor = "CONFIRMED_OUTLINE", outline.confirmed_by
         elif source["kind"] == "AGENT_PREFERENCE":

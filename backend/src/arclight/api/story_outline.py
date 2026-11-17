@@ -6,7 +6,6 @@ from fastapi import APIRouter, Header, Request
 from pydantic import Field, StringConstraints, field_validator, model_validator
 from sqlalchemy import select
 
-from arclight.agents.story_outline import StoryOutlineContent
 from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
 from arclight.api.schemas import AcceptedRun, Input, Resource
@@ -18,6 +17,7 @@ from arclight.application.story_outline import (
     start_outline,
 )
 from arclight.domain.screenwriter_creation import ScreenwriterOptions
+from arclight.domain.series_planning import OutlineContent, read_outline_content
 from arclight.persistence.models import StoryOutline
 
 router = APIRouter(prefix="/api/v1/episodes/{episode_id}", tags=["story-outlines"])
@@ -42,7 +42,7 @@ class OutlineCreate(Input, ScreenwriterOptions):
 
 class OutlineSave(Input):
     base_version_id: UUID
-    content: StoryOutlineContent
+    content: OutlineContent
 
 
 class OutlineRead(Resource):
@@ -65,14 +65,14 @@ class OutlineRead(Resource):
 
 
 class OutlineDetail(OutlineRead):
-    content: StoryOutlineContent
+    content: OutlineContent
     source_snapshot: dict
 
 
 def detail(row: StoryOutline) -> OutlineDetail:
     return OutlineDetail(
         **OutlineRead.model_validate(row).model_dump(),
-        content=StoryOutlineContent.model_validate(row.content_json),
+        content=read_outline_content(row.content_json),
         source_snapshot=row.source_snapshot,
     )
 

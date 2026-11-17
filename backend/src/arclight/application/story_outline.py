@@ -11,6 +11,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.application.commands import emit, require_episode
 from arclight.application.model_services import run_settings, text_snapshot
+from arclight.application.production_events import begin_serialized
+from arclight.application.series_planning import planning_source, validate_planning_source
 from arclight.application.source_objects import source_text
 from arclight.application.story_sources import bind_source, capture_inline, provenance
 from arclight.core.config import Settings
@@ -18,6 +20,11 @@ from arclight.core.errors import DomainError
 from arclight.domain.enums import RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.domain.screenwriter_creation import SCREENWRITER_OUTLINE_VERSION
+from arclight.domain.series_planning import (
+    OutlineContent,
+    SeriesOutlineContent,
+    read_outline_content,
+)
 from arclight.persistence.models import (
     AuditEvent,
     Episode,
@@ -246,8 +253,10 @@ def save_outline_candidate(
 
 
 def save_outline(
-    db: Session, episode_id: UUID, actor: str, base_id: UUID, content: StoryOutlineContent, key: str
+    db: Session, episode_id: UUID, actor: str, base_id: UUID, content: OutlineContent, key: str
 ) -> StoryOutline:
+    if isinstance(content, SeriesOutlineContent):
+        begin_serialized(db)
     episode = require_episode(db, episode_id, actor, write=True)
     db.refresh(episode)
     if episode.status == "ARCHIVED":
@@ -266,13 +275,22 @@ def save_outline(
         return existing
     idle(db, episode_id)
     base = require_outline(db, episode.project_id, base_id)
+    if base.content_json.get("schema_version") == "2.0" and not isinstance(
+        content, SeriesOutlineContent
+    ):
+        raise DomainError("SERIES_PLAN_REQUIRED", "全剧规划版本另存时必须保留结构化规划", 422)
+    source_snapshot = (
+        planning_source(db, episode.project_id, content, base.source_snapshot)
+        if isinstance(content, SeriesOutlineContent)
+        else base.source_snapshot
+    )
     row = StoryOutline(
         project_id=episode.project_id,
         episode_id=base.episode_id,
         base_version_id=base.id,
         version_no=next_version(db, episode.project_id),
         content_json=content.model_dump(mode="json"),
-        source_snapshot=base.source_snapshot,
+        source_snapshot=source_snapshot,
         created_by=actor,
         save_key=key,
         request_fingerprint=digest,
@@ -292,6 +310,7 @@ def save_outline(
 
 
 def confirm_outline(db: Session, episode_id: UUID, actor: str, version_id: UUID) -> StoryOutline:
+    begin_serialized(db)
     episode = require_episode(db, episode_id, actor, write=True, owner=True)
     db.refresh(episode)
     if episode.status == "ARCHIVED":
@@ -300,7 +319,9 @@ def confirm_outline(db: Session, episode_id: UUID, actor: str, version_id: UUID)
     if row.status == "APPROVED":
         return row
     idle(db, episode_id)
-    StoryOutlineContent.model_validate(row.content_json)
+    content = read_outline_content(row.content_json)
+    if isinstance(content, SeriesOutlineContent):
+        validate_planning_source(db, episode.project_id, content, row.source_snapshot)
     row.status = "APPROVED"
     row.confirmed_by = actor
     row.confirmed_at = datetime.now(UTC)
@@ -318,10 +339,13 @@ def confirm_outline(db: Session, episode_id: UUID, actor: str, version_id: UUID)
 
 
 def writer_outline(db: Session, episode: Episode, version_id: UUID) -> dict:
+    begin_serialized(db)
     row = require_outline(db, episode.project_id, version_id)
     if row.status != "APPROVED":
         raise DomainError("OUTLINE_NOT_CONFIRMED", "请先确认指定的大纲版本", 409)
-    content = StoryOutlineContent.model_validate(row.content_json)
+    content = read_outline_content(row.content_json)
+    if isinstance(content, SeriesOutlineContent):
+        validate_planning_source(db, episode.project_id, content, row.source_snapshot)
     entry = next((item for item in content.episodes if item.episode_no == episode.episode_no), None)
     if entry is None or content.episode_duration_ms != episode.target_duration_ms:
         raise DomainError(

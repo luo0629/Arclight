@@ -20,20 +20,17 @@ import CreationOptionsFields, {
   validCreationOptions,
 } from "@/features/editor/components/creation-options";
 
-type Entry = {
-  episode_no: number;
-  title: string;
-  goal: string;
-  conflict: string;
-  turning_point: string;
-  ending_hook: string;
-};
-type Content = {
-  schema_version: "1.0";
-  target_episode_count: number;
-  episode_duration_ms: number;
-  episodes: Entry[];
-};
+import SeriesPlanEditor from "./series-plan-editor";
+import {
+  emptySeriesPlan,
+  isOutlineContentDraft,
+  resizeOutline,
+  seriesPlanProblem,
+  type OutlineContent as Content,
+  type OutlineEntry as Entry,
+  type CharacterReference,
+} from "../series-plan";
+
 type Outline = {
   id: string;
   episode_id: string;
@@ -54,6 +51,7 @@ type Detail = Outline & {
     source_sha256: string | null;
     analysis_id: string | null;
     analysis_version_no: number | null;
+    series_plan_references?: { characters: CharacterReference[] };
   };
 };
 type Source = { id: string; import_no: number; original_name: string };
@@ -78,28 +76,7 @@ const outlineDraftValid = (
 ): v is { content: Content; key: string } => {
   if (!v || typeof v !== "object") return false;
   const { content, key } = v as { content?: Content; key?: unknown };
-  return (
-    typeof key === "string" &&
-    !!content &&
-    content.schema_version === "1.0" &&
-    Number.isInteger(content.target_episode_count) &&
-    Number.isFinite(content.episode_duration_ms) &&
-    Array.isArray(content.episodes) &&
-    content.episodes.length > 0 &&
-    content.episodes.length <= 1000 &&
-    content.episodes.every(
-      (row) =>
-        !!row &&
-        Number.isInteger(row.episode_no) &&
-        [
-          row.title,
-          row.goal,
-          row.conflict,
-          row.turning_point,
-          row.ending_hook,
-        ].every((text) => typeof text === "string"),
-    )
-  );
+  return typeof key === "string" && isOutlineContentDraft(content);
 };
 const active = (run: Run | null) =>
   !!run && ["QUEUED", "RUNNING", "WAITING_REVIEW"].includes(run.status);
@@ -691,6 +668,7 @@ export default function StoryOutline({
                 key={detail.id}
                 detail={detail}
                 episodeId={episode.id}
+                projectId={episode.project_id}
                 writable={writable}
                 blocked={blocked}
                 onSaved={async (result) => {
@@ -717,12 +695,14 @@ export default function StoryOutline({
 function OutlineEditor({
   detail,
   episodeId,
+  projectId,
   writable,
   blocked,
   onSaved,
 }: {
   detail: Detail;
   episodeId: string;
+  projectId: string;
   writable: boolean;
   blocked: boolean;
   onSaved: (detail: Detail) => Promise<void>;
@@ -745,6 +725,10 @@ function OutlineEditor({
     };
   }, []);
   const content = draft.value.content;
+  const planningProblem =
+    content.schema_version === "2.0"
+      ? seriesPlanProblem(content.series_plan, content.episodes)
+      : "";
   function update(next: Content) {
     draft.update({ content: next, key: crypto.randomUUID() });
   }
@@ -758,7 +742,7 @@ function OutlineEditor({
   }
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (saving.current || !writable || blocked) return;
+    if (saving.current || !writable || blocked || planningProblem) return;
     saving.current = true;
     setBusy(true);
     setError("");
@@ -814,6 +798,45 @@ function OutlineEditor({
           }
         />
       </Field>
+      {content.schema_version === "1.0" ? (
+        <section className="grid gap-3" aria-label="全剧规划">
+          <h4 className="text-lg font-semibold">全剧／全季规划</h4>
+          <p className="text-sm text-muted-foreground">
+            此版本未记录全剧规划。
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            className="justify-self-start"
+            disabled={!writable || blocked || busy}
+            onClick={() =>
+              update({
+                ...content,
+                schema_version: "2.0",
+                series_plan: emptySeriesPlan(content.episodes),
+              })
+            }
+          >
+            补充全剧规划
+          </Button>
+        </section>
+      ) : (
+        <>
+          <SeriesPlanEditor
+            plan={content.series_plan}
+            episodeCount={content.episodes.length}
+            projectId={projectId}
+            disabled={!writable || blocked || busy}
+            references={
+              detail.source_snapshot.series_plan_references?.characters ?? []
+            }
+            onChange={(series_plan) => update({ ...content, series_plan })}
+          />
+          {planningProblem && writable && (
+            <Notice role="status">{planningProblem}</Notice>
+          )}
+        </>
+      )}
       {content.episodes.map((row, i) => (
         <fieldset
           key={row.episode_no}
@@ -864,10 +887,8 @@ function OutlineEditor({
             !writable || blocked || busy || content.episodes.length >= 1000
           }
           onClick={() =>
-            update({
-              ...content,
-              target_episode_count: content.episodes.length + 1,
-              episodes: [
+            update(
+              resizeOutline(content, [
                 ...content.episodes,
                 {
                   episode_no: content.episodes.length + 1,
@@ -877,8 +898,8 @@ function OutlineEditor({
                   turning_point: "",
                   ending_hook: "",
                 },
-              ],
-            })
+              ]),
+            )
           }
         >
           追加一集
@@ -890,18 +911,16 @@ function OutlineEditor({
             !writable || blocked || busy || content.episodes.length <= 1
           }
           onClick={() =>
-            update({
-              ...content,
-              target_episode_count: content.episodes.length - 1,
-              episodes: content.episodes.slice(0, -1),
-            })
+            update(resizeOutline(content, content.episodes.slice(0, -1)))
           }
         >
           移除末集
         </Button>
         <Button
           type="submit"
-          disabled={!writable || blocked || busy || !draft.dirty}
+          disabled={
+            !writable || blocked || busy || !draft.dirty || !!planningProblem
+          }
         >
           另存大纲新版本
         </Button>
