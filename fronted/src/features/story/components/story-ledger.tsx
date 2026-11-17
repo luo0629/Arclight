@@ -911,7 +911,7 @@ function LedgerQueryPanel({
       </form>
       {error && <Notice tone="error">{error}</Notice>}
       {result && (
-        <div aria-label="账本受控查询结果" className="grid min-w-0 gap-3">
+        <section aria-label="账本受控查询结果" className="grid min-w-0 gap-3">
           <p className="text-sm">
             版本 {result.version_no}；{sceneLabel(result.target)}；
             {result.perspective === "CHARACTER" ? "角色所知" : "作者视角"}
@@ -978,7 +978,7 @@ function LedgerQueryPanel({
               下一页查询结果
             </Button>
           </div>
-        </div>
+        </section>
       )}
     </section>
   );
