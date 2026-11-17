@@ -452,10 +452,12 @@ def test_workflow_generation_and_approval_use_run_target_snapshot(client, episod
         db.get(Episode, UUID(episode["id"])).target_duration_ms = 60000
     first = advance(client, settings, run_id)
     assert first["status"] == "WAITING_REVIEW"
-    assert review(client, first).status_code == 202
+    first_review = review(client, first)
+    assert first_review.status_code == 202, first_review.text
     second = advance(client, settings, run_id)
     assert second["status"] == "WAITING_REVIEW"
-    assert review(client, second).status_code == 202
+    second_review = review(client, second)
+    assert second_review.status_code == 202, second_review.text
     assert advance(client, settings, run_id)["status"] == "SUCCEEDED"
     with client.app.state.session_factory() as db:
         assert db.scalar(select(Script)).content_json["estimated_duration_ms"] == 30000

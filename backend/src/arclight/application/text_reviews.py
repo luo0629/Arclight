@@ -247,6 +247,7 @@ def validate_manual_approval(
     settings: Settings,
     *,
     performance_intent: PerformanceIntentApproval | None = None,
+    target_duration_ms: int | None = None,
 ) -> None:
     episode = db.get(Episode, artifact.episode_id)
     assert episode is not None
@@ -286,7 +287,12 @@ def validate_manual_approval(
         elif performance_intent is not None:
             raise DomainError("PERFORMANCE_INTENT_INVALID", "仅3.0表演分镜可确认表演意图", 422)
         validate_storyboard_assets(db, episode.project_id, parsed, episode_id=episode.id)
-    validate_duration(parsed, episode.target_duration_ms, settings.text_duration_tolerance_percent)
+    # Run-bound reviews supply their frozen target; manual reviews use the current episode.
+    validate_duration(
+        parsed,
+        episode.target_duration_ms if target_duration_ms is None else target_duration_ms,
+        settings.text_duration_tolerance_percent,
+    )
 
 
 def apply_manual_content(
@@ -399,8 +405,13 @@ def check_text_decision(
         settings = db.info.get("settings")
         if not isinstance(settings, Settings):
             raise DomainError("REVIEW_SETTINGS_UNAVAILABLE", "审核执行配置不可用", 503)
+        run = db.get(WorkflowRun, row.run_id) if row.run_id else None
         validate_manual_approval(
-            db, artifact, settings, performance_intent=payload.performance_intent
+            db,
+            artifact,
+            settings,
+            performance_intent=payload.performance_intent,
+            target_duration_ms=run.input_json["target_duration_ms"] if run else None,
         )
 
 

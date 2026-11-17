@@ -532,10 +532,13 @@ def resume_run(
         else:
             from arclight.application.text_reviews import validate_manual_approval
 
-            if intent is None:
-                validate_manual_approval(db, artifact, settings)
-            else:
-                validate_manual_approval(db, artifact, settings, performance_intent=intent)
+            validate_manual_approval(
+                db,
+                artifact,
+                settings,
+                performance_intent=intent,
+                target_duration_ms=run.input_json["target_duration_ms"],
+            )
         parsed = (
             read_script_content(artifact.content_json)
             if isinstance(artifact, Script)

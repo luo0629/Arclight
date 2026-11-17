@@ -22,7 +22,7 @@ from arclight.application.continuity_selection import validate_selected_shot
 from arclight.application.generation_targets import require_available_shot
 from arclight.application.production_state import shot_facts
 from arclight.application.shot_production import generation_request
-from arclight.application.text_reviews import performance_intent_evidence
+from arclight.application.text_reviews import pause_for_run, performance_intent_evidence
 from arclight.application.timelines import selected_clip_facts
 from arclight.core.errors import DomainError
 from arclight.core.image_service import OPENAI_IMAGE_MODEL
@@ -668,11 +668,15 @@ def test_unified_intent_decision_replay_rechecks_source_and_blockers(
             assert db.get(Storyboard, UUID(board["id"])).status == "APPROVED"
 
 
-def test_workflow_review_create_persists_intent_and_queues_exact_handoff_once(client, episode):
+@pytest.mark.parametrize("entry", ["run", "human_review"])
+@pytest.mark.parametrize("episode_target", [30000, 60000])
+def test_workflow_review_create_persists_intent_and_queues_exact_handoff_once(
+    client, episode, entry, episode_target
+):
     script, manual, _ = performance_case(client, episode, dynamic=True)
     factory = client.app.state.session_factory
-    # Seed an already-produced legacy workflow's pending V3 artifact. This tests
-    # the actual /runs/{id}/resume entry, separately from director startup/admission.
+    # Seed an already-produced legacy workflow's pending V3 artifact, then use
+    # the real pause service so both entry points consume the same durable review.
     with factory.begin() as db:
         owner = db.get(Project, UUID(episode["project_id"])).owner_id
         run = WorkflowRun(
@@ -712,28 +716,77 @@ def test_workflow_review_create_persists_intent_and_queues_exact_handoff_once(cl
         )
         register_content(db, board, owner)
         run.pending_review = {"resource_type": "storyboard", "version_id": str(board.id)}
+        pause_for_run(db, run)
         run_id, board_id = str(run.id), str(board.id)
-    url = f"/api/v1/runs/{run_id}/resume"
-    payload = {
-        "resource_type": "storyboard",
-        "version_id": board_id,
-        "expected_revision": 0,
-        "decision": "APPROVE",
-        "comment": "仅确认表演意图，制作阻断继续保留",
-    }
+    # Simulate external drift in the isolated fixture after the run and review
+    # snapshots were frozen; normal API edits are blocked while the run is active.
+    if episode_target != 30000:
+        with factory.begin() as db:
+            db.get(Episode, UUID(episode["id"])).target_duration_ms = episode_target
+    pending = exact_review(client, episode, {"id": board_id})
+    assert pending["snapshot"]["run_id"] == run_id
+    assert pending["decision"] is None and pending["resume"] is None
+    comment = "仅确认表演意图，制作阻断继续保留"
+    if entry == "run":
+        url = f"/api/v1/runs/{run_id}/resume"
+        payload = {
+            "resource_type": "storyboard",
+            "version_id": board_id,
+            "expected_revision": 0,
+            "decision": "APPROVE",
+            "comment": comment,
+        }
+        explicit_intent = {"performance_intent_only": True}
+    else:
+        url = f"/api/v1/human-reviews/{pending['id']}/decisions"
+        payload = {
+            "version_id": board_id,
+            "request_sha256": pending["request_sha256"],
+            "decision": "APPROVE",
+            "comment": comment,
+        }
+        with factory() as db:
+            evidence = performance_intent_evidence(
+                db, db.get(Storyboard, UUID(board_id)), "APPROVE", comment
+            ).model_dump(mode="json")
+        explicit_intent = {"performance_intent": evidence}
     ordinary = client.post(url, json=payload)
     assert ordinary.status_code == 409, ordinary.text
     assert ordinary.json()["error"]["code"] == "PERFORMANCE_NOT_READY"
-    invalid = client.post(url, json={**payload, "performance_intent_only": True, "comment": " "})
+    invalid = client.post(url, json={**payload, **explicit_intent, "comment": " "})
     assert invalid.status_code == 422, invalid.text
-    accepted = client.post(url, json={**payload, "performance_intent_only": True})
-    assert accepted.status_code == 202, accepted.text
-    assert accepted.json()["status"] == "QUEUED" and accepted.json()["revision"] == 1
+    assert exact_review(client, episode, {"id": board_id})["decision"] is None
+    accepted_payload = {**payload, **explicit_intent}
+    accepted = client.post(url, json=accepted_payload)
+    assert accepted.status_code == (202 if entry == "run" else 200), accepted.text
+    if entry == "run":
+        assert accepted.json()["status"] == "QUEUED" and accepted.json()["revision"] == 1
+    else:
+        repeated = client.post(url, json=accepted_payload)
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json() == accepted.json()
+        decided = exact_review(client, episode, {"id": board_id})
+        assert decided["decision"]["decision_json"]["performance_intent"] == evidence
+        assert decided["resume"] is None
+        with factory() as db:
+            assert db.get(Storyboard, UUID(board_id)).status == "READY_FOR_REVIEW"
+            assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 0
+            assert db.scalar(select(func.count()).select_from(Review)) == 0
+        resumed = client.post(
+            f"/api/v1/human-reviews/{pending['id']}/resume",
+            json={
+                "decision_id": accepted.json()["id"],
+                "request_sha256": pending["request_sha256"],
+            },
+        )
+        assert resumed.status_code == 200, resumed.text
     ledger = exact_review(client, episode, {"id": board_id})
     receipt = ledger["decision"]["decision_json"]["performance_intent"]
     assert receipt["scope"] == "INTENT_ONLY" and receipt["production_ready"] is False
     assert receipt["source_script_version_id"] == script["id"]
+    assert receipt["source_script_sha256"] == digest(script["content_json"])
     assert receipt["blockers"] and ledger["snapshot"]["run_id"] == run_id
+    assert ledger["decision"]["decision_json"]["comment"] == comment
     replay = client.post(
         f"/api/v1/human-reviews/{ledger['id']}/resume",
         json={
@@ -743,10 +796,36 @@ def test_workflow_review_create_persists_intent_and_queues_exact_handoff_once(cl
     )
     assert replay.status_code == 200, replay.text
     assert replay.json() == ledger["resume"]
+    assert exact_review(client, episode, {"id": board_id}) == ledger
     with factory() as db:
         stored = db.get(WorkflowRun, UUID(run_id))
         assert stored.resume_json["performance_intent_only"] is True
         assert stored.pending_review is None
-        assert db.get(Storyboard, UUID(board_id)).status == "APPROVED"
+        assert stored.status == "QUEUED" and stored.revision == 1
+        assert stored.input_json["target_duration_ms"] == 30000
+        assert db.get(Episode, UUID(episode["id"])).target_duration_ms == episode_target
+        approved = db.get(Storyboard, UUID(board_id))
+        assert approved.status == "APPROVED" and approved.content_json == manual["content_json"]
+        shot = stored_shot(db, {"id": board_id})
+        assert shot.duration_ms == 30000
+        with pytest.raises(DomainError) as blocked:
+            generation_request(db, UUID(episode["project_id"]), approved, shot)
+        assert blocked.value.code == "DYNAMIC_MEDIA_REQUIRED"
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
         assert db.scalar(select(func.count()).select_from(Review)) == 1
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(HumanReviewDecision)
+                .where(HumanReviewDecision.request_id == UUID(ledger["id"]))
+            )
+            == 1
+        )
+        assert (
+            db.scalar(
+                select(func.count())
+                .select_from(HumanReviewResume)
+                .where(HumanReviewResume.request_id == UUID(ledger["id"]))
+            )
+            == 1
+        )
