@@ -10,6 +10,15 @@ import {
 } from "@/components/ui/native-select";
 import { Field } from "@/components/ui/field";
 import { useId, useRef, useState } from "react";
+import {
+  emptyShotPerformance,
+  isShotPerformance,
+  emptyPerformanceCharacter,
+  performanceProblem,
+  reorderPerformanceShots,
+  type GenerationRoute,
+} from "../shot-performance";
+import StoryboardPerformanceControls from "./storyboard-performance-controls";
 import { api, json } from "@/lib/api/client";
 import NarrativeInputs from "./narrative-inputs";
 import {
@@ -75,7 +84,11 @@ type Script = {
     }[];
   }[];
 };
-type Board = { shots: StoryboardTableShot[] };
+type Board = {
+  schema_version?: string;
+  generation_routes?: GenerationRoute[];
+  shots: StoryboardTableShot[];
+};
 
 function validContent(value: unknown, kind: VersionKind): boolean {
   if (!value || typeof value !== "object") return false;
@@ -110,6 +123,11 @@ function validContent(value: unknown, kind: VersionKind): boolean {
       )
     );
   return (
+    (row.generation_routes === undefined ||
+      (Array.isArray(row.generation_routes) &&
+        row.generation_routes.every(
+          (route) => route && text(route.provider) && text(route.model),
+        ))) &&
     Array.isArray(row.shots) &&
     row.shots.length > 0 &&
     row.shots.every(
@@ -122,7 +140,10 @@ function validContent(value: unknown, kind: VersionKind): boolean {
         text(shot.visual_description) &&
         strings(shot.characters) &&
         text(shot.camera_movement) &&
-        text(shot.subtitle),
+        text(shot.subtitle) &&
+        (row.schema_version !== "3.0" ||
+          (shot.schema_version === "3.0" &&
+            isShotPerformance(shot.performance))),
     )
   );
 }
@@ -152,7 +173,18 @@ export default function VersionEditor({
 }) {
   const editorId = useId();
   const source = sourceScript?.content_json as Script | undefined;
-  function emptyShot(shotNo: number): Board["shots"][number] {
+  function emptyShot(
+    shotNo: number,
+    performanceMode = false,
+  ): Board["shots"][number] {
+    const performance = emptyShotPerformance([]);
+    performance.props = (source?.scenes[0]?.props ?? []).map((asset) => ({
+      asset: asset as { asset_id: string; asset_version_id: string },
+      holder_start: "",
+      holder_end: "",
+      position_start: "",
+      position_end: "",
+    }));
     return {
       shot_no: shotNo,
       scene_no: source?.scenes[0]?.scene_no ?? 1,
@@ -167,6 +199,7 @@ export default function VersionEditor({
       characters: [],
       camera_movement: "static",
       subtitle: "",
+      ...(performanceMode ? { schema_version: "3.0", performance } : {}),
     };
   }
   const [initial] = useState<Record<string, unknown>>(() =>
@@ -225,15 +258,22 @@ export default function VersionEditor({
     change(copy as unknown as Script & Board);
     local.update(copy);
   }
+  const performanceIssue =
+    kind === "storyboard" && board.schema_version === "3.0"
+      ? board.shots
+          .map((shot) => performanceProblem(shot.performance))
+          .find(Boolean)
+      : null;
   const invalidBoard =
     kind === "storyboard" &&
-    board.shots.some(
-      (shot) =>
-        !shot.visual_description.trim() ||
-        !Number.isFinite(shot.duration_ms) ||
-        shot.duration_ms < 500 ||
-        shot.duration_ms > 30000,
-    );
+    (!!performanceIssue ||
+      board.shots.some(
+        (shot) =>
+          !shot.visual_description.trim() ||
+          !Number.isFinite(shot.duration_ms) ||
+          shot.duration_ms < 500 ||
+          shot.duration_ms > 30000,
+      ));
   async function save() {
     if (
       saving.current ||
@@ -348,6 +388,50 @@ export default function VersionEditor({
           秒 · 目标 {episode.target_duration_ms / 1000}{" "}
           秒，保存及批准由服务端校验。
         </p>
+      )}
+      {kind === "storyboard" && (
+        <StoryboardPerformanceControls
+          schemaVersion={board.schema_version}
+          routes={board.generation_routes ?? []}
+          editing={editing}
+          sourceLoaded={!!source}
+          onRoutes={(generation_routes) =>
+            mutate((value) => {
+              value.generation_routes = generation_routes;
+            })
+          }
+          onEnable={() =>
+            mutate((value) => {
+              value.schema_version = "3.0";
+              value.generation_routes = [];
+              const previous = new Map<number, number>();
+              value.shots = value.shots.map((shot) => {
+                const scene = source?.scenes.find(
+                  (row) => row.scene_no === shot.scene_no,
+                );
+                const performance = emptyShotPerformance(
+                  shot.characters,
+                  shot.dialogue_line_ids,
+                  scene?.dialogue,
+                );
+                performance.continuity_from_shot =
+                  previous.get(shot.scene_no) ?? null;
+                previous.set(shot.scene_no, shot.shot_no);
+                performance.props = (shot.props ?? []).map((asset) => ({
+                  asset: asset as {
+                    asset_id: string;
+                    asset_version_id: string;
+                  },
+                  holder_start: "",
+                  holder_end: "",
+                  position_start: "",
+                  position_end: "",
+                }));
+                return { ...shot, schema_version: "3.0", performance };
+              });
+            })
+          }
+        />
       )}
       <div className="section-heading flex flex-wrap items-center justify-between gap-2">
         <h3>
@@ -771,6 +855,22 @@ export default function VersionEditor({
                                 (row) =>
                                   row.scene_no === Number(event.target.value),
                               );
+                              if (value.shots[index].performance) {
+                                const current = value.shots[index].performance!;
+                                current.dialogue = [];
+                                current.props = (scene?.props ?? []).map(
+                                  (asset) => ({
+                                    asset: asset as {
+                                      asset_id: string;
+                                      asset_version_id: string;
+                                    },
+                                    holder_start: "",
+                                    holder_end: "",
+                                    position_start: "",
+                                    position_end: "",
+                                  }),
+                                );
+                              }
                               Object.assign(value.shots[index], {
                                 scene_id: scene?.scene_id ?? null,
                                 dialogue_line_ids: [],
@@ -854,6 +954,7 @@ export default function VersionEditor({
                     出场角色（用中文逗号分隔）
                     <Input
                       value={shot.characters.join("，")}
+                      disabled={!!shot.performance && !source}
                       onChange={(event) =>
                         mutate((value) => {
                           value.shots[index].characters = event.target.value
@@ -862,6 +963,21 @@ export default function VersionEditor({
                                 .map((name) => name.trim())
                             : [];
                           const current = value.shots[index];
+                          if (current.performance) {
+                            const performance = current.performance;
+                            performance.characters = current.characters.map(
+                              (character) =>
+                                performance.characters.find(
+                                  (row) => row.character === character,
+                                ) ?? emptyPerformanceCharacter(character),
+                            );
+                            performance.interactions =
+                              performance.interactions.filter(
+                                (row) =>
+                                  current.characters.includes(row.actor) &&
+                                  current.characters.includes(row.target),
+                              );
+                          }
                           const details = current.character_details ?? [];
                           current.character_details = current.characters.map(
                             (character) => {
@@ -933,13 +1049,17 @@ export default function VersionEditor({
                 <Button
                   variant="outline"
                   size="lg"
-                  disabled={board.shots.length === 1}
+                  disabled={
+                    board.shots.length === 1 ||
+                    board.shots.some(
+                      (row) =>
+                        row.performance?.continuity_from_shot === shot.shot_no,
+                    )
+                  }
                   onClick={() =>
                     mutate((value) => {
                       value.shots.splice(index, 1);
-                      value.shots.forEach((row, i) => {
-                        row.shot_no = i + 1;
-                      });
+                      value.shots = reorderPerformanceShots(value.shots);
                     })
                   }
                 >
@@ -955,7 +1075,18 @@ export default function VersionEditor({
               disabled={board.shots.length >= 100}
               onClick={() =>
                 mutate((value) => {
-                  value.shots.push(emptyShot(value.shots.length + 1));
+                  const shot = emptyShot(
+                    value.shots.length + 1,
+                    value.schema_version === "3.0",
+                  );
+                  if (shot.performance) {
+                    shot.performance.continuity_from_shot =
+                      [...value.shots]
+                        .reverse()
+                        .find((row) => row.scene_no === shot.scene_no)
+                        ?.shot_no ?? null;
+                  }
+                  value.shots.push(shot);
                 })
               }
             >
@@ -1019,7 +1150,8 @@ export default function VersionEditor({
       <ContractMetadata content={draft} />
       {editing && invalidBoard && (
         <p className="hint text-xs leading-relaxed text-muted-foreground">
-          每个镜头都需要画面描述，时长须在 0.5–30 秒之间。
+          {performanceIssue ||
+            "每个镜头都需要画面描述，时长须在 0.5–30 秒之间。"}
         </p>
       )}
       {editing && (

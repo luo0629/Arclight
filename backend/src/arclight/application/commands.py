@@ -5,12 +5,15 @@ from uuid import UUID
 from sqlalchemy import literal, select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import StoryboardContent, read_script_content
+from arclight.agents.contracts import (
+    ScriptContentV3,
+    read_script_content,
+    read_storyboard_content,
+)
 from arclight.api.schemas import ReviewCreate
 from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
-    validate_storyboard_assets,
 )
 from arclight.application.model_services import text_snapshot
 from arclight.application.source_objects import source_text
@@ -150,6 +153,7 @@ def start_run(
     professional_director: bool = False,
     director_revision_rounds: int | None = None,
     director_art_collaboration: bool = False,
+    performance: bool = False,
     art_task: ArtDirectionTask | None = None,
     art_concept_plan: ArtConceptPlan | None = None,
     producer_parent_run_id: UUID | None = None,
@@ -159,11 +163,22 @@ def start_run(
         agent_limits=agent_limits,
         revision_rounds=revision_rounds,
     )
-    DirectorRevisionOptions(
-        professional=professional_director,
-        director_revision_rounds=director_revision_rounds,
-        director_art_collaboration=director_art_collaboration,
-    )
+    if performance:
+        from arclight.domain.director_performance import PerformanceDirectorOptions
+
+        PerformanceDirectorOptions(
+            professional=professional_director,
+            director_revision_rounds=director_revision_rounds,
+            director_art_collaboration=director_art_collaboration,
+        )
+        if script_version_id is None or professional or art_task is not None:
+            raise DomainError("DIRECTOR_TASK_INVALID", "表演分镜须从精确批准剧本独立发起", 422)
+    else:
+        DirectorRevisionOptions(
+            professional=professional_director,
+            director_revision_rounds=director_revision_rounds,
+            director_art_collaboration=director_art_collaboration,
+        )
     if narrative is not None and (
         not professional
         or professional_director
@@ -232,6 +247,8 @@ def start_run(
             payload["director_revision_rounds"] = director_revision_rounds
         if director_art_collaboration:
             payload["director_art_collaboration"] = True
+        if performance:
+            payload["performance"] = True
     if art_task is not None:
         payload |= {
             "art_task": art_task.model_dump(mode="json"),
@@ -295,6 +312,10 @@ def start_run(
                 else "只能从已批准的剧本版本生成分镜",
             )
         source = read_script_content(script.content_json)
+        if performance and not isinstance(source, ScriptContentV3):
+            raise DomainError(
+                "PERFORMANCE_SCRIPT_V3_REQUIRED", "表演分镜须选择3.0叙事剧本版本", 422
+            )
         validate_script_assets(db, project.id, source)
         validate_duration(
             source, episode.target_duration_ms, settings.text_duration_tolerance_percent
@@ -349,6 +370,8 @@ def start_run(
             inputs["director"]["revision_rounds"] = director_revision_rounds
         if director_art_collaboration:
             inputs["director"]["art_collaboration"] = True
+        if performance:
+            inputs["director"]["performance"] = True
     if art_task is not None:
         from arclight.domain.art_workflow import ART_WORKFLOW_VERSION
 
@@ -398,6 +421,10 @@ def start_run(
                 if revision_rounds is not None
                 else COLLABORATIVE_PRODUCTION_VERSION
             )
+        if performance:
+            from arclight.domain.director_performance import PERFORMANCE_DIRECTOR_VERSION
+
+            version = PERFORMANCE_DIRECTOR_VERSION
     elif professional:
         version = (
             SERIES_SCREENWRITER_VERSION
@@ -486,8 +513,16 @@ def resume_run(
     if artifact is None or artifact.run_id != run.id:
         raise DomainError("STALE_REVIEW", "待审核版本不存在或不属于本次工作流")
     from arclight.application.human_reviews import record_resume
-    from arclight.application.text_reviews import prepare_text_decision
+    from arclight.application.text_reviews import (
+        performance_intent_evidence,
+        prepare_text_decision,
+    )
 
+    intent = (
+        performance_intent_evidence(db, artifact, review.decision, review.comment)
+        if review.performance_intent_only
+        else None
+    )
     if review.decision == "APPROVE":
         episode = require_episode(db, run.episode_id, actor)
         if isinstance(artifact, Script):
@@ -495,23 +530,34 @@ def resume_run(
                 db, episode.project_id, read_script_content(artifact.content_json)
             )
         else:
-            validate_storyboard_assets(
-                db,
-                episode.project_id,
-                StoryboardContent.model_validate(artifact.content_json),
-                episode_id=episode.id,
-            )
+            from arclight.application.text_reviews import validate_manual_approval
+
+            if intent is None:
+                validate_manual_approval(db, artifact, settings)
+            else:
+                validate_manual_approval(db, artifact, settings, performance_intent=intent)
         parsed = (
             read_script_content(artifact.content_json)
             if isinstance(artifact, Script)
-            else StoryboardContent.model_validate(artifact.content_json)
+            else read_storyboard_content(artifact.content_json)
         )
         validate_duration(
             parsed, run.input_json["target_duration_ms"], settings.text_duration_tolerance_percent
         )
-    review_request, review_decision = prepare_text_decision(
-        db, artifact, actor, review.decision, review.comment, review.impact_digest
-    )
+    if intent is None:
+        review_request, review_decision = prepare_text_decision(
+            db, artifact, actor, review.decision, review.comment, review.impact_digest
+        )
+    else:
+        review_request, review_decision = prepare_text_decision(
+            db,
+            artifact,
+            actor,
+            review.decision,
+            review.comment,
+            review.impact_digest,
+            performance_intent=intent,
+        )
     artifact.status = AssetStatus.APPROVED if review.decision == "APPROVE" else AssetStatus.REJECTED
     if isinstance(artifact, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):

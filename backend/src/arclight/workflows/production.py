@@ -5,7 +5,7 @@ from uuid import UUID
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from arclight.agents.contracts import StoryboardContent, read_script_content
+from arclight.agents.contracts import read_script_content, read_storyboard_content
 from arclight.domain.agent_state import (
     AgentRunScope,
     AgentRunState,
@@ -182,7 +182,8 @@ def build_graph(
                 if director_generate is not None
                 else provider.storyboard(script, state["target_duration_ms"])
             )
-            return StoryboardContent.model_validate(content).validate_against(script).model_dump()
+            value = content if isinstance(content, dict) else content.model_dump(mode="json")
+            return read_storyboard_content(value).validate_against(script).model_dump()
 
         version_id, content = artifacts.storyboard(state["script_version_id"], generate)
         return {

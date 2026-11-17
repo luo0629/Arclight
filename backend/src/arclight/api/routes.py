@@ -183,6 +183,7 @@ def create_storyboard_run(
         professional_director=payload.professional,
         director_revision_rounds=payload.director_revision_rounds,
         director_art_collaboration=payload.director_art_collaboration,
+        performance=payload.performance,
         agent_limits=payload.agent_limits,
     )
     return AcceptedRun(

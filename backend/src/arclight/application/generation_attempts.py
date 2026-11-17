@@ -63,7 +63,14 @@ def require_writable_target(db: Session, job: GenerationJob) -> None:
     if binding is not None:
         from arclight.application.generation_targets import require_available_shot
 
-        require_available_shot(db, job.project_id, binding, job.episode_id, exclude_job_id=job.id)
+        require_available_shot(
+            db,
+            job.project_id,
+            binding,
+            job.episode_id,
+            exclude_job_id=job.id,
+            task_type=job.task_type,
+        )
 
 
 def start_attempt(

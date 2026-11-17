@@ -128,7 +128,9 @@ def create_job(
     if review_binding is not None:
         from arclight.application.generation_targets import require_available_shot
 
-        require_available_shot(db, project_id, review_binding, payload.episode_id)
+        require_available_shot(
+            db, project_id, review_binding, payload.episode_id, task_type=payload.task_type
+        )
     from arclight.application.media_services import bind_selection, select_for_spec
 
     service = select_for_spec(db, actor, payload.spec, payload.task_type, frozen_service)

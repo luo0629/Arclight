@@ -22,12 +22,21 @@ import CharacterMatching from "@/features/story/components/character-matching";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import ScreenwriterProgress from "@/features/tasks/components/screenwriter-progress";
 import { NarrativeApproval } from "@/features/editor/components/script-narrative";
+import {
+  StoryboardPerformanceApproval,
+  type PerformanceReviewInput,
+} from "@/features/editor/components/performance-review";
 import ArtProgress from "./art-progress";
 import MediaTasks from "./media-tasks";
 import ProducerStart from "./producer-start";
 import ProducerProgress from "./producer-progress";
 
 type Act = (action: () => Promise<unknown>) => Promise<boolean>;
+function reviewVersionId(run: Run) {
+  return run.pending_review && "version_id" in run.pending_review
+    ? run.pending_review.version_id
+    : "";
+}
 export default function Tasks({
   projectId,
   episodeId,
@@ -50,7 +59,17 @@ export default function Tasks({
   reload: () => Promise<void>;
 }) {
   const [eventRun, setEventRun] = useState("");
-  const [comment, setComment] = useState("");
+  const [reviewInputs, setReviewInputs] = useState<
+    Record<string, PerformanceReviewInput>
+  >({});
+  const [storyboardSchemas, setStoryboardSchemas] = useState<
+    Record<string, boolean>
+  >({});
+  const storyboardReady = useCallback(
+    (id: string, supportsIntent: boolean) =>
+      setStoryboardSchemas((schemas) => ({ ...schemas, [id]: supportsIntent })),
+    [],
+  );
   const [readyCandidates, setReadyCandidates] = useState<string[]>([]);
   const candidateReady = useCallback(
     (id: string) =>
@@ -94,12 +113,20 @@ export default function Tasks({
     impact_digest?: string,
   ) {
     if (run.workflow_type === "producer") return false;
+    const versionId = reviewVersionId(run);
+    const input = reviewInputs[versionId] ?? { intentOnly: false, comment: "" };
     const payload =
       command === "resume"
         ? {
             ...run.pending_review,
             decision,
-            comment,
+            comment: input.comment,
+            ...(decision === "APPROVE" &&
+            run.pending_review?.resource_type === "storyboard" &&
+            storyboardSchemas[versionId] === true &&
+            input.intentOnly
+              ? { performance_intent_only: true }
+              : {}),
             expected_revision: run.revision,
             impact_digest,
           }
@@ -129,7 +156,10 @@ export default function Tasks({
             );
         }
       }
-      setComment("");
+      setReviewInputs((inputs) => ({
+        ...inputs,
+        [versionId]: { intentOnly: false, comment: "" },
+      }));
     });
   }
   return (
@@ -231,6 +261,7 @@ export default function Tasks({
                   "director/1.0",
                   "director/2.0",
                   "director/3.0",
+                  "director/4.0",
                   "production/1.0",
                   "production/2.0",
                   "production/3.0",
@@ -291,11 +322,48 @@ export default function Tasks({
                           onReady={candidateReady}
                         />
                       )}
+                      {run.pending_review.resource_type === "storyboard" && (
+                        <StoryboardPerformanceApproval
+                          key={run.pending_review.version_id}
+                          episodeId={run.episode_id}
+                          versionId={run.pending_review.version_id}
+                          value={
+                            reviewInputs[run.pending_review.version_id] ?? {
+                              intentOnly: false,
+                              comment: "",
+                            }
+                          }
+                          disabled={busy}
+                          onReady={storyboardReady}
+                          onChange={(value) =>
+                            setReviewInputs((inputs) => ({
+                              ...inputs,
+                              [reviewVersionId(run)]: value,
+                            }))
+                          }
+                        />
+                      )}
                       <FormLabel>
-                        审核意见
+                        {reviewInputs[run.pending_review.version_id]?.intentOnly
+                          ? "表演意图确认理由（必填）"
+                          : "审核意见"}
                         <Textarea
-                          value={comment}
-                          onChange={(event) => setComment(event.target.value)}
+                          value={
+                            reviewInputs[run.pending_review.version_id]
+                              ?.comment ?? ""
+                          }
+                          onChange={(event) => {
+                            const versionId = reviewVersionId(run);
+                            const comment = event.target.value;
+                            setReviewInputs((inputs) => ({
+                              ...inputs,
+                              [versionId]: {
+                                intentOnly:
+                                  inputs[versionId]?.intentOnly ?? false,
+                                comment,
+                              },
+                            }));
+                          }}
                           maxLength={2000}
                           placeholder="记录这次创作决定的原因"
                         />
@@ -307,6 +375,16 @@ export default function Tasks({
                           className=""
                           disabled={
                             busy ||
+                            (run.pending_review.resource_type ===
+                              "storyboard" &&
+                              (storyboardSchemas[
+                                run.pending_review.version_id
+                              ] === undefined ||
+                                (reviewInputs[run.pending_review.version_id]
+                                  ?.intentOnly === true &&
+                                  !reviewInputs[
+                                    run.pending_review.version_id
+                                  ]?.comment.trim()))) ||
                             (run.pending_review.resource_type === "script" &&
                               !readyCandidates.includes(
                                 run.pending_review.version_id,
@@ -317,7 +395,10 @@ export default function Tasks({
                             action(run, "resume", "APPROVE", digest)
                           }
                         >
-                          批准并继续
+                          {reviewInputs[run.pending_review.version_id]
+                            ?.intentOnly
+                            ? "仅确认表演意图并继续"
+                            : "批准并继续"}
                         </ImpactButton>
                         <Button
                           variant="outline"

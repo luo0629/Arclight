@@ -1,6 +1,9 @@
 import { Notice } from "@/components/ui-kit";
+import ShotPerformanceDetails from "@/features/editor/components/shot-performance";
+import type { ShotPerformance } from "@/features/editor/shot-performance";
 
 type Shot = {
+  performance?: ShotPerformance;
   shot_no: number;
   duration_ms: number;
   visual_description: string;
@@ -212,6 +215,13 @@ export default function DirectorRevisionDetails({
                   镜头 {shot.shot_no} · {shot.duration_ms / 1000} 秒
                   <p>{shot.visual_description}</p>
                   <p>对白引用 {shot.dialogue_line_ids.length} 条</p>
+                  {shot.performance && (
+                    <ShotPerformanceDetails
+                      performance={shot.performance}
+                      editing={false}
+                      update={() => {}}
+                    />
+                  )}
                 </li>
               ))}
             </ol>

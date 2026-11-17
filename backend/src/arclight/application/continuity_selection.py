@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ShotContent
+from arclight.agents.contracts import ShotContent, read_shot_content
 from arclight.application.candidate_checks import require_candidate_media_check
 from arclight.application.continuity_review_store import REVIEW_RESOURCE, require_review_record
 from arclight.application.continuity_reviews import validate_review_contract
@@ -43,7 +43,7 @@ def validate_selected_shot(
     assert source is not None  # require_shot_review already validated the exact target.
     # Sequence changes reuse the exact reviewed intent; the new timeline owns its order.
     ignored = {"shot_no", "selected_visual_asset", "quality_review"}
-    original = ShotContent.model_validate(source.content_json)
+    original = read_shot_content(source.content_json)
     if record.review.episode_id != episode_id or original.model_dump(
         mode="json", exclude=ignored
     ) != content.model_dump(mode="json", exclude=ignored):

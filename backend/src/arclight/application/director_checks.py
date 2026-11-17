@@ -13,7 +13,6 @@ from arclight.core.errors import DomainError
 from arclight.domain.director_creation import ITERATIVE_DIRECTOR_VERSIONS
 from arclight.domain.director_revision import (
     CHECK_TOOL,
-    REVISION_VERSION,
     DirectorCheckParameters,
     DirectorCheckResult,
     DirectorIssue,
@@ -26,6 +25,9 @@ from arclight.persistence.models import WorkflowRun
 
 
 def check_seed(db: Session, run: WorkflowRun, key: str) -> tuple[AgentLoop, DirectorRevisionSeed]:
+    from arclight.application.director_performance import director_contracts
+
+    contracts = director_contracts(run.workflow_version)
     if run.workflow_version not in ITERATIVE_DIRECTOR_VERSIONS:
         raise DomainError("DIRECTOR_REVISION_SCOPE", "此运行未授权导演检查修订", 422)
     loop = db.scalar(
@@ -41,10 +43,10 @@ def check_seed(db: Session, run: WorkflowRun, key: str) -> tuple[AgentLoop, Dire
         request = loop.seed_json
         if (
             request["agent_name"] != "director"
-            or request["result_schema_version"] != REVISION_VERSION
+            or request["result_schema_version"] != contracts.revision_version
         ):
             raise ValueError
-        seed = DirectorRevisionSeed.model_validate(request["messages"][0]["data"])
+        seed = contracts.revision_seed.model_validate(request["messages"][0]["data"])
         if (
             seed.operation_key != key
             or digest(seed.source.model_dump(mode="json")) != seed.source_sha256
@@ -96,15 +98,19 @@ def merge_patch(
         for shot in scene.shots:
             number += 1
             shot.shot_no = number
-    work = DirectorWorkingStoryboard.model_validate(work.model_dump(mode="json"))
+    work = type(seed.source).model_validate(work.model_dump(mode="json"))
     if work == seed.source:
         raise DomainError("DIRECTOR_PATCH_EMPTY", "补丁须实际修订工作稿", 422)
     return work
 
 
-def director_check_tool(settings: Settings) -> AgentToolDefinition:
+def director_check_tool(settings: Settings, workflow_version: str = "") -> AgentToolDefinition:
+    from arclight.application.director_performance import director_contracts
+
+    contracts = director_contracts(workflow_version)
+
     def check(context: AgentToolContext, parameters) -> dict:
-        assert isinstance(parameters, DirectorCheckParameters)
+        assert isinstance(parameters, contracts.parameters)
         run = context.db.get(WorkflowRun, context.run_id)
         assert run is not None
         loop, seed = check_seed(context.db, run, parameters.operation_key)
@@ -148,7 +154,7 @@ def director_check_tool(settings: Settings) -> AgentToolDefinition:
         name=CHECK_TOOL,
         allowed_agents=frozenset({"director"}),
         allowed_steps=frozenset({"storyboard"}),
-        parameters_model=DirectorCheckParameters,
+        parameters_model=contracts.parameters,
         result_model=DirectorCheckResult,
         scope_validator=lambda context, parameters: None,
         handler=check,

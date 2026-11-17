@@ -30,6 +30,11 @@ import {
   StoryStateReceiptSummary,
 } from "./script-narrative";
 import type { StoryStateReceipt } from "../script-narrative";
+import {
+  PerformanceIntentFields,
+  PerformanceIntentReceipt,
+  type PerformanceReviewInput,
+} from "./performance-review";
 import CharacterMatching from "@/features/story/components/character-matching";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
 import ImpactButton from "@/features/dependencies/components/impact-button";
@@ -82,6 +87,11 @@ export default function Inspector({
   draftId?: string;
 }) {
   const storyId = useId();
+  const [manualReview, setManualReview] = useState({
+    versionId: "",
+    intentOnly: false,
+    comment: "",
+  });
   const [stateReceipt, setStateReceipt] = useState<StoryStateReceipt | null>(
     null,
   );
@@ -125,6 +135,14 @@ export default function Inspector({
     node?.kind === "script"
       ? scripts.find((row) => row.id === node.resource_id)
       : boards.find((row) => row.id === node?.resource_id);
+  const reviewInput: PerformanceReviewInput =
+    manualReview.versionId === version?.id
+      ? manualReview
+      : { intentOnly: false, comment: "" };
+  const performanceIntentOnly =
+    node?.kind === "storyboard" &&
+    version?.content_json.schema_version === "3.0" &&
+    reviewInput.intentOnly;
   useEffect(() => {
     if (focusVersionId && version?.id === focusVersionId) {
       panel.current?.focus({ preventScroll: true });
@@ -372,6 +390,14 @@ export default function Inspector({
             )}
             active={active}
           />
+          {node.kind === "storyboard" &&
+            version.content_json.schema_version === "3.0" && (
+              <PerformanceIntentReceipt
+                key={`performance:${version.id}:${version.status}`}
+                projectId={episode.project_id}
+                versionId={version.id}
+              />
+            )}
           {node.kind === "script" &&
             stateReceipt?.script_version_id === version.id && (
               <StoryStateReceiptSummary receipt={stateReceipt} />
@@ -404,6 +430,9 @@ export default function Inspector({
               <>
                 <CreationOptionsFields
                   directorOnly
+                  performanceSourceSchema={String(
+                    version.content_json.schema_version ?? "",
+                  )}
                   value={directorCreation}
                   onChange={setDirectorCreation}
                   disabled={busy || active}
@@ -413,7 +442,11 @@ export default function Inspector({
                   size="lg"
                   className="wide w-full"
                   disabled={
-                    busy || active || !validCreationOptions(directorCreation)
+                    busy ||
+                    active ||
+                    !validCreationOptions(directorCreation) ||
+                    (directorCreation.performance === true &&
+                      version.content_json.schema_version !== "3.0")
                   }
                   onClick={() => void direct(version.id)}
                 >
@@ -445,13 +478,28 @@ export default function Inspector({
                       approving
                     />
                   )}
+                  {node.kind === "storyboard" &&
+                    version.content_json.schema_version === "3.0" && (
+                      <PerformanceIntentFields
+                        value={reviewInput}
+                        disabled={busy}
+                        onChange={(value) =>
+                          setManualReview({ versionId: version.id, ...value })
+                        }
+                      />
+                    )}
                   <div className="button-row flex flex-wrap items-center gap-2">
                     {["APPROVE", "REJECT"].map((decision) => (
                       <ImpactButton
                         variant="outline"
                         size="lg"
                         key={decision}
-                        disabled={busy}
+                        disabled={
+                          busy ||
+                          (decision === "APPROVE" &&
+                            performanceIntentOnly &&
+                            !reviewInput.comment.trim())
+                        }
                         endpoint={
                           decision === "APPROVE"
                             ? `/episodes/${episode.id}/${node.kind === "script" ? "scripts" : "storyboards"}/${version.id}/dependency-impact`
@@ -463,7 +511,17 @@ export default function Inspector({
                               story_state_receipt?: StoryStateReceipt;
                             }>(
                               `/episodes/${episode.id}/${node.kind === "script" ? "scripts" : "storyboards"}/${version.id}/review`,
-                              json("POST", { decision, impact_digest }),
+                              json("POST", {
+                                decision,
+                                impact_digest,
+                                ...(decision === "APPROVE" &&
+                                performanceIntentOnly
+                                  ? {
+                                      performance_intent_only: true,
+                                      comment: reviewInput.comment,
+                                    }
+                                  : {}),
+                              }),
                             );
                             if (result.story_state_receipt)
                               setStateReceipt(result.story_state_receipt);
@@ -471,7 +529,11 @@ export default function Inspector({
                           })
                         }
                       >
-                        {decision === "APPROVE" ? "批准该版本" : "驳回该版本"}
+                        {decision === "APPROVE"
+                          ? performanceIntentOnly
+                            ? "仅确认表演意图"
+                            : "批准该版本"
+                          : "驳回该版本"}
                       </ImpactButton>
                     ))}
                   </div>

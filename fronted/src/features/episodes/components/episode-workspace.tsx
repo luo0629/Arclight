@@ -711,6 +711,7 @@ export default function EpisodeWorkspace({
       )}
       {shotId && data && (
         <ShotViewer
+          projectId={episode.project_id}
           graph={data.graph}
           shotId={shotId}
           boards={boardRows}

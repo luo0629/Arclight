@@ -51,6 +51,12 @@ def check_work(
     settings: Settings,
     checksum: str,
 ) -> DirectorCheckResult:
+    from arclight.domain.director_performance import is_performance_director
+
+    if is_performance_director(run.workflow_version):
+        from arclight.application.director_performance import check_performance_work
+
+        return check_performance_work(db, run, work, plan, settings, checksum)
     script = revision_input(db, run, plan, settings)
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
@@ -241,8 +247,20 @@ def check_work(
     )
 
 
-def publication_content(work: DirectorWorkingStoryboard) -> StoryboardContent:
+def publication_content(
+    work: DirectorWorkingStoryboard, plan: DirectorPlan | None = None
+) -> StoryboardContent:
     """Reparse every shot; working model instances must never bypass strict validators."""
+    from arclight.domain.director_performance import (
+        PerformanceDirectorPlan,
+        PerformanceWorkingStoryboard,
+    )
+
+    if isinstance(work, PerformanceWorkingStoryboard):
+        from arclight.application.director_performance import performance_publication_content
+
+        assert isinstance(plan, PerformanceDirectorPlan)
+        return performance_publication_content(work, plan)
     return StoryboardContent.model_validate(
         {"shots": [shot.model_dump(mode="json") for scene in work.scenes for shot in scene.shots]}
     )

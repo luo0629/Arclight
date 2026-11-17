@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import (
     ScriptContent,
-    ShotContent,
+    ShotContentV3,
     StoryboardContent,
     read_script_content,
+    read_shot_content,
+    read_storyboard_content,
 )
 from arclight.application.commands import require_episode
 from arclight.application.content_dependencies import reference_ids
@@ -154,7 +156,7 @@ def input_issues(
                 checked_content = script_content
                 validate_script_assets(db, episode.project_id, script_content)
             else:
-                board_content = StoryboardContent.model_validate(row.content_json)
+                board_content = read_storyboard_content(row.content_json)
                 # Selected media is a later-stage gate. Validate the same reference
                 # assets here without confusing a draft candidate with missing art.
                 prerequisites = board_content.model_copy(
@@ -204,10 +206,32 @@ def shot_facts(
     continuity = None
     selection = None
     try:
-        content = ShotContent.model_validate(row.content_json)
+        content = read_shot_content(row.content_json)
     except ValidationError:
         issues.append("INVALID_CONTENT")
     else:
+        if (
+            isinstance(content, ShotContentV3)
+            and content.performance.motion_requirement == "dynamic_required"
+        ):
+            return ShotFacts(
+                project_id=episode.project_id,
+                episode_id=episode.id,
+                shot_id=row.id,
+                storyboard_version_id=row.storyboard_id,
+                issues=["DYNAMIC_MEDIA_REQUIRED"],
+            )
+        if isinstance(content, ShotContentV3):
+            from arclight.application.text_reviews import has_performance_intent_approval
+
+            if has_performance_intent_approval(db, row.storyboard_id):
+                return ShotFacts(
+                    project_id=episode.project_id,
+                    episode_id=episode.id,
+                    shot_id=row.id,
+                    storyboard_version_id=row.storyboard_id,
+                    issues=["PERFORMANCE_NOT_READY"],
+                )
         reference = content.selected_visual_asset
         selected = (
             db.get(AssetVersion, clip.source_asset_version_id)

@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-from arclight.agents.contracts import Dialogue, Identifier, ShotContent, read_content
+from arclight.agents.contracts import Dialogue, Identifier, read_content, read_shot_content
 from arclight.domain.director_revision import DirectorRevisionOptions
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.domain.screenwriter_revision import ScreenwriterRevisionOptions
@@ -87,9 +87,23 @@ class RunCreate(Input, ScreenwriterRevisionOptions, DirectorRevisionOptions):
 class StoryboardRunCreate(Input, DirectorRevisionOptions):
     script_version_id: UUID
     rebuild_from_version_id: UUID | None = None
+    performance: bool = Field(default=False, strict=True)
+
+    @model_validator(mode="after")
+    def performance_director(self):
+        if self.performance and (
+            not self.professional
+            or self.director_revision_rounds is None
+            or self.director_art_collaboration
+        ):
+            raise ValueError("表演分镜须使用独立专业导演修订流程")
+        return self
 
 
 class ReviewCreate(Input):
+    performance_intent_only: bool = Field(
+        default=False, strict=True, exclude_if=lambda value: not value
+    )
     resource_type: Literal["script", "storyboard"]
     version_id: UUID
     decision: Literal["APPROVE", "REJECT"]
@@ -152,7 +166,7 @@ class ShotRead(Resource):
     @field_validator("content_json")
     @classmethod
     def normalize_content(cls, value: dict) -> dict:
-        return ShotContent.model_validate(value).model_dump(mode="json")
+        return read_shot_content(value).model_dump(mode="json")
 
 
 class EventRead(Resource):

@@ -6,7 +6,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ScriptContent, StoryboardContent, read_script_content
+from arclight.agents.contracts import (
+    ScriptContent,
+    StoryboardContent,
+    StoryboardContentV3,
+    read_script_content,
+    read_storyboard_content,
+)
 from arclight.application.audit import audit
 from arclight.application.content_dependencies import reference_ids, review_registry
 from arclight.application.content_duration import validate_duration
@@ -22,7 +28,11 @@ from arclight.application.human_reviews import (
 )
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.human_reviews import HumanDecision, ReviewSnapshot
+from arclight.domain.human_reviews import (
+    HumanDecision,
+    PerformanceIntentApproval,
+    ReviewSnapshot,
+)
 from arclight.domain.versions import digest
 from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
 from arclight.persistence.models import AssetVersion, Episode, Script, Shot, Storyboard, WorkflowRun
@@ -132,6 +142,81 @@ def pause_for_run(db: Session, run: WorkflowRun) -> None:
     pause_for_content(db, artifact, execution_actor(db, run))
 
 
+PERFORMANCE_INTENT_BLOCKERS = frozenset(
+    {
+        "PERFORMANCE_MOTION_UNVERIFIED",
+        "PERFORMANCE_CAPABILITY_UNSUPPORTED",
+        "PERFORMANCE_CAPABILITY_UNVERIFIED",
+        "PERFORMANCE_LIPSYNC_UNDECLARED",
+        "PERFORMANCE_MOCK_NOT_PRODUCTION",
+    }
+)
+
+
+def _performance_intent_facts(
+    db: Session,
+    artifact: Storyboard,
+    content: StoryboardContentV3,
+    source: Script,
+) -> PerformanceIntentApproval:
+    from arclight.application.director_performance import check_performance_storyboard
+
+    run = db.get(WorkflowRun, artifact.run_id) if artifact.run_id else None
+    issues = check_performance_storyboard(
+        db, content, read_script_content(source.content_json), run=run
+    )
+    structural = next(
+        (issue for issue in issues if issue.code not in PERFORMANCE_INTENT_BLOCKERS), None
+    )
+    if structural is not None:
+        raise DomainError(
+            "PERFORMANCE_NOT_READY", "表演意图仍有必须修订的问题：" + structural.message, 409
+        )
+    return PerformanceIntentApproval(
+        source_script_version_id=source.id,
+        source_script_sha256=digest(source.content_json),
+        blockers=issues,
+    )
+
+
+def performance_intent_evidence(
+    db: Session, artifact: Script | Storyboard, decision: str, comment: str
+) -> PerformanceIntentApproval:
+    if decision != "APPROVE" or not isinstance(artifact, Storyboard):
+        raise DomainError("PERFORMANCE_INTENT_INVALID", "仅3.0表演分镜可确认表演意图", 422)
+    content = read_storyboard_content(artifact.content_json)
+    if not isinstance(content, StoryboardContentV3):
+        raise DomainError("PERFORMANCE_INTENT_INVALID", "仅3.0表演分镜可确认表演意图", 422)
+    if not comment.strip():
+        raise DomainError("PERFORMANCE_INTENT_REASON_REQUIRED", "仅确认表演意图须填写理由", 422)
+    source = db.get(Script, artifact.script_version_id, populate_existing=True)
+    if source is None or source.episode_id != artifact.episode_id or source.status != "APPROVED":
+        raise DomainError("SCRIPT_NOT_APPROVED", "请先批准本剧集的来源剧本版本", 409)
+    return _performance_intent_facts(db, artifact, content, source)
+
+
+def has_performance_intent_approval(db: Session, storyboard_id: UUID) -> bool:
+    decision = db.scalar(
+        select(HumanReviewDecision)
+        .join(HumanReviewRequest, HumanReviewRequest.id == HumanReviewDecision.request_id)
+        .where(
+            HumanReviewRequest.creation_key == "text:" + str(storyboard_id),
+            HumanReviewRequest.handler == "TEXT_STORYBOARD",
+        )
+    )
+    # The immutable decision remains binding even if provider declarations later improve.
+    return decision is not None and decision.decision_json.get("performance_intent") is not None
+
+
+def require_performance_production(db: Session, storyboard_id: UUID) -> None:
+    if has_performance_intent_approval(db, storyboard_id):
+        raise DomainError(
+            "PERFORMANCE_NOT_READY",
+            "此版本仅确认表演意图，制作条件仍阻塞；请另存新版本并重新进行能力审核。",
+            409,
+        )
+
+
 def prepare_text_decision(
     db: Session,
     artifact: Script | Storyboard,
@@ -139,6 +224,8 @@ def prepare_text_decision(
     decision: str,
     comment: str,
     impact_digest: str | None,
+    *,
+    performance_intent: PerformanceIntentApproval | None = None,
 ) -> tuple[HumanReviewRequest, HumanReviewDecision]:
     row = pause_for_content(db, artifact, actor)
     payload = HumanDecision.model_validate(
@@ -148,25 +235,56 @@ def prepare_text_decision(
             "decision": decision,
             "comment": comment,
             "impact_digest": impact_digest,
+            "performance_intent": performance_intent,
         }
     )
     return row, submit_decision(db, row.id, actor, payload)
 
 
 def validate_manual_approval(
-    db: Session, artifact: Script | Storyboard, settings: Settings
+    db: Session,
+    artifact: Script | Storyboard,
+    settings: Settings,
+    *,
+    performance_intent: PerformanceIntentApproval | None = None,
 ) -> None:
     episode = db.get(Episode, artifact.episode_id)
     assert episode is not None
     parsed: ScriptContent | StoryboardContent
     if isinstance(artifact, Script):
+        if performance_intent is not None:
+            raise DomainError("PERFORMANCE_INTENT_INVALID", "剧本不能使用表演意图确认", 422)
         parsed = read_script_content(artifact.content_json)
         validate_script_assets(db, episode.project_id, parsed)
     else:
         source = db.get(Script, artifact.script_version_id, populate_existing=True)
         if source is None or source.episode_id != episode.id or source.status != "APPROVED":
             raise DomainError("SCRIPT_NOT_APPROVED", "请先批准本剧集的来源剧本版本", 409)
-        parsed = StoryboardContent.model_validate(artifact.content_json)
+        parsed = read_storyboard_content(artifact.content_json)
+        source_content = read_script_content(source.content_json)
+        try:
+            parsed.validate_against(source_content)
+        except ValueError as exc:
+            raise DomainError("INVALID_REFERENCES", str(exc), 422) from exc
+        if isinstance(parsed, StoryboardContentV3):
+            facts = _performance_intent_facts(db, artifact, parsed, source)
+            if performance_intent is not None:
+                if facts != performance_intent:
+                    raise DomainError(
+                        "PERFORMANCE_INTENT_CHANGED",
+                        "表演意图确认的精确来源或能力阻断已变化，请刷新后重新决定。",
+                        409,
+                    )
+            elif facts.blockers:
+                raise DomainError(
+                    "PERFORMANCE_NOT_READY",
+                    "表演分镜尚不具备制作条件："
+                    + facts.blockers[0].message
+                    + "；请修订制作路线，或明确仅确认表演意图并保留制作阻塞。",
+                    409,
+                )
+        elif performance_intent is not None:
+            raise DomainError("PERFORMANCE_INTENT_INVALID", "仅3.0表演分镜可确认表演意图", 422)
         validate_storyboard_assets(db, episode.project_id, parsed, episode_id=episode.id)
     validate_duration(parsed, episode.target_duration_ms, settings.text_duration_tolerance_percent)
 
@@ -181,7 +299,9 @@ def apply_manual_content(
     episode = db.get(Episode, artifact.episode_id)
     assert episode is not None
     if payload.decision == "APPROVE":
-        validate_manual_approval(db, artifact, settings)
+        validate_manual_approval(
+            db, artifact, settings, performance_intent=payload.performance_intent
+        )
     artifact.status = "APPROVED" if payload.decision == "APPROVE" else "REJECTED"
     if isinstance(artifact, Storyboard):
         for shot in db.scalars(select(Shot).where(Shot.storyboard_id == artifact.id)):
@@ -208,6 +328,8 @@ def apply_manual_content(
     result: dict[str, object] = {"version_id": str(artifact.id), "status": artifact.status}
     if state_receipt is not None:
         result["story_state_receipt"] = state_receipt
+    if payload.performance_intent is not None:
+        result["performance_intent"] = payload.performance_intent.model_dump(mode="json")
     return result
 
 
@@ -237,6 +359,7 @@ def apply_text(
                     "comment": payload.comment,
                     "impact_digest": payload.impact_digest,
                     "expected_revision": snapshot.expected_revision,
+                    "performance_intent_only": payload.performance_intent is not None,
                 }
             ),
             settings,
@@ -253,7 +376,32 @@ def apply_text(
         else db.get(Storyboard, snapshot.version_id)
     )
     assert artifact is not None
-    return apply_manual_content(db, artifact, actor, payload, settings)
+    result = apply_manual_content(db, artifact, actor, payload, settings)
+    return {key: value for key, value in result.items() if key != "performance_intent"}
+
+
+def check_text_decision(
+    db: Session, row: HumanReviewRequest, payload: HumanDecision, actor: str
+) -> None:
+    snapshot = ReviewSnapshot.model_validate(row.snapshot_json)
+    artifact = (
+        db.get(Script, snapshot.version_id)
+        if snapshot.kind == "SCRIPT"
+        else db.get(Storyboard, snapshot.version_id)
+    )
+    if artifact is None:
+        raise DomainError("REVIEW_INPUT_CHANGED", "精确文本对象不存在", 409)
+    if payload.performance_intent is None and (
+        not isinstance(artifact, Storyboard) or artifact.content_json.get("schema_version") != "3.0"
+    ):
+        return
+    if payload.decision == "APPROVE":
+        settings = db.info.get("settings")
+        if not isinstance(settings, Settings):
+            raise DomainError("REVIEW_SETTINGS_UNAVAILABLE", "审核执行配置不可用", 503)
+        validate_manual_approval(
+            db, artifact, settings, performance_intent=payload.performance_intent
+        )
 
 
 def complete_manual_review(
@@ -265,24 +413,40 @@ def complete_manual_review(
     decision: str,
     comment: str,
     impact_digest: str | None,
+    performance_intent_only: bool = False,
 ) -> dict:
     # Preserve the established manual endpoint's domain error precedence.
     # The unified journal still independently checks the exact frozen inputs.
-    if decision == "APPROVE":
-        validate_manual_approval(db, artifact, settings)
-    row, decision_record = prepare_text_decision(
-        db, artifact, actor, decision, comment, impact_digest
+    intent = (
+        performance_intent_evidence(db, artifact, decision, comment)
+        if performance_intent_only
+        else None
     )
+    if decision == "APPROVE":
+        if intent is None:
+            validate_manual_approval(db, artifact, settings)
+        else:
+            validate_manual_approval(db, artifact, settings, performance_intent=intent)
+    if intent is None:
+        row, decision_record = prepare_text_decision(
+            db, artifact, actor, decision, comment, impact_digest
+        )
+    else:
+        row, decision_record = prepare_text_decision(
+            db, artifact, actor, decision, comment, impact_digest, performance_intent=intent
+        )
     result = apply_manual_content(
         db, artifact, actor, HumanDecision.model_validate(decision_record.decision_json), settings
     )
+    if intent is not None:
+        result["human_review_request_id"] = str(row.id)
     # The state receipt lives in the ledger and response; keep the legacy handoff shape.
-    handoff = {key: value for key, value in result.items() if key != "story_state_receipt"}
+    handoff = {"version_id": result["version_id"], "status": result["status"]}
     record_resume(db, row, decision_record, actor, handoff)
     return result
 
 
 TEXT_HANDLERS = {
-    "TEXT_SCRIPT": ReviewHandler(read_text, apply_text),
-    "TEXT_STORYBOARD": ReviewHandler(read_text, apply_text),
+    "TEXT_SCRIPT": ReviewHandler(read_text, apply_text, check_text_decision),
+    "TEXT_STORYBOARD": ReviewHandler(read_text, apply_text, check_text_decision),
 }

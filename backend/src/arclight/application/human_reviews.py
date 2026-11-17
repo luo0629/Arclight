@@ -210,7 +210,9 @@ def submit_decision(
             raise DomainError("REVIEW_DECISION_CONFLICT", "该对象已有不同人工决定", 409)
         # A handoff already committed cannot be applied again; authority is still checked above.
         if resumed is None or row.handler == "RENDER_DELIVERY":
-            _current(db, row, registry if registry is not None else handlers())
+            handler = _current(db, row, registry if registry is not None else handlers())
+            if decision.performance_intent is not None and handler.check_decision is not None:
+                handler.check_decision(db, row, decision, actor)
         return prior
     handler = _current(db, row, registry if registry is not None else handlers())
     if handler.check_decision is not None:
@@ -299,5 +301,8 @@ def resume_review(
             _current(db, row, registry if registry is not None else handlers())
         return prior
     handler = _current(db, row, registry if registry is not None else handlers())
+    payload_decision = HumanDecision.model_validate(decision.decision_json)
+    if payload_decision.performance_intent is not None and handler.check_decision is not None:
+        handler.check_decision(db, row, payload_decision, actor)
     result = handler.apply(db, row, decision, actor)
     return record_resume(db, row, decision, actor, result)

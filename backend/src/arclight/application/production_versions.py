@@ -144,6 +144,12 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    from arclight.domain.director_performance import is_performance_director
+
+    if stage == "storyboard" and is_performance_director(workflow_version):
+        from arclight.application.director_performance import performance_text_definitions
+
+        return performance_text_definitions(workflow_version)
     from arclight.domain.screenwriter_revision import SERIES_WORKFLOWS
 
     if workflow_version in SERIES_WORKFLOWS and stage in {"script", "rewrite"}:

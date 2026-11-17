@@ -5,6 +5,7 @@ from uuid import UUID
 
 from pydantic import Field, model_validator
 
+from arclight.domain.director_revision import DirectorIssue
 from arclight.domain.production_state import ProductionContract
 from arclight.domain.workflow_contracts import Checksum
 
@@ -43,12 +44,31 @@ class ReviewSnapshot(ProductionContract):
         return self
 
 
+class PerformanceIntentApproval(ProductionContract):
+    scope: Literal["INTENT_ONLY"] = "INTENT_ONLY"
+    production_ready: Literal[False] = False
+    source_script_version_id: UUID
+    source_script_sha256: Checksum
+    blockers: list[DirectorIssue] = Field(default_factory=list, max_length=4096)
+
+
 class HumanDecision(ProductionContract):
     version_id: UUID
     request_sha256: Checksum
     decision: Literal["APPROVE", "REJECT"]
     comment: str = Field(default="", max_length=2000)
     impact_digest: Checksum | None = None
+    performance_intent: PerformanceIntentApproval | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+    @model_validator(mode="after")
+    def explicit_intent(self):
+        if self.performance_intent is not None and (
+            self.decision != "APPROVE" or not self.comment.strip()
+        ):
+            raise ValueError("仅确认表演意图须明确批准并填写理由")
+        return self
 
 
 class ReviewResume(ProductionContract):

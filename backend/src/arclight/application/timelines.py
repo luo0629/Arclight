@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ShotContent, read_script_content
+from arclight.agents.contracts import ShotContentV3, read_script_content, read_shot_content
 from arclight.application.asset_objects import read_object
 from arclight.application.commands import require_episode
 from arclight.application.continuity_selection import require_shot_review, validate_selected_shot
@@ -84,6 +84,23 @@ def selected_clip_facts(
     duration_ms: int,
 ) -> ClipSnapshot:
     """Database-only selection/QA checks shared with transactional export reviews."""
+    try:
+        content = read_shot_content(shot.content_json)
+    except ValidationError as exc:
+        raise DomainError("INVALID_STORYBOARD", "镜头内容不符合当前合同", 409) from exc
+    if (
+        isinstance(content, ShotContentV3)
+        and content.performance.motion_requirement == "dynamic_required"
+    ):
+        raise DomainError(
+            "DYNAMIC_MEDIA_REQUIRED",
+            "必须动态的镜头不能选用静图时间轴，请保留动态要求并修订制作路线。",
+            409,
+        )
+    if isinstance(content, ShotContentV3):
+        from arclight.application.text_reviews import require_performance_production
+
+        require_performance_production(db, shot.storyboard_id)
     version, asset = exact_version(db, episode.project_id, version_id)
     if (
         asset.asset_type not in {"IMAGE", "SHOT_IMAGE"}
@@ -94,10 +111,6 @@ def selected_clip_facts(
     ):
         raise DomainError("ASSET_NOT_USABLE", "时间轴只能使用当前已选用且已批准的有效镜头图", 409)
     record = require_shot_review(db, version)
-    try:
-        content = ShotContent.model_validate(shot.content_json)
-    except ValidationError as exc:
-        raise DomainError("INVALID_STORYBOARD", "镜头内容不符合当前合同", 409) from exc
     validate_selected_shot(db, record, content, episode.id)
     if record.review.target.shot_id != shot.id and (
         content.quality_review is None

@@ -2,9 +2,11 @@
 
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from arclight.agents.contracts import ShotContentV3, read_shot_content
 from arclight.core.errors import DomainError
 from arclight.domain.generation import ACTIVE_STATUSES
 from arclight.persistence.generation import GenerationJob
@@ -33,6 +35,7 @@ def require_available_shot(
     episode_id: UUID | None,
     *,
     exclude_job_id: UUID | None = None,
+    task_type: str | None = None,
 ) -> None:
     """Use the existing project write gate before checking an exact shot target."""
     from arclight.application.continuity_workflow import require_shot_binding
@@ -47,6 +50,24 @@ def require_available_shot(
         raise DomainError("ASSET_NOT_USABLE", "分镜来源已失效或不可用于生产", 409)
     shot = db.get(Shot, target.shot_id, populate_existing=True)
     assert shot is not None
+    if task_type == "IMAGE" and shot.content_json.get("schema_version") == "3.0":
+        try:
+            content = read_shot_content(shot.content_json)
+        except ValidationError as exc:
+            raise DomainError("INVALID_STORYBOARD", "表演镜头内容不符合当前合同", 409) from exc
+        if (
+            isinstance(content, ShotContentV3)
+            and content.performance.motion_requirement == "dynamic_required"
+        ):
+            raise DomainError(
+                "DYNAMIC_MEDIA_REQUIRED",
+                "必须动态的镜头不能进入镜头图生产，请修订制作路线或转人工决定。",
+                409,
+            )
+    if task_type is not None and shot.content_json.get("schema_version") == "3.0":
+        from arclight.application.text_reviews import require_performance_production
+
+        require_performance_production(db, shot.storyboard_id)
     selected = shot.content_json.get("selected_visual_asset")
     if selected is not None:
         selected_version, selected_asset = exact_version(

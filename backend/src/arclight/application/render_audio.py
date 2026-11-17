@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ShotContent, read_script_content
+from arclight.agents.contracts import read_script_content, read_shot_content
 from arclight.core.errors import DomainError
 from arclight.domain.render_manifests import LineAudioDecision
 from arclight.domain.timelines import TimelineSnapshot
@@ -66,7 +66,7 @@ def validate_line_audio(
                 "RENDER_SUBTITLE_AUDIO_CONFLICT", "字幕须引用同一精确台词实际使用的配音版本", 409
             )
     for shot in db.scalars(select(Shot).where(Shot.storyboard_id == board.id)):
-        if ShotContent.model_validate(shot.content_json).sound_effects and not any(
+        if read_shot_content(shot.content_json).sound_effects and not any(
             clip.shot_id == shot.id for clip in tracks["SFX"]
         ):
             raise DomainError(

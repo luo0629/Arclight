@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ShotContent
+from arclight.agents.contracts import ShotContentV3, read_shot_content
 from arclight.application.commands import require_episode, require_project
 from arclight.application.continuity_selection import require_shot_review
 from arclight.application.dependencies import exact_version
@@ -35,7 +35,20 @@ from arclight.persistence.models import (
 def generation_request(
     db: Session, project_id: UUID, board: Storyboard, shot: Shot
 ) -> GenerationCreate:
-    content = ShotContent.model_validate(shot.content_json)
+    content = read_shot_content(shot.content_json)
+    if (
+        isinstance(content, ShotContentV3)
+        and content.performance.motion_requirement == "dynamic_required"
+    ):
+        raise DomainError(
+            "DYNAMIC_MEDIA_REQUIRED",
+            "此镜头必须使用动态素材；当前镜头图入口不能以静图代替，请修订制作路线或等待视频生产接入。",
+            409,
+        )
+    if isinstance(content, ShotContentV3):
+        from arclight.application.text_reviews import require_performance_production
+
+        require_performance_production(db, board.id)
     references = [content.scene_asset, content.location_asset, *content.props]
     for character in content.character_details:
         references.extend([character.asset, character.costume])

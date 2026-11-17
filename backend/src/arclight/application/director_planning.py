@@ -12,6 +12,7 @@ from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolRegistry, build_agent_tool_registry
 from arclight.application.commands import require_run
 from arclight.application.content_duration import duration_bounds
+from arclight.application.director_performance import director_contracts, require_performance_script
 from arclight.application.director_research import approved_input
 from arclight.application.gateway_text import execution_actor, validate_publication
 from arclight.application.model_gateway import lock_gate
@@ -21,14 +22,17 @@ from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.agent_state import AgentRunState, state_for_scope
+from arclight.domain.director_performance import (
+    PerformanceDirectorPlan,
+    PerformanceDirectorSeed,
+    is_performance_director,
+)
 from arclight.domain.director_planning import (
     PLAN_VERSION,
-    PLANNING_PROMPT,
     RESEARCH_TOOL,
     DirectorConstraints,
     DirectorEvidence,
     DirectorPlan,
-    DirectorSeed,
     InvestigateProductionResult,
 )
 from arclight.domain.versions import digest
@@ -42,14 +46,14 @@ def _registry(settings: Settings) -> AgentToolRegistry:
     return AgentToolRegistry([tool])
 
 
-def _operation(run_id: UUID, attempt: int) -> str:
-    return digest({"run": str(run_id), "stage": "storyboard", "operation": _key(attempt)})
+def _operation(run_id: UUID, attempt: int, version: str = PLAN_VERSION) -> str:
+    return digest({"run": str(run_id), "stage": "storyboard", "operation": _key(attempt, version)})
 
 
-def _key(attempt: int) -> str:
+def _key(attempt: int, version: str = PLAN_VERSION) -> str:
     if type(attempt) is not int or attempt < 0:
         raise DomainError("DIRECTOR_ATTEMPT_INVALID", "规划重试次数无效", 422)
-    return PLAN_VERSION if not attempt else f"{PLAN_VERSION}:attempt:{attempt}"
+    return version if not attempt else f"{version}:attempt:{attempt}"
 
 
 def _validate(db: Session, run_id: UUID, plan: DirectorPlan, settings: Settings, attempt: int):
@@ -58,7 +62,9 @@ def _validate(db: Session, run_id: UUID, plan: DirectorPlan, settings: Settings,
     script, _ = approved_input(db, run, execution_actor(db, run), settings)
     loop = db.scalar(
         select(AgentLoop).where(
-            AgentLoop.run_id == run_id, AgentLoop.operation_sha256 == _operation(run_id, attempt)
+            AgentLoop.run_id == run_id,
+            AgentLoop.operation_sha256
+            == _operation(run_id, attempt, director_contracts(run.workflow_version).plan_version),
         )
     )
     if loop is None:
@@ -66,7 +72,7 @@ def _validate(db: Session, run_id: UUID, plan: DirectorPlan, settings: Settings,
     seed = AgentModelRequest.model_validate(loop.seed_json)
     first = seed.messages[0]
     assert isinstance(first, AgentUserMessage)
-    task = DirectorSeed.model_validate(first.data).constraints
+    task = director_contracts(run.workflow_version).plan_seed.model_validate(first.data).constraints
     if (
         plan.script_version_id != task.script_version_id
         or plan.script_version_id != script.id
@@ -120,7 +126,10 @@ def _remember(factory: sessionmaker[Session], result: AgentLoopResult[DirectorPl
         run = db.get(WorkflowRun, result.run_id, populate_existing=True, with_for_update=True)
         assert run is not None and run.agent_state_json is not None
         state = state_for_scope(run.agent_state_json, scope_for_run(run, result.project_id))
-        reference = {"loop_id": str(result.loop_id), "schema_version": PLAN_VERSION}
+        reference = {
+            "loop_id": str(result.loop_id),
+            "schema_version": director_contracts(run.workflow_version).plan_version,
+        }
         previous = state.extensions.get("director.planning")
         if previous == reference:
             return
@@ -140,7 +149,7 @@ def _remember(factory: sessionmaker[Session], result: AgentLoopResult[DirectorPl
 def _select_operation(db: Session, run: WorkflowRun, attempt: int) -> None:
     """Reserve the working operation before I/O, including concurrent distinct retries."""
     assert run.agent_state_json is not None
-    operation = _operation(run.id, attempt)
+    operation = _operation(run.id, attempt, director_contracts(run.workflow_version).plan_version)
     previous = run.agent_state_json["extensions"].get("director.planning_operation")
     if previous == {"sha256": operation}:
         return
@@ -179,11 +188,27 @@ def plan_director(
         if actor != execution_actor(db, run):
             raise DomainError("FORBIDDEN", "规划启动须使用原运行发起者", 403)
         script, _ = approved_input(db, run, actor, settings)
+        contracts = director_contracts(run.workflow_version)
+        source = read_script_content(script.content_json)
+        constraints = DirectorConstraints(
+            script_version_id=script.id,
+            script_sha256=digest(script.content_json),
+            scene_ids=[scene.scene_id for scene in source.scenes],
+            target_duration_ms=run.input_json["target_duration_ms"],
+            duration_tolerance_percent=settings.text_duration_tolerance_percent,
+        )
+        plan_seed = (
+            PerformanceDirectorSeed(
+                constraints=constraints, script=require_performance_script(source)
+            )
+            if is_performance_director(run.workflow_version)
+            else contracts.plan_seed(constraints=constraints)
+        )
         _select_operation(db, run, attempt)
         previous = db.scalar(
             select(AgentLoop).where(
                 AgentLoop.run_id == run.id,
-                AgentLoop.operation_sha256 == _operation(run.id, attempt),
+                AgentLoop.operation_sha256 == _operation(run.id, attempt, contracts.plan_version),
             )
         )
         request = (
@@ -193,28 +218,13 @@ def plan_director(
                 run_id=run.id,
                 agent_name="director",
                 stage="storyboard",
-                operation_key=_key(attempt),
-                agent_version=PLAN_VERSION,
-                prompt_version=PLAN_VERSION,
-                result_schema_version=PLAN_VERSION,
-                system_instruction=PLANNING_PROMPT,
+                operation_key=_key(attempt, contracts.plan_version),
+                agent_version=contracts.plan_version,
+                prompt_version=contracts.plan_version,
+                result_schema_version=contracts.plan_version,
+                system_instruction=contracts.plan_prompt,
                 max_tokens=16000,
-                messages=[
-                    AgentUserMessage(
-                        data=DirectorSeed(
-                            constraints=DirectorConstraints(
-                                script_version_id=script.id,
-                                script_sha256=digest(script.content_json),
-                                scene_ids=[
-                                    scene.scene_id
-                                    for scene in read_script_content(script.content_json).scenes
-                                ],
-                                target_duration_ms=run.input_json["target_duration_ms"],
-                                duration_tolerance_percent=settings.text_duration_tolerance_percent,
-                            )
-                        ).model_dump(mode="json")
-                    )
-                ],
+                messages=[AgentUserMessage(data=plan_seed.model_dump(mode="json"))],
             )
         )
     result = run_persistent_agent_loop(
@@ -222,7 +232,7 @@ def plan_director(
         settings,
         request,
         _registry(settings),
-        DirectorPlan,
+        contracts.plan,
         limits=limits,
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings, attempt),
     )
@@ -241,18 +251,19 @@ def resume_director_plan(
     with factory.begin() as db:
         loop = checked_loop(db, loop_id, actor=actor)
         seed = AgentModelRequest.model_validate(loop.seed_json)
-        attempt = (
-            int(seed.operation_key.rsplit(":", 1)[-1])
-            if seed.operation_key.startswith(PLAN_VERSION + ":attempt:")
-            else 0
-        )
-        if seed.agent_name != "director" or loop.operation_sha256 != _operation(
-            loop.run_id, attempt
-        ):
-            raise DomainError("DIRECTOR_PLAN_SCOPE", "此循环不是导演规划", 409)
         run_id = loop.run_id
         run = db.get(WorkflowRun, run_id)
         assert run is not None
+        contracts = director_contracts(run.workflow_version)
+        attempt = (
+            int(seed.operation_key.rsplit(":", 1)[-1])
+            if seed.operation_key.startswith(contracts.plan_version + ":attempt:")
+            else 0
+        )
+        if seed.agent_name != "director" or loop.operation_sha256 != _operation(
+            loop.run_id, attempt, contracts.plan_version
+        ):
+            raise DomainError("DIRECTOR_PLAN_SCOPE", "此循环不是导演规划", 409)
         validate_publication(db, run_id)
         approved_input(db, run, execution_actor(db, run), settings)
     result = resume_agent_loop(
@@ -261,7 +272,7 @@ def resume_director_plan(
         loop_id,
         actor,
         _registry(settings),
-        DirectorPlan,
+        contracts.plan,
         decision=decision,
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings, attempt),
     )
@@ -271,19 +282,20 @@ def resume_director_plan(
 
 def read_director_plan(
     db: Session, loop_id: UUID, actor: str
-) -> AgentLoopResult[DirectorPlan] | None:
+) -> AgentLoopResult[DirectorPlan] | AgentLoopResult[PerformanceDirectorPlan] | None:
     loop = db.get(AgentLoop, loop_id)
     if loop is None:
         raise DomainError("NOT_FOUND", "导演规划不存在", 404)
-    require_run(db, loop.run_id, actor)
+    run = require_run(db, loop.run_id, actor)
+    contracts = director_contracts(run.workflow_version)
     seed = AgentModelRequest.model_validate(loop.seed_json)
     if seed.agent_name != "director" or not (
-        seed.operation_key == PLAN_VERSION
-        or seed.operation_key.startswith(PLAN_VERSION + ":attempt:")
+        seed.operation_key == contracts.plan_version
+        or seed.operation_key.startswith(contracts.plan_version + ":attempt:")
     ):
         raise DomainError("NOT_FOUND", "导演规划不存在", 404)
-    return (
-        AgentLoopResult[DirectorPlan].model_validate(loop.outcome_json)
-        if loop.outcome_json
-        else None
-    )
+    if not loop.outcome_json:
+        return None
+    if is_performance_director(run.workflow_version):
+        return AgentLoopResult[PerformanceDirectorPlan].model_validate(loop.outcome_json)
+    return AgentLoopResult[DirectorPlan].model_validate(loop.outcome_json)

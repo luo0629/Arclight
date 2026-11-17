@@ -11,9 +11,11 @@ import ShotDetails, {
   type Performance,
 } from "@/features/editor/components/shot-details";
 import { message } from "@/lib/api/client";
+import { PerformanceIntentReceipt } from "./performance-review";
 import type { ContentVersion, Graph } from "@/types/api";
 
 type Props = {
+  projectId: string;
   graph: Graph;
   shotId: string;
   boards: ContentVersion[];
@@ -23,6 +25,7 @@ type Props = {
   onOpenBoard: (id: string) => void;
 };
 export default function ShotViewer({
+  projectId,
   graph,
   shotId,
   boards,
@@ -82,6 +85,12 @@ export default function ShotViewer({
   const details = {
     characters: strings(shot?.characters),
     composition: text(shot?.composition),
+    ...(shot?.schema_version === "3.0" && shot.performance
+      ? {
+          performance:
+            shot.performance as import("../shot-performance").ShotPerformance,
+        }
+      : {}),
     dialogue_line_ids: strings(shot?.dialogue_line_ids),
     character_details: Array.isArray(shot?.character_details)
       ? shot.character_details
@@ -161,6 +170,13 @@ export default function ShotViewer({
             <aside className="shot-viewer-info" aria-label="镜头信息">
               <h3>镜头信息</h3>
               {node && <StatusBadge status={node.status} />}
+              {version?.content_json.schema_version === "3.0" && (
+                <PerformanceIntentReceipt
+                  key={`${version.id}:${version.status}`}
+                  projectId={projectId}
+                  versionId={version.id}
+                />
+              )}
               <dl>
                 <div>
                   <dt>所属分镜</dt>

@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_loop_recovery import run_persistent_agent_loop
 from arclight.application.director_creation import creation_attempt
+from arclight.application.director_performance import director_contracts, offset_working_shot
 from arclight.application.director_planning import _registry
 from arclight.application.director_validation import revision_input
 from arclight.application.screenwriter_creation import creation_loops, operation
@@ -15,11 +16,7 @@ from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.director_planning import DirectorPlan
 from arclight.domain.director_revision import (
-    WORKING_PROMPT,
-    WORKING_VERSION,
     DirectorWorkingFragment,
-    DirectorWorkingScene,
-    DirectorWorkingSeed,
     DirectorWorkingStoryboard,
 )
 from arclight.persistence.models import WorkflowRun
@@ -60,7 +57,8 @@ def create_working_fragment(
         run = db.get(WorkflowRun, run_id)
         assert run is not None
         script = revision_input(db, run, plan, settings)
-        prefix = f"{WORKING_VERSION}:scene:{scene_no}:attempt:"
+        contracts = director_contracts(run.workflow_version)
+        prefix = f"{contracts.working_version}:scene:{scene_no}:attempt:"
         loops = [
             loop
             for loop in creation_loops(db, run.id, "director")
@@ -78,13 +76,13 @@ def create_working_fragment(
                 stage="storyboard",
                 operation_key=key,
                 agent_version=run.workflow_version,
-                prompt_version=WORKING_VERSION,
-                result_schema_version=WORKING_VERSION,
-                system_instruction=WORKING_PROMPT,
+                prompt_version=contracts.working_version,
+                result_schema_version=contracts.working_version,
+                system_instruction=contracts.working_prompt,
                 max_tokens=8000,
                 messages=[
                     AgentUserMessage(
-                        data=DirectorWorkingSeed(
+                        data=contracts.working_seed(
                             plan_loop_id=plan_id,
                             plan=plan,
                             scene=script.scenes[scene_no - 1],
@@ -102,7 +100,7 @@ def create_working_fragment(
         settings,
         request,
         _registry(settings),
-        DirectorWorkingFragment,
+        contracts.fragment,
         validate_result=lambda db, result: _validate(
             db, settings, run_id, plan_id, plan, scene_no, result
         ),
@@ -114,6 +112,14 @@ def assemble_working(
 ) -> DirectorWorkingStoryboard:
     if len(fragments) != len(plan.scenes):
         raise DomainError("DIRECTOR_INCOMPLETE", "全部场景齐备后才能校验工作稿", 422)
+    from arclight.domain.director_performance import (
+        PERFORMANCE_DIRECTOR_VERSION,
+        PerformanceDirectorPlan,
+    )
+
+    contracts = director_contracts(
+        PERFORMANCE_DIRECTOR_VERSION if isinstance(plan, PerformanceDirectorPlan) else ""
+    )
     scenes = []
     offset = 0
     for number, (scene, fragment) in enumerate(zip(plan.scenes, fragments, strict=True), 1):
@@ -124,14 +130,11 @@ def assemble_working(
         ):
             raise DomainError("DIRECTOR_FRAGMENT_SCOPE", "组装须保留原计划及完整场景顺序", 422)
         scenes.append(
-            DirectorWorkingScene(
+            contracts.scene(
                 scene_id=fragment.scene_id,
                 scene_no=fragment.scene_no,
-                shots=[
-                    shot.model_copy(update={"shot_no": offset + shot.shot_no}, deep=True)
-                    for shot in fragment.shots
-                ],
+                shots=[offset_working_shot(shot, offset) for shot in fragment.shots],
             )
         )
         offset += len(fragment.shots)
-    return DirectorWorkingStoryboard(scenes=scenes)
+    return contracts.work(scenes=scenes)

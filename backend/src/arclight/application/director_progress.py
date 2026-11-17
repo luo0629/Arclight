@@ -11,9 +11,6 @@ from arclight.core.errors import DomainError
 from arclight.domain.director_creation import DIRECTOR_VERSIONS, FRAGMENT_VERSION
 from arclight.domain.director_revision import (
     CHECK_TOOL,
-    REVISION_VERSION,
-    WORKING_VERSION,
-    DirectorRevisionSeed,
 )
 from arclight.persistence.agent_loops import AgentLoopAction
 
@@ -22,6 +19,9 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
     run = require_run(db, run_id, actor)
     if run.workflow_version not in DIRECTOR_VERSIONS:
         raise DomainError("NOT_FOUND", "此运行没有专业导演工作稿", 404)
+    from arclight.application.director_performance import director_contracts
+
+    contracts = director_contracts(run.workflow_version)
     values = []
     from arclight.application.agent_workflows import workflow_agent_loops
     from arclight.application.director_collaboration import requested_opinion
@@ -29,9 +29,10 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
     for loop in workflow_agent_loops(db, run, "director"):
         key = operation(loop)
         fragment = any(
-            key.startswith(version + ":scene:") for version in (FRAGMENT_VERSION, WORKING_VERSION)
+            key.startswith(version + ":scene:")
+            for version in (FRAGMENT_VERSION, contracts.working_version)
         )
-        revision = key.startswith(REVISION_VERSION + ":round:")
+        revision = key.startswith(contracts.revision_version + ":round:")
         outcome = loop.outcome_json or {}
         actions = list(
             db.scalars(
@@ -47,7 +48,7 @@ def read_progress(db: Session, run_id: UUID, actor: str) -> dict:
         ]
         detail = {}
         if revision:
-            seed = DirectorRevisionSeed.model_validate(loop.seed_json["messages"][0]["data"])
+            seed = contracts.revision_seed.model_validate(loop.seed_json["messages"][0]["data"])
             chosen = (outcome.get("result") or {}).get("check_sha256")
             patches = []
             for action in actions:

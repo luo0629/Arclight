@@ -9,6 +9,7 @@ from arclight.agents.contracts import (
     ScriptContent,
     ScriptContentV3,
     StoryboardContent,
+    StoryboardContentV3,
     read_script_content,
 )
 from arclight.api.collaboration import audit, require_idle
@@ -46,11 +47,12 @@ class StoryboardVersionInput(Input):
     expected_version_no: int = Field(ge=0)
     base_version_id: UUID | None = None
     script_version_id: UUID
-    content: StoryboardContent
+    content: StoryboardContentV3 | StoryboardContent
 
 
 class ContentReview(Input):
     decision: str = Field(pattern="^(APPROVE|REJECT)$")
+    performance_intent_only: bool = Field(default=False, strict=True)
     comment: str = Field(default="", max_length=2000)
     impact_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
@@ -154,7 +156,13 @@ def save_storyboard(
     except ValueError:
         raise DomainError("INVALID_REFERENCES", "分镜引用了无效的场景或角色", 422) from None
     if payload.base_version_id:
-        require_version(db, Storyboard, episode_id, payload.base_version_id)
+        base = require_version(db, Storyboard, episode_id, payload.base_version_id)
+        if base.content_json.get("schema_version") == "3.0" and not isinstance(
+            payload.content, StoryboardContentV3
+        ):
+            raise DomainError(
+                "STORYBOARD_VERSION_DOWNGRADE", "表演分镜另存须保留3.0合同及完整表演计划", 422
+            )
     validate_storyboard_assets(db, episode.project_id, payload.content, episode_id=episode.id)
     validate_duration(
         payload.content,
@@ -244,4 +252,5 @@ def review_content(
         decision=payload.decision,
         comment=payload.comment,
         impact_digest=payload.impact_digest,
+        performance_intent_only=payload.performance_intent_only,
     )

@@ -99,6 +99,7 @@ def execute_director(
             COLLABORATIVE_DIRECTOR_VERSION,
             DIRECTOR_VERSION,
             ITERATIVE_DIRECTOR_VERSION,
+            "director/4.0",
         }:
             return False
     try:

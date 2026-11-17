@@ -13,6 +13,7 @@ from arclight.application.agent_loop_recovery import (
 from arclight.application.agent_tools import AgentToolRegistry, build_agent_tool_registry
 from arclight.application.director_checks import check_seed, merge_patch
 from arclight.application.director_creation import creation_attempt
+from arclight.application.director_performance import director_contracts, require_performance_script
 from arclight.application.director_validation import check_work, publication_content, revision_input
 from arclight.application.screenwriter_creation import creation_loops, operation
 from arclight.core.config import Settings
@@ -26,15 +27,13 @@ from arclight.domain.director_collaboration import (
     CollaborativeDirectorDecision,
 )
 from arclight.domain.director_creation import COLLABORATIVE_DIRECTOR_VERSIONS
+from arclight.domain.director_performance import is_performance_director
 from arclight.domain.director_planning import RESEARCH_TOOL, DirectorPlan
 from arclight.domain.director_revision import (
     CHECK_TOOL,
-    REVISION_PROMPT,
-    REVISION_VERSION,
     DirectorCheckParameters,
     DirectorCheckResult,
     DirectorRevisionDecision,
-    DirectorRevisionSeed,
     DirectorWorkingStoryboard,
 )
 from arclight.domain.versions import digest
@@ -42,7 +41,15 @@ from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import WorkflowRun
 
 
-def _registry(settings: Settings, collaborative: bool = False) -> AgentToolRegistry:
+def _registry(
+    settings: Settings, collaborative: bool = False, workflow_version: str = ""
+) -> AgentToolRegistry:
+    if is_performance_director(workflow_version):
+        from arclight.application.director_checks import director_check_tool
+
+        research = build_agent_tool_registry(settings=settings).get(RESEARCH_TOOL)
+        assert research is not None
+        return AgentToolRegistry([research, director_check_tool(settings, workflow_version)])
     catalog = build_agent_tool_registry(settings=settings)
     names = [RESEARCH_TOOL, CHECK_TOOL] + (
         [REQUEST_OPINION, OBSERVE_OPINION] if collaborative else []
@@ -55,6 +62,9 @@ def _registry(settings: Settings, collaborative: bool = False) -> AgentToolRegis
 def checked_receipt(
     db: Session, loop: AgentLoop, checksum: str
 ) -> tuple[DirectorCheckParameters, DirectorCheckResult]:
+    run = db.get(WorkflowRun, loop.run_id)
+    assert run is not None
+    contracts = director_contracts(run.workflow_version)
     for action in db.scalars(select(AgentLoopAction).where(AgentLoopAction.loop_id == loop.id)):
         feedback = action.result_json or {}
         if (
@@ -64,7 +74,7 @@ def checked_receipt(
         ):
             continue
         result = DirectorCheckResult.model_validate(feedback["result"])
-        parameters = DirectorCheckParameters.model_validate(action.request_json["arguments"])
+        parameters = contracts.parameters.model_validate(action.request_json["arguments"])
         if result.accepted and result.check_sha256 == checksum == digest(
             parameters.model_dump(mode="json")
         ):
@@ -119,8 +129,11 @@ def _round(
         run = db.get(WorkflowRun, run_id)
         assert run is not None
         script = revision_input(db, run, plan, settings)
+        contracts = director_contracts(run.workflow_version)
         collaborative = run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS
-        prefix = f"{REVISION_VERSION}:round:{round_no}:" + ("human:" if human else "check:")
+        prefix = f"{contracts.revision_version}:round:{round_no}:" + (
+            "human:" if human else "check:"
+        )
         key = prefix + f"attempt:{creation_attempt(run)}"
         candidates = [
             loop
@@ -132,23 +145,27 @@ def _round(
         if selected and (selected.status != "STOPPED" or operation(selected) == key):
             request = AgentModelRequest.model_validate(selected.seed_json)
             key = request.operation_key
-            saved = DirectorRevisionSeed.model_validate(selected.seed_json["messages"][0]["data"])
+            saved = contracts.revision_seed.model_validate(
+                selected.seed_json["messages"][0]["data"]
+            )
             if saved.source_sha256 != digest(source.model_dump(mode="json")):
                 raise DomainError("DIRECTOR_REVISION_SCOPE", "恢复不能更换已检查工作稿", 409)
         else:
-            parameters = DirectorCheckParameters(
+            parameters = contracts.parameters(
                 operation_key=key, source_sha256=digest(source.model_dump(mode="json"))
             )
             checks = check_work(
                 db, run, source, plan, settings, digest(parameters.model_dump(mode="json"))
             )
-            seed = DirectorRevisionSeed(
+            seed = contracts.revision_seed(
                 operation_key=key,
                 round=round_no,
                 remaining_patches=remaining,
                 source_sha256=parameters.source_sha256,
                 source=source,
-                script=legacy_script_view(script),
+                script=require_performance_script(script)
+                if is_performance_director(run.workflow_version)
+                else legacy_script_view(script),
                 plan=plan,
                 checks=checks,
                 previous_reason=previous,
@@ -159,9 +176,9 @@ def _round(
                 stage="storyboard",
                 operation_key=key,
                 agent_version=run.workflow_version,
-                prompt_version=REVISION_VERSION,
-                result_schema_version=REVISION_VERSION,
-                system_instruction=REVISION_PROMPT
+                prompt_version=contracts.revision_version,
+                result_schema_version=contracts.revision_version,
+                system_instruction=contracts.revision_prompt
                 + (COLLABORATION_PROMPT if collaborative else ""),
                 messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
                 max_tokens=8000,
@@ -182,14 +199,14 @@ def _round(
     from arclight.application.director_collaboration import drive_opinion
 
     result_model: type[DirectorRevisionDecision] = (
-        CollaborativeDirectorDecision if collaborative else DirectorRevisionDecision
+        CollaborativeDirectorDecision if collaborative else contracts.decision
     )
     for _ in range(2):
         outcome = run_persistent_agent_loop(
             factory,
             settings,
             request,
-            _registry(settings, collaborative),
+            _registry(settings, collaborative, run.workflow_version),
             result_model,
             validate_result=lambda db, report: _validate(db, run_id, key, report, settings, human),
         )
@@ -210,13 +227,14 @@ def revise_storyboard(
         run = db.get(WorkflowRun, run_id)
         assert run is not None
         maximum = run.input_json["director"]["revision_rounds"]
+        contracts = director_contracts(run.workflow_version)
     previous = ""
     for round_no in range(maximum + 1):
         with factory.begin() as db:
             run = db.get(WorkflowRun, run_id)
             assert run is not None
             checks = check_work(db, run, source, plan, settings, "0" * 64)
-            human_prefix = f"{REVISION_VERSION}:round:{round_no}:human:"
+            human_prefix = f"{contracts.revision_version}:round:{round_no}:human:"
             had_human = any(
                 operation(loop).startswith(human_prefix)
                 for loop in creation_loops(db, run_id, "director")
@@ -260,11 +278,11 @@ def revise_storyboard(
                 assert run is not None
                 if not check_work(db, run, source, plan, settings, report.check_sha256).valid:
                     raise DomainError("DIRECTOR_CHECK_FAILED", "交付前工作稿仍有未解决问题", 422)
-            return outcome, publication_content(source)
+            return outcome, publication_content(source, plan)
         with factory() as db:
             loop = db.get(AgentLoop, outcome.loop_id)
             assert loop is not None
-            seed = DirectorRevisionSeed.model_validate(loop.seed_json["messages"][0]["data"])
+            seed = contracts.revision_seed.model_validate(loop.seed_json["messages"][0]["data"])
             parameters, _ = checked_receipt(db, loop, report.check_sha256)
             source = merge_patch(seed, parameters)
         previous = report.reason

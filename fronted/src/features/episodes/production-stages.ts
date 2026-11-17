@@ -66,6 +66,8 @@ const issueLabels: Record<string, string> = {
   INVALID_CONTENT: "内容尚未满足制作要求",
   MISSING_SHOTS: "尚无必需镜头",
   MISSING_MEDIA: "镜头尚缺画面",
+  DYNAMIC_MEDIA_REQUIRED: "需要动态素材",
+  PERFORMANCE_NOT_READY: "表演分镜制作条件尚未满足",
   MEDIA_CHECK_PENDING: "媒体检查待完成",
   MEDIA_CHECK_FAILED: "媒体检查未通过",
   CONTINUITY_PENDING: "连续性审查待完成",

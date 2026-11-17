@@ -33,13 +33,21 @@ from arclight.domain.director_creation import (
     DirectorFragment,
     DirectorFragmentSeed,
 )
-from arclight.domain.director_planning import PLAN_VERSION, RESEARCH_TOOL, DirectorPlan
+from arclight.domain.director_planning import RESEARCH_TOOL, DirectorPlan
 from arclight.domain.director_revision import CHECK_TOOL
 from arclight.domain.versions import digest
 from arclight.persistence.models import Episode, WorkflowRun
 
 
 def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Settings) -> None:
+    from arclight.application.director_revision import _registry
+    from arclight.domain.director_performance import is_performance_director
+
+    catalog = (
+        _registry(settings, workflow_version=run.workflow_version)
+        if is_performance_director(run.workflow_version)
+        else build_agent_tool_registry(settings=settings)
+    )
     grant_agent_tools(
         db,
         AgentToolGrantRequest(
@@ -54,7 +62,7 @@ def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Sett
             ),
         ),
         actor,
-        build_agent_tool_registry(settings=settings),
+        catalog,
     )
     if run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS:
         grant_agent_tools(
@@ -83,11 +91,14 @@ def create_plan(
 ) -> AgentLoopResult[DirectorPlan]:
     with factory() as db:
         run = require_run(db, run_id, actor)
+        from arclight.application.director_performance import director_contracts
+
+        plan_version = director_contracts(run.workflow_version).plan_version
         loops = [
             loop
             for loop in creation_loops(db, run.id, "director")
-            if operation(loop) == PLAN_VERSION
-            or operation(loop).startswith(PLAN_VERSION + ":attempt:")
+            if operation(loop) == plan_version
+            or operation(loop).startswith(plan_version + ":attempt:")
         ]
         selected = next((loop for loop in loops if loop.status == "COMPLETED"), None)
         selected = selected or (loops[-1] if loops else None)

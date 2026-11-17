@@ -297,8 +297,249 @@ class StoryboardContent(Contract):
         return self
 
 
+class PerformanceCharacter(Contract):
+    character: str = Field(min_length=1, max_length=100)
+    objective: str = Field(min_length=1, max_length=1000)
+    emotion_start: str = Field(min_length=1, max_length=300)
+    emotion_end: str = Field(min_length=1, max_length=300)
+    action_start: str = Field(min_length=1, max_length=1000)
+    action_end: str = Field(min_length=1, max_length=1000)
+    position_start: str = Field(min_length=1, max_length=500)
+    position_end: str = Field(min_length=1, max_length=500)
+    eyeline_start: str = Field(min_length=1, max_length=500)
+    eyeline_end: str = Field(min_length=1, max_length=500)
+
+
+class PerformanceInteraction(Contract):
+    actor: str = Field(min_length=1, max_length=100)
+    target: str = Field(min_length=1, max_length=100)
+    action: str = Field(min_length=1, max_length=1000)
+    reaction: str = Field(min_length=1, max_length=1000)
+
+
+class PerformanceProp(Contract):
+    asset: AssetReference
+    holder_start: str = Field(min_length=1, max_length=100)
+    holder_end: str = Field(min_length=1, max_length=100)
+    position_start: str = Field(min_length=1, max_length=500)
+    position_end: str = Field(min_length=1, max_length=500)
+
+
+class PerformanceDialogue(Contract):
+    line_id: Identifier
+    speaker: str = Field(min_length=1, max_length=100)
+    text: str = Field(min_length=1, max_length=2000)
+    presentation: Literal["visible", "voice_over", "off_screen"]
+    emotion: str = Field(min_length=1, max_length=300)
+    pacing: str = Field(min_length=1, max_length=500)
+    lipsync: Literal["required", "not_applicable"]
+    exemption_reason: str = Field(default="", max_length=1000)
+
+    @model_validator(mode="after")
+    def check_lipsync(self) -> "PerformanceDialogue":
+        if self.presentation == "visible":
+            if self.lipsync != "required" or self.exemption_reason:
+                raise ValueError("可见对白必须标记口型适用，不可用豁免代替")
+        elif self.lipsync != "not_applicable" or not self.exemption_reason.strip():
+            raise ValueError("旁白或画外音必须记录口型不适用的具体理由")
+        return self
+
+
+class PerformanceRoute(Contract):
+    # A proposed route is never a capability declaration or execution authorization.
+    provider: str = Field(min_length=1, max_length=100)
+    model: str = Field(min_length=1, max_length=200)
+
+
+class ShotPerformance(Contract):
+    scene_purpose: str = Field(min_length=1, max_length=2000)
+    narrative_purpose: str = Field(min_length=1, max_length=2000)
+    emotion_rhythm: str = Field(min_length=1, max_length=1000)
+    characters: list[PerformanceCharacter] = Field(max_length=50)
+    interactions: list[PerformanceInteraction] = Field(default_factory=list, max_length=100)
+    space_start: str = Field(min_length=1, max_length=1000)
+    space_end: str = Field(min_length=1, max_length=1000)
+    props: list[PerformanceProp] = Field(default_factory=list, max_length=50)
+    continuity_from_shot: int | None = Field(default=None, gt=0)
+    continuity_mode: Literal["continuous", "ellipsis"] = "continuous"
+    continuity_notes: str = Field(default="", max_length=2000)
+    motion_requirement: Literal["dynamic_required", "static_allowed"]
+    dialogue: list[PerformanceDialogue] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode="after")
+    def check_motion(self) -> "ShotPerformance":
+        names = [item.character for item in self.characters]
+        prop_ids = [item.asset.asset_id for item in self.props]
+        line_ids = [item.line_id for item in self.dialogue]
+        if any(len(values) != len(set(values)) for values in (names, prop_ids, line_ids)):
+            raise ValueError("表演角色、道具或台词不能重复")
+        for item in self.interactions:
+            if item.actor == item.target or not {item.actor, item.target} <= set(names):
+                raise ValueError("人物互动必须关联本镜头的两名不同角色")
+        changes = (
+            self.space_start != self.space_end
+            or bool(self.interactions)
+            or any(item.presentation == "visible" for item in self.dialogue)
+        )
+        changes = changes or any(
+            item.action_start != item.action_end
+            or item.position_start != item.position_end
+            or item.eyeline_start != item.eyeline_end
+            for item in self.characters
+        )
+        changes = changes or any(
+            item.holder_start != item.holder_end or item.position_start != item.position_end
+            for item in self.props
+        )
+        if changes and self.motion_requirement != "dynamic_required":
+            raise ValueError("动作、互动或空间道具变化必须使用动态素材")
+        if self.continuity_mode == "ellipsis" and not self.continuity_notes.strip():
+            raise ValueError("省略或跳变必须说明接续原因")
+        return self
+
+
+class ShotContentV3(ShotContent):
+    schema_version: Literal["3.0"] = "3.0"
+    performance: ShotPerformance
+
+    @model_validator(mode="after")
+    def check_performance(self) -> "ShotContentV3":
+        if {item.character for item in self.performance.characters} != set(self.characters):
+            raise ValueError("表演记录必须覆盖全部出镜角色")
+        if {item.line_id for item in self.performance.dialogue} != set(self.dialogue_line_ids):
+            raise ValueError("表演台词必须精确覆盖镜头台词引用")
+        props = {item.asset_id: item for item in self.props}
+        if len(props) != len(self.props):
+            raise ValueError("镜头道具不能重复或同时引用同一道具的不同版本")
+        if {item.asset.asset_id: item.asset for item in self.performance.props} != props:
+            raise ValueError("表演道具必须与镜头道具精确版本一致")
+        if (
+            self.performance.continuity_from_shot is not None
+            and self.performance.continuity_from_shot >= self.shot_no
+        ):
+            raise ValueError("镜头接续必须引用前序镜头")
+        return self
+
+
+class StoryboardContentV3(StoryboardContent):
+    # Separate subclasses preserve every archived 2.0 schema and workflow fingerprint.
+    schema_version: Literal["3.0"] = "3.0"  # type: ignore[assignment]
+    shots: list[ShotContentV3] = Field(min_length=1, max_length=100)  # type: ignore[assignment]
+    generation_routes: list[PerformanceRoute] = Field(default_factory=list, max_length=10)
+
+    @model_validator(mode="after")
+    def check_continuity(self) -> "StoryboardContentV3":
+        routes = [(item.provider, item.model) for item in self.generation_routes]
+        if len(routes) != len(set(routes)):
+            raise ValueError("生成路线不能重复")
+        previous: dict[int, ShotContentV3] = {}
+        people: dict[int, dict[str, PerformanceCharacter]] = {}
+        props: dict[int, dict[str, PerformanceProp]] = {}
+        for shot in self.shots:
+            prior = previous.get(shot.scene_no)
+            performance = shot.performance
+            known_people = people.setdefault(shot.scene_no, {})
+            known_props = props.setdefault(shot.scene_no, {})
+            if prior is None:
+                if performance.continuity_from_shot is not None:
+                    raise ValueError("场景首镜不能引用其他场景作为连续接续")
+            else:
+                if performance.continuity_from_shot != prior.shot_no:
+                    raise ValueError("同场景镜头必须明确接续前一镜头")
+                if performance.continuity_mode == "continuous":
+                    self._continuous(prior.performance, performance, known_people, known_props)
+            if performance.continuity_mode == "ellipsis":
+                known_people.clear()
+                known_props.clear()
+            known_people.update((item.character, item) for item in performance.characters)
+            known_props.update((item.asset.asset_id, item) for item in performance.props)
+            previous[shot.scene_no] = shot
+        return self
+
+    @staticmethod
+    def _continuous(
+        prior: ShotPerformance,
+        current: ShotPerformance,
+        people: dict[str, PerformanceCharacter],
+        props: dict[str, PerformanceProp],
+    ) -> None:
+        if prior.space_end != current.space_start:
+            raise ValueError("空间接续不一致；如为合理跳变须显式说明")
+        for item in current.characters:
+            before = people.get(item.character)
+            if before is not None and (
+                before.position_end != item.position_start
+                or before.eyeline_end != item.eyeline_start
+            ):
+                raise ValueError("人物走位或视线接续不一致")
+        for prop in current.props:
+            before_prop = props.get(prop.asset.asset_id)
+            if before_prop is not None and (
+                before_prop.asset != prop.asset
+                or before_prop.holder_end != prop.holder_start
+                or before_prop.position_end != prop.position_start
+            ):
+                raise ValueError("道具版本、归属或位置接续不一致")
+
+    def validate_against(self, script: ScriptContent) -> "StoryboardContentV3":
+        scenes = {scene.scene_no: scene for scene in script.scenes}
+        bindings = {item.character: item.asset for item in script.character_assets}
+        covered: set[str] = set()
+        for shot in self.shots:
+            scene = scenes.get(shot.scene_no)
+            if scene is None or not set(shot.characters) <= set(script.characters):
+                raise ValueError("分镜引用了不存在的场景或角色")
+            if shot.scene_id is None:
+                shot.scene_id = scene.scene_id
+            if shot.scene_id != scene.scene_id:
+                raise ValueError("场景 ID 与所属场景编号不一致")
+            lines = {line.line_id: line for line in scene.dialogue}
+            for delivery in shot.performance.dialogue:
+                line = lines.get(delivery.line_id)
+                if line is None or (delivery.speaker, delivery.text) != (line.speaker, line.text):
+                    raise ValueError("表演台词必须精确匹配所选剧本的当前场景及原文")
+                if line.line_type == "narration":
+                    if delivery.presentation != "voice_over":
+                        raise ValueError("旁白必须明确使用 voice_over")
+                elif delivery.presentation == "voice_over":
+                    raise ValueError("角色对白不得静默改为旁白")
+                elif delivery.presentation == "visible" and line.speaker not in shot.characters:
+                    raise ValueError("可见对白必须关联出镜说话角色")
+                covered.add(line.line_id)
+            details = {item.character: item for item in shot.character_details}
+            for character in shot.characters:
+                if character in bindings and (
+                    character not in details or details[character].asset != bindings[character]
+                ):
+                    raise ValueError("镜头角色资产必须与剧本精确绑定一致")
+            for field in ("scene_asset", "location_asset"):
+                expected = getattr(scene, field)
+                if expected is not None and getattr(shot, field) != expected:
+                    raise ValueError("镜头场景及地点资产必须与剧本精确绑定一致")
+            if not set(item.model_dump_json() for item in shot.props) <= set(
+                item.model_dump_json() for item in scene.props
+            ):
+                raise ValueError("镜头道具必须来自剧本场景的精确版本")
+        expected_lines = {line.line_id for scene in script.scenes for line in scene.dialogue}
+        if covered != expected_lines:
+            raise ValueError("表演分镜必须覆盖批准剧本的全部台词")
+        if set(scenes) != {shot.scene_no for shot in self.shots}:
+            raise ValueError("表演分镜必须覆盖批准剧本的全部场景")
+        return self
+
+
+def read_storyboard_content(value: dict) -> StoryboardContent | StoryboardContentV3:
+    if value.get("schema_version") == "3.0":
+        return StoryboardContentV3.model_validate(value)
+    return StoryboardContent.model_validate(value)
+
+
+def read_shot_content(value: dict) -> ShotContent | ShotContentV3:
+    if value.get("schema_version") == "3.0":
+        return ShotContentV3.model_validate(value)
+    return ShotContent.model_validate(value)
+
+
 def read_content(value: dict) -> dict:
-    parsed = (
-        read_script_content(value) if "scenes" in value else StoryboardContent.model_validate(value)
-    )
+    parsed = read_script_content(value) if "scenes" in value else read_storyboard_content(value)
     return parsed.model_dump(mode="json")

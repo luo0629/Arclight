@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/native-select";
 import { FormLabel, Notice } from "@/components/ui-kit";
 import type { ShotExtensions } from "./shot-details";
+import { reorderPerformanceShots } from "../shot-performance";
 
 export type StoryboardTableShot = ShotExtensions & {
   scene_asset?: unknown;
@@ -119,7 +120,7 @@ export default function StoryboardTable({
     ordered.splice(to, 0, ordered.splice(from, 1)[0]);
     orderedKeys.splice(to, 0, orderedKeys.splice(from, 1)[0]);
     setKeys(orderedKeys);
-    onChange(ordered.map((shot, index) => ({ ...shot, shot_no: index + 1 })));
+    onChange(reorderPerformanceShots(ordered));
     setAnnouncement(`镜头 ${from + 1} 已移至第 ${to + 1} 位，序号已更新。`);
   }
 
@@ -385,6 +386,31 @@ export default function StoryboardTable({
                     />
                   ) : (
                     shot.visual_description
+                  )}
+                  {shot.performance && (
+                    <div className="mt-2 text-xs text-muted-foreground">
+                      <p>
+                        {shot.performance.motion_requirement ===
+                        "dynamic_required"
+                          ? "必须动态"
+                          : "允许静态"}{" "}
+                        · 接续
+                        {shot.performance.continuity_from_shot === null
+                          ? "无"
+                          : `镜头 ${shot.performance.continuity_from_shot}`}
+                      </p>
+                      <p>
+                        {shot.performance.dialogue
+                          .map((line) =>
+                            line.presentation === "visible"
+                              ? "可见对白／需口型"
+                              : line.presentation === "voice_over"
+                                ? "旁白／不适用口型"
+                                : "画外音／不适用口型",
+                          )
+                          .join("、")}
+                      </p>
+                    </div>
                   )}
                 </td>
                 <td className="min-w-28">

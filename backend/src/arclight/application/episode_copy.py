@@ -9,8 +9,9 @@ from sqlalchemy.orm import Session
 from arclight.agents.contracts import (
     AssetReference,
     ScriptContentV3,
-    StoryboardContent,
+    ShotContentV3,
     read_script_content,
+    read_storyboard_content,
 )
 from arclight.application.content_references import require_asset
 from arclight.core.errors import DomainError
@@ -59,7 +60,7 @@ def copy_episode(
 
     try:
         text = read_script_content(script.content_json) if script else None
-        shots = StoryboardContent.model_validate(board.content_json) if board else None
+        shots = read_storyboard_content(board.content_json) if board else None
         if text and shots:
             shots.validate_against(text)
     except (ValidationError, ValueError):
@@ -108,12 +109,22 @@ def copy_episode(
             for shot in shots.shots:
                 shot.scene_id = scenes[shot.scene_id] if shot.scene_id else None
                 shot.dialogue_line_ids = [lines[line] for line in shot.dialogue_line_ids]
+                if isinstance(shot, ShotContentV3):
+                    for delivery in shot.performance.dialogue:
+                        delivery.line_id = lines[delivery.line_id]
                 for detail in shot.character_details:
                     detail.asset = asset(detail.asset, {"CHARACTER"})
                     detail.costume = asset(detail.costume, {"COSTUME"})
                 shot.scene_asset = asset(shot.scene_asset, {"SCENE"})
                 shot.location_asset = asset(shot.location_asset, {"LOCATION", "SCENE"})
                 shot.props = [ref for item in shot.props if (ref := asset(item, {"PROP"}))]
+                if isinstance(shot, ShotContentV3):
+                    retained_props = {item.asset_id: item for item in shot.props}
+                    shot.performance.props = [
+                        item
+                        for item in shot.performance.props
+                        if retained_props.get(item.asset.asset_id) == item.asset
+                    ]
                 # Shot results and their approvals belong to the old production, not this draft.
                 shot.selected_visual_asset = None
                 shot.quality_review = None

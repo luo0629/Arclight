@@ -90,13 +90,21 @@ def list_reviews(
     project_id: UUID,
     db: Database,
     actor: Actor,
+    version_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[HumanReviewRead]:
     require_project(db, project_id, actor)
     rows = db.scalars(
         select(HumanReviewRequest)
-        .where(HumanReviewRequest.project_id == project_id)
+        .where(
+            HumanReviewRequest.project_id == project_id,
+            *(
+                [HumanReviewRequest.snapshot_json["version_id"].as_string() == str(version_id)]
+                if version_id is not None
+                else []
+            ),
+        )
         .order_by(HumanReviewRequest.created_at.desc(), HumanReviewRequest.id)
         .limit(limit)
         .offset(offset)

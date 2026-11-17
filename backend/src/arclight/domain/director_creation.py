@@ -14,6 +14,7 @@ from arclight.agents.contracts import (
     StoryboardContent,
 )
 from arclight.domain.agent_tools import AgentToolContract
+from arclight.domain.director_performance import PERFORMANCE_DIRECTOR_VERSION
 from arclight.domain.director_planning import DirectorEvidence, DirectorPlan
 from arclight.domain.generation_requests import safe_metadata
 
@@ -32,6 +33,7 @@ COLLABORATIVE_DIRECTOR_VERSIONS = {
     REVISED_COLLABORATIVE_PRODUCTION_VERSION,
 }
 ITERATIVE_DIRECTOR_VERSIONS = {
+    PERFORMANCE_DIRECTOR_VERSION,
     ITERATIVE_DIRECTOR_VERSION,
     ITERATIVE_PRODUCTION_VERSION,
     REVISED_ITERATIVE_PRODUCTION_VERSION,

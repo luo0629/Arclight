@@ -11,6 +11,8 @@ import type {
 import { Notice } from "@/components/ui-kit";
 import { api, json, message } from "@/lib/api/client";
 import type { Run } from "@/types/api";
+import ShotPerformanceDetails from "@/features/editor/components/shot-performance";
+import type { ShotPerformance } from "@/features/editor/shot-performance";
 import DirectorRevisionDetails, {
   type DirectorCheck,
   type DirectorRevision,
@@ -26,6 +28,7 @@ type Scene = {
   dialogue: { line_id: string; speaker: string; text: string }[];
 };
 type Working = {
+  generation_routes?: { provider: string; model: string }[];
   narrative_context?: Record<string, unknown>;
   scenes?: {
     scene_id: string;
@@ -36,6 +39,7 @@ type Working = {
     estimated_duration_ms: number;
   }[];
   shots?: {
+    performance?: ShotPerformance;
     shot_no: number;
     duration_ms: number;
     visual_description: string;
@@ -289,6 +293,11 @@ export default function ScreenwriterProgress({
               </>
             )}
             {operation.result?.objective && <p>{operation.result.objective}</p>}
+            {operation.result?.generation_routes?.map((route, index) => (
+              <p key={index} className="break-all">
+                候选生成路线：{route.provider} / {route.model}
+              </p>
+            ))}
             {operation.result?.scenes && (
               <ol className="list-decimal pl-5">
                 {operation.result.scenes.map((scene) => (
@@ -312,6 +321,13 @@ export default function ScreenwriterProgress({
                       出镜：{shot.characters.join("、") || "无"} · 台词引用{" "}
                       {shot.dialogue_line_ids.length} 条
                     </p>
+                    {shot.performance && (
+                      <ShotPerformanceDetails
+                        performance={shot.performance}
+                        editing={false}
+                        update={() => {}}
+                      />
+                    )}
                   </li>
                 ))}
               </ol>

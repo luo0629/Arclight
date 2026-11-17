@@ -1,6 +1,12 @@
 "use client";
 
 import { useId } from "react";
+import ShotPerformanceDetails from "./shot-performance";
+import {
+  performanceDialogue,
+  type ShotPerformance,
+  type PerformanceSourceLine,
+} from "../shot-performance";
 import { Field, FieldGroup } from "@/components/ui/field";
 import { FormLabel } from "@/components/ui-kit";
 import { Input } from "@/components/ui/input";
@@ -18,6 +24,9 @@ export type Performance = {
   gaze?: string;
 };
 export type ShotExtensions = {
+  schema_version?: string;
+  props?: unknown[];
+  performance?: ShotPerformance;
   scene_id?: string | null;
   composition?: string;
   dialogue_line_ids?: string[];
@@ -26,7 +35,7 @@ export type ShotExtensions = {
   transition_out?: string;
   notes?: string;
 };
-export type SourceLine = { line_id?: string; speaker: string; text: string };
+export type SourceLine = PerformanceSourceLine;
 
 export function ContractMetadata({ content }: { content: unknown }) {
   return (
@@ -74,6 +83,21 @@ export default function ShotDetails({
   return (
     <details className="shot-details min-w-0 rounded-lg border p-3 [overflow-wrap:anywhere]">
       <summary>镜头表演、台词与制作备注</summary>
+      {shot.performance && (
+        <div className="mt-4">
+          <ShotPerformanceDetails
+            performance={shot.performance}
+            editing={editing}
+            lines={lines}
+            update={(performance) =>
+              update({
+                performance,
+                props: performance.props.map((row) => row.asset),
+              })
+            }
+          />
+        </div>
+      )}
       {editing ? (
         <FieldGroup className="mt-4">
           <Field>
@@ -99,6 +123,26 @@ export default function ShotDetails({
                     event.target.selectedOptions,
                     (option) => option.value,
                   ),
+                  ...(shot.performance
+                    ? {
+                        performance: {
+                          ...shot.performance,
+                          dialogue: Array.from(
+                            event.target.selectedOptions,
+                            (option) =>
+                              shot.performance!.dialogue.find(
+                                (line) => line.line_id === option.value,
+                              ) ??
+                              performanceDialogue(
+                                option.value,
+                                lines?.find(
+                                  (line) => line.line_id === option.value,
+                                ),
+                              ),
+                          ),
+                        },
+                      }
+                    : {}),
                 })
               }
             >

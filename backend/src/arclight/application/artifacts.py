@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.agents.contracts import (
     ScriptContent,
     ScriptContentV3,
-    StoryboardContent,
     read_content,
     read_script_content,
+    read_storyboard_content,
 )
 from arclight.application.content_dependencies import register_content
 from arclight.application.content_duration import validate_duration
@@ -85,7 +85,7 @@ class ArtifactStore(Artifacts):
             source = read_script_content(script.content_json)
             validate_script_assets(db, episode.project_id, source)
             validate_duration(source, self.target_duration_ms, self.tolerance_percent)
-        parsed = StoryboardContent.model_validate(generate())
+        parsed = read_storyboard_content(generate())
         with self.factory.begin() as db:
             lock_dependency_graph(db, project_id)
             validate_publication(db, self.run_id)

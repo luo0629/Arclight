@@ -22,6 +22,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 export type CreationOptions = {
   narrative?: NarrativeRequest | null;
   professional: boolean;
+  performance?: boolean;
   professionalDirector?: boolean;
   directorReview?: boolean;
   artCollaboration?: boolean;
@@ -74,6 +75,12 @@ export function creationPayload(value: CreationOptions, directorOnly = false) {
   return value.professional
     ? {
         professional: true,
+        ...(directorOnly && value.performance
+          ? {
+              performance: true,
+              director_revision_rounds: Number(value.revisionRounds),
+            }
+          : {}),
         ...(value.narrative ? { narrative: value.narrative } : {}),
         ...(value.professionalDirector ? { professional_director: true } : {}),
         ...((directorOnly
@@ -108,6 +115,7 @@ export function isCreationOptions(value: unknown): value is CreationOptions {
   const row = value as Record<string, unknown>;
   return (
     typeof row.professional === "boolean" &&
+    (row.performance === undefined || typeof row.performance === "boolean") &&
     (row.narrative === undefined ||
       row.narrative === null ||
       isNarrativeRequest(row.narrative)) &&
@@ -134,6 +142,7 @@ export default function CreationOptionsFields({
   allowDirector = false,
   directorOnly = false,
   narrativeEpisode,
+  performanceSourceSchema,
 }: {
   value: CreationOptions;
   onChange: (value: CreationOptions) => void;
@@ -143,8 +152,10 @@ export default function CreationOptionsFields({
   allowDirector?: boolean;
   directorOnly?: boolean;
   narrativeEpisode?: Episode;
+  performanceSourceSchema?: string;
 }) {
   const id = useId();
+  const performanceAvailable = performanceSourceSchema === "3.0";
   return (
     <FieldSet disabled={disabled}>
       <FieldLegend variant="label">
@@ -185,6 +196,7 @@ export default function CreationOptionsFields({
                 onChange({
                   ...value,
                   professional: mode !== "standard",
+                  ...(mode === "standard" ? { performance: false } : {}),
                   professionalDirector:
                     mode === "standard" ? false : value.professionalDirector,
                   review:
@@ -220,6 +232,36 @@ export default function CreationOptionsFields({
             </FieldDescription>
           )}
         </Field>
+        {directorOnly && value.professional && (
+          <Field>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              className="w-full flex-wrap"
+              aria-label="导演分镜合同"
+              value={value.performance ? "performance" : "legacy"}
+              onValueChange={(mode) => {
+                if (mode && (mode !== "performance" || performanceAvailable))
+                  onChange({ ...value, performance: mode === "performance" });
+              }}
+            >
+              <ToggleGroupItem value="legacy">常规文字分镜</ToggleGroupItem>
+              <ToggleGroupItem
+                value="performance"
+                disabled={!performanceAvailable}
+              >
+                表演与动态分镜
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <FieldDescription>
+              {!performanceAvailable
+                ? "表演与动态分镜需要已批准的剧情 3.0 剧本；请先将此精确剧本另存升级并批准，再从该版本启动。"
+                : value.performance
+                  ? "记录叙事目的、动作起止、人物互动与接续，精确标记台词及口型。能力不足会请求修订或人工决定。"
+                  : "沿用现有调查、拆镜与审核流程。"}
+            </FieldDescription>
+          </Field>
+        )}
         {value.professional && (
           <>
             {allowDirector && (
