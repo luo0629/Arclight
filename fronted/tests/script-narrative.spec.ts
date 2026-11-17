@@ -15,7 +15,7 @@ async function setup(page: Page, count = 3) {
       display_name: "连续剧交付验收",
     },
   });
-  expect(registration.status()).toBe(201);
+  expect(registration.status(), await registration.text()).toBe(201);
   const owner = await registration.json();
   const headers = { Authorization: `Bearer ${owner.access_token}` };
   const created = await page.request.post("/api/v1/projects", {
@@ -28,13 +28,13 @@ async function setup(page: Page, count = 3) {
       },
     },
   });
-  expect(created.status()).toBe(201);
+  expect(created.status(), await created.text()).toBe(201);
   const project = await created.json();
   const episodeResponse = await page.request.post(
     `/api/v1/projects/${project.id}/episodes`,
     { headers, data: { episode_no: 1, title: "渡口接信" } },
   );
-  expect(episodeResponse.status()).toBe(201);
+  expect(episodeResponse.status(), await episodeResponse.text()).toBe(201);
   const episode = await episodeResponse.json();
   const prefix = `/api/v1/episodes/${episode.id}`;
   const ledger = `/api/v1/projects/${project.id}/story-ledger`;
@@ -47,7 +47,7 @@ async function setup(page: Page, count = 3) {
         data: { kind: "CHARACTER", name, description: "在渡口护送信件的旅人" },
       },
     );
-    expect(response.status()).toBe(201);
+    expect(response.status(), await response.text()).toBe(201);
     characters.push(await response.json());
   }
   // Prepare the real approved planning contract through the existing generation/save/confirm chain.
@@ -59,7 +59,7 @@ async function setup(page: Page, count = 3) {
       episode_duration_ms: 30000,
     },
   });
-  expect(queued.status()).toBe(202);
+  expect(queued.status(), await queued.text()).toBe(202);
   let outlineId = "";
   await expect(async () => {
     const rows: { id: string }[] = await (
@@ -95,7 +95,16 @@ async function setup(page: Page, count = 3) {
         milestones: [{ episode_no: count, change: "共同承担选择的后果。" }],
       })),
       relationship_arcs: [],
-      foreshadowing: [],
+      foreshadowing: [
+        {
+          id: "seal",
+          thread_id: "letter",
+          setup_episode_no: 1,
+          setup: "红信的封口留有一枚旧印。",
+          expected_payoff_episode_no: count,
+          planned_payoff: "旧印成为寻找失主的线索。",
+        },
+      ],
       episode_progressions: Array.from({ length: count }, (_, index) => ({
         episode_no: index + 1,
         thread_beats: [
@@ -114,13 +123,13 @@ async function setup(page: Page, count = 3) {
     headers: { ...headers, "Idempotency-Key": crypto.randomUUID() },
     data: { base_version_id: legacy.id, content },
   });
-  expect(savedPlan.status()).toBe(201);
+  expect(savedPlan.status(), await savedPlan.text()).toBe(201);
   const plan = await savedPlan.json();
   const confirmed = await page.request.post(
     prefix + `/story-outlines/${plan.id}/confirm`,
     { headers, data: {} },
   );
-  expect(confirmed.status()).toBe(200);
+  expect(confirmed.status(), await confirmed.text()).toBe(200);
   const legacyResponse = await page.request.post(prefix + "/scripts", {
     headers,
     data: {
@@ -141,7 +150,7 @@ async function setup(page: Page, count = 3) {
       },
     },
   });
-  expect(legacyResponse.status()).toBe(201);
+  expect(legacyResponse.status(), await legacyResponse.text()).toBe(201);
   const source = await legacyResponse.json();
   return {
     owner,
@@ -190,8 +199,30 @@ async function capture(page: Page, env: Case, time = 10) {
       character_ids: env.characters.map((row) => row.id),
     },
   });
-  expect(response.status()).toBe(200);
+  expect(response.status(), await response.text()).toBe(200);
   return (await response.json()).context;
+}
+
+async function selectWritingCharacters(page: Page, env: Case) {
+  const inputs = page.getByRole("region", {
+    name: "连续剧写作依据",
+    exact: true,
+  });
+  await inputs
+    .getByRole("button", { name: "加载更多写作角色", exact: true })
+    .click();
+  const scope = inputs.getByRole("group", {
+    name: "需要隔离知情范围的故事角色",
+    exact: true,
+  });
+  for (const character of env.characters) {
+    const checkbox = scope.getByRole("checkbox", {
+      name: character.name,
+      exact: true,
+    });
+    await checkbox.check();
+    await expect(checkbox).toBeChecked();
+  }
 }
 
 function narrativeContent(env: Case, context: Record<string, unknown>) {
@@ -253,7 +284,7 @@ async function approve(page: Page, env: Case, versionId: string) {
   const impact = await page.request.get(path + "/dependency-impact", {
     headers: env.headers,
   });
-  expect(impact.status()).toBe(200);
+  expect(impact.status(), await impact.text()).toBe(200);
   const response = await page.request.post(path + "/review", {
     headers: env.headers,
     data: {
@@ -261,7 +292,7 @@ async function approve(page: Page, env: Case, versionId: string) {
       impact_digest: (await impact.json()).impact_digest,
     },
   });
-  expect(response.status()).toBe(200);
+  expect(response.status(), await response.text()).toBe(200);
   return (await response.json()).story_state_receipt;
 }
 
@@ -304,14 +335,29 @@ test("explicitly upgrades a manual draft and atomically approves its exact narra
     .getByLabel("已批准全剧规划版本", { exact: true })
     .fill(env.plan.id);
   await page.getByLabel("写作目标故事时点", { exact: true }).fill("10");
+  await selectWritingCharacters(page, env);
+  const delivery = page.getByRole("region", {
+    name: "连续剧场景交付",
+    exact: true,
+  });
+  await delivery
+    .getByRole("button", { name: "加载更多叙事故事设定", exact: true })
+    .click();
   await page.getByLabel("场景故事时点", { exact: true }).fill("10");
   await page
     .getByLabel("场景关键冲突", { exact: true })
     .fill("石岚要看信，阿青要求先过河。");
   await page.getByRole("button", { name: "添加人物目的", exact: true }).click();
-  await page
-    .getByLabel("场景人物", { exact: true })
-    .selectOption(env.characters[0].id);
+  const sceneCharacter = delivery.getByRole("combobox", {
+    name: "场景人物",
+    exact: true,
+  });
+  for (const character of env.characters) {
+    await expect(
+      sceneCharacter.locator(`option[value="${character.id}"]`),
+    ).toHaveText(character.name);
+  }
+  await sceneCharacter.selectOption(env.characters[0].id);
   await page
     .getByLabel("人物目的", { exact: true })
     .fill("保护红信并争取协助。");
@@ -338,7 +384,7 @@ test("explicitly upgrades a manual draft and atomically approves its exact narra
     .getByRole("button", { name: "添加状态变更提案", exact: true })
     .click();
   await page
-    .getByLabel("状态主体", { exact: true })
+    .getByRole("combobox", { name: "状态主体", exact: true })
     .selectOption(env.characters[0].id);
   await page.getByLabel("状态名称", { exact: true }).fill("received-letter");
   await page
@@ -348,7 +394,7 @@ test("explicitly upgrades a manual draft and atomically approves its exact narra
     .getByRole("button", { name: "添加提案知情角色", exact: true })
     .click();
   await page
-    .getByLabel("知情角色", { exact: true })
+    .getByRole("combobox", { name: "知情角色", exact: true })
     .selectOption(env.characters[0].id);
   await page
     .getByRole("button", { name: "预览精确写作依据", exact: true })
@@ -367,7 +413,7 @@ test("explicitly upgrades a manual draft and atomically approves its exact narra
   );
   await page.getByRole("button", { name: "保存为新版本", exact: true }).click();
   const response = await savedResponse;
-  expect(response.status()).toBe(201);
+  expect(response.status(), await response.text()).toBe(201);
   const saved = await response.json();
   expect(saved.content_json.schema_version).toBe("3.0");
   expect(saved.content_json.narrative_context.episode_id).toBe(env.episode.id);
@@ -444,7 +490,7 @@ test("keeps a conflicting candidate unapproved and exposes historical narrative 
       content: narrativeContent(env, context),
     },
   });
-  expect(firstResponse.status()).toBe(201);
+  expect(firstResponse.status(), await firstResponse.text()).toBe(201);
   const first = await firstResponse.json();
   const secondResponse = await page.request.post(env.prefix + "/scripts", {
     headers: env.headers,
@@ -454,7 +500,7 @@ test("keeps a conflicting candidate unapproved and exposes historical narrative 
       content: narrativeContent(env, context),
     },
   });
-  expect(secondResponse.status()).toBe(201);
+  expect(secondResponse.status(), await secondResponse.text()).toBe(201);
   const second = await secondResponse.json();
   await approve(page, env, first.id);
   await openScript(page, env, second);
@@ -465,7 +511,8 @@ test("keeps a conflicting candidate unapproved and exposes historical narrative 
         env.prefix + `/scripts/${second.id}/review`,
   );
   await page.getByRole("button", { name: "批准该版本", exact: true }).click();
-  expect((await review).status()).toBe(409);
+  const reviewResponse = await review;
+  expect(reviewResponse.status(), await reviewResponse.text()).toBe(409);
   await expect(page.getByRole("alert").first()).toBeVisible();
   await expect(
     page.getByRole("button", { name: "批准该版本", exact: true }),
@@ -490,7 +537,7 @@ test("keeps a conflicting candidate unapproved and exposes historical narrative 
       display_name: "连续剧阅读者",
     },
   });
-  expect(registered.status()).toBe(201);
+  expect(registered.status(), await registered.text()).toBe(201);
   const viewer = await registered.json();
   const membership = await page.request.post(
     `/api/v1/projects/${env.project.id}/members`,
@@ -499,7 +546,7 @@ test("keeps a conflicting candidate unapproved and exposes historical narrative 
       data: { email: viewer.user.email, role: "viewer" },
     },
   );
-  expect(membership.status()).toBe(201);
+  expect(membership.status(), await membership.text()).toBe(201);
   await openScript(page, env, second);
   await expect(
     page.getByRole("region", { name: "连续剧绑定与状态提案", exact: true }),
@@ -515,7 +562,7 @@ test("keeps a conflicting candidate unapproved and exposes historical narrative 
       data: { decision: "APPROVE" },
     },
   );
-  expect(denied.status()).toBe(403);
+  expect(denied.status(), await denied.text()).toBe(403);
 });
 
 test("previews distant approved causality with separate character knowledge and runs the series writer", async ({
@@ -531,14 +578,14 @@ test("previews distant approved causality with separate character knowledge and 
       content: firstContent,
     },
   });
-  expect(savedResponse.status()).toBe(201);
+  expect(savedResponse.status(), await savedResponse.text()).toBe(201);
   const first = await savedResponse.json();
   const receipt = await approve(page, env, first.id);
   const created = await page.request.post(
     `/api/v1/projects/${env.project.id}/episodes`,
     { headers: env.headers, data: { episode_no: 7, title: "红信的后果" } },
   );
-  expect(created.status()).toBe(201);
+  expect(created.status(), await created.text()).toBe(201);
   const seventh = await created.json();
   const seventhPrefix = `/api/v1/episodes/${seventh.id}`;
   await page.goto(
@@ -566,6 +613,7 @@ test("previews distant approved causality with separate character knowledge and 
     page.getByLabel("已批准账本版本（尚无批准账本时留空）", { exact: true }),
   ).toHaveValue(receipt.approved_version_id);
   await page.getByLabel("写作目标故事时点", { exact: true }).fill("70");
+  await selectWritingCharacters(page, env);
   await expect(
     page.getByRole("radio", { name: "调查、规划与逐场景拆镜", exact: true }),
   ).toBeDisabled();

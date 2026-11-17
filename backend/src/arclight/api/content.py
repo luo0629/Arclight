@@ -85,6 +85,13 @@ def duplicate_episode(
     return EpisodeRead.model_validate(copy_episode(db, source, actor, **payload.model_dump()))
 
 
+@router.get("/episodes/{episode_id}/scripts/{version_id}")
+def read_script(episode_id: UUID, version_id: UUID, db: Database, actor: Actor) -> ScriptRead:
+    require_episode(db, episode_id, actor)
+    version = require_version(db, Script, episode_id, version_id)
+    return ScriptRead.model_validate(version)
+
+
 @router.post("/episodes/{episode_id}/scripts", status_code=201)
 def save_script(
     episode_id: UUID, payload: ScriptVersionInput, request: Request, db: Database, actor: Actor

@@ -510,3 +510,95 @@ def test_copied_v3_draft_remaps_interactions_and_requires_new_episode_context(cl
     assert denied.status_code == 409, denied.text
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(StoryLedgerVersion)) == 1
+
+
+@pytest.mark.parametrize("schema_version", ["2.0", "3.0"])
+def test_exact_script_read_keeps_historical_content_and_allows_archived_reads(
+    client, writing_case, schema_version
+):
+    case = writing_case
+    content = screenplay(case, capture(client, case))
+    if schema_version == "2.0":
+        content = ScriptContent(
+            title="旧版渡口送信",
+            summary="阿青在渡口等待失主。",
+            estimated_duration_ms=30000,
+            characters=[item["name"] for item in case["characters"]],
+            scenes=[Scene(scene_no=1, title="雨夜渡口", action="阿青站在渡口护住信封。")],
+        ).model_dump(mode="json")
+    first = save(client, case, content)
+    newer = copy.deepcopy(content)
+    newer["title"] = "下一版渡口送信"
+    newer["summary"] = "新稿中的行动尚未批准。"
+    second = save(client, case, newer, expected=first["version_no"], base=first["id"])
+    prefix = f"/api/v1/episodes/{case['episode']['id']}"
+    response = client.get(f"{prefix}/scripts/{first['id']}")
+    assert response.status_code == 200, response.text
+    assert response.json() == first
+    assert response.json()["id"] != second["id"]
+    assert response.json()["content_json"]["schema_version"] == schema_version
+
+    archived = client.patch(prefix, json={"archived": True})
+    assert archived.status_code == 200, archived.text
+    archived_episode = client.get(f"{prefix}/scripts/{first['id']}")
+    assert archived_episode.status_code == 200, archived_episode.text
+    assert archived_episode.json() == first
+    archived = client.patch(
+        f"/api/v1/projects/{case['episode']['project_id']}", json={"archived": True}
+    )
+    assert archived.status_code == 200, archived.text
+    archived_project = client.get(f"{prefix}/scripts/{first['id']}")
+    assert archived_project.status_code == 200, archived_project.text
+    assert archived_project.json() == first
+    with client.app.state.session_factory() as db:
+        assert db.get(Script, UUID(first["id"])).content_json == first["content_json"]
+        assert db.scalar(select(func.count()).select_from(StoryLedgerVersion)) == 0
+
+
+def test_exact_script_read_rejects_missing_versions_and_cross_episode_ids(client, writing_case):
+    case = writing_case
+    saved = save(client, case, screenplay(case, capture(client, case)))
+    response = client.post(
+        f"/api/v1/projects/{case['episode']['project_id']}/episodes",
+        json={"episode_no": 2, "title": "另一集"},
+    )
+    assert response.status_code == 201, response.text
+    other = response.json()
+    paths = [
+        f"/api/v1/episodes/{case['episode']['id']}/scripts/{uuid4()}",
+        f"/api/v1/episodes/{uuid4()}/scripts/{saved['id']}",
+        f"/api/v1/episodes/{other['id']}/scripts/{saved['id']}",
+    ]
+    for path in paths:
+        denied = client.get(path)
+        assert denied.status_code == 404, denied.text
+        assert denied.json()["error"]["code"] == "NOT_FOUND"
+
+
+@pytest.mark.parametrize(
+    "role,expected",
+    [("viewer", 200), ("editor", 200), ("outsider", 404), ("unauthenticated", 401)],
+)
+def test_exact_script_read_obeys_project_membership(client, writing_case, role, expected):
+    case = writing_case
+    saved = save(client, case, screenplay(case, capture(client, case)))
+    owner_header = client.headers["Authorization"]
+    if role == "unauthenticated":
+        client.headers.pop("Authorization")
+    else:
+        member = register(client, f"read-{role}@series03.example.com")
+        if role != "outsider":
+            response = client.post(
+                f"/api/v1/projects/{case['episode']['project_id']}/members",
+                headers={"Authorization": owner_header},
+                json={"email": member["user"]["email"], "role": role},
+            )
+            assert response.status_code == 201, response.text
+    response = client.get(f"/api/v1/episodes/{case['episode']['id']}/scripts/{saved['id']}")
+    assert response.status_code == expected, response.text
+    if expected == 200:
+        assert response.json() == saved
+    else:
+        assert response.json()["error"]["code"] == (
+            "UNAUTHORIZED" if role == "unauthenticated" else "NOT_FOUND"
+        )

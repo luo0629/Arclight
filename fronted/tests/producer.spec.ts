@@ -2,6 +2,12 @@ import { test, expect, type Page } from "@playwright/test";
 import type { ProducerProgress } from "../src/features/tasks/producer-types";
 import { closeDirectory } from "./workspace-helpers";
 
+test.afterEach(async ({ page }) => {
+  // Drain route.fetch/fulfill before page teardown so handler failures stay
+  // attributed to this test instead of leaking into the next one.
+  await page.unrouteAll({ behavior: "wait" });
+});
+
 async function setup(page: Page) {
   const registered = await page.request.post("/api/v1/auth/register", {
     data: {
