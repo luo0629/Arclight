@@ -85,7 +85,17 @@ async function setup(page: Page, directoryPadding = 0) {
       headers,
       data: { kind: "WORLD", name: `已有世界设定 ${index + 1}` },
     });
-    expect(response.status()).toBe(201);
+    const padding: StoryEntry = await response.json();
+    expect(response.status(), JSON.stringify(padding)).toBe(201);
+    // Keep a real second directory page without exceeding the 100 active-entry limit.
+    const archived = await page.request.patch(
+      `${charactersPath}/${padding.id}`,
+      {
+        headers,
+        data: { expected_revision: padding.revision, archived: true },
+      },
+    );
+    expect(archived.status(), await archived.text()).toBe(200);
   }
   const characters: StoryEntry[] = [];
   for (const [name, description] of [
@@ -96,14 +106,67 @@ async function setup(page: Page, directoryPadding = 0) {
       headers,
       data: { kind: "CHARACTER", name, description },
     });
-    expect(response.status()).toBe(201);
-    characters.push(await response.json());
+    const character: StoryEntry = await response.json();
+    expect(response.status(), JSON.stringify(character)).toBe(201);
+    characters.push(character);
   }
   await page.addInitScript(
     (id) => localStorage.setItem("arclight-project", id),
     project.id,
   );
-  await page.goto("/");
+  const projectEpisodesReady = page.waitForResponse(async (response) => {
+    if (
+      response.request().method() !== "GET" ||
+      new URL(response.url()).pathname !==
+        `/api/v1/projects/${project.id}/episodes` ||
+      response.status() !== 200
+    )
+      return false;
+    try {
+      const rows: unknown = await response.json();
+      return (
+        Array.isArray(rows) &&
+        rows.some(
+          (row) => row?.id === episode.id && row.project_id === project.id,
+        )
+      );
+    } catch {
+      return false;
+    }
+  });
+  const episodeCanvasReady = page.waitForResponse(async (response) => {
+    if (
+      response.request().method() !== "GET" ||
+      new URL(response.url()).pathname !==
+        `/api/v1/episodes/${episode.id}/canvas` ||
+      response.status() !== 200
+    )
+      return false;
+    try {
+      const graph: unknown = await response.json();
+      return (
+        !!graph &&
+        typeof graph === "object" &&
+        "nodes" in graph &&
+        Array.isArray(graph.nodes) &&
+        "edges" in graph &&
+        Array.isArray(graph.edges)
+      );
+    } catch {
+      return false;
+    }
+  });
+  await Promise.all([projectEpisodesReady, episodeCanvasReady, page.goto("/")]);
+  await expect(
+    page.getByRole("heading", {
+      name: `第 ${episode.episode_no} 集 · ${episode.title}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.locator(".episode-studio")).toHaveAttribute(
+    "aria-busy",
+    "false",
+  );
   await openOutline(page);
   await page
     .getByLabel("待规划故事", { exact: true })
