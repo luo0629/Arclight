@@ -51,8 +51,14 @@ function firstFramePng() {
 export async function realVideoFixture(
   page: Page,
   loseGenerationResponse = false,
+  forTimeline = false,
 ) {
-  const env = await shotProductionFixture(page);
+  const env = await shotProductionFixture(page, {
+    singleShot: forTimeline,
+    outputProfile: forTimeline
+      ? { width: 320, height: 180, fps: 30 }
+      : undefined,
+  });
   const root = `/api/v1/projects/${env.project.id}`;
   const call = { headers: env.headers };
   const configured = await page.request.put("/api/v1/me/model-services/video", {
@@ -119,7 +125,7 @@ export async function realVideoFixture(
     if (data.task_type !== "VIDEO") return route.continue();
     data.spec.context = {
       ...data.spec.context,
-      e2e_synthetic_video: "video01",
+      e2e_synthetic_video: forTimeline ? "video03" : "video01",
     };
     generationKeys.push(route.request().headers()["idempotency-key"]);
     if (loseGenerationResponse) {

@@ -21,6 +21,7 @@ from arclight.application.content_references import (
     validate_storyboard_assets,
 )
 from arclight.application.project_reads import lock_project_snapshot
+from arclight.application.timeline_store import checked_timeline
 from arclight.core.errors import DomainError
 from arclight.domain.enums import AssetStatus
 from arclight.domain.production_state import (
@@ -34,6 +35,7 @@ from arclight.domain.production_state import (
     VersionEvidence,
 )
 from arclight.domain.production_status import episode_state
+from arclight.domain.timelines import ClipSnapshot
 from arclight.persistence.generation import GenerationJob
 from arclight.persistence.generation_candidates import GenerationCandidate
 from arclight.persistence.models import (
@@ -197,9 +199,68 @@ def input_issues(
     return list(dict.fromkeys(issues))
 
 
+def video_shot_facts(db: Session, episode: Episode, row: Shot, clip: ClipSnapshot) -> ShotFacts:
+    from arclight.application.timelines import validate_visual_clip_facts
+
+    facts = ShotFacts(
+        project_id=episode.project_id,
+        episode_id=episode.id,
+        shot_id=row.id,
+        storyboard_version_id=row.storyboard_id,
+    )
+    try:
+        validate_visual_clip_facts(db, episode, row, clip)
+    except DomainError as error:
+        issue = (
+            "STALE_INPUT"
+            if error.code == "ASSET_NOT_USABLE"
+            else "PERFORMANCE_NOT_READY"
+            if error.code == "PERFORMANCE_NOT_READY"
+            else "CONTINUITY_PENDING"
+        )
+        return facts.model_copy(update={"issues": [issue]})
+    version = db.get(AssetVersion, clip.source_asset_version_id)
+    assert version is not None and clip.video is not None and clip.review_id is not None
+    binding = {
+        "project_id": episode.project_id,
+        "episode_id": episode.id,
+        "version_id": version.id,
+        "source_version_id": row.storyboard_id,
+    }
+    return facts.model_copy(
+        update={
+            "media": VersionEvidence(
+                project_id=episode.project_id,
+                episode_id=episode.id,
+                kind="VIDEO",
+                version_id=version.id,
+                status=AssetStatus(version.status),
+                source_version_ids=[row.storyboard_id],
+            ),
+            "file_check": ReviewEvidence(
+                **binding,
+                review_id=clip.video.candidate_id,
+                actor_id="video-media-check",
+                decision="PASS",
+            ),
+            "continuity": ReviewEvidence(
+                **binding,
+                review_id=clip.review_id,
+                actor_id="video-temporal-admission",
+                decision="PASS",
+            ),
+            "selection": ReviewEvidence(
+                **binding, review_id=clip.id, actor_id="timeline-selection", decision="APPROVE"
+            ),
+        }
+    )
+
+
 def shot_facts(
-    db: Session, episode: Episode, row: Shot, clip: TimelineClip | None = None
+    db: Session, episode: Episode, row: Shot, clip: TimelineClip | ClipSnapshot | None = None
 ) -> ShotFacts:
+    if isinstance(clip, ClipSnapshot) and clip.video is not None and clip.shot_id == row.id:
+        return video_shot_facts(db, episode, row, clip)
     issues: list[IssueCode] = []
     media = None
     file_check = None
@@ -422,10 +483,28 @@ def production_facts(db: Session, episode_id: UUID, actor: str) -> EpisodeFacts:
         if timeline and board
         else []
     )
-    selections = {clip.shot_id: clip for clip in clips}
+    selections: dict[UUID | None, TimelineClip | ClipSnapshot] = {
+        clip.shot_id: clip for clip in clips
+    }
     if len(selections) != len(clips):
         # Ambiguous historical clips never establish a shot selection.
         selections = {}
+    if selections and timeline is not None:
+        version = db.get(AssetVersion, timeline.version_id)
+        if version is not None and "timeline_video_clips" in version.metadata_json:
+            sealed = db.get(Timeline, timeline.version_id)
+            assert sealed is not None
+            try:
+                snapshot = checked_timeline(db, sealed, episode.project_id).snapshot
+            except (DomainError, ValidationError):
+                selections = {}
+            else:
+                selections = {
+                    clip.shot_id: clip
+                    for track in snapshot.tracks
+                    if track.kind == "VIDEO"
+                    for clip in track.clips
+                }
     return EpisodeFacts(
         project_id=episode.project_id,
         episode_id=episode.id,

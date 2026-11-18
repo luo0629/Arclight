@@ -166,7 +166,7 @@ def admission_facts(db: Session, row: RenderManifest) -> RenderFacts:
                 "asset_status": asset.status,
                 "asset_revision": asset.revision,
                 "selection": str(asset.current_version_id)
-                if source.asset_type in {"IMAGE", "SHOT_IMAGE", "MUSIC"}
+                if source.asset_type in {"IMAGE", "SHOT_IMAGE", "VIDEO", "MUSIC"}
                 else None,
             }
         )
@@ -181,7 +181,7 @@ def admission_facts(db: Session, row: RenderManifest) -> RenderFacts:
         raise DomainError("ASSET_NOT_USABLE", "全部必需镜头须保持批准状态", 409)
     for track in snapshot.timeline.tracks:
         if track.kind in {"VIDEO", "SUBTITLE"} and any(
-            clip.source_start_ms for clip in track.clips
+            clip.source_start_ms and clip.video is None for clip in track.clips
         ):
             raise DomainError("RENDER_SOURCE_RANGE_INVALID", "静图或字幕不能使用非零媒体入点", 409)
     return RenderFacts(
@@ -208,6 +208,12 @@ def validate_render_objects(
     """Read exact receipts and fully decode media; never trust declared audio duration."""
     snapshot = facts.snapshot
     durations = {}
+    videos = {
+        clip.video.file_id: clip.video
+        for track in snapshot.timeline.tracks
+        for clip in track.clips
+        if clip.video is not None
+    }
     references = [source.file for source in snapshot.sources if source.file is not None]
     if snapshot.font is not None:
         references.append(snapshot.font)
@@ -226,6 +232,14 @@ def validate_render_objects(
             if observer is None
             else probe(data, file.media_type, observer=observer)
         )
+        if file.media_type == "video/mp4":
+            video = videos.get(file.id)
+            if video is None or (
+                details["duration_ms"],
+                details["frame_rate"],
+                details["has_audio"],
+            ) != (video.source_duration_ms, video.frame_rate, video.has_audio):
+                raise DomainError("RENDER_INPUT_CHANGED", "视频实测结果与冻结回执不同", 409)
         if file.asset_version_id is not None and file.media_type.startswith("audio/"):
             durations[file.asset_version_id] = details["duration_ms"]
             version, asset = exact_version(db, file.project_id, file.asset_version_id)

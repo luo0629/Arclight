@@ -48,14 +48,23 @@ from arclight.persistence.models import (
 )
 
 
-def performance_case(client, episode, *, dynamic=False, with_prop=False, insufficient=False):
+def performance_case(
+    client,
+    episode,
+    *,
+    dynamic=False,
+    with_prop=False,
+    insufficient=False,
+    duration_ms=30000,
+    generation_routes=None,
+):
     content = legacy_script()
     prop = None
     if with_prop:
         with client.app.state.session_factory.begin() as db:
             prop = make_asset(db, episode["project_id"], "PROP")
         content["scenes"][0]["props"] = [prop]
-    script = save_script(client, episode, content)
+    script = save_script(client, episode, {**content, "estimated_duration_ms": duration_ms})
     parsed = read_script_content(script["content_json"])
     scene = parsed.scenes[0]
     shot = {
@@ -63,7 +72,7 @@ def performance_case(client, episode, *, dynamic=False, with_prop=False, insuffi
         "shot_no": 1,
         "scene_no": scene.scene_no,
         "scene_id": scene.scene_id,
-        "duration_ms": 30000,
+        "duration_ms": duration_ms,
         "visual_description": "主角在门边驻足，听见画外的声音。",
         "characters": ["主角"],
         "dialogue_line_ids": [line.line_id for line in scene.dialogue],
@@ -121,9 +130,13 @@ def performance_case(client, episode, *, dynamic=False, with_prop=False, insuffi
         {
             "schema_version": "3.0",
             "shots": [shot],
-            "generation_routes": []
-            if dynamic or insufficient
-            else [{"provider": "openai", "model": OPENAI_IMAGE_MODEL}],
+            "generation_routes": generation_routes
+            if generation_routes is not None
+            else (
+                []
+                if dynamic or insufficient
+                else [{"provider": "openai", "model": OPENAI_IMAGE_MODEL}]
+            ),
         }
     ).validate_against(parsed)
     response = client.post(

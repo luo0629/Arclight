@@ -35,6 +35,8 @@ FAILURES = frozenset(
         "SOURCE_EMPTY",
         "MEMORY_LIMIT",
         "SANDBOX_UNAVAILABLE",
+        "DYNAMIC_MEDIA_REQUIRED",
+        "SOURCE_RANGE_INVALID",
     }
 )
 

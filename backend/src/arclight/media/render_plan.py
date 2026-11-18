@@ -1,5 +1,7 @@
 """A small allowlisted byte protocol shared by the planner and sealed renderer."""
 
+from __future__ import annotations
+
 import unicodedata
 from collections.abc import Sequence
 from typing import Literal
@@ -20,14 +22,49 @@ MAX_ACTIVE_AUDIO = 16
 MAX_AUDIO_DECODE_SAMPLES = AUDIO_RATE * 3600
 
 
+class RenderVideo(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    data: str = Field(min_length=1)
+    source_start_ms: int = Field(strict=True, ge=0, lt=30000)
+    source_end_ms: int = Field(strict=True, gt=0, le=30000)
+    frame_rate: float = Field(strict=True, gt=0, le=120, allow_inf_nan=False)
+    keep_audio: bool = Field(strict=True)
+    motion_required: bool = Field(strict=True)
+
+
 class RenderClip(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    image: str = Field(min_length=1)
+    image: str | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
+    video: RenderVideo | None = Field(default=None, exclude_if=lambda value: value is None)
     start_ms: int = Field(strict=True, ge=0, le=3_600_000)
     duration_ms: int = Field(strict=True, gt=0, le=3_600_000)
     visual: ClipVisual
     fade_in_ms: int = Field(strict=True, ge=0, le=2000)
     fade_out_ms: int = Field(strict=True, ge=0, le=2000)
+
+    @model_validator(mode="after")
+    def exact_source(self):
+        if (self.image is None) == (self.video is None):
+            raise ValueError("Exactly one image or video source is required")
+        if self.video is not None and (
+            self.video.source_start_ms + self.duration_ms != self.video.source_end_ms
+        ):
+            raise ValueError("Video source trim must match its timeline duration")
+        return self
+
+    @property
+    def embedded_audio(self) -> RenderAudioRange | None:
+        if self.video is None or not self.video.keep_audio:
+            return None
+        return RenderAudioRange(
+            start_ms=self.start_ms,
+            duration_ms=self.duration_ms,
+            source_start_ms=self.video.source_start_ms,
+        )
+
+
+def first_output_frame(start_ms: int, fps: int) -> int:
+    return (start_ms * fps + 999) // 1000
 
 
 class RenderAudioSource(BaseModel):
@@ -36,9 +73,8 @@ class RenderAudioSource(BaseModel):
     media_type: Literal["audio/wav", "audio/mpeg", "audio/ogg", "audio/flac"]
 
 
-class RenderAudioClip(BaseModel):
+class RenderAudioRange(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    source_index: int = Field(strict=True, ge=0, lt=768)
     start_ms: int = Field(strict=True, ge=0, le=3_600_000)
     duration_ms: int = Field(strict=True, gt=0, le=600_000)
     source_start_ms: int = Field(default=0, strict=True, ge=0, le=600_000)
@@ -49,6 +85,10 @@ class RenderAudioClip(BaseModel):
         if self.audio is not None:
             self.audio.validate_duration(self.duration_ms)
         return self
+
+
+class RenderAudioClip(RenderAudioRange):
+    source_index: int = Field(strict=True, ge=0, lt=768)
 
 
 class RenderCue(BaseModel):
@@ -98,7 +138,13 @@ class RenderPlan(BaseModel):
 
     @property
     def frames(self) -> int:
-        return (self.duration_ms * self.output.fps + 999) // 1000
+        return first_output_frame(self.duration_ms, self.output.fps)
+
+    @property
+    def has_audio_mix(self) -> bool:
+        return bool(self.audio_clips) or any(
+            clip.video is not None and clip.video.keep_audio for clip in self.clips
+        )
 
     @model_validator(mode="after")
     def bounded_work(self):
@@ -111,6 +157,12 @@ class RenderPlan(BaseModel):
             if clip.start_ms != cursor or clip.fade_in_ms + clip.fade_out_ms > clip.duration_ms:
                 raise ValueError("Invalid render clip range")
             cursor += clip.duration_ms
+            if clip.video is not None and (
+                first_output_frame(cursor, self.output.fps)
+                - first_output_frame(clip.start_ms, self.output.fps)
+                < (2 if clip.video.motion_required else 1)
+            ):
+                raise ValueError("Video trim has insufficient output frames")
         if cursor != self.duration_ms:
             raise ValueError("Render clips must cover the entire timeline")
         for sound_clip in self.audio_clips:
@@ -120,8 +172,13 @@ class RenderPlan(BaseModel):
                 or sound_clip.source_start_ms + sound_clip.duration_ms > 600_000
             ):
                 raise ValueError("Invalid audio clip range or source")
+        embedded = (clip.embedded_audio for clip in self.clips)
         validate_audio_work(
-            [(clip.start_ms, clip.duration_ms, clip.source_start_ms) for clip in self.audio_clips]
+            [
+                (clip.start_ms, clip.duration_ms, clip.source_start_ms)
+                for clip in (*self.audio_clips, *embedded)
+                if clip is not None
+            ]
         )
         end = 0
         for cue in self.subtitles.cues if self.subtitles else ():

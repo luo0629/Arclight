@@ -55,7 +55,7 @@ class EvidenceScope(ProductionContract):
 
 class VersionEvidence(EvidenceScope):
     version_id: UUID
-    kind: Literal["SCRIPT", "STORYBOARD", "IMAGE", "TIMELINE", "RENDER", "RENDER_PREVIEW"]
+    kind: Literal["SCRIPT", "STORYBOARD", "IMAGE", "VIDEO", "TIMELINE", "RENDER", "RENDER_PREVIEW"]
     status: AssetStatus
     stale: bool = Field(default=False, strict=True)
     source_version_ids: list[UUID] = Field(default_factory=list, max_length=4096)
@@ -234,8 +234,8 @@ class EpisodeFacts(EvidenceScope):
             ):
                 if value is not None:
                     check(value)
-            if shot.media is not None and shot.media.kind != "IMAGE":
-                raise ValueError("Shot media needs an image version")
+            if shot.media is not None and shot.media.kind not in {"IMAGE", "VIDEO"}:
+                raise ValueError("Shot media needs an image or video version")
         for values, attribute in (
             (self.shots, "shot_id"),
             (self.media_executions, "execution_id"),

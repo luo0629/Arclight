@@ -14,7 +14,7 @@ from arclight.application.dependencies import require_manifest
 from arclight.application.render_audio import validate_line_audio
 from arclight.application.render_inputs import capture_font, capture_sources
 from arclight.application.timeline_store import read_timeline
-from arclight.application.timelines import write_episode
+from arclight.application.timelines import validate_snapshot_facts, write_episode
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.render_manifests import (
@@ -28,7 +28,7 @@ from arclight.domain.render_manifests import (
 )
 from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.versions import digest
-from arclight.media.versions import renderer_software
+from arclight.media.versions import renderer_software, video_renderer_software
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import DependencyOutput
 from arclight.persistence.render_manifests import RenderManifest
@@ -143,6 +143,8 @@ def create_render_manifest(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一渲染键不能用于不同输入或创建者", 409)
         return read_render_manifest(db, previous.id, actor)
     timeline = read_timeline(db, timeline_id, actor)
+    if timeline.snapshot.has_video_sources:
+        validate_snapshot_facts(db, episode, timeline.snapshot)
     validate_line_audio(db, timeline.snapshot, decisions, complete=False)
     dependency = require_manifest(db, episode.project_id, timeline.dependency_manifest_id)
     if (
@@ -185,7 +187,9 @@ def create_render_manifest(
         output=output_profile(timeline.snapshot.output_profile, payload.profile),
         subtitle_style=payload.subtitle_style,
         font=font,
-        software=renderer_software(),
+        software=video_renderer_software()
+        if timeline.snapshot.has_video_sources
+        else renderer_software(),
         created_at=now,
         line_audio_decisions=decisions,
     )

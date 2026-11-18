@@ -1,5 +1,6 @@
 """Fail-closed consumption of trusted temporal reports, without an HTTP PASS writer."""
 
+from dataclasses import dataclass
 from math import ceil
 from uuid import UUID
 
@@ -12,6 +13,7 @@ from arclight.application.human_reviews import require_review_actor
 from arclight.application.production_versions import checked_snapshot, find_binding
 from arclight.application.video_candidates import require_video_candidate_media_check
 from arclight.core.errors import DomainError
+from arclight.domain.candidate_checks import CheckedVideo
 from arclight.domain.generation_requests import ShotReviewBinding
 from arclight.domain.human_reviews import HumanDecision, ReviewSnapshot
 from arclight.domain.versions import digest
@@ -96,7 +98,7 @@ def _human_acceptance(
     admission: VideoReviewAdmission,
     version: AssetVersion,
     manifest: DependencyManifest,
-) -> None:
+) -> HumanReviewDecision:
     request = (
         db.get(HumanReviewRequest, admission.human_review_request_id)
         if (admission.human_review_request_id is not None)
@@ -142,9 +144,21 @@ def _human_acceptance(
         raise DomainError(
             "HUMAN_DECISION_REQUIRED", "视频须有绑定本次时序审查的有效Owner决定", 409
         ) from error
+    return decision
+
+
+@dataclass(frozen=True)
+class VideoReviewFacts:
+    record: VideoReviewRecord
+    media: CheckedVideo
+    decision: HumanReviewDecision | None
 
 
 def require_video_review(db: Session, version: AssetVersion) -> VideoReviewRecord:
+    return video_review_facts(db, version).record
+
+
+def video_review_facts(db: Session, version: AssetVersion) -> VideoReviewFacts:
     """Read durable evidence; callers retain permissions, CAS and lifecycle authority."""
     asset = db.get(VisualAsset, version.asset_id, populate_existing=True)
     candidate = db.scalar(
@@ -221,13 +235,14 @@ def require_video_review(db: Session, version: AssetVersion) -> VideoReviewRecor
         not issue.resolved for issue in report.issues
     ):
         raise DomainError("VIDEO_REVISION_REQUIRED", "视频时序问题须修复并对新候选重新审查", 409)
+    decision = None
     if (
         report.conclusion == "HUMAN_REVIEW"
         or admission.requires_human_review
         or (admission.human_review_request_id is not None)
     ):
-        _human_acceptance(db, record, admission, version, manifest)
-    return record
+        decision = _human_acceptance(db, record, admission, version, manifest)
+    return VideoReviewFacts(record=record, media=check.video, decision=decision)
 
 
 def read_admission(db: Session, project_id: UUID, version: AssetVersion) -> dict:

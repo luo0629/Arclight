@@ -1,4 +1,4 @@
-"""Compile exact images, audio and captions into the existing sealed render protocol."""
+"""Compile exact picture, sound and caption bytes into the sealed render protocol."""
 
 import base64
 import re
@@ -24,14 +24,19 @@ from arclight.media.render_plan import (
     RenderCue,
     RenderPlan,
     RenderSubtitles,
+    RenderVideo,
+    first_output_frame,
     validate_audio_work,
 )
-from arclight.media.versions import renderer_software
+from arclight.media.versions import renderer_software, video_renderer_software
 from arclight.persistence.models import AssetVersion, StoredFile
 
 
 def check_support(snapshot: RenderManifestSnapshot) -> None:
-    if snapshot.software != renderer_software():
+    software = (
+        video_renderer_software() if snapshot.timeline.has_video_sources else renderer_software()
+    )
+    if snapshot.software != software:
         raise DomainError(
             "RENDER_SOFTWARE_CHANGED", "渲染软件版本已变化，请另建清单并重新批准", 409
         )
@@ -44,9 +49,20 @@ def check_support(snapshot: RenderManifestSnapshot) -> None:
     ranges = [
         (clip.start_ms, clip.duration_ms, clip.source_start_ms)
         for track in snapshot.timeline.tracks
-        if track.enabled and track.kind in {"VOICE", "MUSIC", "SFX"}
+        if track.enabled
         for clip in track.clips
+        if track.kind in {"VOICE", "MUSIC", "SFX"} or (clip.video and clip.video.keep_audio)
     ]
+    for track in snapshot.timeline.tracks:
+        for clip in track.clips:
+            if clip.video is None:
+                continue
+            fps = snapshot.output.fps
+            frames = first_output_frame(clip.start_ms + clip.duration_ms, fps) - first_output_frame(
+                clip.start_ms, fps
+            )
+            if frames < (2 if clip.video.motion_required else 1):
+                raise DomainError("RENDER_SOURCE_RANGE_INVALID", "视频裁切在输出帧率下过短", 409)
     try:
         validate_audio_work(ranges)
     except ValueError:
@@ -186,10 +202,21 @@ def build_plan(
             observer(None)
         reference = sources[clip.source_asset_version_id].file
         assert reference is not None
-        data = exact_file_bytes(db, settings, reference)
+        encoded = base64.b64encode(exact_file_bytes(db, settings, reference)).decode("ascii")
+        video = clip.video
         clips.append(
             RenderClip(
-                image=base64.b64encode(data).decode("ascii"),
+                image=encoded if video is None else None,
+                video=RenderVideo(
+                    data=encoded,
+                    source_start_ms=clip.source_start_ms,
+                    source_end_ms=video.source_end_ms,
+                    frame_rate=video.frame_rate,
+                    keep_audio=video.keep_audio,
+                    motion_required=video.motion_required,
+                )
+                if video is not None
+                else None,
                 start_ms=clip.start_ms,
                 duration_ms=clip.duration_ms,
                 visual=clip.visual or ClipVisual(),

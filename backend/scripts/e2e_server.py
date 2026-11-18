@@ -89,9 +89,10 @@ def main():
             from e2e_art import advance_concepts
 
             advance_concepts(factory, settings)
-            from e2e_video import advance_videos
+            from e2e_video import advance_renders, advance_videos
 
             advance_videos(factory, settings)
+            advance_renders(factory, settings)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()

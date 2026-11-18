@@ -3,7 +3,7 @@
 import json
 import sys
 
-from arclight.media.execution import command_for
+from arclight.media.execution import FAILURES, MediaExecutionError, command_for
 from arclight.media.isolation import IsolationUnavailable, seal_process
 from arclight.media.limits import restrict_process
 from arclight.media.text import InvalidStoryText, decode_story
@@ -58,6 +58,10 @@ if __name__ == "__main__":
         raise SystemExit(1) from None
     except InvalidStoryText as exc:
         sys.stderr.write("ARCLIGHT_MEDIA:" + exc.reason + "\n")
+        raise SystemExit(1) from None
+    except MediaExecutionError as exc:
+        reason = exc.reason if exc.reason in FAILURES else "INVALID_MEDIA"
+        sys.stderr.write("ARCLIGHT_MEDIA:" + reason + "\n")
         raise SystemExit(1) from None
     except Exception:
         sys.stderr.write("ARCLIGHT_MEDIA:INVALID_MEDIA\n")

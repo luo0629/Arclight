@@ -70,9 +70,16 @@ export function changeClip(
     ...snapshot,
     tracks: snapshot.tracks.map((track) => ({
       ...track,
-      clips: track.clips.map((clip) =>
-        clip.id === id ? { ...clip, ...patch } : clip,
-      ),
+      clips: track.clips.map((clip) => {
+        if (clip.id !== id) return clip;
+        const updated = { ...clip, ...patch };
+        if (updated.video)
+          updated.video = {
+            ...updated.video,
+            source_end_ms: updated.source_start_ms + updated.duration_ms,
+          };
+        return updated;
+      }),
     })),
   };
   return snapshot.tracks.some(
@@ -123,6 +130,11 @@ export function timelineIssues(snapshot: TimelineSnapshot) {
         clip.start_ms + clip.duration_ms > snapshot.duration_ms
       )
         errors.push(`${name}越过时间轴范围或时长无效。`);
+      if (
+        clip.video &&
+        clip.video.source_end_ms > clip.video.source_duration_ms
+      )
+        errors.push(`${name}的视频出点超出源视频时长。`);
       const previous = clips[index - 1];
       if (
         previous &&
@@ -268,6 +280,22 @@ export function validDraft(
         )
           return false;
       }
+      if (
+        clip.video &&
+        (track.kind !== "VIDEO" ||
+          typeof clip.video.candidate_id !== "string" ||
+          typeof clip.video.file_id !== "string" ||
+          !/^[0-9a-f]{64}$/.test(clip.video.review_sha256) ||
+          typeof clip.video.keep_audio !== "boolean" ||
+          typeof clip.video.has_audio !== "boolean" ||
+          typeof clip.video.motion_required !== "boolean" ||
+          ![
+            clip.video.source_end_ms,
+            clip.video.source_duration_ms,
+            clip.video.frame_rate,
+          ].every(Number.isFinite))
+      )
+        return false;
       if (
         clip.audio &&
         (!Array.isArray(clip.audio.envelope) ||

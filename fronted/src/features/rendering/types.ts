@@ -13,6 +13,18 @@ export type ClipAudio = {
   fade_out_ms: number;
   envelope: { offset_ms: number; gain_milli: number }[];
 };
+export type ClipVideo = {
+  candidate_id: string;
+  file_id: string;
+  review_sha256: string;
+  human_decision_id: string | null;
+  source_end_ms: number;
+  source_duration_ms: number;
+  frame_rate: number;
+  has_audio: boolean;
+  keep_audio: boolean;
+  motion_required: boolean;
+};
 export type TimelineClip = {
   id: string;
   ordinal: number;
@@ -30,6 +42,7 @@ export type TimelineClip = {
   review_shot_id: string | null;
   visual?: ClipVisual | null;
   audio?: ClipAudio | null;
+  video?: ClipVideo | null;
 };
 export type TimelineSnapshot = {
   schema_version: 1 | 2;
@@ -58,7 +71,11 @@ export type Timeline = {
   based_on_timeline_id: string | null;
   snapshot: TimelineSnapshot;
 };
-export type ShotSelection = { shot_id: string; asset_version_id: string };
+export type ShotSelection = {
+  shot_id: string;
+  asset_version_id: string;
+  video?: { source_start_ms: number; duration_ms: number; keep_audio: boolean };
+};
 export type TimelineCreate = {
   creation_key: string;
   storyboard_id: string;
@@ -72,11 +89,13 @@ export type TimelinePreparation = {
     shot_id: string;
     shot_no: number;
     description: string;
+    motion_required: boolean;
     options: {
       asset_id: string;
       asset_version_id: string;
       version_no: number;
       description: string;
+      video?: { duration_ms: number; frame_rate: number };
     }[];
   }[];
   blocking_issues: string[];

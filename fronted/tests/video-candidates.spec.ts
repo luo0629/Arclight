@@ -6,6 +6,7 @@ import {
   realVideoFixture,
 } from "./video-candidates-helpers";
 import { deferred } from "./render-helpers";
+import { closeDirectory } from "./workspace-helpers";
 
 test.afterEach(async ({}, info) => {
   await writeFile(
@@ -552,9 +553,10 @@ test("VIDEO-01模拟迟到：切换精确候选丢弃旧详情和媒体，跨项
   ).toBeDisabled();
 });
 
-test("VIDEO-02：视频时序取证、精确人工队列及独立版本门禁", async ({ page }) => {
-  test.setTimeout(90000);
-  const env = await realVideoFixture(page);
+async function admitVideoInWorkspace(
+  page: Page,
+  env: Awaited<ReturnType<typeof realVideoFixture>>,
+) {
   const shot = (await env.open()).getByRole("region", {
     name: "镜头 1 视频候选",
     exact: true,
@@ -613,4 +615,230 @@ test("VIDEO-02：视频时序取证、精确人工队列及独立版本门禁", 
   await expect(
     shot.getByRole("button", { name: "视频 v1 · DRAFT", exact: true }),
   ).toBeVisible();
+  return detail;
+}
+
+test("VIDEO-02：视频时序取证、精确人工队列及独立版本门禁", async ({ page }) => {
+  test.setTimeout(90000);
+  await admitVideoInWorkspace(page, await realVideoFixture(page));
+});
+
+test("VIDEO-03：工作区选用视频、另存裁切和原声并播放真实预览及正式成片", async ({
+  page,
+}, info) => {
+  test.setTimeout(120000);
+  const env = await realVideoFixture(page, false, true);
+  expect(env.candidate.media_check?.video?.has_audio).toBe(true);
+  const detail = await admitVideoInWorkspace(page, env);
+  for (const name of ["提交视频版本审核", "批准此视频版本", "正式选用此视频"]) {
+    const action = detail.getByRole("button", { name, exact: true });
+    await expect(action).toBeEnabled();
+    await action.click();
+  }
+  await expect(detail).toContainText("已正式选用此精确视频版本");
+  const call = { headers: env.headers };
+  const prefix = `/api/v1/episodes/${env.episode.id}`;
+  await page.goto(
+    `/projects/${env.project.id}/episodes/${env.episode.id}?view=render`,
+  );
+  await closeDirectory(page);
+  const panel = page.getByRole("region", { name: "渲染与成片", exact: true });
+  await panel.getByText("从已批准分镜创建默认时间轴", { exact: true }).click();
+  await panel
+    .getByLabel("已批准分镜版本", { exact: true })
+    .selectOption(env.board.id);
+  await panel
+    .getByRole("button", { name: "核对当前选用镜头", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("region", { name: "默认时间轴镜头核对" }),
+  ).toContainText(env.candidate.asset_version_id!);
+  await panel
+    .getByRole("checkbox", {
+      name: "我已核对全部镜头及精确素材版本",
+      exact: true,
+    })
+    .check();
+  const created = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === prefix + "/timelines" &&
+      response.request().method() === "POST",
+  );
+  await panel
+    .getByRole("button", { name: "创建默认时间轴", exact: true })
+    .click();
+  const original = await (await created).json();
+  expect(original.snapshot.tracks[0].clips[0].video.keep_audio).toBe(false);
+
+  await panel.getByText("时间轴编辑器", { exact: true }).click();
+  const editor = panel.getByRole("region", {
+    name: "时间轴编辑器",
+    exact: true,
+  });
+  await editor
+    .getByRole("button", { name: /画面片段 1，0 至 3000 毫秒/ })
+    .click();
+  await editor.getByLabel("源视频入点（毫秒）", { exact: true }).fill("1000");
+  await editor.getByLabel("片段时长（毫秒）", { exact: true }).fill("1500");
+  await editor
+    .getByRole("checkbox", { name: "保留视频原声", exact: true })
+    .check();
+  await expect(editor).toContainText("出点 2500 毫秒");
+  const saved = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === `/api/v1/timelines/${original.id}` &&
+      response.request().method() === "PATCH",
+  );
+  await editor
+    .getByRole("button", { name: "保存时间轴新版本", exact: true })
+    .click();
+  const revised = await (await saved).json();
+  expect(revised.based_on_timeline_id).toBe(original.id);
+  expect(revised.snapshot.tracks[0].clips[0]).toMatchObject({
+    source_asset_version_id: env.candidate.asset_version_id,
+    duration_ms: 1500,
+    source_start_ms: 1000,
+    video: { source_end_ms: 2500, keep_audio: true, frame_rate: 24 },
+  });
+
+  async function startRender(manifestId: string) {
+    const response = await page.request.post(
+      `/api/v1/render-manifests/${manifestId}/jobs`,
+      {
+        ...call,
+        data: { creation_key: crypto.randomUUID() },
+      },
+    );
+    expect(response.status(), await response.text()).toBe(202);
+    let job = await response.json();
+    await expect(async () => {
+      const read = await page.request.get(
+        `/api/v1/render-jobs/${job.id}`,
+        call,
+      );
+      expect(read.status()).toBe(200);
+      job = await read.json();
+      expect(job.status, JSON.stringify(job)).toBe("SUCCEEDED");
+    }).toPass({ timeout: 30_000 });
+    return job;
+  }
+  const manifestPath = `/api/v1/timelines/${revised.id}/render-manifests`;
+  const previewCreated = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === manifestPath &&
+      response.request().method() === "POST",
+  );
+  await panel
+    .getByRole("button", { name: "创建预览清单", exact: true })
+    .click();
+  const preview = await (await previewCreated).json();
+  const previewJob = await startRender(preview.id);
+  const formal = await page.request.post(manifestPath, {
+    ...call,
+    data: { creation_key: crypto.randomUUID(), profile: "FORMAL" },
+  });
+  expect(formal.status(), await formal.text()).toBe(201);
+  const frozen = await formal.json();
+  const reviewResponse = await page.request.post(
+    `/api/v1/render-manifests/${frozen.id}/export-review`,
+    call,
+  );
+  expect(reviewResponse.status(), await reviewResponse.text()).toBe(201);
+  const review = await reviewResponse.json();
+  const accepted = await page.request.post(
+    `/api/v1/human-reviews/${review.id}/decisions`,
+    {
+      ...call,
+      data: {
+        version_id: review.snapshot.version_id,
+        request_sha256: review.request_sha256,
+        decision: "APPROVE",
+        comment: "验收合成视频的精确裁切与保留原声。",
+      },
+    },
+  );
+  expect(accepted.status(), await accepted.text()).toBe(200);
+  const resumed = await page.request.post(
+    `/api/v1/human-reviews/${review.id}/resume`,
+    {
+      ...call,
+      data: {
+        request_sha256: review.request_sha256,
+        decision_id: (await accepted.json()).id,
+      },
+    },
+  );
+  expect(resumed.status(), await resumed.text()).toBe(200);
+  const formalJob = await startRender(frozen.id);
+  expect(formalJob.is_delivery).toBe(false);
+  const report = await page.request.get(
+    prefix + `/deliveries/${formalJob.artifact_id}/report`,
+    call,
+  );
+  expect(report.status(), await report.text()).toBe(200);
+  const result = (await report.json()).report.details;
+  expect(result.manifest_sha256).toBe(frozen.content_sha256);
+  expect(result.warnings).toEqual([
+    expect.objectContaining({
+      code: "MEDIA_EXCEPTION",
+      source_version_id: env.candidate.asset_version_id,
+      human_review_decision_id:
+        revised.snapshot.tracks[0].clips[0].video.human_decision_id,
+    }),
+  ]);
+
+  await expect(panel.getByLabel("时间轴版本", { exact: true })).toHaveValue(
+    revised.id,
+  );
+  await panel.getByText("时间轴编辑器", { exact: true }).click();
+  await expect(
+    editor.getByRole("heading", { name: "时间轴 v2" }),
+  ).toBeVisible();
+  await editor
+    .getByRole("button", { name: "刷新时间轴预览", exact: true })
+    .click();
+  const savedPreview = editor.getByRole("region", {
+    name: "时间轴保存版本预览",
+  });
+  const outputs = savedPreview.getByLabel("时间轴预览成片", { exact: true });
+  await expect(outputs.locator("option")).toHaveCount(2);
+  for (const job of [previewJob, formalJob]) {
+    await outputs.selectOption(job.artifact_id);
+    await expect(savedPreview).toHaveAttribute("aria-busy", "false");
+    const player = savedPreview.getByRole("region", {
+      name: "时间轴成片预览与下载",
+      exact: true,
+    });
+    const receivedContent = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname ===
+        `${prefix}/deliveries/${job.artifact_id}/content`,
+    );
+    await player
+      .getByRole("button", { name: "读取时间轴成片预览", exact: true })
+      .click();
+    expect((await receivedContent).status()).toBe(200);
+    const media = player.locator("video");
+    await expect(media).toBeVisible();
+    await expect
+      .poll(() => media.evaluate((video: HTMLVideoElement) => video.readyState))
+      .toBeGreaterThanOrEqual(1);
+    const dimensions = await media.evaluate((video: HTMLVideoElement) => ({
+      width: video.videoWidth,
+      height: video.videoHeight,
+      duration: video.duration,
+    }));
+    expect(dimensions).toMatchObject({ width: 320, height: 180 });
+    expect(dimensions.duration).toBeCloseTo(1.5, 1);
+    await media.evaluate(async (video: HTMLVideoElement) => {
+      video.muted = true;
+      await video.play();
+    });
+    await expect
+      .poll(() =>
+        media.evaluate((video: HTMLVideoElement) => video.currentTime),
+      )
+      .toBeGreaterThan(0);
+  }
+  await editor.screenshot({ path: info.outputPath("video03-timeline.png") });
 });

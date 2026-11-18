@@ -96,6 +96,7 @@ export default function TimelineClipFields({
   onOpenAudio?: () => void;
 }) {
   const visual = clip.visual ?? defaultVisual();
+  const video = clip.video;
   const setVisual = (patch: Partial<ClipVisual>) =>
     onChange({ visual: { ...visual, ...patch } });
   return (
@@ -126,15 +127,46 @@ export default function TimelineClipFields({
           <NumberField
             label="片段时长（毫秒）"
             min={1}
+            max={
+              video
+                ? Math.max(1, video.source_duration_ms - clip.source_start_ms)
+                : undefined
+            }
             value={clip.duration_ms}
             onChange={(duration_ms) => onChange({ duration_ms })}
           />
-          {kind !== "VIDEO" && (
+          {(kind !== "VIDEO" || video) && (
             <NumberField
-              label="源音频入点（毫秒）"
+              label={video ? "源视频入点（毫秒）" : "源音频入点（毫秒）"}
               value={clip.source_start_ms}
+              max={video ? video.source_duration_ms - 1 : undefined}
               onChange={(source_start_ms) => onChange({ source_start_ms })}
             />
+          )}
+          {video && (
+            <div className="col-span-2 space-y-2 text-sm">
+              <p className="text-muted-foreground">
+                源视频 {video.source_duration_ms} 毫秒 ·{" "}
+                {video.frame_rate.toFixed(2)} fps · 出点 {video.source_end_ms}{" "}
+                毫秒
+              </p>
+              {video.has_audio ? (
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={video.keep_audio}
+                    onChange={(event) =>
+                      onChange({
+                        video: { ...video, keep_audio: event.target.checked },
+                      })
+                    }
+                  />
+                  保留视频原声
+                </label>
+              ) : (
+                <p className="text-muted-foreground">源视频无原声轨</p>
+              )}
+            </div>
           )}
         </fieldset>
       )}
@@ -162,7 +194,7 @@ export default function TimelineClipFields({
                 })
               }
             >
-              <option value="STATIC">静止画面</option>
+              <option value="STATIC">{video ? "固定视窗" : "静止画面"}</option>
               <option value="LINEAR">线性推拉／平移</option>
             </select>
           </label>

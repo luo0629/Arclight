@@ -22,7 +22,7 @@ from arclight.domain.render_manifests import (
     RenderReportEnvelope,
     RenderReportRead,
 )
-from arclight.media.versions import renderer_software
+from arclight.media.versions import renderer_software, video_renderer_software
 from arclight.persistence.models import StoredFile
 from arclight.persistence.render_manifests import RenderArtifact, RenderReportLink
 
@@ -92,7 +92,12 @@ def bind_render_artifact(
         if previous.file_id != file_id or previous.duration_ms != duration_ms:
             raise DomainError("RENDER_RESULT_CONFLICT", "渲染产物回执不能替换", 409)
         return artifact_read(previous)
-    if renderer_software() != manifest.snapshot.software:
+    software = (
+        video_renderer_software()
+        if manifest.snapshot.timeline.has_video_sources
+        else renderer_software()
+    )
+    if software != manifest.snapshot.software:
         raise DomainError("RENDER_SOFTWARE_CHANGED", "渲染软件已变更，须创建新清单", 409)
     if db.scalar(select(RenderArtifact.id).where(RenderArtifact.file_id == file_id)):
         raise DomainError("RENDER_RESULT_CONFLICT", "产物已绑定其他清单，不能借用历史回执", 409)

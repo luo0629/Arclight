@@ -3,6 +3,7 @@ import "client-only";
 import { ApiError, api, apiBlob, json } from "@/lib/api/client";
 import type { Graph } from "@/types/api";
 import type { ContinuityComparison } from "@/features/continuity/types";
+import { readVideoAsset, readVideoCandidate } from "@/features/video/api";
 import type {
   HumanReview,
   LineAudioDecision,
@@ -269,6 +270,7 @@ type Shot = {
   description: string;
   storyboard_id: string;
   content_json?: {
+    performance?: { motion_requirement: string };
     quality_review?: { review_id: string } | null;
     selected_visual_asset?: {
       asset_id: string;
@@ -407,6 +409,9 @@ export async function prepareTimelineSelection(
         shot_id: shot.id,
         shot_no: shot.shot_no,
         description: shot.description,
+        motion_required:
+          shot.content_json?.performance?.motion_requirement ===
+          "dynamic_required",
         options: [],
       })),
     blocking_issues: [],
@@ -416,7 +421,7 @@ export async function prepareTimelineSelection(
       node.kind === "asset_version" &&
       node.current === true &&
       !node.stale &&
-      ["IMAGE", "SHOT_IMAGE"].includes(node.asset_type ?? "") &&
+      ["IMAGE", "SHOT_IMAGE", "VIDEO"].includes(node.asset_type ?? "") &&
       ["APPROVED", "LOCKED"].includes(node.status) &&
       node.asset_id,
   );
@@ -426,6 +431,14 @@ export async function prepareTimelineSelection(
     const comparisons = await Promise.all(
       versions.slice(start, start + 4).map(async (node) => {
         try {
+          if (node.asset_type === "VIDEO") {
+            if (!node.candidate_id || !node.asset_id) return null;
+            const [candidate, asset] = await Promise.all([
+              readVideoCandidate(projectId, node.candidate_id, signal),
+              readVideoAsset(projectId, node.asset_id, signal),
+            ]);
+            return { kind: "video" as const, node, candidate, asset };
+          }
           return await read<ContinuityComparison>(
             `/projects/${id(projectId)}/assets/${id(node.asset_id!)}/versions/${id(node.resource_id ?? node.id)}/continuity?limit=1`,
             signal,
@@ -440,7 +453,46 @@ export async function prepareTimelineSelection(
         }
       }),
     );
-    for (const comparison of comparisons) {
+    for (const item of comparisons) {
+      if (item && "kind" in item) {
+        const { candidate, asset, node } = item;
+        const version = candidate.version;
+        const source = candidate.video_source;
+        const check = candidate.media_check;
+        const shot = result.shots.find(
+          (row) => row.shot_id === source?.shot_id,
+        );
+        if (
+          !shot ||
+          source?.storyboard_id !== storyboardId ||
+          !version ||
+          version.id !== (node.resource_id ?? node.id) ||
+          version.asset_id !== asset.id ||
+          version.stale ||
+          !["APPROVED", "LOCKED"].includes(version.status) ||
+          ["ARCHIVED", "STALE", "REJECTED"].includes(asset.status) ||
+          asset.current_version_id !== version.id ||
+          candidate.admission?.status !== "ADMITTED" ||
+          !candidate.admission.report_id ||
+          check?.status !== "PASSED" ||
+          check.candidate_id !== candidate.id ||
+          check.video?.checksum !== version.checksum ||
+          shot.options.some((option) => option.asset_version_id === version.id)
+        )
+          continue;
+        shot.options.push({
+          asset_id: asset.id,
+          asset_version_id: version.id,
+          version_no: version.version_no,
+          description: node.title,
+          video: {
+            duration_ms: check.video.duration_ms,
+            frame_rate: check.video.frame_rate,
+          },
+        });
+        continue;
+      }
+      const comparison = item;
       if (
         !comparison ||
         comparison.actions.blocker !== null ||
@@ -473,6 +525,7 @@ export async function prepareTimelineSelection(
           (row) => row.shot_id === currentShot.id,
         )!;
         if (
+          shot.motion_required ||
           shot.options.some(
             (option) => option.asset_version_id === comparison.version.id,
           )
@@ -496,7 +549,9 @@ export async function prepareTimelineSelection(
       });
     else if (shot.options.length === 0)
       result.blocking_issues.push(
-        `镜头 ${shot.shot_no} 缺少当前已选用且审查通过的图片，请先完成素材审核与选用`,
+        shot.motion_required
+          ? `镜头 ${shot.shot_no} 必须使用已通过时序审查并正式选用的视频`
+          : `镜头 ${shot.shot_no} 缺少当前已选用且审查通过的图片或视频，请先完成素材审核与选用`,
       );
   }
   return result;

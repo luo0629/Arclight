@@ -85,7 +85,7 @@ def remux_with_audio(movie: bytes, plan: RenderPlan, gain: float) -> bytes:
 
 
 def checked_audio_output(movie: bytes, plan: RenderPlan) -> bytes:
-    if not plan.audio_clips:
+    if not plan.has_audio_mix:
         return movie
     samples = (plan.frames * AUDIO_RATE + plan.output.fps - 1) // plan.output.fps
     gain = 1.0

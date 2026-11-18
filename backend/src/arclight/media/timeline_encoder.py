@@ -2,13 +2,15 @@
 
 import base64
 import sys
+from contextlib import closing
 from fractions import Fraction
 from io import BytesIO
 
-from arclight.media.render_plan import RenderClip, RenderPlan
+from arclight.media.render_plan import RenderClip, RenderPlan, first_output_frame
 from arclight.media.timeline_audio_output import checked_audio_output
 from arclight.media.timeline_captions import SubtitleBurner
 from arclight.media.timeline_mixer import AudioMixer
+from arclight.media.timeline_video import video_images
 
 
 def viewport(image, clip: RenderClip, local_ms: Fraction, size: tuple[int, int], fps: int):
@@ -35,9 +37,28 @@ def viewport(image, clip: RenderClip, local_ms: Fraction, size: tuple[int, int],
     return ImageEnhance.Brightness(result).enhance(max(0.0, brightness))
 
 
+def clip_images(clip: RenderClip, indices: range, fps: int):
+    from PIL import Image
+
+    if clip.video is not None:
+        yield from video_images(
+            clip.video, (Fraction(index * 1000, fps) - clip.start_ms for index in indices)
+        )
+        return
+    assert clip.image is not None
+    raw = base64.b64decode(clip.image, validate=True)
+    if not raw:
+        raise ValueError("Invalid image size")
+    with Image.open(BytesIO(raw), formats=["PNG", "JPEG"]) as source:
+        if source.width * source.height > 4_000_000 or max(source.size) > 4096:
+            raise ValueError("Invalid image dimensions")
+        with source.convert("RGB") as image:
+            for _ in indices:
+                yield image
+
+
 def encode_timeline(data: bytes) -> bytes:
     import av
-    from PIL import Image
 
     plan = RenderPlan.model_validate_json(data)
     profile = plan.output
@@ -59,51 +80,41 @@ def encode_timeline(data: bytes) -> bytes:
         audio.codec_context.thread_count = 1
         total_samples = (plan.frames * 48000 + profile.fps - 1) // profile.fps
         sample = 0
-        clip_index, image, last_progress = -1, None, -1
-        for index in range(plan.frames):
-            stamp = Fraction(index * 1000, profile.fps)
-            next_index = max(i for i, item in enumerate(plan.clips) if item.start_ms <= stamp)
-            if next_index != clip_index:
-                if image is not None:
-                    image.close()
-                clip_index = next_index
-                clip = plan.clips[clip_index]
-                raw = base64.b64decode(clip.image, validate=True)
-                if not raw:
-                    raise ValueError("Invalid image size")
-                with Image.open(BytesIO(raw), formats=["PNG", "JPEG"]) as source:
-                    if source.width * source.height > 4_000_000 or max(source.size) > 4096:
-                        raise ValueError("Invalid image dimensions")
-                    image = source.convert("RGB")
-            clip = plan.clips[clip_index]
-            with viewport(
-                image, clip, stamp - clip.start_ms, (profile.width, profile.height), profile.fps
-            ) as rendered:
-                captions.apply(rendered, stamp)
-                frame = av.VideoFrame.from_image(rendered)
-            frame.pts, frame.time_base = index, Fraction(1, profile.fps)
-            for packet in video.encode(frame):
-                container.mux(packet)
-            # Share the same sample clock for mixing, video interleaving and the silent tail.
-            target = min(total_samples, ((index + 1) * 48000 + profile.fps - 1) // profile.fps)
-            while sample < target:
-                count = min(1024, target - sample)
-                mixed = mixer.frame(sample, count)
-                for packet in audio.encode(mixed):
-                    container.mux(packet)
-                sample += count
-            progress = (index + 1) * (95 if plan.audio_clips else 100) // plan.frames
-            if progress // 5 != last_progress:
-                last_progress = progress // 5
-                sys.stderr.write(f"ARCLIGHT_PROGRESS:{progress}\n")
-                sys.stderr.flush()
+        last_progress = -1
+        fps = profile.fps
+        for clip in plan.clips:
+            indices = range(
+                first_output_frame(clip.start_ms, fps),
+                first_output_frame(clip.start_ms + clip.duration_ms, fps),
+            )
+            with closing(clip_images(clip, indices, fps)) as images:
+                for index, image in zip(indices, images, strict=True):
+                    stamp = Fraction(index * 1000, fps)
+                    with viewport(
+                        image, clip, stamp - clip.start_ms, (profile.width, profile.height), fps
+                    ) as rendered:
+                        captions.apply(rendered, stamp)
+                        frame = av.VideoFrame.from_image(rendered)
+                    frame.pts, frame.time_base = index, Fraction(1, fps)
+                    for packet in video.encode(frame):
+                        container.mux(packet)
+                    # Share the sample clock for mixing, interleaving and the silent tail.
+                    target = min(total_samples, ((index + 1) * 48000 + fps - 1) // fps)
+                    while sample < target:
+                        count = min(1024, target - sample)
+                        mixed = mixer.frame(sample, count)
+                        for packet in audio.encode(mixed):
+                            container.mux(packet)
+                        sample += count
+                    progress = (index + 1) * 95 // plan.frames
+                    if progress // 5 != last_progress:
+                        last_progress = progress // 5
+                        sys.stderr.write(f"ARCLIGHT_PROGRESS:{progress}\n")
+                        sys.stderr.flush()
         for stream in (video, audio):
             for packet in stream.encode(None):
                 container.mux(packet)
-        if image is not None:
-            image.close()
     result = checked_audio_output(output.getvalue(), plan)
-    if plan.audio_clips:
-        sys.stderr.write("ARCLIGHT_PROGRESS:100\n")
-        sys.stderr.flush()
+    sys.stderr.write("ARCLIGHT_PROGRESS:100\n")
+    sys.stderr.flush()
     return result

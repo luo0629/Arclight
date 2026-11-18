@@ -25,3 +25,7 @@ def renderer_software() -> RenderSoftware:
             },
         },
     )
+
+
+def video_renderer_software() -> RenderSoftware:
+    return renderer_software().model_copy(update={"renderer_version": "arclight-pyav/4"})

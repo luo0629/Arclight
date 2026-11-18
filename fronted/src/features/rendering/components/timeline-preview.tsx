@@ -45,17 +45,18 @@ export default function TimelinePreview({
       row.project_id === projectId,
   );
   const [selectedId, select] = useState("");
-  const selected =
-    candidates.find((row) => row.id === selectedId) ?? candidates[0];
+  const candidateId =
+    candidates.find((row) => row.id === selectedId)?.id ?? candidates[0]?.id;
   const fetchDetail = useCallback(
     async (signal: AbortSignal) => {
+      if (!candidateId) throw new Error("当前时间轴没有可读取的成片。");
       const detail = await renderingApi.getDelivery(
         episodeId,
-        selected!.id,
+        candidateId,
         signal,
       );
       if (
-        detail.id !== selected!.id ||
+        detail.id !== candidateId ||
         detail.timeline_id !== timeline.id ||
         detail.timeline_sha256 !== timeline.content_sha256 ||
         detail.project_id !== projectId ||
@@ -64,16 +65,17 @@ export default function TimelinePreview({
         throw new Error("成片与当前时间轴的精确版本不一致，已停止预览。");
       return detail;
     },
-    [episodeId, selected, timeline.id, timeline.content_sha256, projectId],
+    [episodeId, candidateId, timeline.id, timeline.content_sha256, projectId],
   );
   const detail = useRenderDetail(
-    `${timeline.id}:${selected?.id ?? ""}`,
+    `${timeline.id}:${candidateId ?? ""}`,
     fetchDetail,
     unavailable,
-    !!selected,
+    !!candidateId,
   );
   return (
     <section
+      aria-busy={list.loading || detail.loading}
       aria-label="时间轴保存版本预览"
       className="flex min-w-0 flex-col gap-3"
     >
@@ -109,7 +111,7 @@ export default function TimelinePreview({
           <select
             aria-label="时间轴预览成片"
             className={selectClass}
-            value={selected?.id}
+            value={candidateId}
             onChange={(e) => select(e.target.value)}
           >
             {candidates.map((row) => (
@@ -133,7 +135,7 @@ export default function TimelinePreview({
       {(list.error || detail.error) && (
         <Notice tone="error">{list.error || detail.error}</Notice>
       )}
-      {detail.data && (
+      {detail.data && detail.data.id === candidateId && (
         <DeliveryPreview
           key={detail.data.id}
           projectId={projectId}

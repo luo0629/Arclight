@@ -74,6 +74,12 @@ def checked_timeline(db: Session, row: Timeline, project_id: UUID) -> TimelineRe
         or len(disabled) != len(set(disabled))
     ):
         raise DomainError("TIMELINE_HISTORY_INVALID", "冻结的轨道开关无效", 409)
+    videos = version.metadata_json.get("timeline_video_clips", {})
+    video_tracks = {track.id for track in tracks if track.kind == "VIDEO"}
+    if not isinstance(videos, dict) or not videos.keys() <= {
+        str(clip.id) for clip in clips if clip.track_id in video_tracks
+    }:
+        raise DomainError("TIMELINE_HISTORY_INVALID", "冻结的视频片段配置无效", 409)
     snapshot = TimelineSnapshot(
         schema_version=version.metadata_json.get("timeline_schema_version", 1),
         episode_id=row.episode_id,
@@ -93,10 +99,11 @@ def checked_timeline(db: Session, row: Timeline, project_id: UUID) -> TimelineRe
                             **{
                                 key: getattr(clip, key)
                                 for key in ClipSnapshot.model_fields
-                                if key not in {"visual", "audio"}
+                                if key not in {"visual", "audio", "video"}
                             },
                             "visual": visuals.get(clip.id),
                             "audio": audio.get(clip.id),
+                            "video": videos.get(str(clip.id)),
                         }
                     )
                     for clip in clips
@@ -219,6 +226,13 @@ def append_timeline(
     audio_count = sum(clip.audio is not None for track in snapshot.tracks for clip in track.clips)
     if audio_count:
         metadata["timeline_audio_clip_count"] = audio_count
+    if snapshot.has_video_sources:
+        metadata["timeline_video_clips"] = {
+            str(clip.id): clip.video.model_dump(mode="json")
+            for track in snapshot.tracks
+            for clip in track.clips
+            if clip.video is not None
+        }
     if base:
         metadata["based_on_timeline_id"] = str(base.id)
     version = AssetVersion(
@@ -258,7 +272,7 @@ def append_timeline(
                 TimelineClip(
                     timeline_id=row.id,
                     track_id=track.id,
-                    **clip.model_dump(exclude={"visual", "audio"}),
+                    **clip.model_dump(exclude={"visual", "audio", "video"}),
                 )
             )
     db.flush()

@@ -2,7 +2,16 @@ import { expect, type Page, type Route } from "@playwright/test";
 import { openWorkspacePanels } from "./workspace-helpers";
 import type { ProductionPage } from "../src/features/editor/shot-production-types";
 
-export async function shotProductionFixture(page: Page) {
+export async function shotProductionFixture(
+  page: Page,
+  {
+    singleShot = false,
+    outputProfile,
+  }: {
+    singleShot?: boolean;
+    outputProfile?: { width: number; height: number; fps: number };
+  } = {},
+) {
   const registered = await page.request.post("/api/v1/auth/register", {
     data: {
       email: `shot-production-${crypto.randomUUID()}@example.com`,
@@ -15,7 +24,7 @@ export async function shotProductionFixture(page: Page) {
   const headers = { Authorization: `Bearer ${session.access_token}` };
   const projectResponse = await page.request.post("/api/v1/projects", {
     headers,
-    data: { name: "星光镜头生产" },
+    data: { name: "星光镜头生产", output_profile: outputProfile },
   });
   expect(projectResponse.status()).toBe(201);
   const project = await projectResponse.json();
@@ -67,19 +76,20 @@ export async function shotProductionFixture(page: Page) {
       expected_version_no: 0,
       script_version_id: source.id,
       content: {
-        shots: ["提灯走入森林", "在桥边回头", "星光落在掌心"].map(
-          (visual_description, index) => ({
-            shot_no: index + 1,
-            scene_id: sceneId,
-            scene_no: 1,
-            duration_ms: 10000,
-            shot_size: "medium",
-            visual_description,
-            characters: ["女孩"],
-            camera_movement: "static",
-            subtitle: "",
-          }),
-        ),
+        shots: (singleShot
+          ? ["在桥边回头"]
+          : ["提灯走入森林", "在桥边回头", "星光落在掌心"]
+        ).map((visual_description, index) => ({
+          shot_no: index + 1,
+          scene_id: sceneId,
+          scene_no: 1,
+          duration_ms: singleShot ? 30000 : 10000,
+          shot_size: "medium",
+          visual_description,
+          characters: ["女孩"],
+          camera_movement: "static",
+          subtitle: "",
+        })),
       },
     },
   });
@@ -128,7 +138,7 @@ export async function shotProductionFixture(page: Page) {
     });
     await expect(
       dialog.getByRole("table", { name: "镜头生产列表" }).getByRole("row"),
-    ).toHaveCount(4);
+    ).toHaveCount(singleShot ? 2 : 4);
     return dialog;
   }
   return {

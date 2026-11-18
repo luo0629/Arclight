@@ -62,6 +62,7 @@ def validate_dependency_type(source_kind: str, target_kind: str, dependency_type
     elif dependency_type == "RENDER_DEPENDENCY":
         allowed = source_kind in IMAGE_KINDS | {
             "SHOT_PREVIEW",
+            "VIDEO",
             "AUDIO",
             "MUSIC",
             "SUBTITLE",

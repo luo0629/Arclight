@@ -276,14 +276,25 @@ def validate_manual_approval(
                         "表演意图确认的精确来源或能力阻断已变化，请刷新后重新决定。",
                         409,
                     )
-            elif facts.blockers:
-                raise DomainError(
-                    "PERFORMANCE_NOT_READY",
-                    "表演分镜尚不具备制作条件："
-                    + facts.blockers[0].message
-                    + "；请修订制作路线，或明确仅确认表演意图并保留制作阻塞。",
-                    409,
+            else:
+                # Motion is verified on the resulting video. Storyboard approval still
+                # needs a capable route so the shot can produce that exact candidate.
+                blocker = next(
+                    (
+                        item
+                        for item in facts.blockers
+                        if item.code != "PERFORMANCE_MOTION_UNVERIFIED"
+                    ),
+                    None,
                 )
+                if blocker is not None:
+                    raise DomainError(
+                        "PERFORMANCE_NOT_READY",
+                        "表演分镜尚不具备制作条件："
+                        + blocker.message
+                        + "；请修订制作路线，或明确仅确认表演意图并保留制作阻塞。",
+                        409,
+                    )
         elif performance_intent is not None:
             raise DomainError("PERFORMANCE_INTENT_INVALID", "仅3.0表演分镜可确认表演意图", 422)
         validate_storyboard_assets(db, episode.project_id, parsed, episode_id=episode.id)

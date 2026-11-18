@@ -2,7 +2,9 @@
 
 import io
 import logging
+import math
 import tempfile
+from array import array
 from functools import lru_cache
 from pathlib import Path
 from uuid import UUID
@@ -17,6 +19,8 @@ from arclight.application.generation_artifacts import import_attempt
 from arclight.application.generation_delivery import consume_dispatch
 from arclight.application.generation_reconciliation import mark_result_unknown, reconcile
 from arclight.application.media_services import connection_for_job
+from arclight.application.render_dispatch import candidates as render_candidates
+from arclight.application.render_execution import execute_render
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.persistence.generation import GenerationDispatch
@@ -55,8 +59,8 @@ def isolated_browser_database(factory: sessionmaker[Session], settings: Settings
     )
 
 
-@lru_cache(maxsize=1)
-def synthetic_video() -> bytes:
+@lru_cache(maxsize=2)
+def synthetic_video(with_audio: bool = False) -> bytes:
     """A playable H.264 clip; deterministic media checks remain the production ones."""
     data = io.BytesIO()
     with av.open(data, "w", format="mp4") as output:
@@ -64,14 +68,31 @@ def synthetic_video() -> bytes:
         stream.width, stream.height, stream.pix_fmt = 1280, 720, "yuv420p"
         stream.options = {"preset": "ultrafast", "crf": "30", "profile": "baseline"}
         stream.codec_context.thread_count = 1
+        audio = None
+        if with_audio:
+            audio = output.add_stream("aac", rate=48000)
+            audio.layout = "mono"
+            audio.codec_context.thread_count = 1
         for index in range(144):
             frame = av.VideoFrame(1280, 720, "yuv420p")
             for number, plane in enumerate(frame.planes):
                 plane.update(bytes([32 + index % 128 if number == 0 else 128]) * plane.buffer_size)
             for packet in stream.encode(frame):
                 output.mux(packet)
-        for packet in stream.encode():
-            output.mux(packet)
+            if audio is not None:
+                sound = av.AudioFrame(format="fltp", layout="mono", samples=2000)
+                sound.sample_rate = 48000
+                sound.pts = index * 2000
+                raw = array(
+                    "f", (0.2 * math.sin(2 * math.pi * i / 80) for i in range(2000))
+                ).tobytes()
+                plane = sound.planes[0]
+                plane.update(raw + bytes(plane.buffer_size - len(raw)))
+                for packet in audio.encode(sound):
+                    output.mux(packet)
+        for item in output.streams:
+            for packet in item.encode():
+                output.mux(packet)
     return data.getvalue()
 
 
@@ -91,7 +112,7 @@ def _advance(factory: sessionmaker[Session], settings: Settings, job_id: UUID) -
             )
         if request.url.host == "video01.example" and request.method == "GET":
             return httpx.Response(
-                200, content=synthetic_video(), headers={"content-type": "video/mp4"}
+                200, content=synthetic_video(with_audio), headers={"content-type": "video/mp4"}
             )
         return httpx.Response(400, json={"error": {"code": "SYNTHETIC_ROUTE_REFUSED"}})
 
@@ -100,7 +121,9 @@ def _advance(factory: sessionmaker[Session], settings: Settings, job_id: UUID) -
         assert job is not None
         manifest = db.get(DependencyManifest, job.input_manifest_id)
         assert manifest is not None
-        output = manifest.snapshot_json["context"]["generation"]["output_spec"]
+        specification = manifest.snapshot_json["context"]["generation"]
+        output = specification["output_spec"]
+        with_audio = specification["context"]["e2e_synthetic_video"] == "video03"
         if any(
             output.get(name) != value
             for name, value in (
@@ -171,8 +194,9 @@ def advance_videos(factory: sessionmaker[Session], settings: Settings) -> int:
                         GenerationJob.model == MODEL,
                         DependencyManifest.snapshot_json["context"]["generation"]["context"][
                             "e2e_synthetic_video"
-                        ].as_string()
-                        == "video01",
+                        ]
+                        .as_string()
+                        .in_(("video01", "video03")),
                     )
                     .limit(10)
                 )
@@ -193,3 +217,9 @@ def advance_videos(factory: sessionmaker[Session], settings: Settings) -> int:
             )
             LOGGER.error("Synthetic video job %s failed: %s", job_id, code)
     return imported
+
+
+def advance_renders(factory: sessionmaker[Session], settings: Settings) -> None:
+    if isolated_browser_database(factory, settings):
+        for run_id in render_candidates(factory)[:2]:
+            execute_render(factory, settings, run_id)

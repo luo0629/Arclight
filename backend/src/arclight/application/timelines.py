@@ -15,24 +15,31 @@ from arclight.application.dependencies import (
     exact_version,
     lock_dependency_graph,
 )
+from arclight.application.text_reviews import require_performance_production
 from arclight.application.timeline_store import append_timeline, read_timeline, replay_timeline
+from arclight.application.video_candidates import require_video_version
+from arclight.application.video_review import video_review_facts
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.timelines import (
     TRACK_KINDS,
     ClipSnapshot,
+    ClipVideo,
     TimelineCreate,
     TimelineRead,
     TimelineSave,
     TimelineSnapshot,
     TrackSnapshot,
+    VideoTrim,
 )
 from arclight.domain.versions import digest
 from arclight.persistence.models import (
+    AssetVersion,
     Episode,
     Project,
     Script,
     Shot,
+    StoredFile,
     Storyboard,
 )
 from arclight.persistence.timelines import Timeline
@@ -60,19 +67,84 @@ def approved_board(db: Session, episode: Episode, board_id: UUID) -> tuple[Story
     return board, shots
 
 
-def selected_clip(
+def verify_visual_object(
     db: Session,
     settings: Settings,
     episode: Episode,
+    clip: ClipSnapshot,
+    actor: str,
+) -> None:
+    version, asset = exact_version(db, episode.project_id, clip.source_asset_version_id)
+    if clip.video is not None:
+        require_video_version(db, settings, episode.project_id, asset, version, actor)
+    else:
+        read_object(settings, episode.project_id, version.id, version.object_key, version.checksum)
+
+
+def selected_video_clip(
+    db: Session,
+    episode: Episode,
     shot: Shot,
-    version_id: UUID,
+    version: AssetVersion,
     ordinal: int,
-    duration_ms: int,
+    default_duration_ms: int,
+    trim: VideoTrim | None,
+    *,
+    motion_required: bool,
 ) -> ClipSnapshot:
-    clip = selected_clip_facts(db, episode, shot, version_id, ordinal, duration_ms)
-    version, _ = exact_version(db, episode.project_id, version_id)
-    read_object(settings, episode.project_id, version.id, version.object_key, version.checksum)
-    return clip
+    facts = video_review_facts(db, version)
+    record, media = facts.record, facts.media
+    target = record.report.target
+    if (
+        record.report.episode_id != episode.id
+        or target.storyboard_id != shot.storyboard_id
+        or target.shot_id != shot.id
+        or shot.status != "APPROVED"
+    ):
+        raise DomainError("REVIEW_TARGET_INVALID", "视频须经本集本版分镜的精确镜头审查", 409)
+    file = db.scalar(select(StoredFile).where(StoredFile.asset_version_id == version.id))
+    if (
+        file is None
+        or file.project_id != episode.project_id
+        or file.object_key != version.object_key
+        or file.checksum != media.checksum
+        or file.byte_size != media.byte_size
+        or file.media_type != media.media_type
+    ):
+        raise DomainError("OBJECT_UNAVAILABLE", "视频缺少精确私有文件回执", 409)
+    if not (file.source_note.strip() and file.rights_note.strip()):
+        raise DomainError("RENDER_RIGHTS_REQUIRED", "视频须保留来源与使用权声明", 409)
+    trim = trim or VideoTrim(duration_ms=min(default_duration_ms, media.duration_ms))
+    end_ms = trim.source_start_ms + trim.duration_ms
+    if end_ms > media.duration_ms:
+        raise DomainError("TIMELINE_SOURCE_RANGE_INVALID", "视频出点超出精确源视频时长", 409)
+    if trim.keep_audio and not media.has_audio:
+        raise DomainError("TIMELINE_VIDEO_AUDIO_MISSING", "源视频没有可保留的原声轨", 409)
+    return ClipSnapshot(
+        id=uuid4(),
+        ordinal=ordinal,
+        source_asset_version_id=version.id,
+        source_sha256=version.checksum,
+        start_ms=0,
+        source_start_ms=trim.source_start_ms,
+        duration_ms=trim.duration_ms,
+        shot_id=shot.id,
+        review_id=record.report.report_id,
+        review_storyboard_id=target.storyboard_id,
+        review_shot_id=target.shot_id,
+        video=ClipVideo(
+            candidate_id=target.candidate_id,
+            file_id=file.id,
+            review_sha256=record.report_sha256,
+            human_decision_id=facts.decision.id if facts.decision else None,
+            source_end_ms=end_ms,
+            source_duration_ms=media.duration_ms,
+            frame_rate=media.frame_rate,
+            has_audio=media.has_audio,
+            keep_audio=trim.keep_audio,
+            motion_required=motion_required,
+        ),
+    )
 
 
 def selected_clip_facts(
@@ -82,34 +154,50 @@ def selected_clip_facts(
     version_id: UUID,
     ordinal: int,
     duration_ms: int,
+    *,
+    trim: VideoTrim | None = None,
 ) -> ClipSnapshot:
     """Database-only selection/QA checks shared with transactional export reviews."""
     try:
         content = read_shot_content(shot.content_json)
     except ValidationError as exc:
         raise DomainError("INVALID_STORYBOARD", "镜头内容不符合当前合同", 409) from exc
-    if (
+    motion_required = (
         isinstance(content, ShotContentV3)
         and content.performance.motion_requirement == "dynamic_required"
-    ):
+    )
+    if isinstance(content, ShotContentV3) and not motion_required:
+        require_performance_production(db, shot.storyboard_id)
+    try:
+        exact = exact_version(db, episode.project_id, version_id)
+    except DomainError as exc:
+        if not motion_required or exc.code != "NOT_FOUND":
+            raise
+        exact = None
+    if motion_required and (exact is None or exact[1].asset_type != "VIDEO"):
         raise DomainError(
             "DYNAMIC_MEDIA_REQUIRED",
             "必须动态的镜头不能选用静图时间轴，请保留动态要求并修订制作路线。",
             409,
         )
-    if isinstance(content, ShotContentV3):
-        from arclight.application.text_reviews import require_performance_production
-
+    assert exact is not None
+    version, asset = exact
+    if motion_required:
         require_performance_production(db, shot.storyboard_id)
-    version, asset = exact_version(db, episode.project_id, version_id)
     if (
-        asset.asset_type not in {"IMAGE", "SHOT_IMAGE"}
+        asset.asset_type not in {"IMAGE", "SHOT_IMAGE", "VIDEO"}
         or asset.status in {"ARCHIVED", "STALE", "REJECTED"}
         or asset.current_version_id != version.id
         or version.status not in {"APPROVED", "LOCKED"}
         or version.stale
     ):
-        raise DomainError("ASSET_NOT_USABLE", "时间轴只能使用当前已选用且已批准的有效镜头图", 409)
+        raise DomainError("ASSET_NOT_USABLE", "时间轴只能使用当前已选用且已批准的镜头素材", 409)
+    if asset.asset_type == "VIDEO":
+        return selected_video_clip(
+            db, episode, shot, version, ordinal, duration_ms, trim, motion_required=motion_required
+        )
+    if trim is not None:
+        raise DomainError("TIMELINE_REFERENCE_CONFLICT", "视频裁切仅用于精确视频版本", 409)
     record = require_shot_review(db, version)
     validate_selected_shot(db, record, content, episode.id)
     if record.review.target.shot_id != shot.id and (
@@ -153,24 +241,34 @@ def create_timeline(
     if replay:
         return replay
     board, shots = approved_board(db, episode, payload.storyboard_id)
-    selections = {item.shot_id: item.asset_version_id for item in payload.selected_shots}
+    selections = {item.shot_id: item for item in payload.selected_shots}
     if len(shots) > 63 or set(selections) != {shot.id for shot in shots}:
         raise DomainError(
             "TIMELINE_SHOTS_INCOMPLETE", "须提供本分镜全部镜头的精确选用，最多63镜头", 422
         )
-    clips = [
-        selected_clip(
-            db, settings, episode, shot, selections[shot.id], index, payload.default_duration_ms
+    clips = []
+    cursor = 0
+    for index, shot in enumerate(shots):
+        selection = selections[shot.id]
+        clip = selected_clip_facts(
+            db,
+            episode,
+            shot,
+            selection.asset_version_id,
+            index,
+            payload.default_duration_ms,
+            trim=selection.video,
         )
-        for index, shot in enumerate(shots)
-    ]
+        verify_visual_object(db, settings, episode, clip, actor)
+        clips.append(clip.model_copy(update={"start_ms": cursor}))
+        cursor += clip.duration_ms
     project = db.get(Project, episode.project_id)
     assert project is not None
     snapshot = TimelineSnapshot(
         episode_id=episode.id,
         storyboard_id=board.id,
         default_duration_ms=payload.default_duration_ms,
-        duration_ms=len(shots) * payload.default_duration_ms,
+        duration_ms=cursor,
         output_profile=deepcopy(project.output_profile),
         tracks=[
             TrackSnapshot(
@@ -229,8 +327,6 @@ def require_sound_source(db: Session, episode: Episode, clip: ClipSnapshot) -> N
                 "TIMELINE_AUDIO_ROLE_INVALID", "音轨须固定与素材版本一致的音乐或音效用途", 409
             )
     elif clip.audio is not None:
-        from arclight.persistence.models import StoredFile
-
         file = db.scalar(select(StoredFile).where(StoredFile.asset_version_id == version.id))
         if (
             file is None
@@ -252,10 +348,7 @@ def validate_snapshot(
     for track in value.tracks:
         if track.kind == "VIDEO":
             for clip in track.clips:
-                version, _ = exact_version(db, episode.project_id, clip.source_asset_version_id)
-                read_object(
-                    settings, episode.project_id, version.id, version.object_key, version.checksum
-                )
+                verify_visual_object(db, settings, episode, clip, actor)
         elif track.kind in {"MUSIC", "SFX"}:
             from arclight.application.music_assets import require_music_version
 
@@ -263,6 +356,37 @@ def validate_snapshot(
                 version, asset = exact_version(db, episode.project_id, clip.source_asset_version_id)
                 if asset.asset_type == "MUSIC":
                     require_music_version(db, settings, episode.project_id, asset, version, actor)
+
+
+def validate_visual_clip_facts(
+    db: Session, episode: Episode, shot: Shot, clip: ClipSnapshot
+) -> None:
+    expected = selected_clip_facts(
+        db,
+        episode,
+        shot,
+        clip.source_asset_version_id,
+        clip.ordinal,
+        clip.duration_ms,
+        trim=VideoTrim(
+            source_start_ms=clip.source_start_ms,
+            duration_ms=clip.duration_ms,
+            keep_audio=clip.video.keep_audio,
+        )
+        if clip.video
+        else None,
+    )
+    if any(
+        getattr(clip, field) != getattr(expected, field)
+        for field in (
+            "source_sha256",
+            "review_id",
+            "review_storyboard_id",
+            "review_shot_id",
+            "video",
+        )
+    ):
+        raise DomainError("TIMELINE_REFERENCE_CONFLICT", "片段须保留当前精确素材与审查身份", 409)
 
 
 def validate_snapshot_facts(
@@ -302,24 +426,7 @@ def validate_snapshot_facts(
                 )
             if track.kind == "VIDEO":
                 assert clip.shot_id is not None
-                expected = selected_clip_facts(
-                    db,
-                    episode,
-                    shots_by_id[clip.shot_id],
-                    clip.source_asset_version_id,
-                    clip.ordinal,
-                    clip.duration_ms,
-                )
-                for name in (
-                    "source_sha256",
-                    "review_id",
-                    "review_storyboard_id",
-                    "review_shot_id",
-                ):
-                    if getattr(clip, name) != getattr(expected, name):
-                        raise DomainError(
-                            "TIMELINE_REFERENCE_CONFLICT", "片段须保留当前精确素材与审查身份", 409
-                        )
+                validate_visual_clip_facts(db, episode, shots_by_id[clip.shot_id], clip)
             elif track.kind in {"MUSIC", "SFX"}:
                 require_sound_source(db, episode, clip)
             else:

@@ -19,7 +19,14 @@ from arclight.media.audio import (
     check_ogg,
     check_wave,
 )
-from arclight.media.render_plan import AUDIO_RATE, RenderAudioClip, RenderAudioSource, RenderPlan
+from arclight.media.render_plan import (
+    AUDIO_RATE,
+    RenderAudioRange,
+    RenderAudioSource,
+    RenderPlan,
+    RenderVideo,
+)
+from arclight.media.timeline_video import embedded_audio_frames
 
 if TYPE_CHECKING:
     import av
@@ -80,8 +87,12 @@ def decoded_frames(source: RenderAudioSource) -> Generator[av.AudioFrame, None, 
 
 
 class ClipReader:
-    def __init__(self, source: RenderAudioSource, clip: RenderAudioClip):
-        self.frames = decoded_frames(source)
+    def __init__(self, source: RenderAudioSource | RenderVideo, clip: RenderAudioRange):
+        self.frames = (
+            embedded_audio_frames(source)
+            if isinstance(source, RenderVideo)
+            else decoded_frames(source)
+        )
         self.clip = clip
         self.frame: av.AudioFrame | None = None
         self.left = self.right = memoryview(b"").cast("f")
@@ -152,7 +163,14 @@ class AudioMixer:
     def __init__(self, plan: RenderPlan, *, output_gain: float = 1.0):
         self.plan = plan
         self.output_gain = output_gain
-        self.pending = iter(sorted(enumerate(plan.audio_clips), key=lambda item: item[1].start_ms))
+        inputs: list[tuple[RenderAudioRange, RenderAudioSource | RenderVideo]] = [
+            (clip, plan.audio_sources[clip.source_index]) for clip in plan.audio_clips
+        ]
+        for clip in plan.clips:
+            region = clip.embedded_audio
+            if clip.video is not None and region is not None:
+                inputs.append((region, clip.video))
+        self.pending = iter(enumerate(sorted(inputs, key=lambda item: item[0].start_ms)))
         self.next_clip = next(self.pending, None)
         self.active: dict[int, ClipReader] = {}
 
@@ -172,9 +190,9 @@ class AudioMixer:
             if (reader.clip.start_ms + reader.clip.duration_ms) * 48 <= start:
                 reader.close()
                 del self.active[key]
-        while self.next_clip is not None and self.next_clip[1].start_ms * 48 < end:
-            key, clip = self.next_clip
-            self.active[key] = ClipReader(self.plan.audio_sources[clip.source_index], clip)
+        while self.next_clip is not None and self.next_clip[1][0].start_ms * 48 < end:
+            key, (clip, source) = self.next_clip
+            self.active[key] = ClipReader(source, clip)
             self.next_clip = next(self.pending, None)
         left, right = [0.0] * count, [0.0] * count
         for key, reader in list(self.active.items()):

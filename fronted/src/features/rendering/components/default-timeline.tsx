@@ -35,8 +35,8 @@ export default function DefaultTimeline({
       <summary>从已批准分镜创建默认时间轴</summary>
       <div className="mt-4 flex min-w-0 flex-col gap-4">
         <p className="max-w-2xl text-sm text-muted-foreground">
-          每个镜头固定 3
-          秒，按分镜顺序使用当前已选用且审查通过的图片。请先核对完整清单；本次操作创建独立时间轴版本。
+          按分镜顺序使用已审核并选用的图片或视频。图片为 3 秒，视频最多取前 3
+          秒，原声默认静音。
         </p>
         {approved.length === 0 && (
           <Notice>
@@ -177,10 +177,7 @@ function PreparedTimeline({
       {prepared.error && <Notice tone="error">{prepared.error}</Notice>}
       {prepared.data && (
         <>
-          <p className="text-sm">
-            共 {prepared.data.shots.length} 个镜头，每镜头 3
-            秒。以下版本来自现有选用结果。
-          </p>
+          <p className="text-sm">共 {prepared.data.shots.length} 个镜头。</p>
           {prepared.data.blocking_issues.length > 0 && (
             <Notice tone="error">
               <ul className="list-inside list-disc">
@@ -203,12 +200,21 @@ function PreparedTimeline({
                 </p>
                 {shot.options.length === 0 ? (
                   <p className="text-destructive">
-                    缺少有效的已选用图片，无法创建时间轴。
+                    缺少有效的已选用
+                    {shot.motion_required ? "视频" : "图片或视频"}。
                   </p>
                 ) : shot.options.length === 1 ? (
                   <p className="break-all text-xs">
-                    已选用图片 v{shot.options[0].version_no}：
+                    已选用{shot.options[0].video ? "视频" : "图片"} v
+                    {shot.options[0].version_no}：
                     {shot.options[0].asset_version_id}
+                    {shot.options[0].video && (
+                      <>
+                        {" "}
+                        · {shot.options[0].video.duration_ms} 毫秒 ·{" "}
+                        {shot.options[0].video.frame_rate.toFixed(2)} fps
+                      </>
+                    )}
                   </p>
                 ) : (
                   <>
@@ -236,6 +242,7 @@ function PreparedTimeline({
                             key={option.asset_version_id}
                             value={option.asset_version_id}
                           >
+                            {option.video ? "视频" : "图片"} ·{" "}
                             {option.description} v{option.version_no} ·{" "}
                             {option.asset_version_id}
                           </option>

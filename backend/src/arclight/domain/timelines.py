@@ -18,9 +18,16 @@ class TimelineContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class VideoTrim(TimelineContract):
+    source_start_ms: Milliseconds = 0
+    duration_ms: int = Field(strict=True, gt=0, le=3_600_000)
+    keep_audio: bool = Field(default=False, strict=True)
+
+
 class ShotSelection(TimelineContract):
     shot_id: UUID
     asset_version_id: UUID
+    video: VideoTrim | None = Field(default=None, exclude_if=lambda value: value is None)
 
 
 class TimelineCreate(TimelineContract):
@@ -33,6 +40,25 @@ class TimelineCreate(TimelineContract):
     def unique_shots(self):
         if len({item.shot_id for item in self.selected_shots}) != len(self.selected_shots):
             raise ValueError("每个镜头只能指定一个精确选用版本")
+        return self
+
+
+class ClipVideo(TimelineContract):
+    candidate_id: UUID
+    file_id: UUID
+    review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    human_decision_id: UUID | None = None
+    source_end_ms: int = Field(strict=True, gt=0, le=30000)
+    source_duration_ms: int = Field(strict=True, gt=0, le=30000)
+    frame_rate: float = Field(strict=True, gt=0, le=120, allow_inf_nan=False)
+    has_audio: bool = Field(strict=True)
+    keep_audio: bool = Field(strict=True)
+    motion_required: bool = Field(strict=True)
+
+    @model_validator(mode="after")
+    def valid_source(self):
+        if self.source_end_ms > self.source_duration_ms or self.keep_audio and not self.has_audio:
+            raise ValueError("视频出点及原声决定须匹配已核验的源视频")
         return self
 
 
@@ -53,6 +79,7 @@ class ClipSnapshot(TimelineContract):
     review_shot_id: UUID | None = None
     visual: ClipVisual | None = Field(default=None, exclude_if=lambda value: value is None)
     audio: ClipAudio | None = Field(default=None, exclude_if=lambda value: value is None)
+    video: ClipVideo | None = Field(default=None, exclude_if=lambda value: value is None)
 
     @model_validator(mode="after")
     def precise_line(self):
@@ -60,6 +87,14 @@ class ClipSnapshot(TimelineContract):
             raise ValueError("台词必须同时绑定精确剧本版本和稳定台词ID")
         if self.audio is not None:
             self.audio.validate_duration(self.duration_ms)
+        if self.video is not None and (
+            self.source_start_ms + self.duration_ms != self.video.source_end_ms
+            or self.review_id is None
+            or self.review_storyboard_id is None
+            or self.shot_id is None
+            or self.shot_id != self.review_shot_id
+        ):
+            raise ValueError("视频裁切范围须保留准确的出点与镜头审查身份")
         return self
 
 
@@ -83,6 +118,8 @@ class TrackSnapshot(TimelineContract):
                     raise ValueError("音频用途须匹配背景音乐或音效轨道")
             if self.kind != "VIDEO" and clip.visual is not None:
                 raise ValueError("视觉配置只能用于画面轨")
+            if self.kind != "VIDEO" and clip.video is not None:
+                raise ValueError("视频配置只能用于画面轨")
             if self.kind == "VIDEO" and clip.shot_id is None:
                 raise ValueError("画面片段必须关联精确镜头")
             if self.kind in {"VOICE", "SUBTITLE"} and clip.line_id is None:
@@ -136,6 +173,10 @@ class TimelineSnapshot(TimelineContract):
         ):
             raise ValueError("相邻转场窗口不能越过片段范围或互相重叠")
         return self
+
+    @property
+    def has_video_sources(self) -> bool:
+        return any(clip.video is not None for track in self.tracks for clip in track.clips)
 
     def video_fades(self) -> dict[UUID, FadeWindow]:
         """Split each incoming black fade across its boundary; preserve clip durations."""

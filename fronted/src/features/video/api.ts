@@ -13,7 +13,7 @@ export const candidatePath = (projectId: string, candidateId: string) => {
 export async function readVideoCandidate(
   projectId: string,
   candidateId: string,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) {
   const row = await api<VideoCandidate>(candidatePath(projectId, candidateId), {
     signal,
@@ -31,7 +31,7 @@ export async function readVideoCandidate(
 export async function readVideoAsset(
   projectId: string,
   assetId: string,
-  signal: AbortSignal,
+  signal?: AbortSignal,
 ) {
   if (!isResourceId(assetId)) throw new Error("视频资产标识无效。");
   const row = await api<VideoAsset>(

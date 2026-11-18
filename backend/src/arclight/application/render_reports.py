@@ -18,6 +18,7 @@ from arclight.application.render_admission import RenderFacts, admission_facts
 from arclight.application.render_inputs import file_storage
 from arclight.application.render_manifests import checked_snapshot
 from arclight.application.render_reviews import require_export_approval
+from arclight.application.video_review import video_review_facts
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.continuity_selection import ADMISSION_RESOURCE, ReviewAdmission
@@ -104,28 +105,31 @@ def report_warnings(db: Session, snapshot: RenderManifestSnapshot) -> tuple[Rend
         for decision in snapshot.line_audio_decisions
     ]
     for source in snapshot.sources:
-        if source.asset_type not in {"IMAGE", "SHOT_IMAGE"}:
+        if source.asset_type not in {"IMAGE", "SHOT_IMAGE", "VIDEO"}:
             continue
         version = db.get(AssetVersion, source.asset_version_id)
         assert version is not None
-        record = require_shot_review(db, version)
-        binding = find_binding(
-            db, record.review.project_id, ADMISSION_RESOURCE, record.review.result_id
-        )
-        if binding is None:
-            raise DomainError("RENDER_REPORT_INVALID", "镜头缺少精确审查准入", 409)
-        admission = ReviewAdmission.model_validate(
-            binding_snapshot(db, binding)["review_admission"]
-        )
-        if admission.human_review_request_id is not None:
+        if source.asset_type == "VIDEO":
+            decision_row = video_review_facts(db, version).decision
+        else:
+            record = require_shot_review(db, version)
+            binding = find_binding(
+                db, record.review.project_id, ADMISSION_RESOURCE, record.review.result_id
+            )
+            if binding is None:
+                raise DomainError("RENDER_REPORT_INVALID", "镜头缺少精确审查准入", 409)
+            admission = ReviewAdmission.model_validate(
+                binding_snapshot(db, binding)["review_admission"]
+            )
+            if admission.human_review_request_id is None:
+                continue
             decision_row = db.scalar(
                 select(HumanReviewDecision).where(
                     HumanReviewDecision.request_id == admission.human_review_request_id
                 )
             )
-            assert (
-                decision_row is not None
-            )  # require_shot_review verified the exact Owner decision.
+            assert decision_row is not None  # The shot review verified the exact Owner decision.
+        if decision_row is not None:
             answer = HumanDecision.model_validate(decision_row.decision_json)
             warnings.append(
                 report_warning(

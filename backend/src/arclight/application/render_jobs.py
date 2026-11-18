@@ -63,7 +63,7 @@ def create_job(
     first = next(
         source.file
         for source in facts.snapshot.sources
-        if source.file and source.asset_type in {"IMAGE", "SHOT_IMAGE"}
+        if source.file and source.asset_type in {"IMAGE", "SHOT_IMAGE", "VIDEO"}
     )
     assert first is not None
     run_id = uuid4()

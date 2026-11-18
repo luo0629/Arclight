@@ -18,6 +18,7 @@ from arclight.storage.objects import ObjectStorage
 SOURCE_TYPES = {
     "IMAGE": {"image/png", "image/jpeg"},
     "SHOT_IMAGE": {"image/png", "image/jpeg"},
+    "VIDEO": {"video/mp4"},
     "AUDIO": {"audio/wav", "audio/mpeg", "audio/ogg", "audio/flac"},
     "MUSIC": {"audio/wav", "audio/mpeg", "audio/ogg", "audio/flac"},
     "SUBTITLE": {"text/plain"},
