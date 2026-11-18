@@ -1,14 +1,18 @@
 """Known model restrictions apply before voice persistence and dialogue admission."""
 
+import json
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from sqlalchemy import func, select
-from test_audio_tts import create_ok, tts_case
+from test_audio_production import wave_bytes
+from test_audio_tts import create_ok, declaration, finish_audio, tts_case
 from test_audio_tts_boundaries import boundary_state
+from test_native_media_integration import attempt_for
 
 from arclight.persistence.audio_voices import AudioVoiceVersion
-from arclight.persistence.models import DependencyManifest
+from arclight.persistence.models import DependencyManifest, GenerationAttempt
 
 __all__ = ["tts_case"]
 
@@ -187,3 +191,56 @@ def test_siliconflow_known_models_admit_valid_frozen_output_to_line_budget(
         assert generation["output_spec"] == output
         assert generation["model"] == model
     assert len(boundary_state(client)["reserved"]) == 1
+
+
+def test_qwen_audio_flash_dialogue_downloads_signed_wav_and_keeps_usage(client, settings, tts_case):
+    model = "qwen-audio-3.0-tts-flash"
+    configure_model(client, settings, model, protocol="qwen_tts")
+    voice = "longanlingxi"
+    instructions = "Read with restrained urgency."
+    invalid = save_model_voice(client, tts_case, voice=voice, speed=2.1)
+    assert invalid.status_code == 422, invalid.text
+    assert invalid.json()["error"]["code"] == "PROVIDER_PARAMETERS_UNSUPPORTED"
+    response = save_model_voice(client, tts_case, voice=voice, speed=0.8, instructions=instructions)
+    assert response.status_code == 201, response.text
+    tts_case["payload"]["voice_version_id"] = response.json()["id"]
+    audio = wave_bytes()
+    signed_path = "dashscope-result-bj.oss-cn-beijing.aliyuncs.com/line.wav?Signature=abc%2Fdef"
+    requests = []
+
+    def respond(request):
+        requests.append(request.method)
+        if request.method == "GET":
+            assert str(request.url) == f"https://{signed_path}"
+            assert "authorization" not in request.headers
+            return httpx.Response(200, content=audio, headers={"content-type": "audio/wav"})
+        assert request.method == "POST"
+        assert request.url.path == "/v1/services/audio/tts/SpeechSynthesizer"
+        assert request.headers["authorization"] == "Bearer synthetic-model-parameter-key"
+        assert json.loads(request.content) == {
+            "model": model,
+            "input": {
+                "text": tts_case["lines"][0]["text"],
+                "voice": voice,
+                "format": "wav",
+                "rate": 0.8,
+                "instruction": instructions,
+            },
+        }
+        return httpx.Response(
+            200,
+            json={
+                "output": {"finish_reason": "stop", "audio": {"url": f"http://{signed_path}"}},
+                "usage": {"characters": 22},
+            },
+        )
+
+    row, job, _ = finish_audio(client, settings, tts_case, data=audio, handler=respond)
+    response = client.post(tts_case["url"] + f"/{row['job_id']}/result", json=declaration())
+    assert response.status_code == 201, response.text
+    assert requests == ["POST", "GET"]
+    attempt_id = attempt_for(client, job)
+    with client.app.state.session_factory() as db:
+        attempt = db.get(GenerationAttempt, attempt_id)
+        assert attempt.result_json["usage"] == {"characters": 22}
+        assert attempt.cost is None

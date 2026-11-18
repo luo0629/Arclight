@@ -277,6 +277,7 @@ def test_native_dialogue_flow_reuses_each_existing_tts_protocol(
         body = json.loads(request.content)
         submitted.append(body)
         if protocol == "qwen_tts":
+            assert request.url.path == "/v1/services/aigc/multimodal-generation/generation"
             assert body["input"] == {"text": tts_case["lines"][0]["text"], "voice": "test-voice"}
             return httpx.Response(
                 200, json={"output": {"audio": {"url": "https://cdn.example/speech"}}}

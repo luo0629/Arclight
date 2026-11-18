@@ -50,6 +50,7 @@ PARAMETERS = {
 }
 
 
+QWEN_AUDIO_TTS_FLASH_MODEL = "qwen-audio-3.0-tts-flash"
 SEEDANCE_FIRST_FRAME_MODELS = frozenset({"doubao-seedance-1-0-pro-250528"})
 SEEDANCE_MAX_IMAGE_BYTES = 30 * 1024 * 1024
 SEEDANCE_MAX_REQUEST_BYTES = 64 * 1024 * 1024
@@ -112,10 +113,11 @@ def validate_spec(spec: GenerationSpec, reference_count: int = 0) -> None:
                 2000 if key == "instructions" else 160
             )
         elif key == "speed":
+            minimum, maximum = (0.5, 2) if spec.provider == "qwen_tts" else (0.25, 4)
             valid = (
                 isinstance(value, (int, float))
                 and not isinstance(value, bool)
-                and 0.25 <= value <= 4
+                and minimum <= value <= maximum
             )
         elif key == "num_inference_steps":
             valid = type(value) is int and 1 <= value <= 100
@@ -309,6 +311,17 @@ def submission(
     if task == "AUDIO":
         kind = output.get("format", "wav")
         if protocol == "qwen_tts":
+            if spec.model == QWEN_AUDIO_TTS_FLASH_MODEL:
+                audio = {"text": prompt, "voice": params["voice"], "format": kind}
+                if "speed" in params:
+                    audio["rate"] = params["speed"]
+                if "instructions" in params:
+                    audio["instruction"] = params["instructions"]
+                return (
+                    "/services/audio/tts/SpeechSynthesizer",
+                    {"model": spec.model, "input": audio},
+                    {},
+                )
             return (
                 "/services/aigc/multimodal-generation/generation",
                 {"model": spec.model, "input": {"text": prompt, **params}},

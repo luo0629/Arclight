@@ -24,6 +24,7 @@ from arclight.providers.media_submission import MediaImageInput, MediaSubmission
 from arclight.providers.native_media_protocols import (
     ASYNC,
     KINDS,
+    QWEN_AUDIO_TTS_FLASH_MODEL,
     capabilities,
     query_path,
     submission,
@@ -230,7 +231,18 @@ class NativeMediaProvider:
                 if part.get("type") == "video"
             ]
         if self.name == "qwen_tts":
-            return [(value["output"]["audio"]["url"], "audio/wav")]
+            source = value["output"]["audio"]["url"]
+            if (
+                self.connection.configuration["model"] == QWEN_AUDIO_TTS_FLASH_MODEL
+                and source.startswith("http://")
+                and re.fullmatch(
+                    r"[a-z0-9-]+\.oss-(?:cn-beijing|ap-southeast-1)\.aliyuncs\.com",
+                    urlsplit(source).netloc,
+                )
+            ):
+                # DashScope can return HTTP OSS links. Preserve the signed path and query.
+                source = "https://" + source.removeprefix("http://")
+            return [(source, "audio/wav")]
         items = (
             value.get("images", []) if self.name == "siliconflow_image" else value.get("data", [])
         )
