@@ -109,6 +109,7 @@ const protocolNames: Record<string, string> = {
   gemini_video: "Google Gemini 视频",
   xai_video: "xAI 视频",
   qwen_tts: "通义语音",
+  qwen_audio_tts: "阿里云 Qwen Audio TTS",
   siliconflow_tts: "硅基流动语音",
   openai_tts: "OpenAI 语音",
 };

@@ -247,5 +247,5 @@ PROTOCOLS = {
     "text": ("openai_chat", "gemini", "qwen_chat"),
     "image": ("openai_image", "cogview", "seedream", "siliconflow_image", "gemini_image"),
     "video": ("seedance", "cogvideo", "wan", "gemini_video", "xai_video", "veo"),
-    "speech": ("openai_tts", "siliconflow_tts", "qwen_tts"),
+    "speech": ("openai_tts", "siliconflow_tts", "qwen_tts", "qwen_audio_tts"),
 }

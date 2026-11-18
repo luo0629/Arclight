@@ -75,6 +75,7 @@ class GenerationSpec(MediaInput):
         "gemini_video",
         "xai_video",
         "qwen_tts",
+        "qwen_audio_tts",
         "siliconflow_tts",
         "openai_tts",
     ] = "mock"

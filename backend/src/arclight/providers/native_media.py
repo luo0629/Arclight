@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
+from struct import pack, pack_into
 from typing import cast
 from urllib.parse import urlsplit
 
@@ -24,7 +25,6 @@ from arclight.providers.media_submission import MediaImageInput, MediaSubmission
 from arclight.providers.native_media_protocols import (
     ASYNC,
     KINDS,
-    QWEN_AUDIO_TTS_FLASH_MODEL,
     capabilities,
     query_path,
     submission,
@@ -59,6 +59,26 @@ def media_kind(data: bytes, fallback: str) -> str:
     if data[4:8] == b"ftyp":
         return "video/mp4"
     return fallback
+
+
+# DashScope sometimes leaves these length placeholders in its downloaded mono PCM WAV.
+_QWEN_WAV_STREAM_HEADER = pack("<4sI4s4sIHH", b"RIFF", 0x7FFFFFBF, b"WAVE", b"fmt ", 16, 1, 1)
+_QWEN_WAV_STREAM_DATA = pack("<HH4sI", 2, 16, b"data", 0x7FFFFF9B)
+
+
+def _finalize_qwen_wave(data: bytes) -> bytes:
+    if (
+        len(data) <= 44
+        or len(data) > 0x7FFFFFBF
+        or len(data) % 2
+        or not data.startswith(_QWEN_WAV_STREAM_HEADER)
+        or data[32:44] != _QWEN_WAV_STREAM_DATA
+    ):
+        return data
+    wave = bytearray(data)
+    pack_into("<I", wave, 4, len(data) - 8)
+    pack_into("<I", wave, 40, len(data) - 44)
+    return bytes(wave)
 
 
 class NativeMediaProvider:
@@ -180,6 +200,8 @@ class NativeMediaProvider:
             if not data:
                 raise GatewayFailure("INVALID_RESPONSE")
             kind = media_kind(data, hint)
+            if self.name == "qwen_audio_tts" and kind == "audio/wav":
+                data = _finalize_qwen_wave(data)
             suffix = {
                 "image/png": "png",
                 "image/jpeg": "jpeg",
@@ -230,10 +252,10 @@ class NativeMediaProvider:
                 for part in step.get("content", [])
                 if part.get("type") == "video"
             ]
-        if self.name == "qwen_tts":
+        if self.name in {"qwen_tts", "qwen_audio_tts"}:
             source = value["output"]["audio"]["url"]
             if (
-                self.connection.configuration["model"] == QWEN_AUDIO_TTS_FLASH_MODEL
+                self.name == "qwen_audio_tts"
                 and source.startswith("http://")
                 and re.fullmatch(
                     r"[a-z0-9-]+\.oss-(?:cn-beijing|ap-southeast-1)\.aliyuncs\.com",

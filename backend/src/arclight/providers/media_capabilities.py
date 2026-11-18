@@ -60,7 +60,7 @@ def resolve_capabilities(provider: str, model: str) -> MediaCapabilities:
 def resolve_parameters(provider: str, model: str) -> frozenset[str]:
     """The installed adapter declares its options; a request cannot advertise support."""
     resolve_capabilities(provider, model)
-    from arclight.providers.native_media_protocols import PARAMETERS, QWEN_AUDIO_TTS_FLASH_MODEL
+    from arclight.providers.native_media_protocols import PARAMETERS
 
     if provider in PARAMETERS:
         parameters = PARAMETERS[provider]
@@ -68,8 +68,6 @@ def resolve_parameters(provider: str, model: str) -> frozenset[str]:
         # Do not infer restrictions for unknown compatible models from their names.
         if provider == "openai_tts" and model in {"tts-1", "tts-1-hd"}:
             return parameters - {"instructions"}
-        if provider == "qwen_tts" and model == QWEN_AUDIO_TTS_FLASH_MODEL:
-            return frozenset({"voice", "speed", "instructions"})
         return parameters
     if provider == "openai":
         return frozenset({"quality"})

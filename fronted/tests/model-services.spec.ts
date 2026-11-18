@@ -417,6 +417,9 @@ for (const viewport of [
     await dialog
       .getByRole("combobox", { name: "API 协议", exact: true })
       .click();
+    await expect(
+      page.getByRole("option", { name: "阿里云 Qwen Audio TTS", exact: true }),
+    ).toBeVisible();
     await page
       .getByRole("option", { name: "OpenAI 语音", exact: true })
       .click();

@@ -1,6 +1,8 @@
 """Known model restrictions apply before voice persistence and dialogue admission."""
 
+import hashlib
 import json
+from struct import pack_into
 from uuid import UUID, uuid4
 
 import httpx
@@ -193,10 +195,17 @@ def test_siliconflow_known_models_admit_valid_frozen_output_to_line_budget(
     assert len(boundary_state(client)["reserved"]) == 1
 
 
-def test_qwen_audio_flash_dialogue_downloads_signed_wav_and_keeps_usage(client, settings, tts_case):
-    model = "qwen-audio-3.0-tts-flash"
-    configure_model(client, settings, model, protocol="qwen_tts")
-    voice = "longanlingxi"
+@pytest.mark.parametrize(
+    "model,voice,streamed",
+    [
+        ("qwen-audio-3.0-tts-flash", "longanlingxi", True),
+        ("qwen-audio-3.1-tts-flash", "longanhuan_v3.1", False),
+    ],
+)
+def test_qwen_audio_protocol_downloads_signed_wav_and_keeps_usage(
+    client, settings, tts_case, model, voice, streamed
+):
+    configure_model(client, settings, model, protocol="qwen_audio_tts")
     instructions = "Read with restrained urgency."
     invalid = save_model_voice(client, tts_case, voice=voice, speed=2.1)
     assert invalid.status_code == 422, invalid.text
@@ -205,6 +214,10 @@ def test_qwen_audio_flash_dialogue_downloads_signed_wav_and_keeps_usage(client, 
     assert response.status_code == 201, response.text
     tts_case["payload"]["voice_version_id"] = response.json()["id"]
     audio = wave_bytes()
+    provider_wav = bytearray(audio)
+    if streamed:
+        pack_into("<I", provider_wav, 4, 0x7FFFFFBF)
+        pack_into("<I", provider_wav, 40, 0x7FFFFF9B)
     signed_path = "dashscope-result-bj.oss-cn-beijing.aliyuncs.com/line.wav?Signature=abc%2Fdef"
     requests = []
 
@@ -213,7 +226,9 @@ def test_qwen_audio_flash_dialogue_downloads_signed_wav_and_keeps_usage(client, 
         if request.method == "GET":
             assert str(request.url) == f"https://{signed_path}"
             assert "authorization" not in request.headers
-            return httpx.Response(200, content=audio, headers={"content-type": "audio/wav"})
+            return httpx.Response(
+                200, content=bytes(provider_wav), headers={"content-type": "audio/wav"}
+            )
         assert request.method == "POST"
         assert request.url.path == "/v1/services/audio/tts/SpeechSynthesizer"
         assert request.headers["authorization"] == "Bearer synthetic-model-parameter-key"
@@ -243,4 +258,7 @@ def test_qwen_audio_flash_dialogue_downloads_signed_wav_and_keeps_usage(client, 
     with client.app.state.session_factory() as db:
         attempt = db.get(GenerationAttempt, attempt_id)
         assert attempt.result_json["usage"] == {"characters": 22}
+        assert attempt.result_json["output_handles"][0].endswith(
+            f"/{hashlib.sha256(audio).hexdigest()}.wav"
+        )
         assert attempt.cost is None
