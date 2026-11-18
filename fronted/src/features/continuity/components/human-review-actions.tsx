@@ -24,11 +24,13 @@ export default function HumanReviewActions({
   allowed,
   busy,
   mutate,
+  mediaLabel = "图片",
 }: {
   row: HumanReview;
   allowed: boolean;
   busy: boolean;
   mutate: Mutate;
+  mediaLabel?: "图片" | "视频";
 }) {
   const input = useId();
   const [comment, setComment] = useState("");
@@ -93,7 +95,8 @@ export default function HumanReviewActions({
               onChange={(event) => setComment(event.target.value)}
             />
             <FieldDescription>
-              说明本次精确图片的接受或拒绝依据。例外决定与版本批准分别记录。
+              说明本次精确{mediaLabel}
+              的接受或拒绝依据。例外决定与版本批准分别记录。
             </FieldDescription>
           </Field>
           <Field orientation="horizontal" className="flex-wrap">

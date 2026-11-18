@@ -161,6 +161,21 @@ def read_candidate(
                     and asset.status == "LOCKED"
                     and asset.current_version_id == version.id
                 ),
+                "can_start_review": (
+                    editable
+                    and not version.stale
+                    and result.admission["blocked_code"] == "VIDEO_REVIEW_REQUIRED"
+                    and result.admission["review_run_id"] is None
+                ),
+                "can_decide_review": editable and owner and not version.stale,
+                "can_revise": (
+                    editable
+                    and not version.stale
+                    and result.admission["blocked_code"] == "VIDEO_REVISION_REQUIRED"
+                    and result.admission["conclusion"] == "REVISION_REQUIRED"
+                    and result.admission["review_status"] == "WAITING_REVIEW"
+                    and result.admission["revision_id"] is None
+                ),
                 "can_replace": editable,
                 "can_restore": editable,
             }

@@ -34,6 +34,10 @@ def main() -> None:
         result = encode_timeline(data)
     elif operation == "inspect":
         result = inspect_render(data).model_dump_json().encode()
+    elif operation == "sample":
+        from arclight.media.video_frames import sample_video
+
+        result = sample_video(data)
     else:
         from arclight.media.probe import inspect_media
 

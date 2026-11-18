@@ -10,6 +10,7 @@ from arclight.application.agent_workflows import queue_answer
 from arclight.application.commands import require_project
 from arclight.application.continuity_workflow import read_work, start_candidate_review
 from arclight.application.production_versions import find_binding
+from arclight.application.video_review_work import read_temporal_work
 from arclight.core.errors import DomainError
 from arclight.domain.agent_runtime import AgentHumanDecision
 from arclight.domain.continuity_workflow import REVIEW_BLOCK_RESOURCE, CandidateReviewCreate
@@ -50,7 +51,9 @@ def progress(project_id: UUID, candidate_id: UUID, db: Database, actor: Actor) -
     candidate = db.get(GenerationCandidate, candidate_id)
     if candidate is None or candidate.project_id != project_id:
         raise DomainError("NOT_FOUND", "生成候选不存在", 404)
-    work = read_work(db, project_id, candidate.id)
+    work = read_work(db, project_id, candidate.id) or read_temporal_work(
+        db, project_id, candidate.id
+    )
     if work is None:
         block = find_binding(db, project_id, REVIEW_BLOCK_RESOURCE, candidate.id)
         return {

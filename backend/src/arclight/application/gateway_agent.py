@@ -23,6 +23,7 @@ from arclight.domain.agent_model import (
 )
 from arclight.domain.model_gateway import GatewayCapabilities, GatewayRequest, GatewayRoute
 from arclight.domain.versions import digest
+from arclight.domain.video_temporal_reviewer import TEMPORAL_AGENT
 from arclight.persistence.models import Episode, WorkflowRun
 from arclight.providers.agent_model import OpenAICompatibleAgentProvider, check_capabilities
 
@@ -75,17 +76,22 @@ def invoke_agent[T: BaseModel](
         if settings.provider != "openai_compatible":
             raise DomainError("GATEWAY_CAPABILITY_REJECTED", "此 Provider 尚未实现 Agent 协议", 422)
         capabilities = check_capabilities(settings, request, tools)
-        trace = read_trace(db, run, request.stage, actor, request.evidence_round)
-        images = load_context_images(
-            db,
-            settings,
-            run,
-            request.stage,
-            actor,
-            request.image_ids(),
-            through_round=request.evidence_round,
-            capabilities=capabilities,
-        )
+        if request.agent_version == TEMPORAL_AGENT:
+            from arclight.application.video_review_evidence import temporal_gateway_evidence
+
+            trace, images = temporal_gateway_evidence(request)
+        else:
+            trace = read_trace(db, run, request.stage, actor, request.evidence_round)
+            images = load_context_images(
+                db,
+                settings,
+                run,
+                request.stage,
+                actor,
+                request.image_ids(),
+                through_round=request.evidence_round,
+                capabilities=capabilities,
+            )
         policy = settings.model_gateway_policy
         route = GatewayRoute(
             provider=settings.llm_supplier

@@ -18,6 +18,7 @@ import {
 import type { VideoCandidate } from "../types";
 import useVideoCandidate from "../hooks/use-video-candidate";
 import VideoPreview from "./video-preview";
+import VideoTemporalReview from "./video-temporal-review";
 
 type Replacement = {
   file_id: string;
@@ -398,38 +399,13 @@ export default function VideoCandidateDetail({
           ) : (
             <Notice>缺少完整视频媒体检查，不能作为可用镜头选用。</Notice>
           )}
-          <section
-            aria-label="视频时序审查准入"
-            className="flex flex-col gap-1 text-xs"
-          >
-            <h5 className="font-semibold">视频时序审查</h5>
-            {data.admission?.status === "ADMITTED" ? (
-              <p>
-                精确审查已准入 · {data.admission?.conclusion} ·{" "}
-                {data.admission?.report_id}
-              </p>
-            ) : (
-              <Notice>
-                视频时序审查尚未满足，不能提交批准、正式选用或锁定。
-                {data.admission?.blocked_code}
-              </Notice>
-            )}
-            {data.admission?.report_sha256 && (
-              <p className="break-all">
-                报告 SHA-256：{data.admission?.report_sha256}
-              </p>
-            )}
-            {data.admission?.sampled_frame_count != null && (
-              <p>
-                采样 {data.admission?.sampled_frame_count} 帧 · 覆盖{" "}
-                {data.admission?.coverage_start_ms}–
-                {data.admission?.coverage_end_ms} ms
-              </p>
-            )}
-            {data.admission?.limitations.map((limitation, index) => (
-              <p key={index}>{limitation}</p>
-            ))}
-          </section>
+          <VideoTemporalReview
+            key={data.id}
+            candidate={data}
+            disabled={disabled}
+            state={state}
+            onChanged={onChanged}
+          />
           {state.fresh && (
             <VideoPreview
               key={data.id + ":" + version?.checksum}

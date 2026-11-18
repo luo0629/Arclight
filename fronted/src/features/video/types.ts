@@ -86,6 +86,22 @@ export type VideoCandidate = {
     coverage_start_ms: number | null;
     coverage_end_ms: number | null;
     limitations: string[];
+    summary?: string | null;
+    sampling_strategy?: string | null;
+    samples?: { time_ms: number; frame_sha256: string; observation: string }[];
+    issues?: {
+      issue_id: string;
+      time_ms: number;
+      description: string;
+      resolved: boolean;
+    }[];
+    review_run_id?: string | null;
+    review_status?: string | null;
+    review_error_code?: string | null;
+    human_review_request_id?: string | null;
+    revision_id?: string | null;
+    revision_job_id?: string | null;
+    revision_status?: string | null;
   } | null;
   actions: Record<
     | "can_submit"
@@ -95,7 +111,10 @@ export type VideoCandidate = {
     | "can_lock"
     | "can_unlock"
     | "can_replace"
-    | "can_restore",
+    | "can_restore"
+    | "can_start_review"
+    | "can_decide_review"
+    | "can_revise",
     boolean
   > | null;
 };

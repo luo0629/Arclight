@@ -120,9 +120,21 @@ def start_candidate_review(
     candidate = db.get(GenerationCandidate, candidate_id, populate_existing=True)
     if candidate is None or candidate.project_id != project_id:
         raise DomainError("NOT_FOUND", "生成候选不存在", 404)
-    checked = require_candidate_media_check(db, project_id, candidate.id)
     job = db.get(GenerationJob, candidate.job_id)
     assert job is not None
+    if job.target_type == "VIDEO":
+        from arclight.application.video_review_work import start_temporal_review
+
+        return start_temporal_review(
+            db,
+            settings,
+            project_id,
+            candidate.id,
+            actor,
+            payload,
+            producer_parent_run_id=producer_parent_run_id,
+        )
+    checked = require_candidate_media_check(db, project_id, candidate.id)
     manifest = db.get(DependencyManifest, candidate.input_manifest_id)
     assert manifest is not None
     context = manifest.snapshot_json["context"]
@@ -302,6 +314,9 @@ def queue_pending_reviews(
     factory: sessionmaker[Session], settings: Settings, limit: int = 100
 ) -> int:
     """Candidate rows are durable intake facts; a lost dispatch never loses a review."""
+    from arclight.application.video_review_work import read_temporal_work
+    from arclight.domain.video_temporal_reviewer import TEMPORAL_WORK_RESOURCE
+
     current_work, source_work, blocked = (aliased(VersionBinding) for _ in range(3))
     with factory() as db:
         identities = list(
@@ -314,7 +329,7 @@ def queue_pending_reviews(
                 )
                 .outerjoin(
                     current_work,
-                    (current_work.resource_type == REVIEW_WORK_RESOURCE)
+                    current_work.resource_type.in_([REVIEW_WORK_RESOURCE, TEMPORAL_WORK_RESOURCE])
                     & (current_work.resource_id == GenerationCandidate.id),
                 )
                 .outerjoin(
@@ -329,7 +344,7 @@ def queue_pending_reviews(
                 )
                 .where(
                     blocked.id.is_(None),
-                    GenerationJob.target_type == "SHOT_IMAGE",
+                    GenerationJob.target_type.in_(["SHOT_IMAGE", "VIDEO"]),
                     GenerationCandidate.asset_version_id.is_not(None),
                     current_work.id.is_(None),
                     or_(
@@ -368,7 +383,9 @@ def queue_pending_reviews(
                 candidate = db.get(GenerationCandidate, identity)
                 assert candidate is not None
                 project_id = candidate.project_id
-                if read_work(db, candidate.project_id, candidate.id) is not None:
+                if read_work(db, project_id, candidate.id) or read_temporal_work(
+                    db, project_id, candidate.id
+                ):
                     continue
                 job = db.get(GenerationJob, candidate.job_id)
                 manifest = db.get(DependencyManifest, candidate.input_manifest_id)

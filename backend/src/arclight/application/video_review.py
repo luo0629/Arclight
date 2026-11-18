@@ -52,7 +52,7 @@ def _definitions(db: Session, binding: VersionBinding, report: VideoReviewReport
             raise ValueError("An image schema cannot authorize temporal evidence")
 
 
-def _latest_record(db: Session, project_id: UUID, candidate_id: UUID) -> VideoReviewRecord:
+def latest_video_review(db: Session, project_id: UUID, candidate_id: UUID) -> VideoReviewRecord:
     rows = list(
         db.scalars(
             select(VersionBinding).where(
@@ -159,7 +159,7 @@ def require_video_review(db: Session, version: AssetVersion) -> VideoReviewRecor
         raise DomainError("VIDEO_REVIEW_REQUIRED", "视频须有独立候选、媒体检查和时序审查", 409)
     check = require_video_candidate_media_check(db, asset.project_id, candidate.id)
     assert check.video is not None
-    record = _latest_record(db, asset.project_id, candidate.id)
+    record = latest_video_review(db, asset.project_id, candidate.id)
     report = record.report
     manifest = db.get(DependencyManifest, candidate.input_manifest_id)
     job = db.get(GenerationJob, candidate.job_id)
@@ -245,6 +245,7 @@ def read_admission(db: Session, project_id: UUID, version: AssetVersion) -> dict
             "VIDEO_REVIEW_REQUIRED",
             "VIDEO_REVISION_REQUIRED",
             "HUMAN_DECISION_REQUIRED",
+            "VIDEO_REVIEW_TARGET_INVALID",
         }:
             candidate = db.scalar(
                 select(GenerationCandidate).where(
@@ -253,7 +254,7 @@ def read_admission(db: Session, project_id: UUID, version: AssetVersion) -> dict
             )
             if candidate is not None and candidate.project_id == project_id:
                 try:
-                    latest = _latest_record(db, project_id, candidate.id)
+                    latest = latest_video_review(db, project_id, candidate.id)
                     if latest.report.target.asset_version_id == version.id and (
                         latest.report.target.asset_id == asset.id
                         and latest.report.target.checksum == version.checksum
@@ -261,7 +262,37 @@ def read_admission(db: Session, project_id: UUID, version: AssetVersion) -> dict
                         record = latest
                 except DomainError:
                     pass
+    from arclight.application.continuity_revision_store import candidate_revision, revision_record
+    from arclight.application.video_review_work import read_temporal_work
+    from arclight.persistence.models import WorkflowRun
+
+    candidate = db.scalar(
+        select(GenerationCandidate).where(
+            GenerationCandidate.asset_version_id == version.id,
+            GenerationCandidate.project_id == project_id,
+        )
+    )
+    work = read_temporal_work(db, project_id, candidate.id) if candidate else None
+    run = db.get(WorkflowRun, work.run_id) if work else None
     report = record.report if record else None
+    human_request_id = None
+    if report is not None and record is not None:
+        route = find_binding(db, project_id, VIDEO_ADMISSION_RESOURCE, report.report_id)
+        if route is not None:
+            try:
+                admission = VideoReviewAdmission.model_validate(
+                    checked_snapshot(db, route)["video_admission"]
+                )
+                if admission.report_id == report.report_id and admission.record_sha256 == digest(
+                    record.model_dump(mode="json")
+                ):
+                    human_request_id = admission.human_review_request_id
+            except (ValidationError, KeyError, TypeError, ValueError, DomainError):
+                pass
+    revision = candidate_revision(db, project_id, candidate.id) if candidate else None
+    saved_revision = (
+        revision_record(db, project_id, revision.resource_id) if revision is not None else None
+    )
     return {
         "schema_version": "video-review-summary/1",
         "status": "BLOCKED" if blocked else "ADMITTED",
@@ -276,4 +307,14 @@ def read_admission(db: Session, project_id: UUID, version: AssetVersion) -> dict
         "limitations": list(report.limitations) if report else [],
         "sampling_strategy": report.sampling_strategy if report else None,
         "samples": [sample.model_dump(mode="json") for sample in report.samples] if report else [],
+        "issues": [issue.model_dump(mode="json") for issue in report.issues] if report else [],
+        "review_run_id": str(run.id) if run else None,
+        "review_status": run.status if run else None,
+        "review_error_code": run.error_code if run else None,
+        "human_review_request_id": str(human_request_id) if human_request_id else None,
+        "revision_id": str(saved_revision.revision_id) if saved_revision else None,
+        "revision_job_id": str(saved_revision.job_id)
+        if saved_revision and saved_revision.job_id
+        else None,
+        "revision_status": saved_revision.status if saved_revision else None,
     }

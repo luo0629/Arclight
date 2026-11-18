@@ -551,3 +551,66 @@ test("VIDEO-01模拟迟到：切换精确候选丢弃旧详情和媒体，跨项
     detail.getByRole("button", { name: "正式选用此视频", exact: true }),
   ).toBeDisabled();
 });
+
+test("VIDEO-02：视频时序取证、精确人工队列及独立版本门禁", async ({ page }) => {
+  test.setTimeout(90000);
+  const env = await realVideoFixture(page);
+  const shot = (await env.open()).getByRole("region", {
+    name: "镜头 1 视频候选",
+    exact: true,
+  });
+  await shot
+    .getByRole("button", { name: "视频 v1 · DRAFT", exact: true })
+    .click();
+  const detail = shot.getByRole("region", {
+    name: "精确视频候选详情",
+    exact: true,
+  });
+  const panel = detail.getByRole("region", {
+    name: "视频时序审查准入",
+    exact: true,
+  });
+  const endpoint = `/api/v1${env.candidate.content_path?.replace(/\/content$/, "")}`;
+  await panel
+    .getByRole("button", { name: "提交视频时序审查", exact: true })
+    .click();
+  await expect(async () => {
+    const response = await page.request.get(endpoint, { headers: env.headers });
+    expect(response.status()).toBe(200);
+    expect((await response.json()).admission.blocked_code).toBe(
+      "HUMAN_DECISION_REQUIRED",
+    );
+  }).toPass({ timeout: 20000 });
+  await detail
+    .getByRole("button", { name: "刷新视频候选", exact: true })
+    .click();
+  await expect(panel).toContainText("采样 8 帧");
+  await expect(panel).toContainText("HUMAN_DECISION_REQUIRED");
+  await panel.getByText("时间码与取证记录", { exact: true }).click();
+  await expect(
+    panel.getByText("5958 ms · 媒体沙箱取得的可解码帧", { exact: true }),
+  ).toBeVisible();
+  await detail
+    .getByRole("button", { name: "读取视频候选预览", exact: true })
+    .click();
+  await expect(detail.locator("video")).toBeVisible();
+  const queue = panel.getByRole("region", {
+    name: "精确版本人工处理",
+    exact: true,
+  });
+  await expect(queue).toContainText(env.candidate.asset_version_id!);
+  await queue
+    .getByLabel("人工处理意见（必填）")
+    .fill("已观看完整离线合成候选，接受抽样覆盖限制。");
+  await queue
+    .getByRole("button", { name: "接受本次例外", exact: true })
+    .click();
+  await expect(
+    queue.getByRole("button", { name: "恢复原执行", exact: true }),
+  ).toBeEnabled();
+  await queue.getByRole("button", { name: "恢复原执行", exact: true }).click();
+  await expect(panel).toContainText("精确审查已准入 · HUMAN_REVIEW");
+  await expect(
+    shot.getByRole("button", { name: "视频 v1 · DRAFT", exact: true }),
+  ).toBeVisible();
+});

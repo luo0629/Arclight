@@ -58,7 +58,11 @@ class VideoReviewReport(ProductionContract):
     @model_validator(mode="after")
     def temporal_evidence(self):
         times = [sample.time_ms for sample in self.samples]
-        if times != sorted(set(times)) or times[0] != 0 or times[-1] >= self.duration_ms:
+        if (
+            times != sorted(set(times))
+            or (times[0] != 0 and self.conclusion != "HUMAN_REVIEW")
+            or times[-1] >= self.duration_ms
+        ):
             raise ValueError("Video evidence requires ordered, distinct in-range timecodes")
         if self.coverage_start_ms != 0 or self.coverage_end_ms != self.duration_ms:
             raise ValueError("Temporal coverage must explicitly name the complete candidate")

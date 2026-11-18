@@ -81,6 +81,21 @@ def require_revision_execution(db: Session, job: GenerationJob) -> None:
     if record is None:
         return
     require_review_actor(db, record.project_id, record.created_by, owner=False)
+    if job.target_type == "VIDEO":
+        from arclight.application.video_review_routing import require_temporal_revision
+
+        reviewed_video, inputs = require_temporal_revision(
+            db, record.project_id, record.request.review_id
+        )
+        if (
+            record.target.model_dump(mode="json")
+            != inputs.target.model_dump(mode="json", exclude={"checksum", "manifest_sha256"})
+            or record.review_sha256 != digest(reviewed_video.model_dump(mode="json"))
+            or record.source_job_id != inputs.job.id
+            or record.source_manifest_id != inputs.job.input_manifest_id
+        ):
+            raise DomainError("REVISION_SOURCE_INVALID", "原视频审查或精确来源已变化", 409)
+        return
     # Workers already own the job and project gate. Taking a workflow row lock here
     # would invert the workflow -> project order used by human handling/routing.
     reviewed, route = read_routed_review(db, record.request.review_id, lock_run=False)

@@ -59,6 +59,14 @@ def execute_continuity(
         run = db.get(WorkflowRun, run_id)
         if run is None or run.workflow_type != "continuity_review":
             return False
+        from arclight.domain.video_temporal_reviewer import TEMPORAL_WORKFLOW_VERSION
+
+        temporal = run.workflow_version == TEMPORAL_WORKFLOW_VERSION
+    if temporal:
+        from arclight.application.video_review_execution import execute_video_review
+
+        execute_video_review(factory, settings, run_id, revision)
+        return True
     try:
         with factory.begin() as db:
             lock_gate(db)

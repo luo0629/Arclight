@@ -25,6 +25,7 @@ from arclight.application.production_events import begin_serialized
 from arclight.application.production_versions import bind, check_media, component, find_binding
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.continuity_reviews import ReviewTarget
 from arclight.domain.continuity_revisions import (
     MAX_REVISION_ROUNDS,
     REVISION_RESOURCE,
@@ -40,6 +41,7 @@ from arclight.domain.shot_revisions import (
     ShotRevisionReceipt,
 )
 from arclight.domain.versions import digest
+from arclight.domain.video_review import VIDEO_REVIEW_RESOURCE
 from arclight.persistence.generation_candidates import GenerationCandidate
 from arclight.persistence.models import DependencyManifest, GenerationJob, VisualAsset
 
@@ -71,39 +73,74 @@ def request_revision(
     if previous is not None:
         require_project(db, project_id, actor, write=True)
         return previous, False
-    record, route = read_routed_review(db, request.review_id)
-    review = record.review
-    if review.project_id != project_id:
-        raise DomainError("NOT_FOUND", "审查记录不存在", 404)
-    require_project(db, project_id, actor, write=True)
+    video_review = (
+        find_binding(db, project_id, VIDEO_REVIEW_RESOURCE, request.review_id) is not None
+    )
+    source: GenerationJob | None
+    if video_review:
+        from arclight.application.dependencies import lock_dependency_graph
+        from arclight.application.model_gateway import lock_gate
+        from arclight.application.video_review_routing import require_temporal_revision
+
+        lock_gate(db)
+        lock_dependency_graph(db, project_id)
+        require_review_actor(db, project_id, actor, owner=False)
+        video_record, video_inputs = require_temporal_revision(db, project_id, request.review_id)
+        video_report = video_record.report
+        target = ReviewTarget.model_validate(
+            video_report.target.model_dump(mode="json", exclude={"checksum", "manifest_sha256"})
+        )
+        episode_id, versions = video_report.episode_id, video_report.versions
+        review_sha256 = digest(video_record.model_dump(mode="json"))
+        video_issues = {
+            issue.issue_id: issue for issue in video_report.issues if not issue.resolved
+        }
+        if not set(request.issue_ids) <= video_issues.keys():
+            raise DomainError("REVISION_SCOPE_INVALID", "视频修订须引用本次未解决的时序问题", 422)
+        evidence_ids = sorted(
+            {
+                uuid5(request.review_id, f"frame:{video_issues[item].time_ms}")
+                for item in request.issue_ids
+            },
+            key=str,
+        )
+        source = video_inputs.job
+    else:
+        record, route = read_routed_review(db, request.review_id)
+        review = record.review
+        if review.project_id != project_id:
+            raise DomainError("NOT_FOUND", "审查记录不存在", 404)
+        require_project(db, project_id, actor, write=True)
+        require_review_actor(db, project_id, actor, owner=False)
+        require_review_actor(db, project_id, route.routed_by, owner=False)
+        require_completed_after_escalation(db, record)
+        if review.conclusion != "REVISION_REQUIRED":
+            raise DomainError("REVISION_NOT_ALLOWED", "只有有效的修订结论可以创建修订任务", 409)
+        target, episode_id, versions = review.target, review.episode_id, review.versions
+        review_sha256 = digest(record.model_dump(mode="json"))
+        issues = {item.issue_id: item for item in review.issues}
+        if not set(request.issue_ids) <= issues.keys() or any(
+            issues[identity].suggested_action not in {"REVISE_PROMPT", "REGENERATE"}
+            for identity in request.issue_ids
+        ):
+            raise DomainError("REVISION_SCOPE_INVALID", "修改范围必须引用本次审查的可修订问题", 422)
+        evidence_ids = sorted(
+            {identity for issue in request.issue_ids for identity in issues[issue].evidence_ids},
+            key=str,
+        )
+        candidate = db.get(GenerationCandidate, target.candidate_id)
+        source = db.get(GenerationJob, candidate.job_id) if candidate else None
+        if source is None or source.project_id != project_id or source.target_type != "SHOT_IMAGE":
+            raise DomainError("REVISION_SOURCE_INVALID", "修订必须源于同项目的镜头候选任务", 409)
     previous = existing_record()
     if previous is not None:
         return previous, False
-    require_review_actor(db, project_id, actor, owner=False)
-    require_review_actor(db, project_id, route.routed_by, owner=False)
-    require_completed_after_escalation(db, record)
-    if review.conclusion != "REVISION_REQUIRED":
-        raise DomainError("REVISION_NOT_ALLOWED", "只有有效的修订结论可以创建修订任务", 409)
-    if candidate_revision(db, project_id, review.target.candidate_id) is not None:
+    if candidate_revision(db, project_id, target.candidate_id) is not None:
         raise DomainError(
-            "REVISION_ALREADY_REQUESTED", "该候选已有修订；失败请重试原任务，新图须重审", 409
+            "REVISION_ALREADY_REQUESTED", "该候选已有修订；失败请重试原任务，新候选须重审", 409
         )
-    issues = {item.issue_id: item for item in review.issues}
-    if not set(request.issue_ids) <= issues.keys() or any(
-        issues[identity].suggested_action not in {"REVISE_PROMPT", "REGENERATE"}
-        for identity in request.issue_ids
-    ):
-        raise DomainError("REVISION_SCOPE_INVALID", "修改范围必须引用本次审查的可修订问题", 422)
-    evidence_ids = sorted(
-        {identity for issue in request.issue_ids for identity in issues[issue].evidence_ids},
-        key=str,
-    )
-    candidate = db.get(GenerationCandidate, review.target.candidate_id)
-    source = db.get(GenerationJob, candidate.job_id) if candidate else None
-    if source is None or source.project_id != project_id or source.target_type != "SHOT_IMAGE":
-        raise DomainError("REVISION_SOURCE_INVALID", "修订必须源于同项目的镜头候选任务", 409)
     manifest = db.get(DependencyManifest, source.input_manifest_id)
-    if manifest is None or manifest.id != review.target.input_manifest_id:
+    if manifest is None or (not video_review and manifest.id != target.input_manifest_id):
         raise DomainError("REVISION_SOURCE_INVALID", "候选与原生成输入不匹配", 409)
     check_media(db, project_id, source.id, manifest.id)
     parent = job_revision(db, source)
@@ -114,12 +151,12 @@ def request_revision(
         project_id=project_id,
         request=request,
         request_sha256=fingerprint,
-        review_sha256=digest(record.model_dump(mode="json")),
-        target=review.target,
+        review_sha256=review_sha256,
+        target=target,
         evidence_ids=evidence_ids,
         source_job_id=source.id,
         source_manifest_id=manifest.id,
-        root_candidate_id=parent.root_candidate_id if parent else review.target.candidate_id,
+        root_candidate_id=parent.root_candidate_id if parent else target.candidate_id,
         parent_revision_id=parent.revision_id if parent else None,
         round=round_no,
         status="NEEDS_REVIEW" if stopped else "QUEUED",
@@ -129,41 +166,56 @@ def request_revision(
     job = None
     if not stopped:
         context = manifest.snapshot_json["context"]
-        composition = context.get("prompt_composition")
-        if not isinstance(composition, dict):
-            raise DomainError("REVISION_SOURCE_INVALID", "原任务缺少可追溯的提示词组合清单", 409)
         original = GenerationSpec.model_validate(context["generation"])
-        spec, amended = amend_prompt(original, composition, request)
-        asset = db.get(VisualAsset, review.target.asset_id, populate_existing=True)
+        if video_review:
+            spec, amended = amend_video_spec(original, request), None
+        else:
+            composition = context.get("prompt_composition")
+            if not isinstance(composition, dict):
+                raise DomainError(
+                    "REVISION_SOURCE_INVALID", "原任务缺少可追溯的提示词组合清单", 409
+                )
+            spec, amended = amend_prompt(original, composition, request)
+        asset = db.get(VisualAsset, target.asset_id, populate_existing=True)
         assert asset is not None
         inputs = [
             {key: item[key] for key in ("source_asset_version_id", "dependency_type", "selectors")}
             for item in manifest.snapshot_json["inputs"]
         ]
         if not any(
-            item["source_asset_version_id"] == str(review.target.storyboard_id)
+            item["source_asset_version_id"] == str(target.storyboard_id)
             and item["dependency_type"] == "CONTENT_DEPENDENCY"
             for item in inputs
         ):
             inputs.append(
                 {
-                    "source_asset_version_id": str(review.target.storyboard_id),
+                    "source_asset_version_id": str(target.storyboard_id),
                     "dependency_type": "CONTENT_DEPENDENCY",
-                    "selectors": ["shot:" + str(review.target.shot_id)],
+                    "selectors": ["shot:" + str(target.shot_id)],
                 }
             )
         payload = GenerationCreate.model_validate(
             {
-                "episode_id": review.episode_id,
+                "episode_id": episode_id,
                 "batch_id": context.get("budget_batch_id"),
-                "target_type": "SHOT_IMAGE",
+                "target_type": source.target_type,
                 "target_asset_id": asset.id,
                 "expected_asset": {
                     "revision": asset.revision,
                     "lock_version": asset.lock_version,
                     "current_version_id": asset.current_version_id,
                 },
-                "task_type": "IMAGE",
+                "task_type": source.task_type,
+                **(
+                    {
+                        "review_target": {
+                            "storyboard_id": target.storyboard_id,
+                            "shot_id": target.shot_id,
+                        }
+                    }
+                    if video_review
+                    else {}
+                ),
                 "inputs": inputs,
                 "spec": spec.model_dump(mode="json"),
             }
@@ -197,7 +249,7 @@ def request_revision(
         job_id=job.id if job else None,
         input_manifest_id=job.input_manifest_id if job else None,
     )
-    entries = [item.model_dump(mode="json") for item in review.versions]
+    entries = [item.model_dump(mode="json") for item in versions]
     entries.extend(
         [
             component(
@@ -244,6 +296,31 @@ def request_revision(
     )
     db.flush()
     return revision, True
+
+
+def amend_video_spec(original: GenerationSpec, request: RevisionRequest) -> GenerationSpec:
+    from pydantic import ValidationError
+
+    prompt, negative = original.prompt, original.negative_prompt
+    for amendment in request.amendments:
+        instruction = amendment.instruction.strip()
+        if amendment.block == "negative_constraints":
+            negative = "\n".join(part for part in (negative, instruction) if part)
+        else:
+            prompt += "\n修订要求：" + instruction
+    try:
+        return GenerationSpec.model_validate(
+            original.model_dump(mode="json")
+            | {
+                "prompt": prompt,
+                "negative_prompt": negative,
+                "batch_size": 1,
+            }
+        )
+    except ValidationError as error:
+        raise DomainError(
+            "PROMPT_COMPOSITION_TOO_LARGE", "视频修订后的提示词超出原生成合同", 422
+        ) from error
 
 
 def request_shot_revision(

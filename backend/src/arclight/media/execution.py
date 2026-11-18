@@ -48,6 +48,10 @@ class MediaExecutionError(Exception):
 def command_for(operation: str, argument: str) -> MediaCommand:
     if operation == "probe" and argument in POLICIES:
         return MediaCommand(argument, POLICIES[argument].max_bytes, 4096)
+    if operation == "sample" and argument == "video/mp4":
+        from arclight.media.video_frames import SAMPLE_OUTPUT_LIMIT
+
+        return MediaCommand(argument, POLICIES[argument].max_bytes, SAMPLE_OUTPUT_LIMIT)
     if operation == "story" and argument in {"utf-8", "gb18030"}:
         return MediaCommand(argument, 256 * 1024, 1024**2)
     if operation == "preview" and argument in {"encode", "finalize"}:

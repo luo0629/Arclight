@@ -346,6 +346,9 @@ export async function mockedVideoFixture(page: Page) {
         can_unlock: false,
         can_replace: true,
         can_restore: true,
+        can_start_review: false,
+        can_decide_review: false,
+        can_revise: false,
       },
     };
   };

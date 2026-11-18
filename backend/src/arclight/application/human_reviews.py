@@ -38,6 +38,7 @@ def handlers() -> Mapping[str, ReviewHandler]:
     from arclight.application.render_reports import DELIVERY_HANDLERS
     from arclight.application.render_reviews import EXPORT_HANDLERS
     from arclight.application.text_reviews import TEXT_HANDLERS
+    from arclight.application.video_review_routing import VIDEO_REVIEW_HANDLERS
 
     return {
         **TEXT_HANDLERS,
@@ -46,6 +47,7 @@ def handlers() -> Mapping[str, ReviewHandler]:
         **FEEDBACK_HANDLERS,
         **EXPORT_HANDLERS,
         **DELIVERY_HANDLERS,
+        **VIDEO_REVIEW_HANDLERS,
     }
 
 
