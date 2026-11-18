@@ -220,11 +220,30 @@ test("UI-01：撤权清空整张图和正在播放的私有音频", async ({ pag
     .click();
   const audio = panel.getByLabel("画布音频播放器", { exact: true });
   await expect(audio).toBeVisible();
+  await audio.evaluate(async (element: HTMLAudioElement) => {
+    element.muted = true;
+    await element.play();
+  });
   const url = await audio.getAttribute("src");
-  env.controlMedia.status = 403;
-  await panel
-    .getByRole("button", { name: "重新读取画布音频", exact: true })
-    .click();
+  const audioPath = `/api/v1/projects/${env.project.id}/files/${env.voice.media_file_id}`;
+  // Revoke on the explicit media read so background graph refreshes cannot win the race.
+  await page.route(
+    `**${audioPath}`,
+    async (route) => {
+      env.controlMedia.status = 403;
+      await route.fallback();
+    },
+    { times: 1 },
+  );
+  const [denied] = await Promise.all([
+    page.waitForResponse(
+      (response) => new URL(response.url()).pathname === audioPath,
+    ),
+    panel
+      .getByRole("button", { name: "重新读取画布音频", exact: true })
+      .click(),
+  ]);
+  expect(denied.status()).toBe(403);
   await expect(
     page.getByRole("heading", { name: "当前画布内容不可访问", exact: true }),
   ).toBeVisible();
