@@ -79,7 +79,7 @@ class AssetArchive(Input):
 
 class AssetRead(Resource):
     project_id: UUID
-    asset_type: AssetType | Literal["IMAGE", "SHOT_IMAGE", "AUDIO", "SUBTITLE"]
+    asset_type: AssetType | Literal["IMAGE", "SHOT_IMAGE", "AUDIO", "SUBTITLE", "VIDEO"]
     name: str
     status: str
     current_version_id: UUID | None
@@ -111,6 +111,7 @@ def find_asset(
     include_audio: bool = False,
     include_subtitle: bool = False,
     include_music: bool = False,
+    include_video: bool = False,
 ) -> VisualAsset:
     row = db.get(VisualAsset, asset_id, populate_existing=True)
     kinds = (*DIRECTORY_TYPES, "IMAGE", "SHOT_IMAGE") if include_media else DIRECTORY_TYPES
@@ -120,6 +121,8 @@ def find_asset(
         kinds = (*kinds, "SUBTITLE")
     if include_music:
         kinds = (*kinds, "MUSIC")
+    if include_video:
+        kinds = (*kinds, "VIDEO")
     if row is None or row.project_id != project_id or row.asset_type not in kinds:
         raise DomainError("NOT_FOUND", "视觉资产不存在", 404)
     return row
@@ -158,6 +161,7 @@ def get_asset(project_id: UUID, asset_id: UUID, db: Database, actor: Actor) -> A
             include_audio=True,
             include_subtitle=True,
             include_music=True,
+            include_video=True,
         )
     )
 

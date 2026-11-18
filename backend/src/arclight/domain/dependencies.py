@@ -34,7 +34,7 @@ CONTENT_TARGETS = {
             "RENDER",
         }
     ),
-    "STORYBOARD": frozenset({"STORYBOARD", "SHOT_IMAGE", "SHOT_PREVIEW", "TIMELINE"}),
+    "STORYBOARD": frozenset({"STORYBOARD", "SHOT_IMAGE", "SHOT_PREVIEW", "TIMELINE", "VIDEO"}),
     "AUDIO": frozenset({"AUDIO", "SUBTITLE", "TIMELINE"}),
     "SUBTITLE": frozenset({"SUBTITLE", "TIMELINE"}),
     "SHOT_PREVIEW": frozenset({"SHOT_PREVIEW", "TIMELINE"}),

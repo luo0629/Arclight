@@ -16,7 +16,8 @@ def inspect_video(data: bytes) -> dict:
         width, height = stream.codec_context.width, stream.codec_context.height
         if not 0 < rate <= 120 or not 0 < width * height <= 8_294_400 or max(width, height) > 4096:
             raise ValueError("Unsupported video dimensions or rate")
-        if stream.codec_context.name not in {"h264", "hevc", "av1", "mpeg4"}:
+        codec = stream.codec_context.name
+        if codec not in {"h264", "hevc", "av1", "mpeg4"}:
             raise ValueError("Unsupported video codec")
         for item in container.streams:
             item.codec_context.thread_count = 1
@@ -58,4 +59,8 @@ def inspect_video(data: bytes) -> dict:
         "height": height,
         "duration_ms": round(end_time * 1000),
         "frame_rate": rate,
+        "codec": codec,
+        "decoded_frames": frames,
+        "has_audio": bool(samples),
+        "full_decode_verified": True,
     }

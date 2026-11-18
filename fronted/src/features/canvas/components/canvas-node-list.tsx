@@ -72,6 +72,7 @@ export default function CanvasNodeList({
               ["text", "文本与镜头"],
               ["assets", "资产与参考"],
               ["images", "候选图"],
+              ["videos", "镜头视频候选"],
               ["audio", "配音、音乐与音效"],
               ["timelines", "时间轴"],
               ["deliveries", "成片"],

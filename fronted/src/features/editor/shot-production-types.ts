@@ -1,3 +1,5 @@
+import type { VideoCandidateSummary } from "@/features/video/types";
+
 export type Blocker = { code: string; message: string };
 export type ProductionJob = {
   id: string;
@@ -45,6 +47,8 @@ export type ProductionShot = {
   blocker: Blocker | null;
   candidates: ProductionCandidate[];
   candidates_truncated: boolean;
+  video_candidates: VideoCandidateSummary[];
+  video_candidates_truncated: boolean;
 };
 export type ProductionPage = {
   project_id: string;

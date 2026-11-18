@@ -1,17 +1,20 @@
 """UI-01: exact canvas projections use real registrations and private media routes."""
 
 import hashlib
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from render_job_helpers import job_case, render_case, review_case, timeline_case
 from render_manifest_helpers import stored_file
-from sqlalchemy import select
+from sqlalchemy import event, select
 from test_audio_production import audio_source, output_audio, prepare, wave_bytes
 from test_file_transfers import transfer_setup
+from test_generation_video_inputs import video_case
 from test_music_assets import create_music, import_music, music_source
 from test_render_deliveries import delivery_case, history_url, viewer
+from test_video_candidates import finish_video, formal_video_case, imported_rows, video_bytes
 
+from arclight.application import generation_artifacts
 from arclight.persistence.models import AssetVersion, StoredFile
 
 __all__ = [
@@ -22,6 +25,8 @@ __all__ = [
     "review_case",
     "timeline_case",
     "transfer_setup",
+    "formal_video_case",
+    "video_case",
 ]
 
 
@@ -233,3 +238,115 @@ def test_canvas_media_never_leaks_from_a_foreign_project(client, episode):
             ).status_code
             == 404
         )
+
+
+def test_canvas_formal_video_is_private_exact_and_unselected_without_temporal_review(
+    client, settings, formal_video_case
+):
+    case, data = formal_video_case, video_bytes()
+    _, attempt, provider = finish_video(client, settings, case, data)
+    assert (
+        generation_artifacts.import_attempt(
+            client.app.state.session_factory, settings, attempt, provider
+        )
+        == 1
+    )
+    candidate = imported_rows(client)[0]
+    episode = {"id": case["episode_id"], "project_id": case["project_id"]}
+    node = exact(graph(client, episode), str(candidate.asset_version_id))
+    assert node["preview_kind"] == "VIDEO"
+    assert node["candidate_id"] == str(candidate.id)
+    assert node["asset_type"] == "VIDEO"
+    assert node["status"] == "DRAFT" and not node["current"]
+    assert node["duration_ms"] == 6000
+    assert node["checksum"] == hashlib.sha256(data).hexdigest()
+    assert node["preview_path"] == (
+        f"/projects/{case['project_id']}/generation-candidates/{candidate.id}/content"
+    )
+    response = client.get("/api/v1" + node["preview_path"])
+    assert response.status_code == 200 and response.content == data
+    assert response.headers["content-type"] == "video/mp4"
+    assert not {"object_key", "bucket", "signed_url", "content_base64"}.intersection(node)
+    with client.app.state.session_factory() as db:
+        file = db.get(StoredFile, UUID(node["media_file_id"]))
+        assert file.asset_version_id == candidate.asset_version_id
+        assert not file.rights_confirmed
+    detail = client.get(
+        f"/api/v1/projects/{case['project_id']}/generation-candidates/{candidate.id}"
+    ).json()
+    assert detail["admission"]["status"] == "BLOCKED"
+    assert detail["actions"]["can_select"] is False
+    foreign = client.post("/api/v1/projects", json={"name": "Unrelated video"}).json()
+    foreign_episode = client.post(
+        f"/api/v1/projects/{foreign['id']}/episodes",
+        json={"episode_no": 1, "title": "No foreign footage"},
+    ).json()
+    assert all(
+        item.get("candidate_id") != str(candidate.id)
+        for item in graph(client, foreign_episode)["nodes"]
+    )
+    assert (
+        client.get(
+            f"/api/v1/projects/{foreign['id']}/generation-candidates/{candidate.id}/content"
+        ).status_code
+        == 404
+    )
+
+
+@pytest.mark.parametrize("checksum_matches", [True, False])
+def test_canvas_video_file_registration_must_match_the_formal_candidate(
+    client, settings, formal_video_case, checksum_matches
+):
+    case = formal_video_case
+    _, attempt, provider = finish_video(client, settings, case, video_bytes())
+
+    def register_checksum(_mapper, _connection, file):
+        # Inject a bad initial receipt without rewriting immutable history.
+        if not checksum_matches and file.asset_version_id and file.media_type == "video/mp4":
+            file.checksum = "f" * 64
+
+    event.listen(StoredFile, "before_insert", register_checksum)
+    try:
+        assert (
+            generation_artifacts.import_attempt(
+                client.app.state.session_factory, settings, attempt, provider
+            )
+            == 1
+        )
+    finally:
+        event.remove(StoredFile, "before_insert", register_checksum)
+    candidate = imported_rows(client)[0]
+    episode = {"id": case["episode_id"], "project_id": case["project_id"]}
+    with client.app.state.session_factory() as db:
+        file = db.scalar(
+            select(StoredFile).where(StoredFile.asset_version_id == candidate.asset_version_id)
+        )
+        version = db.get(AssetVersion, candidate.asset_version_id)
+        assert file is not None and version is not None
+        assert (file.checksum == version.checksum) is checksum_matches
+    node = exact(graph(client, episode), str(candidate.asset_version_id))
+    if checksum_matches:
+        assert node["preview_kind"] == "VIDEO"
+        assert node["candidate_id"] == str(candidate.id)
+        assert node["preview_path"].endswith(f"/{candidate.id}/content")
+    else:
+        assert node.get("preview_kind") is None and node.get("candidate_id") is None
+        assert node.get("preview_path") is None
+
+
+def test_canvas_video_metadata_cannot_publish_an_unregistered_candidate(client, episode):
+    _, version_id, _ = stored_file(
+        client,
+        episode["project_id"],
+        b"not-a-generated-video",
+        "video/mp4",
+        kind="VIDEO",
+        version_metadata={
+            "candidate_id": str(uuid4()),
+            "video_check": {"status": "PASSED", "full_decode_verified": True},
+            "video_source": {"storyboard_id": str(uuid4())},
+        },
+    )
+    node = exact(graph(client, episode), version_id)
+    assert node.get("preview_kind") is None and node.get("candidate_id") is None
+    assert node.get("preview_path") is None

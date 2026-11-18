@@ -4,7 +4,7 @@ import hashlib
 from copy import deepcopy
 from uuid import UUID, uuid5
 
-from sqlalchemy import exists, select
+from sqlalchemy import and_, exists, or_, select
 from sqlalchemy.orm import sessionmaker
 
 from arclight.application.audit import audit
@@ -14,6 +14,7 @@ from arclight.core.errors import DomainError
 from arclight.media.validation import probe
 from arclight.persistence.models import (
     GenerationAttempt,
+    GenerationCandidate,
     GenerationJob,
     GenerationMediaArtifact,
     StoredFile,
@@ -34,7 +35,26 @@ def pending_attempts(factory: sessionmaker) -> list[UUID]:
                     GenerationJob.task_type.in_({"AUDIO", "VIDEO"}),
                     GenerationAttempt.provider.in_(KINDS),
                     GenerationAttempt.status == "SUCCEEDED",
-                    ~exists().where(GenerationMediaArtifact.attempt_id == GenerationAttempt.id),
+                    or_(
+                        ~exists().where(GenerationMediaArtifact.attempt_id == GenerationAttempt.id),
+                        and_(
+                            GenerationJob.task_type == "VIDEO",
+                            GenerationAttempt.input_snapshot_json["context"]["continuity_review"][
+                                "storyboard_id"
+                            ]
+                            .as_string()
+                            .is_not(None),
+                            exists().where(
+                                GenerationMediaArtifact.attempt_id == GenerationAttempt.id,
+                                ~exists()
+                                .where(
+                                    GenerationCandidate.attempt_id == GenerationAttempt.id,
+                                    GenerationCandidate.ordinal == GenerationMediaArtifact.ordinal,
+                                )
+                                .correlate(GenerationAttempt, GenerationMediaArtifact),
+                            ),
+                        ),
+                    ),
                 )
                 .order_by(GenerationAttempt.created_at)
                 .limit(100)
@@ -59,7 +79,10 @@ def import_attempt(
                 GenerationMediaArtifact.attempt_id == attempt_id
             )
         ):
-            return 0
+            from arclight.application.video_candidates import import_video_candidates
+
+            db.close()
+            return import_video_candidates(factory, settings, attempt_id)
         request = MediaSubmission(
             job.id,
             attempt.id,
@@ -144,4 +167,7 @@ def import_attempt(
                 "error_code": error,
             },
         )
+    from arclight.application.video_candidates import import_video_candidates
+
+    import_video_candidates(factory, settings, attempt_id)
     return 1

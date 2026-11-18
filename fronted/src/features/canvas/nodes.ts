@@ -8,6 +8,7 @@ export const assetTypeNames: Record<string, string> = {
   STYLE: "风格",
   IMAGE: "候选图",
   SHOT_IMAGE: "镜头候选图",
+  VIDEO: "镜头视频候选",
   SHOT_PREVIEW: "预览成片",
   SCRIPT: "剧本",
   STORYBOARD: "分镜",
@@ -26,6 +27,8 @@ export function nodeGroup(node: GraphNode) {
     ["RENDER", "SHOT_PREVIEW"].includes(node.asset_type ?? "")
   )
     return "deliveries";
+  if (node.preview_kind === "VIDEO" || node.asset_type === "VIDEO")
+    return "videos";
   if (
     node.preview_kind === "AUDIO" ||
     ["AUDIO", "MUSIC"].includes(node.asset_type ?? "")

@@ -14,7 +14,7 @@ class FilePolicy:
 
 
 POLICIES = {
-    "video/mp4": FilePolicy(frozenset({"GENERATED_VIDEO"}), frozenset({".mp4"}), None),
+    "video/mp4": FilePolicy(frozenset({"GENERATED_VIDEO", "VIDEO"}), frozenset({".mp4"}), None),
     "audio/flac": FilePolicy(frozenset({"GENERATED_AUDIO"}), frozenset({".flac"}), None),
     "image/png": FilePolicy(frozenset({"REFERENCE_IMAGE"}), frozenset({".png"}), None),
     "image/jpeg": FilePolicy(frozenset({"REFERENCE_IMAGE"}), frozenset({".jpg", ".jpeg"}), None),

@@ -1,10 +1,11 @@
 """Project-scoped candidate history and explicit upload-backed replacements."""
 
 from datetime import UTC, datetime
+from typing import Literal
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Request, Response
-from pydantic import Field, field_validator
+from pydantic import Field, ValidationError, field_validator
 from sqlalchemy import select
 
 from arclight.api.asset_versions import VersionRead, read_version
@@ -19,15 +20,25 @@ from arclight.application.commands import require_project
 from arclight.application.generation_candidates import append_candidate_version
 from arclight.application.generation_state import find_job
 from arclight.application.production_versions import digest
+from arclight.application.render_inputs import file_storage
 from arclight.application.uploads import validated_image
+from arclight.application.video_candidates import (
+    append_video_candidate_version,
+    check_video_candidate_media,
+    validated_video,
+)
+from arclight.application.video_review import read_admission
 from arclight.core.errors import DomainError
-from arclight.domain.candidate_checks import CandidateMediaCheck
+from arclight.domain.candidate_checks import CandidateMediaCheck, CandidateVideoCheck
+from arclight.domain.file_policy import POLICIES
 from arclight.persistence.models import (
     AssetVersion,
+    DependencyManifest,
     FileRegistration,
     GenerationAttempt,
     GenerationCandidate,
     GenerationJob,
+    StoredFile,
     VisualAsset,
 )
 
@@ -35,6 +46,7 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}", tags=["generation-can
 
 
 class CandidateRead(Resource):
+    project_id: UUID
     job_id: UUID
     attempt_id: UUID
     input_manifest_id: UUID
@@ -48,7 +60,13 @@ class CandidateRead(Resource):
     required_review: str = "CONTINUITY"
     version: VersionRead | None = None
     asset_revision: int | None = None
-    media_check: CandidateMediaCheck | None = None
+    media_check: CandidateMediaCheck | CandidateVideoCheck | None = None
+    media_kind: Literal["IMAGE", "VIDEO"] = "IMAGE"
+    content_path: str | None = None
+    video_source: dict | None = None
+    production: dict | None = None
+    admission: dict | None = None
+    actions: dict[str, bool] = Field(default_factory=dict)
 
     @field_validator("created_at", "updated_at")
     @classmethod
@@ -69,10 +87,18 @@ def find_candidate(db: Database, project_id: UUID, candidate_id: UUID) -> Genera
     return row
 
 
-def read_candidate(db: Database, row: GenerationCandidate) -> CandidateRead:
+def read_candidate(
+    db: Database, row: GenerationCandidate, actor: str | None = None
+) -> CandidateRead:
     result = CandidateRead.model_validate(row)
+    job = db.get(GenerationJob, row.job_id)
+    video = job is not None and job.target_type == "VIDEO"
+    result.media_kind = "VIDEO" if video else "IMAGE"
+    if video:
+        result.required_review = "VIDEO_TEMPORAL"
     if row.media_check_json is not None:
-        result.media_check = CandidateMediaCheck.model_validate(row.media_check_json)
+        check_type = CandidateVideoCheck if video else CandidateMediaCheck
+        result.media_check = check_type.model_validate(row.media_check_json)
     version = db.get(AssetVersion, row.asset_version_id) if row.asset_version_id else None
     if version is not None:
         result.required_review = version.metadata_json.get("required_review", "CONTINUITY")
@@ -81,6 +107,63 @@ def read_candidate(db: Database, row: GenerationCandidate) -> CandidateRead:
         result.version.updated_at = CandidateRead.utc_timestamp(result.version.updated_at)
         asset = db.get(VisualAsset, version.asset_id)
         result.asset_revision = asset.revision if asset else None
+        if video:
+            result.content_path = (
+                f"/projects/{row.project_id}/generation-candidates/{row.id}/content"
+            )
+            result.video_source = version.metadata_json.get("video_source")
+            manifest = db.get(DependencyManifest, job.input_manifest_id) if job else None
+            if manifest is not None:
+                specification = manifest.snapshot_json.get("context", {}).get("generation", {})
+                result.production = {
+                    key: specification.get(key)
+                    for key in (
+                        "provider",
+                        "model",
+                        "prompt",
+                        "negative_prompt",
+                        "model_config_version",
+                        "prompt_version",
+                        "parameters",
+                        "output_spec",
+                        "seed",
+                        "variation",
+                    )
+                }
+            result.admission = read_admission(db, row.project_id, version)
+            writable = False
+            owner = False
+            if actor is not None:
+                try:
+                    project = require_project(db, row.project_id, actor, write=True)
+                    writable = True
+                    owner = project.owner_id == actor
+                except DomainError:
+                    pass
+            editable = writable and asset is not None and asset.status not in {"LOCKED", "ARCHIVED"}
+            usable = editable and not version.stale and result.admission["status"] == "ADMITTED"
+            result.actions = {
+                "can_submit": usable and version.status == "DRAFT",
+                "can_approve": usable and owner and version.status == "READY_FOR_REVIEW",
+                "can_reject": editable and owner and version.status == "READY_FOR_REVIEW",
+                "can_select": usable and owner and version.status == "APPROVED",
+                "can_lock": bool(
+                    usable
+                    and owner
+                    and version.status == "APPROVED"
+                    and asset is not None
+                    and asset.current_version_id == version.id
+                ),
+                "can_unlock": bool(
+                    writable
+                    and owner
+                    and asset is not None
+                    and asset.status == "LOCKED"
+                    and asset.current_version_id == version.id
+                ),
+                "can_replace": editable,
+                "can_restore": editable,
+            }
     return result
 
 
@@ -98,7 +181,7 @@ def list_candidates(
     if job.project_id != project_id:
         raise DomainError("NOT_FOUND", "媒体任务不存在", 404)
     return [
-        read_candidate(db, row)
+        read_candidate(db, row, actor)
         for row in db.scalars(
             select(GenerationCandidate)
             .where(GenerationCandidate.job_id == job_id)
@@ -107,6 +190,73 @@ def list_candidates(
             .offset(offset)
         )
     ]
+
+
+@router.get("/generation-candidates/{candidate_id}")
+def get_candidate(
+    project_id: UUID, candidate_id: UUID, db: Database, actor: Actor
+) -> CandidateRead:
+    require_project(db, project_id, actor)
+    return read_candidate(db, find_candidate(db, project_id, candidate_id), actor)
+
+
+@router.get("/generation-candidates/{candidate_id}/content")
+def candidate_content(
+    project_id: UUID, candidate_id: UUID, request: Request, db: Database, actor: Actor
+) -> Response:
+    require_project(db, project_id, actor)
+    row = find_candidate(db, project_id, candidate_id)
+    job = db.get(GenerationJob, row.job_id)
+    version = db.get(AssetVersion, row.asset_version_id) if row.asset_version_id else None
+    if job is None or job.target_type != "VIDEO":
+        raise DomainError("INVALID_VIDEO", "此候选不是镜头视频", 422)
+    if version is None or row.error_code is not None:
+        raise DomainError("ASSET_OBJECT_UNAVAILABLE", "候选未通过媒体检查", 409)
+    try:
+        check = CandidateVideoCheck.model_validate(row.media_check_json)
+    except ValidationError as error:
+        raise DomainError("MEDIA_CHECK_REQUIRED", "视频缺少有效的完整媒体检查", 409) from error
+    asset = db.get(VisualAsset, version.asset_id)
+    if (
+        asset is None
+        or asset.project_id != project_id
+        or asset.asset_type != "VIDEO"
+        or job.project_id != project_id
+        or check.input_manifest_id != row.input_manifest_id
+        or check.status != "PASSED"
+        or check.video is None
+        or check.candidate_id != row.id
+        or check.video.checksum != version.checksum
+        or version.metadata_json.get("candidate_id") != str(row.id)
+        or version.metadata_json.get("video_check") != check.video.model_dump(mode="json")
+    ):
+        raise DomainError("MEDIA_CHECK_REQUIRED", "视频缺少匹配的完整媒体检查", 409)
+    file = db.scalar(
+        select(StoredFile).where(
+            StoredFile.project_id == project_id,
+            StoredFile.asset_version_id == version.id,
+            StoredFile.object_key == version.object_key,
+            StoredFile.checksum == version.checksum,
+            StoredFile.media_type == "video/mp4",
+        )
+    )
+    if file is None or file.byte_size != check.video.byte_size:
+        raise DomainError("ASSET_OBJECT_UNAVAILABLE", "视频对象与不可变回执不一致", 409)
+    data = file_storage(request.app.state.settings, file).read(
+        file.object_key, POLICIES[file.media_type].max_bytes, file.checksum
+    )
+    if len(data) != file.byte_size:
+        raise DomainError("ASSET_OBJECT_UNAVAILABLE", "视频对象大小与回执不一致", 409)
+    return Response(
+        data,
+        media_type="video/mp4",
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'inline; filename="candidate-video.mp4"',
+            "Content-Security-Policy": "default-src 'none'; sandbox",
+        },
+    )
 
 
 @router.get("/generation-candidates/{candidate_id}/image")
@@ -118,6 +268,8 @@ def candidate_image(
     version = db.get(AssetVersion, row.asset_version_id) if row.asset_version_id else None
     if version is None:
         raise DomainError("ASSET_OBJECT_UNAVAILABLE", "候选未通过媒体检查", 409)
+    if version.metadata_json.get("media", {}).get("media_type") not in {"image/png", "image/jpeg"}:
+        raise DomainError("INVALID_IMAGE", "此候选不是图片，请使用对应媒体预览", 422)
     data = read_object(
         request.app.state.settings, project_id, version.id, version.object_key, version.checksum
     )
@@ -153,8 +305,8 @@ def replace_candidate(
     )
     if existing is not None:
         if existing.request_fingerprint != fingerprint:
-            raise DomainError("IDEMPOTENCY_CONFLICT", "替换标识不能关联不同图片或候选", 409)
-        return read_candidate(db, existing)
+            raise DomainError("IDEMPOTENCY_CONFLICT", "替换标识不能关联不同文件或候选", 409)
+        return read_candidate(db, existing, actor)
     job = db.get(GenerationJob, source.job_id)
     attempt = db.get(GenerationAttempt, source.attempt_id)
     assert job is not None and attempt is not None
@@ -168,11 +320,74 @@ def replace_candidate(
     if (asset.revision if asset else 0) != payload.expected_revision:
         raise DomainError("VERSION_CONFLICT", "候选资产已变化，请刷新后重试", 409)
     file = find_file(db, project_id, payload.file_id)
+    if job.target_type == "VIDEO":
+        if not file.rights_confirmed:
+            raise DomainError("VIDEO_RIGHTS_REQUIRED", "替换视频须确认来源与使用权", 422)
+        video = validated_video(request.app.state.settings, file)
+        identity = uuid4()
+        manifest = db.get(DependencyManifest, source.input_manifest_id)
+        check = check_video_candidate_media(db, job, attempt, identity, video, manifest=manifest)
+        if check.status != "PASSED":
+            raise DomainError(
+                check.error_code or "INVALID_CANDIDATE", "候选视频的精确输入无效", 409
+            )
+        output = append_video_candidate_version(
+            db,
+            request.app.state.settings,
+            job,
+            attempt,
+            video,
+            payload.creation_key,
+            actor,
+            candidate_id=identity,
+            media_notes={
+                "original_name": file.original_name,
+                "source_note": file.source_note,
+                "rights_note": file.rights_note,
+                "rights_confirmed": file.rights_confirmed,
+            },
+            source_file_id=file.id,
+            replaces_version_id=source.asset_version_id,
+            expected_revision=payload.expected_revision,
+            manifest=manifest,
+        )
+        row = GenerationCandidate(
+            id=identity,
+            project_id=project_id,
+            job_id=job.id,
+            attempt_id=attempt.id,
+            input_manifest_id=source.input_manifest_id,
+            source="REPLACEMENT",
+            asset_version_id=output.id,
+            source_file_id=file.id,
+            replaces_candidate_id=source.id,
+            creation_key=payload.creation_key,
+            request_fingerprint=fingerprint,
+            created_by=actor,
+            media_check_json=check.model_dump(mode="json"),
+        )
+        db.add(row)
+        db.flush()
+        audit(
+            db,
+            project_id,
+            actor,
+            "generation.candidate_replaced",
+            row.id,
+            {
+                "replaces_candidate_id": str(source.id),
+                "asset_version_id": str(output.id),
+                "source_file_id": str(file.id),
+            },
+        )
+        return read_candidate(db, row, actor)
     image = validated_image(request.app.state.settings, file)
     candidate_id = uuid4()
-    check = check_candidate_media(db, job, attempt, candidate_id, image)
-    if check.status != "PASSED":
-        raise DomainError(check.error_code or "INVALID_CANDIDATE", "候选图片的精确输入无效", 409)
+    image_check = check_candidate_media(db, job, attempt, candidate_id, image)
+    if image_check.status != "PASSED":
+        raise DomainError(
+            image_check.error_code or "INVALID_CANDIDATE", "候选图片的精确输入无效", 409
+        )
     output = append_candidate_version(
         db,
         request.app.state.settings,
@@ -191,7 +406,7 @@ def replace_candidate(
     )
     row = GenerationCandidate(
         id=candidate_id,
-        media_check_json=check.model_dump(mode="json"),
+        media_check_json=image_check.model_dump(mode="json"),
         project_id=project_id,
         job_id=job.id,
         attempt_id=attempt.id,
@@ -219,4 +434,4 @@ def replace_candidate(
             "source_file_id": str(file.id),
         },
     )
-    return read_candidate(db, row)
+    return read_candidate(db, row, actor)

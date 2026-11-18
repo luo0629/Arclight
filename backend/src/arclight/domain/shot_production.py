@@ -35,6 +35,18 @@ class ProductionCandidate(BaseModel):
     blocker: ProductionBlocker | None
 
 
+class ProductionVideoCandidate(BaseModel):
+    id: UUID
+    job_id: UUID
+    asset_id: UUID
+    version_id: UUID
+    version_no: int
+    revision: int
+    asset_revision: int
+    status: str
+    content_path: str
+
+
 class ProductionShot(BaseModel):
     id: UUID
     shot_no: int
@@ -44,6 +56,8 @@ class ProductionShot(BaseModel):
     blocker: ProductionBlocker | None
     candidates: list[ProductionCandidate]
     candidates_truncated: bool
+    video_candidates: list[ProductionVideoCandidate] = []
+    video_candidates_truncated: bool = False
 
 
 class StoryboardProduction(BaseModel):

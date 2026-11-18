@@ -19,6 +19,7 @@ export type AssetVersion = {
     original_name: string;
     source_note: string;
     rights_note: string;
+    rights_confirmed?: boolean;
   } | null;
   asset_snapshot: VisualAsset | null;
   restored_from_version_id: string | null;
@@ -222,7 +223,8 @@ export type GraphNode = {
   checksum?: string;
   dependency_manifest_id?: string | null;
   preview_path?: string | null;
-  preview_kind?: "IMAGE" | "AUDIO" | "TIMELINE" | "DELIVERY";
+  preview_kind?: "IMAGE" | "VIDEO" | "AUDIO" | "TIMELINE" | "DELIVERY";
+  candidate_id?: string;
   media_file_id?: string;
   media_type?: string;
   media_episode_id?: string;

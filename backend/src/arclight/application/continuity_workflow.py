@@ -78,8 +78,8 @@ def freeze_review_binding(db: Session, project_id: UUID, payload: GenerationCrea
     if payload.review_target is None and len(legacy) < 2:
         # Partial legacy context is generic metadata, never an exact shot binding.
         return None
-    if payload.target_type != "SHOT_IMAGE":
-        raise DomainError("REVIEW_TARGET_INVALID", "连续性送审只适用于镜头图片", 422)
+    if payload.target_type not in {"SHOT_IMAGE", "VIDEO"}:
+        raise DomainError("REVIEW_TARGET_INVALID", "精确镜头送审只适用于镜头图片或视频", 422)
     try:
         binding = payload.review_target or ShotReviewBinding.model_validate(legacy)
         if legacy and ShotReviewBinding.model_validate(legacy) != binding:

@@ -21,6 +21,7 @@ import TimelinePreview from "@/features/rendering/components/timeline-preview";
 import DeliveryPreview from "@/features/rendering/components/delivery-preview";
 import { duration } from "@/features/rendering/components/render-format";
 import { trackNames } from "@/features/rendering/timeline-editing";
+import VideoCandidateDetail from "@/features/video/components/video-candidate-detail";
 
 type Media =
   | { kind: "TIMELINE"; timeline: Timeline }
@@ -29,10 +30,12 @@ export default function MediaDetails({
   node,
   projectId,
   unavailable,
+  onChanged,
 }: {
   node: GraphNode;
   projectId: string;
   unavailable: (cause: unknown) => void;
+  onChanged: () => Promise<void>;
 }) {
   const [seek, setSeek] = useState({ ms: 0, request: 0 });
   const read = useCallback(
@@ -99,6 +102,39 @@ export default function MediaDetails({
     unavailable,
     ["TIMELINE", "DELIVERY"].includes(node.preview_kind ?? ""),
   );
+  if (node.preview_kind === "VIDEO") {
+    const expected =
+      node.candidate_id &&
+      [projectId, node.candidate_id, node.resource_id ?? ""].every(isResourceId)
+        ? "/projects/" +
+          projectId +
+          "/generation-candidates/" +
+          node.candidate_id +
+          "/content"
+        : null;
+    if (
+      !expected ||
+      node.preview_path !== expected ||
+      !node.checksum ||
+      !/^[a-f0-9]{64}$/i.test(node.checksum)
+    )
+      return (
+        <Notice role="alert" tone="error">
+          视频来源与当前精确版本不一致，已停止读取。
+        </Notice>
+      );
+    return (
+      <VideoCandidateDetail
+        key={projectId + ":" + node.candidate_id + ":" + node.checksum}
+        projectId={projectId}
+        candidateId={node.candidate_id!}
+        expectedVersionId={node.resource_id}
+        expectedChecksum={node.checksum}
+        onChanged={onChanged}
+        unavailable={unavailable}
+      />
+    );
+  }
   if (node.preview_kind === "IMAGE") return null;
   if (
     node.preview_kind === "AUDIO" &&

@@ -3,6 +3,7 @@
 import os
 import tempfile
 import threading
+from decimal import Decimal
 from pathlib import Path
 
 import uvicorn
@@ -13,6 +14,7 @@ from sqlalchemy import select
 
 from arclight.application.runtime import execute_run
 from arclight.core.config import Settings
+from arclight.domain.service_models import ServiceModelPolicy
 from arclight.main import create_app
 from arclight.persistence.models import Episode, WorkflowRun
 from arclight.persistence.session import build_engine, session_factory
@@ -33,6 +35,17 @@ def main():
         checkpoint_url="sqlite:///" + (folder / "checkpoints.db").as_posix(),
         auth_requests_per_minute=300,
         asset_storage_path=folder / "asset-objects",
+        service_model_policies=[
+            ServiceModelPolicy(
+                kind="video",
+                supplier="custom",
+                protocol="seedance",
+                model="doubao-seedance-1-0-pro-250528",
+                base_url="https://native.example/v1",
+                maximum_cost_per_output=Decimal("1"),
+                pricing_version="video01-e2e:1",
+            )
+        ],
     )
     test_s3 = os.getenv("ARCLIGHT_E2E_S3_ENDPOINT")
     if test_s3:
@@ -76,6 +89,9 @@ def main():
             from e2e_art import advance_concepts
 
             advance_concepts(factory, settings)
+            from e2e_video import advance_videos
+
+            advance_videos(factory, settings)
 
     thread = threading.Thread(target=worker, daemon=True)
     thread.start()

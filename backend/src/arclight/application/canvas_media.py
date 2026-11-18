@@ -6,8 +6,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from arclight.application.video_candidates import require_video_candidate_media_check
+from arclight.core.errors import DomainError
 from arclight.persistence.audio_production import AudioLineBinding, AudioSnapshot
-from arclight.persistence.models import AssetVersion, Episode, StoredFile
+from arclight.persistence.models import AssetVersion, Episode, GenerationCandidate, StoredFile
 from arclight.persistence.render_manifests import RenderArtifact, RenderManifest
 from arclight.persistence.rendering import RenderExecution
 from arclight.persistence.timelines import Timeline
@@ -23,6 +25,7 @@ def media_facts(
         return {}
     by_id = {row.id: row for row in versions}
     files: dict[UUID, StoredFile] = {}
+    video_files: dict[UUID, StoredFile] = {}
     for stored in db.scalars(
         select(StoredFile).where(
             StoredFile.project_id == project_id,
@@ -34,12 +37,44 @@ def media_facts(
             version is not None
             and stored.storage_backend in {"LOCAL", "S3"}
             and stored.byte_size > 0
-            and stored.rights_confirmed
             and stored.checksum == version.checksum
             and stored.object_key == version.object_key
         ):
-            files[version.id] = stored
+            if stored.rights_confirmed:
+                files[version.id] = stored
+            if stored.media_type == "video/mp4":
+                video_files[version.id] = stored
     facts: dict[UUID, dict] = {}
+    for candidate in db.scalars(
+        select(GenerationCandidate).where(
+            GenerationCandidate.project_id == project_id,
+            GenerationCandidate.asset_version_id.in_(video_files),
+        )
+    ):
+        candidate_version_id = candidate.asset_version_id
+        if candidate_version_id is None:
+            continue
+        try:
+            check = require_video_candidate_media_check(db, project_id, candidate.id)
+        except DomainError:
+            continue
+        file = video_files.get(candidate_version_id)
+        if (
+            file is not None
+            and check.video is not None
+            and file.checksum == check.video.checksum
+            and file.byte_size == check.video.byte_size
+        ):
+            facts[candidate_version_id] = {
+                "preview_kind": "VIDEO",
+                "candidate_id": str(candidate.id),
+                "media_file_id": str(file.id),
+                "media_type": file.media_type,
+                "preview_path": (
+                    f"/projects/{project_id}/generation-candidates/{candidate.id}/content"
+                ),
+                "duration_ms": check.video.duration_ms,
+            }
     for version_id, audio_file in files.items():
         if audio_file.media_type in AUDIO_TYPES:
             facts[version_id] = {

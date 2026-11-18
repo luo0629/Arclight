@@ -57,6 +57,13 @@ def require_candidate_review(
 ) -> ReviewContractRecord | None:
     gate = version.metadata_json.get("required_review")
     asset = db.get(VisualAsset, version.asset_id) if db is not None else None
+    if gate == "VIDEO_TEMPORAL" or asset is not None and asset.asset_type == "VIDEO":
+        if db is None or asset is None or asset.asset_type != "VIDEO":
+            raise DomainError("VIDEO_REVIEW_REQUIRED", "镜头视频须完成精确时序审查", 409)
+        from arclight.application.video_review import require_video_review
+
+        require_video_review(db, version)
+        return None
     if requires_continuity_review(version, asset):
         if db is None:
             raise DomainError("CONTINUITY_REVIEW_REQUIRED", "候选图片须先完成必需的连续性审查", 409)

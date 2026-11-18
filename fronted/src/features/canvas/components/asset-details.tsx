@@ -113,7 +113,7 @@ export default function AssetDetails({
       {path && (
         <VersionImage key={path} path={path} onUnavailable={onUnavailable} />
       )}
-      {node.preview_path && !path && (
+      {node.preview_kind !== "VIDEO" && node.preview_path && !path && (
         <p role="alert">图片来源与当前精确版本不匹配，已停止读取。</p>
       )}
       {node.kind === "asset_version" && (
@@ -122,6 +122,7 @@ export default function AssetDetails({
           node={node}
           projectId={projectId}
           unavailable={onUnavailable}
+          onChanged={onChanged}
         />
       )}
       <dl className="grid min-w-0 grid-cols-1 gap-2 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:break-all">

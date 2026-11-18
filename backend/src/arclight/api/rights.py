@@ -22,7 +22,7 @@ from arclight.persistence.models import (
     VisualAsset,
 )
 
-Category = Literal["STORY", "REFERENCE_IMAGE", "AUDIO", "MUSIC", "FONT"]
+Category = Literal["STORY", "REFERENCE_IMAGE", "AUDIO", "MUSIC", "FONT", "VIDEO"]
 RightsStatus = Literal["CONFIRMED", "UNDECLARED"]
 router = APIRouter(prefix="/api/v1/projects/{project_id}/rights", tags=["rights"])
 
@@ -94,6 +94,7 @@ def rights_records(project_id: UUID):
                 (StoredFile.media_type.like("image/%"), "REFERENCE_IMAGE"),
                 (StoredFile.media_type.like("text/%"), "STORY"),
                 (StoredFile.media_type.like("font/%"), "FONT"),
+                (StoredFile.media_type == "video/mp4", "VIDEO"),
                 else_="AUDIO",
             ).label("category"),
             StoredFile.original_name,

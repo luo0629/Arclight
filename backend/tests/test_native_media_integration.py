@@ -377,6 +377,10 @@ def test_generated_flac_and_mp4_are_fully_decoded_and_truncation_is_rejected():
     actual = probe(video, "video/mp4")
     assert actual["width"] == 1280 and actual["height"] == 720
     assert actual["duration_ms"] == 125
+    assert actual["codec"] == "mpeg4"
+    assert actual["decoded_frames"] == 3
+    assert actual["has_audio"] is False
+    assert actual["full_decode_verified"] is True
     for data, media in ((flac, "audio/flac"), (video, "video/mp4")):
         with pytest.raises(DomainError):
             probe(data[: len(data) // 2], media)

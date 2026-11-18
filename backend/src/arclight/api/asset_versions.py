@@ -30,6 +30,10 @@ from arclight.application.generation_candidates import require_candidate_review
 from arclight.application.invalidation import check_impact, invalidate
 from arclight.application.music_assets import require_music_version
 from arclight.application.subtitles import require_subtitle_version
+from arclight.application.video_candidates import (
+    require_video_version,
+    restore_video_version_as_new,
+)
 from arclight.core.errors import DomainError
 from arclight.domain.asset_provenance import GenerationDeclaration
 from arclight.domain.asset_versions import decode_image, next_status
@@ -141,6 +145,7 @@ def list_versions(
         include_audio=True,
         include_subtitle=True,
         include_music=True,
+        include_video=True,
     )
     return [
         read_version(row)
@@ -171,6 +176,7 @@ def get_version(
         include_audio=True,
         include_subtitle=True,
         include_music=True,
+        include_video=True,
     )
     return read_version(find_version(db, asset_id, version_id))
 
@@ -327,7 +333,7 @@ def get_rebuild_inputs(
     project_id: UUID, asset_id: UUID, version_id: UUID, db: Database, actor: Actor
 ) -> dict:
     require_project(db, project_id, actor)
-    find_asset(db, project_id, asset_id, include_media=True)
+    find_asset(db, project_id, asset_id, include_media=True, include_video=True)
     version = find_version(db, asset_id, version_id)
     manifest = original_manifest(db, project_id, version)
     inputs = []
@@ -358,7 +364,7 @@ def create_rebuild_manifest(
     actor: Actor,
 ) -> dict:
     require_project(db, project_id, actor, write=True)
-    asset = find_asset(db, project_id, asset_id, include_media=True)
+    asset = find_asset(db, project_id, asset_id, include_media=True, include_video=True)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "归档或锁定资产不能创建重建清单", 409)
     row, _ = rebuild_manifest(
@@ -390,6 +396,7 @@ def select_version(
         include_audio=True,
         include_subtitle=True,
         include_music=True,
+        include_video=True,
     )
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
@@ -405,6 +412,9 @@ def select_version(
         require_music_version(db, request.app.state.settings, project_id, asset, row, actor)
     elif asset.asset_type == "SUBTITLE":
         require_subtitle_version(db, request.app.state.settings, project_id, asset, row, actor)
+    elif asset.asset_type == "VIDEO":
+        require_project(db, project_id, actor, owner=True)
+        require_video_version(db, request.app.state.settings, project_id, asset, row, actor)
     else:
         read_object(
             request.app.state.settings,
@@ -509,6 +519,7 @@ def change_lock(
         include_audio=True,
         include_subtitle=True,
         include_music=True,
+        include_video=True,
     )
     version = find_version(db, asset_id, version_id)
     record = db.scalar(select(AssetSelectionLock).where(AssetSelectionLock.asset_id == asset_id))
@@ -532,6 +543,8 @@ def change_lock(
             require_subtitle_version(
                 db, request.app.state.settings, project_id, asset, version, actor
             )
+        elif asset.asset_type == "VIDEO":
+            require_video_version(db, request.app.state.settings, project_id, asset, version, actor)
         else:
             read_object(
                 request.app.state.settings,
@@ -614,8 +627,23 @@ def restore_version_as_new(
     actor: Actor,
 ) -> VersionRead:
     require_project(db, project_id, actor, write=True)
-    asset = find_asset(db, project_id, asset_id, include_media=True)
+    asset = find_asset(db, project_id, asset_id, include_media=True, include_video=True)
     source = find_version(db, asset_id, version_id)
+    if asset.asset_type == "VIDEO":
+        return read_version(
+            restore_video_version_as_new(
+                db,
+                request.app.state.settings,
+                project_id,
+                asset,
+                source,
+                creation_key=payload.creation_key,
+                expected_revision=payload.expected_revision,
+                comment=payload.comment,
+                dependency_manifest_id=payload.dependency_manifest_id,
+                actor=actor,
+            )
+        )
     existing = db.scalar(
         select(AssetVersion).where(
             AssetVersion.asset_id == asset_id,
@@ -742,6 +770,7 @@ def update_version_state(
         include_audio=True,
         include_subtitle=True,
         include_music=True,
+        include_video=True,
     )
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
@@ -761,6 +790,10 @@ def update_version_state(
             require_music_version(db, request.app.state.settings, project_id, asset, row, actor)
         elif asset.asset_type == "SUBTITLE":
             require_subtitle_version(db, request.app.state.settings, project_id, asset, row, actor)
+        elif asset.asset_type == "VIDEO":
+            if target == "APPROVED":
+                require_project(db, project_id, actor, owner=True)
+            require_video_version(db, request.app.state.settings, project_id, asset, row, actor)
         else:
             if row.creation_key is None or row.metadata_json.get("storage_backend") not in {
                 "LOCAL",

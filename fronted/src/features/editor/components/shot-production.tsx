@@ -20,6 +20,7 @@ import ContinuityComparisonButton from "@/features/continuity/components/continu
 import { api, message } from "@/lib/api/client";
 import useShotProduction from "../hooks/use-shot-production";
 import ShotRevisionButton from "./shot-revision";
+import ShotVideoCandidates from "@/features/video/components/shot-video-candidates";
 import {
   batchActions,
   budgetTotal,
@@ -339,6 +340,24 @@ function ProductionBody({
           </tbody>
         </table>
       </div>
+      <section aria-label="镜头视频候选列表" className="min-w-0">
+        {data.shots.map((shot) => (
+          <ShotVideoCandidates
+            key={shot.id}
+            projectId={projectId}
+            episodeId={episodeId}
+            storyboardId={storyboardId}
+            shotId={shot.id}
+            shotNo={shot.shot_no}
+            description={shot.description}
+            writable={data.writable}
+            candidates={shot.video_candidates ?? []}
+            truncated={shot.video_candidates_truncated ?? false}
+            onChanged={refresh}
+            unavailable={unavailable}
+          />
+        ))}
+      </section>
       <nav
         className="flex flex-wrap items-center gap-3"
         aria-label="生产镜头分页"

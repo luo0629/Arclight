@@ -18,6 +18,7 @@ from arclight.domain.shot_production import (
     ProductionCandidate,
     ProductionJob,
     ProductionShot,
+    ProductionVideoCandidate,
     StoryboardProduction,
 )
 from arclight.persistence.generation_budget import GenerationBudgetQuote
@@ -140,6 +141,7 @@ def read_candidates(
             .join(DependencyManifest, DependencyManifest.id == GenerationJob.input_manifest_id)
             .where(
                 GenerationCandidate.project_id == project_id,
+                VisualAsset.asset_type.in_(["IMAGE", "SHOT_IMAGE"]),
                 or_(
                     and_(
                         DependencyManifest.snapshot_json["context"]["continuity_review"][
@@ -185,6 +187,51 @@ def read_candidates(
     return candidates, len(rows) > 16
 
 
+def read_video_candidates(
+    db: Session, project_id: UUID, storyboard_id: UUID, shot_id: UUID
+) -> tuple[list[ProductionVideoCandidate], bool]:
+    rows = list(
+        db.execute(
+            select(GenerationCandidate, AssetVersion, VisualAsset)
+            .join(AssetVersion, AssetVersion.id == GenerationCandidate.asset_version_id)
+            .join(VisualAsset, VisualAsset.id == AssetVersion.asset_id)
+            .join(GenerationJob, GenerationJob.id == GenerationCandidate.job_id)
+            .join(DependencyManifest, DependencyManifest.id == GenerationJob.input_manifest_id)
+            .where(
+                GenerationCandidate.project_id == project_id,
+                VisualAsset.project_id == project_id,
+                VisualAsset.asset_type == "VIDEO",
+                GenerationJob.project_id == project_id,
+                GenerationJob.target_type == "VIDEO",
+                DependencyManifest.snapshot_json["context"]["continuity_review"][
+                    "storyboard_id"
+                ].as_string()
+                == str(storyboard_id),
+                DependencyManifest.snapshot_json["context"]["continuity_review"][
+                    "shot_id"
+                ].as_string()
+                == str(shot_id),
+            )
+            .order_by(GenerationCandidate.created_at.desc(), GenerationCandidate.id)
+            .limit(17)
+        )
+    )
+    return [
+        ProductionVideoCandidate(
+            id=candidate.id,
+            job_id=candidate.job_id,
+            asset_id=asset.id,
+            version_id=version.id,
+            version_no=version.version_no,
+            revision=version.revision,
+            asset_revision=asset.revision,
+            status=version.status,
+            content_path=f"/projects/{project_id}/generation-candidates/{candidate.id}/content",
+        )
+        for candidate, version, asset in rows[:16]
+    ], len(rows) > 16
+
+
 def read_production(
     db: Session, episode_id: UUID, storyboard_id: UUID, actor: str, *, limit: int, offset: int
 ) -> StoryboardProduction:
@@ -218,6 +265,7 @@ def read_production(
         .join(DependencyManifest, DependencyManifest.id == GenerationJob.input_manifest_id)
         .where(
             GenerationJob.project_id == project.id,
+            GenerationJob.target_type == "SHOT_IMAGE",
             DependencyManifest.snapshot_json["context"]["continuity_review"][
                 "storyboard_id"
             ].as_string()
@@ -267,6 +315,7 @@ def read_production(
             writable=writable,
             owner=owner,
         )
+        videos, videos_truncated = read_video_candidates(db, project.id, board.id, shot.id)
         results.append(
             ProductionShot(
                 id=shot.id,
@@ -286,6 +335,8 @@ def read_production(
                 blocker=blocker,
                 candidates=candidates,
                 candidates_truncated=truncated,
+                video_candidates=videos,
+                video_candidates_truncated=videos_truncated,
             )
         )
     return StoryboardProduction(

@@ -25,7 +25,7 @@ class TransferExpiry(Input):
 
 
 class UploadCreate(TransferExpiry):
-    purpose: Literal["REFERENCE_IMAGE", "STORY", "AUDIO", "MUSIC", "FONT"]
+    purpose: Literal["REFERENCE_IMAGE", "STORY", "AUDIO", "MUSIC", "FONT", "VIDEO"]
     original_name: str = Field(min_length=1, max_length=160)
     media_type: Literal[
         "image/png",
@@ -35,6 +35,7 @@ class UploadCreate(TransferExpiry):
         "audio/wav",
         "audio/mpeg",
         "audio/ogg",
+        "video/mp4",
         "font/ttf",
         "font/otf",
     ]
