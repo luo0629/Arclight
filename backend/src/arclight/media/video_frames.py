@@ -66,6 +66,9 @@ def sample_video(data: bytes) -> bytes:
 
 def thumbnail(frame):
     scale = min(1, SAMPLE_SIDE / max(frame.width, frame.height))
+    # Keep scaling within the sandbox thread budget, like video decoding.
     return frame.to_image(
-        width=max(1, round(frame.width * scale)), height=max(1, round(frame.height * scale))
+        width=max(1, round(frame.width * scale)),
+        height=max(1, round(frame.height * scale)),
+        threads=1,
     )
