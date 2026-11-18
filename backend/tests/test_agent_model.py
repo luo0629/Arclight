@@ -41,7 +41,7 @@ class FinalResult(BaseModel):
 
 
 @pytest.fixture
-def model_service(settings, monkeypatch):
+def model_service(settings, stub_llm):
     settings.provider = "openai_compatible"
     settings.llm_supplier = "custom"
     settings.llm_model = "test-agent-model"
@@ -56,13 +56,7 @@ def model_service(settings, monkeypatch):
         max_input_images=4,
     )
 
-    def respond(handler):
-        monkeypatch.setattr(
-            "arclight.providers.agent_model.PublicHTTPTransport",
-            lambda *args, **kwargs: httpx.MockTransport(handler),
-        )
-
-    return respond
+    return stub_llm
 
 
 def model_request(run_id=None, **patch):
@@ -448,8 +442,8 @@ def test_vendor_tool_calls_are_untrusted_and_must_follow_protocol(settings, mode
         call["type"] = "shell"
     else:
         choice["finish_reason"] = "stop"
-    model_service(lambda _: httpx.Response(200, json=body))
-    provider = OpenAICompatibleAgentProvider(settings)
+    service = model_service(lambda _: httpx.Response(200, json=body))
+    provider = OpenAICompatibleAgentProvider(settings, service=service)
     with pytest.raises(GatewayFailure) as caught:
         provider.complete(model_request(), (declaration(),), FinalResult, {})
     assert caught.value.code == "INVALID_RESPONSE" and caught.value.completed
@@ -481,8 +475,8 @@ def test_wire_dialects_and_strict_final_contract(
             200, json=final_response(usage={"prompt_tokens": True, "completion_tokens": 7})
         )
 
-    model_service(handler)
-    provider = OpenAICompatibleAgentProvider(settings)
+    service = model_service(handler)
+    provider = OpenAICompatibleAgentProvider(settings, service=service)
     result = provider.complete(model_request(), (), FinalResult, {})
     assert result.status == "FINAL"
     assert provider.last_usage.input_tokens is None and provider.last_usage.output_tokens == 7
@@ -666,12 +660,9 @@ def test_legacy_capability_serialization_stays_stable():
         GatewayFailure("INVALID_RESPONSE", usage=GatewayUsage(input_tokens=1))
 
 
-def test_existing_text_adapter_preserves_usage_on_invalid_final(settings, monkeypatch):
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *_: httpx.MockTransport(lambda _: httpx.Response(200, json=final_response())),
-    )
-    provider = OpenAICompatibleTextProvider(settings)
+def test_existing_text_adapter_preserves_usage_on_invalid_final(settings, stub_llm):
+    service = stub_llm(lambda _: httpx.Response(200, json=final_response()))
+    provider = OpenAICompatibleTextProvider(settings, service=service)
     with pytest.raises(GatewayFailure) as caught:
         provider.analyze("测试故事")
     assert caught.value.completed and caught.value.usage.input_tokens == 11
@@ -788,9 +779,11 @@ def test_disabled_actor_cannot_invoke_or_disclose_model_inputs(client, settings,
 def test_transport_response_limit_and_invalid_json_have_sanitized_unknown_outcomes(
     settings, model_service, body
 ):
-    model_service(lambda _: httpx.Response(200, content=body))
+    service = model_service(lambda _: httpx.Response(200, content=body))
     with pytest.raises(GatewayFailure) as caught:
-        OpenAICompatibleAgentProvider(settings).complete(model_request(), (), FinalResult, {})
+        OpenAICompatibleAgentProvider(settings, service=service).complete(
+            model_request(), (), FinalResult, {}
+        )
     assert caught.value.code == "INVALID_RESPONSE"
     assert not caught.value.completed and caught.value.usage.actual_cost is None
     assert "private-malformed-response" not in str(caught.value)
@@ -816,18 +809,22 @@ def test_model_cannot_reuse_a_previous_turn_call_id(settings, model_service):
             AgentToolMessage(call_id="used", feedback=feedback),
         ],
     )
-    model_service(
+    service = model_service(
         lambda _: httpx.Response(200, json=call_response(("used", call.tool_name, call.arguments)))
     )
     with pytest.raises(GatewayFailure) as caught:
-        OpenAICompatibleAgentProvider(settings).complete(request, (declaration(),), FinalResult, {})
+        OpenAICompatibleAgentProvider(settings, service=service).complete(
+            request, (declaration(),), FinalResult, {}
+        )
     assert caught.value.code == "INVALID_RESPONSE"
 
 
 def test_final_output_does_not_coerce_invalid_types(settings, model_service):
     body = final_response()
     body["choices"][0]["message"]["content"] = '{"summary":"测试","requires_human_review":"true"}'
-    model_service(lambda _: httpx.Response(200, json=body))
+    service = model_service(lambda _: httpx.Response(200, json=body))
     with pytest.raises(GatewayFailure) as caught:
-        OpenAICompatibleAgentProvider(settings).complete(model_request(), (), FinalResult, {})
+        OpenAICompatibleAgentProvider(settings, service=service).complete(
+            model_request(), (), FinalResult, {}
+        )
     assert caught.value.code == "INVALID_RESPONSE"

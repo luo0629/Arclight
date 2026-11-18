@@ -1,4 +1,4 @@
-"""Explicitly authorized DeepSeek acceptance with an isolated synthetic story."""
+"""DeepSeek workflow contract; paid acceptance is an explicit opt-in."""
 
 import json
 import os
@@ -6,13 +6,13 @@ from pathlib import Path
 from uuid import UUID
 
 import httpx
-import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import func, select
 from test_api_workflow import advance, review, start
 from test_model_gateway import api
 
+from arclight.agents.contracts import ScriptContent
 from arclight.application.runtime import execute_run
 from arclight.domain.model_gateway import GatewayFailure, GatewayPolicy
 from arclight.domain.model_suppliers import supplier_by_id
@@ -20,22 +20,28 @@ from arclight.domain.versions import digest
 from arclight.main import create_app
 from arclight.persistence.models import Review, Script, Storyboard, WorkflowRun
 from arclight.providers.network import PublicHTTPTransport
-from arclight.providers.text import OpenAICompatibleTextProvider
-
-pytestmark = pytest.mark.skipif(
-    os.getenv("ARCLIGHT_LIVE_TEXT_APPROVAL") != "deepseek-synthetic-story",
-    reason="Real DeepSeek calls require explicit synthetic-text authorization and a local key file",
-)
+from arclight.providers.text import MockTextProvider, OpenAICompatibleTextProvider
 
 
-def test_authorized_deepseek_text_workflow(client, episode, settings, monkeypatch, tmp_path):
-    assert settings.database_url.startswith("sqlite:///"), "Use isolated SQLite for live acceptance"
+def test_authorized_deepseek_text_workflow(
+    client, episode, settings, monkeypatch, tmp_path, stub_llm
+):
+    live = os.getenv("ARCLIGHT_LIVE_TEXT_APPROVAL") == "deepseek-synthetic-story"
+    if live:
+        assert settings.database_url.startswith("sqlite:///"), (
+            "Use isolated SQLite for live acceptance"
+        )
+        key = (
+            Path(os.environ["ARCLIGHT_LIVE_TEXT_KEY_FILE"]).read_text(encoding="utf-8-sig").strip()
+        )
+        assert key, "The explicitly supplied local DeepSeek key file is empty"
+        model = os.environ["ARCLIGHT_LIVE_TEXT_MODEL_ID"]
+    else:
+        key, model = "synthetic-deepseek-test-key", "exact-deepseek-fixture"
     supplier = supplier_by_id("deepseek")
-    key = Path(os.environ["ARCLIGHT_LIVE_TEXT_KEY_FILE"]).read_text(encoding="utf-8-sig").strip()
-    assert key, "The explicitly supplied local DeepSeek key file is empty"
     settings.provider = "openai_compatible"
     settings.llm_base_url = supplier.base_url
-    settings.llm_model = os.environ["ARCLIGHT_LIVE_TEXT_MODEL_ID"]
+    settings.llm_model = model
     settings.llm_supplier = supplier.id
     settings.llm_response_format = supplier.response_format
     settings.llm_api_key = SecretStr(key)
@@ -47,11 +53,14 @@ def test_authorized_deepseek_text_workflow(client, episode, settings, monkeypatc
         "阿树说是一颗刻歪的小星星。确认后，小岚把伞交还，两人相视一笑。"
         "制作30秒的一场戏，只有这两名虚构人物和少量对白。"
     )
-    evidence_dir = Path(os.getenv("ARCLIGHT_LIVE_TEXT_EVIDENCE_DIR", str(tmp_path)))
+    evidence_dir = (
+        Path(os.getenv("ARCLIGHT_LIVE_TEXT_EVIDENCE_DIR", str(tmp_path))) if live else tmp_path
+    )
     evidence_dir.mkdir(parents=True, exist_ok=True)
     evidence_file = evidence_dir / "deepseek-text-evidence.json"
     assert not evidence_file.exists(), "Review the existing live evidence before another paid run"
     evidence = {
+        "mode": "authorized-live" if live else "offline-fixture",
         "provider": supplier.id,
         "model": settings.llm_model,
         "story": story,
@@ -93,7 +102,36 @@ def test_authorized_deepseek_text_workflow(client, episode, settings, monkeypatc
         def close(self):
             self.inner.close()
 
-    monkeypatch.setattr("arclight.providers.text.PublicHTTPTransport", RecordingTransport)
+    def synthetic_response(request):
+        wire = json.loads(request.content)
+        assert wire["model"] == model and request.headers["authorization"] == f"Bearer {key}"
+        assert wire["response_format"] == {"type": "json_object"}
+        assert wire["thinking"] == {"type": "disabled"}
+        data = json.loads(wire["messages"][-1]["content"])["task_input"]
+        duration = data["target_duration_ms"]
+        mock = MockTextProvider()
+        if "script" in data:
+            result = mock.storyboard(ScriptContent.model_validate(data["script"]), duration)
+        else:
+            result = mock.script(data["story"], data["style_guide"], duration)
+        body = {
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": result.model_dump_json()},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+        }
+        evidence["provider_responses"].append({"status": 200, "body": body})
+        return httpx.Response(200, json=body)
+
+    if live:
+        monkeypatch.setattr(
+            "arclight.providers.llm_transport.PublicHTTPTransport", RecordingTransport
+        )
+    else:
+        stub_llm(synthetic_response)
 
     created = start(client, episode, key="txt08-deepseek-live", story=story)
     assert created.status_code == 202
@@ -147,6 +185,7 @@ def test_authorized_deepseek_text_workflow(client, episode, settings, monkeypatc
         evidence["storyboard"] = board.content_json
     calls = client.get(api(episode) + "/calls").json()
     assert len(calls) == 3
+    assert len(evidence["provider_responses"]) == 2
     assert [call["status"] for call in calls] == ["SUCCEEDED", "NOT_ACCEPTED", "SUCCEEDED"]
     assert all(call["maximum_cost"] is None for call in calls)
     evidence["cost_summary"] = client.get(f"/api/v1/projects/{episode['project_id']}/costs").json()[

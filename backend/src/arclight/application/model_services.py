@@ -1,3 +1,5 @@
+from hashlib import sha256
+from hmac import compare_digest
 from uuid import UUID
 
 from pydantic import SecretStr
@@ -6,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from arclight.application.service_credentials import credential_snapshot, read_credential
 from arclight.core.config import Settings
-from arclight.persistence.models import ModelService
+from arclight.core.errors import DomainError
+from arclight.persistence.models import ModelService, WorkflowRun
 from arclight.providers.network import validate_endpoint
 
 __all__ = ["run_settings", "text_snapshot", "validate_endpoint"]
@@ -47,6 +50,29 @@ def run_settings(settings: Settings, snapshot: dict | None, db: Session | None =
             "llm_protocol": snapshot.get("protocol", "openai_chat"),
         }
     )
+
+
+def text_credential_identity(actor: str, snapshot: dict | None) -> tuple[str, ...]:
+    if not snapshot:
+        return ("SERVER", actor)
+    reference = (
+        snapshot.get("credential_id") or sha256(snapshot["encrypted_key"].encode()).hexdigest()
+    )
+    return ("ACCOUNT_SNAPSHOT", actor, reference)
+
+
+def recheck_text_credential(
+    db: Session, run_id: UUID, snapshot: dict | None, settings: Settings
+) -> None:
+    """Revalidate the frozen reference within admission, before any model reuse."""
+    run = db.get(WorkflowRun, run_id, populate_existing=True)
+    if run is None or run.input_json.get("_text_service") != snapshot:
+        raise DomainError("GATEWAY_ROUTE_FORBIDDEN", "文字模型快照已改变", 409)
+    if snapshot and not compare_digest(
+        read_credential(db, settings, snapshot).encode(),
+        settings.llm_api_key.get_secret_value().encode(),
+    ):
+        raise DomainError("GATEWAY_ROUTE_FORBIDDEN", "文字模型凭证已改变", 409)
 
 
 def agent_capabilities(settings: Settings, service: dict | None):

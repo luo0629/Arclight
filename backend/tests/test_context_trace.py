@@ -568,7 +568,7 @@ def test_model_inline_image_output_never_reaches_artifacts_or_checkpoint(
 
 
 def test_text_adapter_sends_exact_evidence_as_data_without_storage_locators(
-    client, episode, settings, monkeypatch
+    client, episode, settings, stub_llm
 ):
     source = save_text(client, episode)
     run_id = run(client, episode)
@@ -583,11 +583,10 @@ def test_text_adapter_sends_exact_evidence_as_data_without_storage_locators(
             200, json={"choices": [{"message": {"content": result.model_dump_json()}}]}
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(handler),
+    service = stub_llm(handler)
+    OpenAICompatibleTextProvider(settings, {"script": value}, service=service).script(
+        "story", {}, 30000
     )
-    OpenAICompatibleTextProvider(settings, {"script": value}).script("story", {}, 30000)
     sent = json.loads(calls[0]["messages"][1]["content"])
     actual = sent["task_context"]["retrieval_evidence"][0]
     assert actual["manifest_id"] == appended["manifest_id"]

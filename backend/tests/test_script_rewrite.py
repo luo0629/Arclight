@@ -85,22 +85,28 @@ def review(client, state, decision="APPROVE"):
 
 @pytest.mark.parametrize("decision,terminal", [("APPROVE", "SUCCEEDED"), ("REJECT", "REJECTED")])
 def test_rewrite_only_merges_selected_scene_and_reviews_exact_version(
-    client, episode, settings, monkeypatch, decision, terminal
+    client, episode, settings, monkeypatch, stub_llm, decision, terminal
 ):
+    settings.provider = "openai_compatible"
     base = source(client, episode)
     source(client, episode, version=1)  # The requested source intentionally is historical.
     payload = body(base, instructions={"dialogue_max_chars": 5, "narration_max_percent": 0})
-    original_rewrite = MockTextProvider.rewrite
     calls = []
 
-    def rewrite(self, context):
+    def respond(request):
+        wire = json.loads(request.content)
+        assert wire["response_format"]["json_schema"]["name"] == "RewriteResult"
+        context = json.loads(wire["messages"][-1]["content"])["task_input"]
         calls.append(copy.deepcopy(context))
-        return original_rewrite(self, context)
+        result = MockTextProvider().rewrite(context)
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": result.model_dump_json()}}]}
+        )
 
     def forbidden(*args, **kwargs):
         raise AssertionError("rewrite may not call a full writer or director")
 
-    monkeypatch.setattr(MockTextProvider, "rewrite", rewrite)
+    stub_llm(respond)
     monkeypatch.setattr(MockTextProvider, "script", forbidden)
     monkeypatch.setattr(MockTextProvider, "storyboard", forbidden)
     response = start(client, episode, payload)
@@ -390,7 +396,7 @@ def test_permissions_archival_cancel_and_snapshot(client, episode, settings):
 
 
 def test_provider_json_schema_and_credentials_stay_out_of_public_state(
-    client, episode, settings, monkeypatch
+    client, episode, settings, stub_llm
 ):
     base = source(client, episode)
     seen = []
@@ -404,10 +410,7 @@ def test_provider_json_schema_and_credentials_stay_out_of_public_state(
             200, json={"choices": [{"message": {"content": patch.model_dump_json()}}]}
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(respond),
-    )
+    service = stub_llm(respond)
     settings_copy = settings.model_copy(update={"provider": "openai_compatible"})
     with client.app.state.session_factory() as db:
         from arclight.agents.script_rewrite import RewriteRequest
@@ -423,7 +426,7 @@ def test_provider_json_schema_and_credentials_stay_out_of_public_state(
             settings,
         )
         context = run.input_json["rewrite_input"]["context"]
-        patch = OpenAICompatibleTextProvider(settings_copy).rewrite(context)
+        patch = OpenAICompatibleTextProvider(settings_copy, service=service).rewrite(context)
         assert len(patch.scenes) == 1
     assert seen[0]["response_format"]["json_schema"]["name"] == "RewriteResult"
     assert "_text_service" not in json.dumps(seen)

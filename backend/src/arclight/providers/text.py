@@ -1,7 +1,8 @@
 import json
+from collections.abc import Callable
 from typing import Protocol, TypeVar
 
-import httpx
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from arclight.agents.contracts import (
@@ -17,10 +18,9 @@ from arclight.agents.story_outline import OutlineEpisode, StoryOutlineContent
 from arclight.application.content_duration import duration_bounds
 from arclight.core.config import Settings
 from arclight.domain.context import check_call
-from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
+from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.project_settings import ProjectStorySettings
-from arclight.providers.chat import completed_message, raise_for_provider_status, response_usage
-from arclight.providers.network import PublicHTTPTransport
+from arclight.providers.llm import LLMService, llm_service, response_contract
 from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 
 T = TypeVar("T", bound=BaseModel)
@@ -151,13 +151,25 @@ class MockTextProvider:
 
 
 class OpenAICompatibleTextProvider:
-    def __init__(self, settings: Settings, contexts: dict[str, dict] | None = None):
+    def __init__(
+        self,
+        settings: Settings,
+        contexts: dict[str, dict] | None = None,
+        *,
+        service: LLMService | None = None,
+    ):
         self.settings = settings
         self.contexts = contexts or {}
-        self.last_usage = GatewayUsage()
+        self.service = service if service is not None else llm_service
 
-    def _generate(self, contract: type[T], instruction: str, data: dict) -> T:
-        self.last_usage = GatewayUsage()
+    def _generate(
+        self,
+        contract: type[T],
+        instruction: str,
+        data: dict,
+        *,
+        validate: Callable[[T], T] | None = None,
+    ) -> T:
         stage = {
             ScriptContent: "script",
             StoryboardContent: "storyboard",
@@ -168,82 +180,25 @@ class OpenAICompatibleTextProvider:
         if stage in self.contexts:
             data = check_call(self.contexts[stage], data)
         # 输入作为独立数据发送；不允许模型输出执行命令或写入数据库。
-        schema = contract.model_json_schema()
-        response_format = (
-            {"type": "json_schema", "json_schema": {"name": contract.__name__, "schema": schema}}
-            if self.settings.llm_response_format == "json_schema"
-            else {"type": "json_object"}
-        )
+        response_format, schema = response_contract(contract, self.settings)
         if self.settings.llm_response_format == "json_object":
             instruction += "\n只输出符合以下 JSON Schema 的 JSON 对象：\n" + json.dumps(
                 schema, ensure_ascii=False
             )
-        token_parameter = (
-            "max_completion_tokens" if self.settings.llm_supplier == "openai" else "max_tokens"
+        result = self.service.invoke(
+            self.settings,
+            [SystemMessage(instruction), HumanMessage(json.dumps(data, ensure_ascii=False))],
+            max_tokens=TEXT_MAX_TOKENS,
+            response_format=response_format,
+            strict_finish=self.settings.llm_protocol != "openai_chat",
         )
-        if self.settings.llm_protocol != "openai_chat":
-            from arclight.providers.native_text import native_chat
-
-            body = native_chat(
-                self.settings,
-                {
-                    "model": self.settings.llm_model,
-                    token_parameter: TEXT_MAX_TOKENS,
-                    "messages": [
-                        {"role": "system", "content": instruction},
-                        {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
-                    ],
-                    "response_format": response_format,
-                },
-            )
-            self.last_usage = response_usage(body)
-            message, reason = completed_message(body)
-            try:
-                if reason != "stop" or message.get("tool_calls"):
-                    raise ValueError("Unexpected tool selection")
-                return contract.model_validate_json(message["content"])
-            except (KeyError, TypeError, ValueError):
-                raise GatewayFailure(
-                    "INVALID_RESPONSE", completed=True, usage=self.last_usage
-                ) from None
-        with httpx.Client(
-            timeout=self.settings.llm_timeout_seconds,
-            transport=PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),
-            trust_env=False,
-            follow_redirects=False,
-        ) as client:
-            response = client.post(
-                f"{self.settings.llm_base_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {self.settings.llm_api_key.get_secret_value()}"},
-                json={
-                    "model": self.settings.llm_model,
-                    token_parameter: TEXT_MAX_TOKENS,
-                    **(
-                        {"thinking": {"type": "disabled"}}
-                        if self.settings.llm_supplier == "deepseek"
-                        else {}
-                    ),
-                    "messages": [
-                        {"role": "system", "content": instruction},
-                        {"role": "user", "content": json.dumps(data, ensure_ascii=False)},
-                    ],
-                    "response_format": response_format,
-                },
-            )
-            raise_for_provider_status(response)
-            try:
-                body = response.json()
-                if not isinstance(body, dict):
-                    raise ValueError("Invalid completion")
-                self.last_usage = response_usage(body)
-                message, reason = completed_message(body, strict=False)
-                if reason != "stop" or message.get("tool_calls"):
-                    raise ValueError("Unexpected tool selection")
-                return contract.model_validate_json(message["content"])
-            except (KeyError, TypeError, ValueError):
-                raise GatewayFailure(
-                    "INVALID_RESPONSE", completed=True, usage=self.last_usage
-                ) from None
+        try:
+            if result.reason != "stop" or result.message.get("tool_calls"):
+                raise ValueError("Unexpected tool selection")
+            value = contract.model_validate_json(result.message["content"])
+            return validate(value) if validate is not None else value
+        except (KeyError, TypeError, ValueError):
+            raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=result.usage) from None
 
     def rewrite(self, context: dict) -> RewriteResult:
         return self._generate(
@@ -305,7 +260,8 @@ class OpenAICompatibleTextProvider:
                     duration_ms, self.settings.text_duration_tolerance_percent
                 ),
             },
-        ).validate_against(script)
+            validate=lambda board: board.validate_against(script),
+        )
 
 
 def build_provider(settings: Settings) -> TextProvider:

@@ -1,6 +1,7 @@
 """Account media bindings and current-config restart span existing professional paths."""
 
 import base64
+import hashlib
 from copy import deepcopy
 from uuid import UUID, uuid4
 
@@ -10,6 +11,7 @@ from art_concept_support import install_concept_model, start_concepts
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from test_agent_model import model_service as model_service
+from test_agent_runtime import tool_feedback
 from test_art_workflow import drive, progress
 from test_asset_versions import image_bytes
 from test_generation_budget import set_policy
@@ -62,7 +64,7 @@ def test_native_concept_rounds_preserve_original_key_after_rotation_and_process_
     episode = account_episode(client)
     configure(client, settings)
     set_policy(client, episode["project_id"], "20")
-    _, errors, _ = install_concept_model(model_service)
+    model_requests, errors, _ = install_concept_model(model_service)
     config = client.get(
         f"/api/v1/projects/{episode['project_id']}/generation-jobs/services/image/configuration"
     ).json()
@@ -112,7 +114,29 @@ def test_native_concept_rounds_preserve_original_key_after_rotation_and_process_
         )
     assert not errors
     assert sent_keys == ["Bearer first-key", "Bearer first-key"]
-    assert len(progress(client, run_id)["concept_rounds"]) == 2
+    rounds = progress(client, run_id)["concept_rounds"]
+    assert len(rounds) == 2
+    comparisons = [
+        row
+        for payload in model_requests
+        for row in tool_feedback(payload)
+        if row["tool_name"] == "compare_art_options" and row["status"] == "SUCCEEDED"
+    ]
+    assert len({row["result"]["comparison"]["comparison_sha256"] for row in comparisons}) == 2
+    compared_images = [
+        part["image_url"]["url"]
+        for payload in model_requests
+        for message in payload["messages"]
+        if message["role"] == "user" and isinstance(message["content"], list)
+        for part in message["content"]
+        if part["type"] == "image_url"
+    ]
+    assert compared_images
+    expected_sha256 = hashlib.sha256(data).digest()
+    for url in compared_images:
+        header, encoded = url.split(",", 1)
+        assert header == "data:image/png;base64"
+        assert hashlib.sha256(base64.b64decode(encoded, validate=True)).digest() == expected_sha256
     assert "credential_id" not in client.get(f"/api/v1/runs/{run_id}").text
 
 

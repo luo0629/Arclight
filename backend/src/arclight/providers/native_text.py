@@ -1,16 +1,8 @@
-"""Native Gemini and DashScope wire formats behind the existing text/Agent contract."""
+"""Native text protocol fields that must survive SDK normalization."""
 
 import json
 from copy import deepcopy
-from urllib.parse import quote
 from uuid import uuid4
-
-import httpx
-
-from arclight.core.config import Settings
-from arclight.domain.model_gateway import GatewayFailure
-from arclight.providers.chat import raise_for_provider_status, response_usage
-from arclight.providers.network import PublicHTTPTransport
 
 
 def gemini_payload(payload: dict) -> dict:
@@ -181,113 +173,17 @@ def _gemini_choices(body: dict, result: dict) -> dict:
     return result
 
 
-def native_chat(settings: Settings, payload: dict) -> dict:
-    protocol = settings.llm_protocol
-    base = settings.llm_base_url.rstrip("/")
-    secret = settings.llm_api_key.get_secret_value()
-    if protocol == "gemini":
-        model = quote(settings.llm_model.removeprefix("models/"), safe="")
-        url = f"{base}/models/{model}:generateContent"
-        headers = {"x-goog-api-key": secret}
-        wire = gemini_payload(payload)
-    elif protocol == "qwen_chat":
-        url = base + "/services/aigc/text-generation/generation"
-        headers = {"Authorization": f"Bearer {secret}"}
-        messages = deepcopy(payload["messages"])
-        for message in messages:
-            for call in message.get("tool_calls", []):
-                call.pop("provider_signature", None)
-                call.pop("provider_call_id", None)
-        schema = payload.get("response_format", {}).get("json_schema", {}).get("schema")
-        if schema:
-            messages.insert(
-                0,
-                {
-                    "role": "system",
-                    "content": "JSON Schema:\n" + json.dumps(schema, ensure_ascii=False),
-                },
-            )
-        if any(isinstance(item.get("content"), list) for item in messages):
-            url = base + "/services/aigc/multimodal-generation/generation"
-            messages = [dict(item) for item in messages]
-            for message in messages:
-                content = message.get("content")
-                if isinstance(content, list):
-                    message["content"] = [
-                        {"text": item["text"]}
-                        if item["type"] == "text"
-                        else {"image": item["image_url"]["url"]}
-                        for item in content
-                    ]
-                elif isinstance(content, str):
-                    message["content"] = [{"text": content}]
-        parameters = {
-            "result_format": "message",
-            "max_tokens": payload.get("max_tokens", payload.get("max_completion_tokens")),
-            "enable_thinking": False,
-        }
-        if payload.get("tools"):
-            parameters["tools"] = payload["tools"]
-        else:
-            parameters["response_format"] = {"type": "json_object"}
-        wire = {
-            "model": settings.llm_model,
-            "input": {"messages": messages},
-            "parameters": parameters,
-        }
-    else:
-        raise GatewayFailure("INPUT_INVALID", not_accepted=True)
+def qwen_response(body: dict) -> dict:
+    result = {"usage": body["usage"]}
     try:
-        with (
-            httpx.Client(
-                timeout=settings.llm_timeout_seconds,
-                transport=PublicHTTPTransport(settings.llm_dns_timeout_seconds),
-                trust_env=False,
-                follow_redirects=False,
-            ) as client,
-            client.stream("POST", url, headers=headers, json=wire) as response,
-        ):
-            raw = bytearray()
-            for chunk in response.iter_bytes():
-                if len(raw) + len(chunk) > 1048576:
-                    raise GatewayFailure("INVALID_RESPONSE")
-                raw.extend(chunk)
-            try:
-                body = json.loads(raw)
-            except ValueError:
-                raise_for_provider_status(response, {})
-                raise GatewayFailure("INVALID_RESPONSE") from None
-            normalized = (
-                {**body, "usage": native_usage(body, protocol)} if isinstance(body, dict) else {}
-            )
-            if isinstance(body, dict) and body.get("code") and not body.get("error"):
-                normalized["error"] = body
-            raise_for_provider_status(response, normalized)
-            if not isinstance(body, dict):
-                raise GatewayFailure("INVALID_RESPONSE")
-            if body.get("error") or body.get("code"):
-                raise_for_provider_status(
-                    httpx.Response(400),
-                    {"error": body.get("error", body), "usage": normalized["usage"]},
-                )
-            if protocol == "gemini":
-                return gemini_response(body)
-            try:
-                output = body.get("output", {})
-                choices = output.get("choices")
-                if isinstance(choices, list):
-                    for choice in choices:
-                        content = choice.get("message", {}).get("content")
-                        if isinstance(content, list):
-                            choice["message"]["content"] = "".join(
-                                item.get("text", "") for item in content
-                            )
-                return {"choices": choices, "usage": normalized["usage"]}
-            except (KeyError, TypeError, ValueError, AttributeError):
-                raise GatewayFailure(
-                    "INVALID_RESPONSE", completed=True, usage=response_usage(normalized)
-                ) from None
-    except httpx.RequestError:
-        raise GatewayFailure("PROVIDER_UNAVAILABLE") from None
-    except (KeyError, TypeError, ValueError, AttributeError, IndexError):
-        raise GatewayFailure("INVALID_RESPONSE") from None
+        choices = body.get("output", {}).get("choices")
+        if isinstance(choices, list):
+            choices = deepcopy(choices)
+            for choice in choices:
+                content = choice.get("message", {}).get("content")
+                if isinstance(content, list):
+                    choice["message"]["content"] = "".join(item.get("text", "") for item in content)
+        result["choices"] = choices
+    except (KeyError, TypeError, ValueError, AttributeError):
+        pass
+    return result

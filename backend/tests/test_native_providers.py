@@ -9,12 +9,18 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from langchain_core.messages import HumanMessage
 from pydantic import SecretStr
 from test_agent_model import FinalResult, declaration, model_request
 from test_asset_versions import image_bytes
 
 from arclight.core.errors import DomainError
-from arclight.domain.agent_model import AgentModelCapabilities
+from arclight.domain.agent_model import (
+    AgentAssistantMessage,
+    AgentModelCapabilities,
+    AgentToolMessage,
+)
+from arclight.domain.agent_tools import AgentToolFeedback
 from arclight.domain.generation_requests import GenerationSpec
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.versions import digest
@@ -25,7 +31,6 @@ from arclight.providers.media_submission import MediaImageInput, MediaSubmission
 from arclight.providers.native_media import MediaConnection, NativeMediaProvider
 from arclight.providers.native_media_protocols import ASYNC, KINDS
 from arclight.providers.native_media_protocols import submission as media_submission
-from arclight.providers.native_text import gemini_payload
 
 CANARY = "native-http-private-key"
 
@@ -375,7 +380,7 @@ def test_siliconflow_unknown_compatible_speech_model_keeps_protocol_output_contr
 
 
 @pytest.mark.parametrize("protocol", ["gemini", "qwen_chat"])
-def test_native_agent_structured_output_tools_and_usage(settings, monkeypatch, protocol):
+def test_native_agent_structured_output_tools_and_usage(settings, stub_llm, protocol):
     settings.llm_protocol = protocol
     settings.llm_base_url = "https://api.example/v1"
     settings.llm_api_key = SecretStr(CANARY)
@@ -413,6 +418,12 @@ def test_native_agent_structured_output_tools_and_usage(settings, monkeypatch, p
                 ]
             else:
                 assert body["generationConfig"]["responseMimeType"] == "application/json"
+                parts = body["contents"][1]["parts"]
+                assert parts[0]["thoughtSignature"] == "opaque-native-signature"
+                assert parts[0]["functionCall"]["id"] == "native-call-1"
+                feedback = body["contents"][2]["parts"][0]["functionResponse"]
+                assert feedback["id"] == "native-call-1"
+                assert feedback["name"] == "read_story_entry"
                 parts = [{"text": content}]
             return httpx.Response(
                 200,
@@ -425,6 +436,8 @@ def test_native_agent_structured_output_tools_and_usage(settings, monkeypatch, p
         assert req.headers["authorization"] == "Bearer " + CANARY
         parameters = body["parameters"]
         assert parameters["result_format"] == "message"
+        if count == 2:
+            assert body["input"]["messages"][-1]["tool_call_id"] == "call_qwen"
         message = (
             {
                 "tool_calls": [
@@ -456,38 +469,30 @@ def test_native_agent_structured_output_tools_and_usage(settings, monkeypatch, p
             },
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.native_text.PublicHTTPTransport",
-        lambda *_args, **_kwargs: httpx.MockTransport(handler),
-    )
-    provider = OpenAICompatibleAgentProvider(settings)
-    tools = provider.complete(model_request(), (declaration(),), FinalResult, {})
+    provider = OpenAICompatibleAgentProvider(settings, service=stub_llm(handler))
+    request = model_request()
+    tools = provider.complete(request, (declaration(),), FinalResult, {})
     assert tools.status == "TOOL_CALLS" and len(tools.tool_calls) == 1
+    call = tools.tool_calls[0]
     if protocol == "gemini":
-        assert tools.tool_calls[0].provider_signature == "opaque-native-signature"
-        assert tools.tool_calls[0].provider_call_id == "native-call-1"
-        replay = gemini_payload(
-            {
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "tool_calls": [
-                            {
-                                "id": "call_1",
-                                "function": {"name": "read_story_entry", "arguments": "{}"},
-                                "provider_signature": "opaque-native-signature",
-                                "provider_call_id": "native-call-1",
-                            }
-                        ],
-                    },
-                    {"role": "tool", "tool_call_id": "call_1", "content": "{}"},
-                ]
-            }
-        )
-        assert replay["contents"][0]["parts"][0]["thoughtSignature"] == "opaque-native-signature"
-        assert replay["contents"][0]["parts"][0]["functionCall"]["id"] == "native-call-1"
-        assert replay["contents"][1]["parts"][0]["functionResponse"]["id"] == "native-call-1"
-    final = provider.complete(model_request(), (), FinalResult, {})
+        assert call.provider_signature == "opaque-native-signature"
+        assert call.provider_call_id == "native-call-1"
+    request.messages.extend(
+        [
+            AgentAssistantMessage(tool_calls=[call]),
+            AgentToolMessage(
+                call_id=call.call_id,
+                feedback=AgentToolFeedback(
+                    run_id=request.run_id,
+                    tool_name=call.tool_name,
+                    idempotency_key=call.call_id,
+                    status="SUCCEEDED",
+                    result={},
+                ),
+            ),
+        ]
+    )
+    final = provider.complete(request, (), FinalResult, {})
     assert final.status == "FINAL" and final.final.summary == "complete"
     assert provider.last_usage.input_tokens == 12 and provider.last_usage.output_tokens == 4
 
@@ -502,20 +507,16 @@ def test_native_agent_structured_output_tools_and_usage(settings, monkeypatch, p
         (429, "PROVIDER_RATE_LIMITED"),
     ],
 )
-def test_native_errors_are_sanitized(settings, monkeypatch, protocol, status, code):
-    from arclight.providers.native_text import native_chat
-
+def test_native_errors_are_sanitized(settings, stub_llm, protocol, status, code):
     settings.llm_protocol = protocol
     settings.llm_api_key = SecretStr(CANARY)
-    monkeypatch.setattr(
-        "arclight.providers.native_text.PublicHTTPTransport",
-        lambda *_a, **_k: httpx.MockTransport(
-            lambda _req: httpx.Response(status, json={"error": {"message": CANARY}})
-        ),
-    )
+    service = stub_llm(lambda _req: httpx.Response(status, json={"error": {"message": CANARY}}))
     with pytest.raises(GatewayFailure) as error:
-        native_chat(
-            settings, {"messages": [{"role": "user", "content": "synthetic"}], "max_tokens": 20}
+        service.invoke(
+            settings,
+            [HumanMessage("synthetic")],
+            max_tokens=20,
+            response_format={"type": "json_object"},
         )
     assert error.value.code == code and error.value.not_accepted
     assert CANARY not in str(error.value)
@@ -524,11 +525,8 @@ def test_native_errors_are_sanitized(settings, monkeypatch, protocol, status, co
 @pytest.mark.parametrize("protocol", ["gemini", "qwen_chat"])
 @pytest.mark.parametrize("malformed", [None, [None], {"content": None}])
 def test_completed_malformed_native_text_retains_known_usage(
-    settings, monkeypatch, protocol, malformed
+    settings, stub_llm, protocol, malformed
 ):
-    from arclight.providers.chat import completed_message
-    from arclight.providers.native_text import native_chat
-
     settings.llm_protocol = protocol
     body = (
         {
@@ -538,13 +536,13 @@ def test_completed_malformed_native_text_retains_known_usage(
         if protocol == "gemini"
         else {"output": malformed, "usage": {"input_tokens": 19, "output_tokens": 7}}
     )
-    monkeypatch.setattr(
-        "arclight.providers.native_text.PublicHTTPTransport",
-        lambda *_a, **_k: httpx.MockTransport(lambda req: httpx.Response(200, json=body)),
-    )
+    service = stub_llm(lambda req: httpx.Response(200, json=body))
     with pytest.raises(GatewayFailure) as error:
-        completed_message(
-            native_chat(settings, {"messages": [{"role": "user", "content": "test"}]})
+        service.invoke(
+            settings,
+            [HumanMessage("test")],
+            max_tokens=20,
+            response_format={"type": "json_object"},
         )
     assert error.value.completed and not error.value.not_accepted
     assert error.value.usage.input_tokens == 19 and error.value.usage.output_tokens == 7

@@ -11,7 +11,11 @@ from arclight.application.context_evidence import read_trace
 from arclight.application.context_images import load_context_images
 from arclight.application.gateway_text import execution_actor
 from arclight.application.model_gateway import invoke, lock_gate, route_id
-from arclight.application.model_services import run_settings
+from arclight.application.model_services import (
+    recheck_text_credential,
+    run_settings,
+    text_credential_identity,
+)
 from arclight.application.production_versions import text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -21,11 +25,17 @@ from arclight.domain.agent_model import (
     AgentModelResponse,
     AgentToolDeclaration,
 )
-from arclight.domain.model_gateway import GatewayCapabilities, GatewayRequest, GatewayRoute
+from arclight.domain.model_gateway import (
+    GatewayCapabilities,
+    GatewayRequest,
+    GatewayRoute,
+    GatewayUsage,
+)
 from arclight.domain.versions import digest
 from arclight.domain.video_temporal_reviewer import TEMPORAL_AGENT
 from arclight.persistence.models import Episode, WorkflowRun
 from arclight.providers.agent_model import OpenAICompatibleAgentProvider, check_capabilities
+from arclight.providers.llm import dispatch_inference
 
 
 def invoke_agent[T: BaseModel](
@@ -68,11 +78,8 @@ def invoke_agent[T: BaseModel](
             )
             for tool in definitions
         )
-        settings = run_settings(
-            text_settings(db, episode.project_id, run, settings),
-            run.input_json.get("_text_service"),
-            db,
-        )
+        snapshot = run.input_json.get("_text_service")
+        settings = run_settings(text_settings(db, episode.project_id, run, settings), snapshot, db)
         if settings.provider != "openai_compatible":
             raise DomainError("GATEWAY_CAPABILITY_REJECTED", "此 Provider 尚未实现 Agent 协议", 422)
         capabilities = check_capabilities(settings, request, tools)
@@ -107,9 +114,7 @@ def invoke_agent[T: BaseModel](
                     "agent": capabilities.model_dump(mode="json"),
                 }
             ),
-            credential_source="ACCOUNT_SNAPSHOT"
-            if run.input_json.get("_text_service")
-            else "SERVER",
+            credential_source="ACCOUNT_SNAPSHOT" if snapshot else "SERVER",
             capabilities=GatewayCapabilities(
                 version=request.protocol_version,
                 tasks=frozenset({request.stage}),
@@ -156,15 +161,31 @@ def invoke_agent[T: BaseModel](
         )
     # The preparation transaction and business row locks are released before external I/O.
     provider = OpenAICompatibleAgentProvider(settings)
-    return invoke(
+    identity = text_credential_identity(actor, snapshot)
+
+    def check_binding(db: Session, call_id: UUID) -> None:
+        recheck_text_credential(db, request.run_id, snapshot, settings)
+        if on_admit is not None:
+            on_admit(db, call_id)
+
+    def publish_round(
+        db: Session, call_id: UUID, result: tuple[AgentModelResponse[T], GatewayUsage]
+    ) -> None:
+        if on_result is not None:
+            on_result(db, call_id, result[0])
+
+    result, _usage = invoke(
         factory,
         call,
         route,
-        lambda: provider.complete(request, tools, result_model, images),
+        lambda: dispatch_inference(
+            settings, identity, lambda: provider.complete(request, tools, result_model, images)
+        ),
         policy=policy.model_copy(
             update={"timeout_seconds": min(policy.timeout_seconds, settings.llm_timeout_seconds)}
         ),
-        usage=lambda _: provider.last_usage,
-        on_admit=on_admit,
-        on_result=on_result,
+        usage=lambda result: result[1],
+        on_admit=check_binding,
+        on_result=publish_round if on_result is not None else None,
     )
+    return result

@@ -244,7 +244,7 @@ def test_legacy_run_without_brief_does_not_load_current_settings(
     assert len(calls) == 1
 
 
-def test_real_adapter_sends_bounded_brief_as_data(settings, monkeypatch):
+def test_real_adapter_sends_bounded_brief_as_data(settings, stub_llm):
     calls = []
 
     def handler(request):
@@ -264,11 +264,8 @@ def test_real_adapter_sends_bounded_brief_as_data(settings, monkeypatch):
             },
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(handler),
-    )
-    OpenAICompatibleTextProvider(settings).script(
+    service = stub_llm(handler)
+    OpenAICompatibleTextProvider(settings, service=service).script(
         "用户故事", {"description": "水彩"}, 30000, story_settings=BRIEF
     )
     data = json.loads(calls[0]["messages"][1]["content"])

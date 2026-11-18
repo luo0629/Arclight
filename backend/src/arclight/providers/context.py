@@ -15,15 +15,13 @@ from arclight.domain.generation_requests import safe_metadata
 from arclight.providers.text import OpenAICompatibleTextProvider, TextProvider
 
 
-def provider_call[T](
-    call: Callable[[], T], *, provider=None, stage: str = "", data: dict | None = None
-) -> T:
+def provider_call[T](call: Callable[[], T], *, provider: TextProvider, stage: str, data: dict) -> T:
     # LangGraph persists exception strings in pending writes. Scrub transport
     # failures before they cross that boundary, rather than only in API logging.
     try:
         from arclight.application.gateway_text import invoke_text
 
-        result = invoke_text(provider, stage, data or {}, call) if stage else call()
+        result = invoke_text(provider, stage, data, call)
         if isinstance(result, BaseModel):
             safe_metadata(result.model_dump(mode="json"))
         return result
@@ -125,5 +123,7 @@ class ContextTextProvider:
 
 def bind_contexts(provider: TextProvider, contexts: dict[str, dict]) -> TextProvider:
     if isinstance(provider, OpenAICompatibleTextProvider):
-        provider = OpenAICompatibleTextProvider(provider.settings, contexts)
+        provider = OpenAICompatibleTextProvider(
+            provider.settings, contexts, service=provider.service
+        )
     return ContextTextProvider(provider, contexts)

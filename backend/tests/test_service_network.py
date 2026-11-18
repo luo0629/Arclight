@@ -18,6 +18,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.model_suppliers import LEGACY_MODELS, SUPPLIERS
 from arclight.providers import network
+from arclight.providers.llm import dispatch_inference
 from arclight.providers.text import OpenAICompatibleTextProvider
 
 
@@ -291,7 +292,7 @@ def test_all_official_presets_obey_the_same_public_https_policy(supplier):
     [p for p in SUPPLIERS if p.kind == "text" and p.protocol == "openai_chat"],
     ids=lambda preset: preset.id,
 )
-def test_official_request_contract_and_invalid_json_rejection(monkeypatch, settings, supplier):
+def test_official_request_contract_and_invalid_json_rejection(stub_llm, settings, supplier):
     sent = []
     valid = StoryAnalysisContent(
         schema_version="1.0",
@@ -312,9 +313,7 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
             },
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport", lambda *args: httpx.MockTransport(respond)
-    )
+    service = stub_llm(respond)
     configuration = settings.model_copy(
         update={
             "llm_supplier": supplier.id,
@@ -323,8 +322,11 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
             "llm_base_url": supplier.base_url,
         }
     )
-    provider = OpenAICompatibleTextProvider(configuration)
-    assert provider.analyze("story") == valid
+    provider = OpenAICompatibleTextProvider(configuration, service=service)
+    result, usage = dispatch_inference(
+        configuration, ("FIXTURE",), lambda: provider.analyze("story")
+    )
+    assert result == valid
     body = sent[0]
     assert body["response_format"]["type"] == supplier.response_format
     assert body["model"] == configuration.llm_model
@@ -337,12 +339,12 @@ def test_official_request_contract_and_invalid_json_rejection(monkeypatch, setti
     else:
         assert "max_tokens" in body and "JSON Schema" in body["messages"][0]["content"]
     assert (body.get("thinking") == {"type": "disabled"}) == (supplier.id == "deepseek")
-    assert provider.last_usage.input_tokens == 4
+    assert usage.input_tokens == 4
     with pytest.raises(GatewayFailure) as caught:
         provider.analyze("story")
     assert caught.value.code == "INVALID_RESPONSE"
     assert caught.value.completed and not caught.value.not_accepted
-    assert caught.value.usage == provider.last_usage
+    assert caught.value.usage == usage
     assert caught.value.usage.input_tokens == 4
     assert caught.value.usage.output_tokens == 8
     assert caught.value.usage.actual_cost is None

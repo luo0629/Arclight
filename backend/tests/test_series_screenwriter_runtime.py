@@ -53,7 +53,7 @@ def series_model_service(writing_case, request):
     return request.getfixturevalue("model_service")
 
 
-def install_series(model_service, monkeypatch, settings, *, author_limit=None, transform=None):
+def install_series(model_service, settings, *, author_limit=None, transform=None):
     path = Path(__file__).resolve().parents[1] / "scripts" / "e2e_screenwriter.py"
     spec = importlib.util.spec_from_file_location("series_screenwriter_fixture", path)
     assert spec is not None and spec.loader is not None
@@ -86,10 +86,6 @@ def install_series(model_service, monkeypatch, settings, *, author_limit=None, t
             raise
 
     model_service(respond)
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(respond),
-    )
     return sent, errors
 
 
@@ -98,9 +94,9 @@ def seeds(sent):
 
 
 def test_series_creation_consumes_views_patches_and_saves_complete_v3_without_facts(
-    client, settings, series_model_service, monkeypatch, writing_case
+    client, settings, series_model_service, writing_case
 ):
-    sent, errors = install_series(series_model_service, monkeypatch, settings, author_limit=1)
+    sent, errors = install_series(series_model_service, settings, author_limit=1)
     run_id = start(client, writing_case["episode"], narrative=writing_case["request"])
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors)
@@ -223,10 +219,10 @@ def manual_series_source(client, case):
 
 @pytest.mark.parametrize("scope", ["scene", "paragraph"])
 def test_series_independent_rewrite_keeps_unselected_narrative_and_exact_source(
-    client, settings, series_model_service, monkeypatch, writing_case, scope
+    client, settings, series_model_service, writing_case, scope
 ):
     base = manual_series_source(client, writing_case)
-    sent, errors = install_series(series_model_service, monkeypatch, settings)
+    sent, errors = install_series(series_model_service, settings)
     scenes = base["content_json"]["scenes"]
     target = {"scope": scope, "scene_id": scenes[1]["scene_id"]}
     if scope == "paragraph":
@@ -281,7 +277,7 @@ def test_legacy_script_schema_stays_separate_and_series_rewrite_needs_explicit_b
 
 
 def test_internal_scene_targets_replay_acquisition_forgetting_and_flashback_knowledge(
-    client, settings, series_model_service, monkeypatch, writing_case
+    client, settings, series_model_service, writing_case
 ):
     script = approved_script(client, writing_case["episode"])
     identity = writing_case["characters"][0]["id"]
@@ -295,7 +291,7 @@ def test_internal_scene_targets_replay_acquisition_forgetting_and_flashback_know
         "ledger_version_id": created["version"]["id"],
         "expected_ledger_head_revision": approved["head"]["revision"],
     }
-    install_series(series_model_service, monkeypatch, settings)
+    install_series(series_model_service, settings)
     run_id = start(client, writing_case["episode"], narrative=writing_case["request"])
     with client.app.state.session_factory() as db:
         run = db.get(WorkflowRun, run_id)
@@ -324,7 +320,7 @@ def test_internal_scene_targets_replay_acquisition_forgetting_and_flashback_know
 
 
 def test_series_research_refresh_appends_binding_after_pause_without_changing_consumption(
-    client, settings, series_model_service, monkeypatch, writing_case
+    client, settings, series_model_service, writing_case
 ):
     case = writing_case
     extended_plan(client, case, 6)
@@ -358,7 +354,7 @@ def test_series_research_refresh_appends_binding_after_pause_without_changing_co
             return call_response((f"resumed-{len(feedback)}", SERIES_RESEARCH_TOOL, parameters))
         return original
 
-    sent, errors = install_series(series_model_service, monkeypatch, settings, transform=respond)
+    sent, errors = install_series(series_model_service, settings, transform=respond)
     run_id = start(client, case["episode"], narrative=case["request"])
     factory = client.app.state.session_factory
     with factory.begin() as db:
@@ -436,7 +432,7 @@ def test_series_research_refresh_appends_binding_after_pause_without_changing_co
 
 
 def test_series_creation_validates_second_scene_anchor_while_first_scene_is_flashback(
-    client, settings, series_model_service, monkeypatch, writing_case
+    client, settings, series_model_service, writing_case
 ):
     writing_case["request"] |= {"target_scene_no": 2, "target_story_time": 10}
 
@@ -451,7 +447,7 @@ def test_series_creation_validates_second_scene_anchor_while_first_scene_is_flas
             message["content"] = json.dumps(envelope, ensure_ascii=False)
         return value
 
-    _, errors = install_series(series_model_service, monkeypatch, settings, transform=respond)
+    _, errors = install_series(series_model_service, settings, transform=respond)
     run_id = start(client, writing_case["episode"], narrative=writing_case["request"])
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors)
@@ -476,7 +472,7 @@ def test_series_creation_validates_second_scene_anchor_while_first_scene_is_flas
 
 @pytest.mark.parametrize("anchor_in_scope", [True, False])
 def test_series_rewrite_maps_anchor_through_source_scene_ids(
-    client, settings, series_model_service, monkeypatch, writing_case, anchor_in_scope
+    client, settings, series_model_service, writing_case, anchor_in_scope
 ):
     base = manual_series_source(client, writing_case)
     scenes = base["content_json"]["scenes"]
@@ -497,7 +493,7 @@ def test_series_rewrite_maps_anchor_through_source_scene_ids(
             message["content"] = json.dumps(envelope, ensure_ascii=False)
         return value
 
-    _, errors = install_series(series_model_service, monkeypatch, settings, transform=respond)
+    _, errors = install_series(series_model_service, settings, transform=respond)
     body = rewrite_body(base, target) | {
         "professional": True,
         "narrative": writing_case["request"] | {"target_scene_no": 2 if anchor_in_scope else 1},

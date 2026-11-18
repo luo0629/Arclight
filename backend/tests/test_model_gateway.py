@@ -529,7 +529,7 @@ def test_downgrade_refuses_to_discard_usage_history(client, episode, migrated):
 
 
 def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
-    client, settings, monkeypatch, caplog
+    client, settings, stub_llm, caplog
 ):
     import json
 
@@ -593,10 +593,7 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
             },
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(handler),
-    )
+    stub_llm(handler)
     execute_run(client.app.state.session_factory, settings, identity, 0)
     assert client.get(f"/api/v1/runs/{identity}").json()["status"] == "WAITING_REVIEW"
     assert captured == [("https://api.openai.com/v1/chat/completions", "text-model")]

@@ -48,7 +48,7 @@ def progress(client, run_id):
 
 
 def install(
-    model_service, monkeypatch, settings, *, count=2, mutate=None, human=None, on_http=None
+    model_service, _monkeypatch, settings, *, count=2, mutate=None, human=None, on_http=None
 ):
     settings.model_gateway_policy = GatewayPolicy(
         text_maximum_cost="0", pricing_version="creation-test:1"
@@ -137,9 +137,6 @@ def install(
             raise
 
     model_service(respond)
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport", lambda *a, **k: httpx.MockTransport(respond)
-    )
     return sent, errors
 
 

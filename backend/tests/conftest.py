@@ -6,14 +6,41 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from uuid import uuid4
 
+import httpx
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 from sqlalchemy import create_engine, inspect, text
 
 from arclight.core.config import Settings
 from arclight.main import create_app
+from arclight.providers.llm import LLMService, llm_service
+
+
+@pytest.fixture
+def stub_llm(settings, monkeypatch):
+    """Patch only the network boundary; SDKs, admission and decoding stay real."""
+    if not settings.llm_api_key.get_secret_value():
+        monkeypatch.setattr(settings, "llm_api_key", SecretStr("synthetic-llm-fixture-key"))
+    offline = []
+
+    def respond(handler):
+        llm_service.clear()
+        monkeypatch.setattr(
+            "arclight.providers.llm_transport.PublicHTTPTransport",
+            lambda *_args, **_kwargs: httpx.MockTransport(handler),
+        )
+        # Only direct adapter unit tests use this explicitly offline instance.
+        service = LLMService(offline_transport=httpx.MockTransport(handler))
+        offline.append(service)
+        return service
+
+    yield respond
+    llm_service.clear()
+    for service in offline:
+        service.clear()
 
 
 @contextmanager

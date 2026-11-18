@@ -59,8 +59,11 @@ def derive(client, episode, row, key="writer"):
 
 
 def test_generation_defaults_exact_source_independence_and_replay(
-    client, episode, settings, monkeypatch
+    client, episode, settings, monkeypatch, stub_llm
 ):
+    import httpx
+
+    settings.provider = "openai_compatible"
     with client.app.state.session_factory.begin() as db:
         db.get(Project, UUID(episode["project_id"])).story_settings = {
             "target_episode_count": 3,
@@ -69,13 +72,18 @@ def test_generation_defaults_exact_source_independence_and_replay(
     story = "  雨夜，阿青捡到信。\r\n"
     body = {"story": story}
     calls = []
-    original = MockTextProvider.outline
 
-    def provider(self, source):
-        calls.append(source)
-        return original(self, source)
+    def respond(request):
+        wire = json.loads(request.content)
+        assert wire["response_format"]["json_schema"]["name"] == "StoryOutlineContent"
+        data = json.loads(wire["messages"][-1]["content"])["task_input"]
+        calls.append(data)
+        result = MockTextProvider().outline(data)
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": result.model_dump_json()}}]}
+        )
 
-    monkeypatch.setattr(MockTextProvider, "outline", provider)
+    stub_llm(respond)
     accepted = start(client, episode, body).json()
     assert start(client, episode, body).json()["run_id"] == accepted["run_id"]
     assert start(client, episode, {"story": "不同"}).status_code == 409
@@ -357,7 +365,7 @@ def test_outline_migration_refuses_losing_saved_data(client, episode, settings, 
         command.downgrade(migrated, "0008")
 
 
-def test_provider_receives_fixed_plan_as_data(settings, monkeypatch):
+def test_provider_receives_fixed_plan_as_data(settings, stub_llm):
     import httpx
 
     from arclight.providers.text import OpenAICompatibleTextProvider
@@ -376,11 +384,8 @@ def test_provider_receives_fixed_plan_as_data(settings, monkeypatch):
             200, json={"choices": [{"message": {"content": expected.model_dump_json()}}]}
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(handler),
-    )
-    assert OpenAICompatibleTextProvider(settings).outline(source) == expected
+    service = stub_llm(handler)
+    assert OpenAICompatibleTextProvider(settings, service=service).outline(source) == expected
     request = received[0]
     assert source["story"] not in request["messages"][0]["content"]
     assert json.loads(request["messages"][1]["content"]) == source

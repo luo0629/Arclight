@@ -282,7 +282,7 @@ def test_startup_and_retry_keep_old_context_after_domain_and_policy_updates(
 
 
 def test_real_text_adapter_consumes_frozen_context_and_refuses_oversized_call(
-    client, episode, settings, monkeypatch
+    client, episode, settings, stub_llm
 ):
     visual_setup(client, episode)
     run_id = start(client, episode).json()["run_id"]
@@ -296,11 +296,8 @@ def test_real_text_adapter_consumes_frozen_context_and_refuses_oversized_call(
             200, json={"choices": [{"message": {"content": result.model_dump_json()}}]}
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(handler),
-    )
-    provider = OpenAICompatibleTextProvider(settings, {"script": value})
+    service = stub_llm(handler)
+    provider = OpenAICompatibleTextProvider(settings, {"script": value}, service=service)
     provider.script(
         "story",
         {},
@@ -328,7 +325,9 @@ def test_real_text_adapter_consumes_frozen_context_and_refuses_oversized_call(
     too_small = copy.deepcopy(value)
     too_small["limits"]["max_bytes"] = 1024
     with pytest.raises(DomainError, match="必需上下文"):
-        OpenAICompatibleTextProvider(settings, {"script": too_small}).script("story", {}, 30000)
+        OpenAICompatibleTextProvider(settings, {"script": too_small}, service=service).script(
+            "story", {}, 30000
+        )
     assert len(calls) == 1
 
 

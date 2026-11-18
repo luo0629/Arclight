@@ -21,6 +21,7 @@ from arclight.domain.model_gateway import (
     GatewayUsage,
 )
 from arclight.domain.versions import digest
+from arclight.providers.llm import dispatch_inference
 from arclight.providers.prompts import TEXT_MAX_TOKENS
 
 
@@ -88,6 +89,10 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
     if runtime is None:
         return call()
     from arclight.application.model_gateway import invoke, route_id
+    from arclight.application.model_services import (
+        recheck_text_credential,
+        text_credential_identity,
+    )
     from arclight.persistence.models import Episode, WorkflowRun
     from arclight.providers.text import MockTextProvider
 
@@ -99,9 +104,8 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
         assert run is not None
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
-        source: Literal["ACCOUNT_SNAPSHOT", "SERVER"] = (
-            "ACCOUNT_SNAPSHOT" if run.input_json.get("_text_service") else "SERVER"
-        )
+        snapshot = run.input_json.get("_text_service")
+        source: Literal["ACCOUNT_SNAPSHOT", "SERVER"] = "ACCOUNT_SNAPSHOT" if snapshot else "SERVER"
         actor = execution_actor(db, run)
         route = GatewayRoute(
             provider="mock"
@@ -141,43 +145,34 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
             execution=_professional_execution(run, stage, runtime.revision),
         )
 
-    def usage(_result) -> GatewayUsage:
-        if mock:
-            return GatewayUsage(actual_cost=Decimal("0"))
-        return getattr(provider, "last_usage", GatewayUsage())
+    identity = text_credential_identity(actor, snapshot) if not mock else ()
 
-    # The account's endpoint/key snapshot is resolved before reaching this layer.
-    # No fallback route is authorized by the existing UI.
-    def safe_call():
+    def invoke_turn() -> tuple[T, GatewayUsage]:
+        if not mock:
+            return dispatch_inference(settings, identity, call)
         try:
-            return call()
-        except Exception as exc:
-            if mock:
-                raise GatewayFailure("PROVIDER_FAILED", not_accepted=True) from None
-            if isinstance(exc, DomainError) and exc.code in {
-                "INVALID_SERVICE_URL",
-                "SERVICE_DNS_UNAVAILABLE",
-                "SERVICE_ADDRESS_BLOCKED",
-                "SERVICE_REDIRECT_BLOCKED",
-            }:
-                raise GatewayFailure(
-                    exc.code, not_accepted=exc.code != "SERVICE_REDIRECT_BLOCKED"
-                ) from None
-            raise
+            return call(), GatewayUsage(actual_cost=Decimal("0"))
+        except Exception:
+            raise GatewayFailure("PROVIDER_FAILED", not_accepted=True) from None
+
+    def check_binding(db: Session, _call_id: UUID) -> None:
+        recheck_text_credential(db, runtime.run_id, snapshot, settings)
 
     try:
-        return invoke(
+        result, _usage = invoke(
             runtime.factory,
             request,
             route,
-            safe_call,
+            invoke_turn,
             policy=policy.model_copy(
                 update={
                     "timeout_seconds": min(policy.timeout_seconds, settings.llm_timeout_seconds)
                 }
             ),
-            usage=usage,
+            usage=lambda result: result[1],
+            on_admit=None if mock else check_binding,
         )
+        return result
     except DomainError as exc:
         if mock and exc.code == "GATEWAY_NOT_ACCEPTED":
             raise ValueError("Mock text execution failed") from None

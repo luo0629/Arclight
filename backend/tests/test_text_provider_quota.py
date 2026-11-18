@@ -27,7 +27,7 @@ from arclight.providers.text import MockTextProvider
 
 
 @pytest.fixture
-def text_service(settings, monkeypatch):
+def text_service(settings, stub_llm):
     supplier = supplier_by_id("deepseek")
     settings.provider = "openai_compatible"
     settings.llm_base_url = supplier.base_url
@@ -37,13 +37,7 @@ def text_service(settings, monkeypatch):
     settings.llm_api_key = SecretStr("private-text-test-key")
     settings.model_gateway_policy = GatewayPolicy()
 
-    def respond(handler):
-        monkeypatch.setattr(
-            "arclight.providers.text.PublicHTTPTransport",
-            lambda *args, **kwargs: httpx.MockTransport(handler),
-        )
-
-    return respond
+    return stub_llm
 
 
 def script_response(req):

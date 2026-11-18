@@ -448,7 +448,7 @@ def test_stale_asset_blocks_manual_approval_and_director_start(client, episode, 
     )
 
 
-def test_http_provider_uses_v2_schema_and_keeps_input_in_data(settings, monkeypatch):
+def test_http_provider_uses_v2_schema_and_keeps_input_in_data(settings, stub_llm):
     requests = []
     script = ScriptContent.model_validate(legacy_script())
 
@@ -459,11 +459,8 @@ def test_http_provider_uses_v2_schema_and_keeps_input_in_data(settings, monkeypa
             200, json={"choices": [{"message": {"content": script.model_dump_json()}}]}
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(respond),
-    )
-    result = OpenAICompatibleTextProvider(settings).script("只作为素材", {})
+    service = stub_llm(respond)
+    result = OpenAICompatibleTextProvider(settings, service=service).script("只作为素材", {})
     assert result == script
     data = requests[0]
     assert "只作为素材" not in data["messages"][0]["content"]

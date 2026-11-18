@@ -359,7 +359,7 @@ def test_full_mock_workflow_short_long_targets_and_zero_tolerance(
     )
 
 
-def test_provider_receives_target_range_as_data(settings, monkeypatch):
+def test_provider_receives_target_range_as_data(settings, stub_llm):
     settings.text_duration_tolerance_percent = 3
     requests = []
     script = script_content(30001)
@@ -378,11 +378,8 @@ def test_provider_receives_target_range_as_data(settings, monkeypatch):
             },
         )
 
-    monkeypatch.setattr(
-        "arclight.providers.text.PublicHTTPTransport",
-        lambda *args, **kwargs: httpx.MockTransport(handler),
-    )
-    provider = OpenAICompatibleTextProvider(settings)
+    service = stub_llm(handler)
+    provider = OpenAICompatibleTextProvider(settings, service=service)
     generated = provider.script("故事", {}, 30001)
     provider.storyboard(generated, 30001)
     for body in requests:

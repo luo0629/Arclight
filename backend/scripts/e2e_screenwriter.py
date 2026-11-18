@@ -19,7 +19,7 @@ from arclight.domain.screenwriter_revision import (
     REVISION_WORKFLOWS,
     SERIES_PATCH_TOOL,
 )
-from arclight.providers import agent_model, text
+from arclight.providers import llm_transport, text
 
 
 def _completion(value):
@@ -523,21 +523,20 @@ def install():
     from arclight.application import producer_planning
 
     producer_planning.capture_text = capture
-    for module in (agent_model, text):
-        original_transport = module.PublicHTTPTransport
+    original_transport = llm_transport.PublicHTTPTransport
 
-        class Transport(httpx.BaseTransport):
-            def __init__(self, *args, original=original_transport, **kwargs):
-                self.real = original(*args, **kwargs)
+    class Transport(httpx.BaseTransport):
+        def __init__(self, *args, **kwargs):
+            self.real = original_transport(*args, **kwargs)
 
-            def handle_request(self, request):
-                return (
-                    _respond(request)
-                    if request.url.host == "screenwriter.invalid"
-                    else self.real.handle_request(request)
-                )
+        def handle_request(self, request):
+            return (
+                _respond(request)
+                if request.url.host == "screenwriter.invalid"
+                else self.real.handle_request(request)
+            )
 
-            def close(self):
-                self.real.close()
+        def close(self):
+            self.real.close()
 
-        module.PublicHTTPTransport = Transport
+    llm_transport.PublicHTTPTransport = Transport

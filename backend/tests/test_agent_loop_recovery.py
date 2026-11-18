@@ -187,15 +187,25 @@ def test_duplicate_decision_is_idempotent_but_conflicting_or_stale_answer_is_rej
         assert caught.value.code == code
 
 
-@pytest.mark.parametrize("node", ["intent", "decide", "tools"])
+@pytest.mark.parametrize(
+    "protocol,node",
+    [
+        ("openai_chat", "intent"),
+        ("openai_chat", "decide"),
+        ("openai_chat", "tools"),
+        ("gemini", "tools"),
+    ],
+)
 def test_reentry_after_crash_reuses_logical_model_and_tool_actions(
     client,
     episode,
     settings,
     model_service,
     monkeypatch,
+    protocol,
     node,
 ):
+    settings.llm_protocol = protocol
     run_id, actor, registry = setup_loop(client, episode, settings)
     entry = create_entry(client, episode["project_id"])
     original_tool = registry.get("read_story_entry")
@@ -206,10 +216,33 @@ def test_reentry_after_crash_reuses_logical_model_and_tool_actions(
 
     registry = AgentToolRegistry([replace(original_tool, handler=record_effect)])
     sent = []
+    native_call = {
+        "id": "native-read",
+        "name": "read_story_entry",
+        "args": {"entry_id": str(entry)},
+    }
+    signature = "opaque-native-signature"
 
     def respond(request):
         payload = json.loads(request.content)
         sent.append(payload)
+        if protocol == "gemini":
+            if len(sent) == 1:
+                parts = [{"functionCall": native_call, "thoughtSignature": signature}]
+            else:
+                history = [part for row in payload["contents"] for part in row["parts"]]
+                assert {"functionCall": native_call, "thoughtSignature": signature} in history
+                (feedback,) = (
+                    part["functionResponse"] for part in history if "functionResponse" in part
+                )
+                assert (
+                    feedback["id"] == native_call["id"] and feedback["name"] == native_call["name"]
+                )
+                assert feedback["response"]["result"]["status"] == "SUCCEEDED"
+                parts = [{"text": final()["choices"][0]["message"]["content"]}]
+            return httpx.Response(
+                200, json={"candidates": [{"finishReason": "STOP", "content": {"parts": parts}}]}
+            )
         return httpx.Response(
             200,
             json=final()
@@ -239,7 +272,11 @@ def test_reentry_after_crash_reuses_logical_model_and_tool_actions(
         start(client, settings, seed, registry)
     if node == "intent":
         assert not sent
-    finished = resume(client, settings, loop_for(client, run_id), actor, registry)
+    if protocol == "gemini":
+        with TestClient(create_app(settings)) as recovered:
+            finished = resume(recovered, settings, loop_for(client, run_id), actor, registry)
+    else:
+        finished = resume(client, settings, loop_for(client, run_id), actor, registry)
     assert finished.status == "COMPLETED" and len(sent) == 2
     assert start(client, settings, seed, registry) == finished
     assert len(rows_for(client, run_id)["invocations"]) == 1
@@ -476,7 +513,7 @@ from arclight.application import agent_loop_recovery as r
 from arclight.application.agent_tools import build_agent_tool_registry
 from arclight.application.generation_leases import LeasePolicy
 from arclight.domain.agent_model import AgentModelRequest
-from arclight.providers import agent_model
+from arclight.providers import llm_transport
 from pydantic import BaseModel, ConfigDict, Field
 class FinalResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -484,7 +521,7 @@ class FinalResult(BaseModel):
     requires_human_review: bool
 data = json.load(open(sys.argv[1], encoding="utf-8"))
 settings = Settings(_env_file=None, **data["settings"])
-agent_model.PublicHTTPTransport = lambda *a, **kw: httpx.MockTransport(
+llm_transport.PublicHTTPTransport = lambda *a, **kw: httpx.MockTransport(
     lambda req: httpx.Response(200, json=data["response"]))
 original = r._PersistentRuntime.decide
 def crash(self, state):
