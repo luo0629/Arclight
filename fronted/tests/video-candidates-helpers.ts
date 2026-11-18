@@ -377,9 +377,49 @@ export async function mockedVideoFixture(page: Page) {
     failReplace?: boolean;
   } = {};
   const reads: string[] = [],
-    mutations: { path: string; body: Record<string, unknown> }[] = [];
+    mutations: { path: string; body: Record<string, unknown> }[] = [],
+    uploads: { path: string; body: Record<string, unknown> }[] = [];
+  const uploadedFileId = crypto.randomUUID();
+  const uploadPath = `/api/v1/projects/${env.project.id}/uploads`;
   await page.route("**/api/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (
+      route.request().method() === "POST" &&
+      [uploadPath, uploadPath + "/local"].includes(path)
+    ) {
+      const body = route.request().postDataJSON();
+      uploads.push({ path, body });
+      if (path === uploadPath)
+        return route.fulfill({
+          status: 503,
+          json: {
+            error: {
+              code: "PRESIGNED_UNAVAILABLE",
+              message: "文件直传需要启用私有 S3 存储",
+            },
+          },
+        });
+      const content = Buffer.from(body.content_base64, "base64");
+      return route.fulfill({
+        status: 201,
+        json: {
+          id: uploadedFileId,
+          project_id: env.project.id,
+          asset_version_id: null,
+          checksum: checksum(content),
+          byte_size: content.length,
+          media_type: body.media_type,
+          original_name: body.original_name,
+          source_note: body.source_note,
+          rights_note: body.rights_note,
+          rights_confirmed: body.rights_confirmed,
+          created_by: crypto.randomUUID(),
+          created_at: "2026-11-18T00:00:00Z",
+          revision: 1,
+          stage: "CANDIDATE",
+        },
+      });
+    }
     if (path === `/api/v1/projects/${env.project.id}/assets/${asset.id}`)
       return route.fulfill({ json: asset });
     const row = candidates.find((item) =>
@@ -430,5 +470,7 @@ export async function mockedVideoFixture(page: Page) {
     controlVideo: control,
     videoReads: reads,
     videoMutations: mutations,
+    videoUploads: uploads,
+    uploadedVideoFileId: uploadedFileId,
   };
 }

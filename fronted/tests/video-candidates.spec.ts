@@ -80,6 +80,23 @@ test("VIDEO-01模拟回执：替换身份不匹配时保留原提交记录且不
     );
     return key ? JSON.parse(sessionStorage.getItem(key)!) : null;
   });
+  expect(env.videoUploads.map((upload) => upload.path)).toEqual([
+    `/api/v1/projects/${env.project.id}/uploads`,
+    `/api/v1/projects/${env.project.id}/uploads/local`,
+  ]);
+  expect(env.videoUploads[1].body).toEqual({
+    ...env.videoUploads[0].body,
+    purpose: "VIDEO",
+    original_name: "mismatch.mp4",
+    media_type: "video/mp4",
+    byte_size: env.bytes.length,
+    checksum: checksum(env.bytes),
+    content_base64: env.bytes.toString("base64"),
+    source_note: "模拟错误候选回执",
+    rights_note: "测试原创素材",
+    rights_confirmed: true,
+  });
+  expect(saved.file_id).toBe(env.uploadedVideoFileId);
   expect(saved.file_id).toBe(env.videoMutations[0].body.file_id);
   expect(saved.creation_key).toBe(env.videoMutations[0].body.creation_key);
 });
@@ -204,9 +221,37 @@ test("VIDEO-01：真实候选API、完整H264规格、私有播放下载、替�
   await detail
     .getByRole("checkbox", { name: "我确认拥有此视频的使用权", exact: true })
     .check();
+  const uploadedFileResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === env.root + "/uploads/local" &&
+      response.request().method() === "POST",
+  );
   await detail
     .getByRole("button", { name: "上传并另存替换候选", exact: true })
     .click();
+  const uploadResponse = await uploadedFileResponse;
+  expect(uploadResponse.status(), await uploadResponse.text()).toBe(201);
+  const uploadedFile = await uploadResponse.json();
+  const expectedUpload = {
+    project_id: env.project.id,
+    original_name: "replacement.mp4",
+    media_type: "video/mp4",
+    byte_size: env.bytes.length,
+    checksum: checksum(env.bytes),
+    source_note: "离线合成视频人工替换",
+    rights_note: "测试原创合成视频",
+    rights_confirmed: true,
+  };
+  expect(uploadedFile).toMatchObject(expectedUpload);
+  const savedFile = await page.request.get(
+    env.root + `/files/${uploadedFile.id}`,
+    { headers: env.headers },
+  );
+  expect(savedFile.status(), await savedFile.text()).toBe(200);
+  expect(await savedFile.json()).toMatchObject({
+    ...expectedUpload,
+    id: uploadedFile.id,
+  });
   await expect(detail).toContainText("视频 v2");
   await expect(detail).toContainText("人工上传替换");
   await expect(detail).toContainText("replacement.mp4");
@@ -242,11 +287,18 @@ test("VIDEO-01：真实候选API、完整H264规格、私有播放下载、替�
     env.generationPath + `/${env.job.id}/candidates`,
     { headers: env.headers },
   );
+  const candidates = await listed.json();
   expect(
-    (await listed.json()).map(
+    candidates.map(
       (row: { version: { status: string } }) => row.version.status,
     ),
   ).toEqual(["DRAFT", "DRAFT", "DRAFT"]);
+  expect(candidates).toContainEqual(
+    expect.objectContaining({
+      source_file_id: uploadedFile.id,
+      replaces_candidate_id: original.id,
+    }),
+  );
   const outsider = await playwright.request.newContext({
     baseURL: new URL(page.url()).origin,
   });
@@ -263,7 +315,8 @@ test("VIDEO-01：真实候选API、完整H264规格、私有播放下载、替�
     const denied = await outsider.get("/api/v1" + original.content_path, {
       headers: { Authorization: "Bearer " + token },
     });
-    expect(denied.status()).toBe(403);
+    expect(denied.status()).toBe(404);
+    expect(await denied.json()).toMatchObject({ error: { code: "NOT_FOUND" } });
   } finally {
     await outsider.dispose();
   }
@@ -311,9 +364,27 @@ test("VIDEO-01：真实生成与替换响应丢失后沿用原请求和同一幂
   await detail
     .getByRole("checkbox", { name: "我确认拥有此视频的使用权", exact: true })
     .check();
+  const uploadedFileResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === env.root + "/uploads/local" &&
+      response.request().method() === "POST",
+  );
   await detail
     .getByRole("button", { name: "上传并另存替换候选", exact: true })
     .click();
+  const uploadResponse = await uploadedFileResponse;
+  expect(uploadResponse.status(), await uploadResponse.text()).toBe(201);
+  const uploadedFile = await uploadResponse.json();
+  expect(uploadedFile).toMatchObject({
+    project_id: env.project.id,
+    original_name: "recover.mp4",
+    media_type: "video/mp4",
+    byte_size: env.bytes.length,
+    checksum: checksum(env.bytes),
+    source_note: "受控响应丢失验证",
+    rights_note: "测试原创",
+    rights_confirmed: true,
+  });
   await expect(detail.getByRole("alert")).toContainText("网络连接失败");
   await expect(
     detail.getByRole("button", { name: "核验原视频替换提交", exact: true }),
@@ -326,6 +397,7 @@ test("VIDEO-01：真实生成与替换响应丢失后沿用原请求和同一幂
     .click();
   await expect(detail).toContainText("视频 v2");
   expect(submitted).toHaveLength(2);
+  expect(submitted[0].file_id).toBe(uploadedFile.id);
   expect(submitted[1]).toEqual(submitted[0]);
   expect(accepted[1]).toBe(accepted[0]);
   const response = await page.request.get(

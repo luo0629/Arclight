@@ -1,6 +1,6 @@
 import "client-only";
 
-import { api, apiBlob, json } from "@/lib/api/client";
+import { api, apiBlob, ApiError, json } from "@/lib/api/client";
 import { isResourceId } from "@/lib/routes";
 import { sha256 } from "@/features/audio/api";
 import type { VideoCandidate, VideoAsset } from "./types";
@@ -74,6 +74,25 @@ export async function loadVideoBlob(
   signal.throwIfAborted();
   return blob;
 }
+type VideoUploadTicket = {
+  upload_id: string;
+  url: string;
+  method: string;
+  body: string;
+  headers: Record<string, string>;
+};
+type UploadedVideo = {
+  id: string;
+  project_id: string;
+  checksum: string;
+  byte_size: number;
+  media_type: string;
+  original_name: string;
+  source_note: string;
+  rights_note: string;
+  rights_confirmed: boolean;
+};
+
 export async function uploadVideo(
   projectId: string,
   file: File,
@@ -83,69 +102,99 @@ export async function uploadVideo(
 ) {
   if (!file.name.toLowerCase().endsWith(".mp4") || file.size < 1)
     throw new Error("请选择非空的 MP4 视频。");
-  const checksum = await sha256(await file.arrayBuffer());
+  const bytes = await file.arrayBuffer();
+  signal.throwIfAborted();
+  const checksum = await sha256(bytes);
+  signal.throwIfAborted();
   const path = "/projects/" + projectId + "/uploads";
-  const ticket = await api<{
-    upload_id: string;
-    url: string;
-    method: string;
-    body: string;
-    headers: Record<string, string>;
-  }>(path, {
-    ...json("POST", {
-      purpose: "VIDEO",
-      original_name: file.name,
-      media_type: "video/mp4",
-      byte_size: file.size,
-      checksum,
-      expires_in: 300,
-    }),
-    signal,
-  });
-  const url = new URL(ticket.url, window.location.origin);
+  const upload = {
+    purpose: "VIDEO",
+    original_name: file.name,
+    media_type: "video/mp4",
+    byte_size: file.size,
+    checksum,
+    expires_in: 300,
+  };
+  const declaration = {
+    source_note: source.trim(),
+    rights_note: rights.trim(),
+    rights_confirmed: true,
+  };
+  let ticket: VideoUploadTicket | null = null;
+  let useLocalUpload = false;
+  try {
+    ticket = await api<VideoUploadTicket>(path, {
+      ...json("POST", upload),
+      signal,
+    });
+  } catch (error) {
+    if (
+      !(error instanceof ApiError) ||
+      error.status !== 503 ||
+      error.code !== "PRESIGNED_UNAVAILABLE"
+    )
+      throw error;
+    useLocalUpload = true;
+  }
+  let saved: UploadedVideo;
+  if (!useLocalUpload) {
+    if (!ticket) throw new Error("视频上传授权无效，请重新申请。");
+    const url = new URL(ticket.url, window.location.origin);
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      url.search ||
+      !/^\/file-transfers\/[^/]+$/.test(url.pathname) ||
+      ticket.method !== "POST" ||
+      ticket.body !== "raw" ||
+      ticket.headers?.["Content-Type"] !== "video/mp4"
+    )
+      throw new Error("视频上传授权无效，请重新申请。");
+    const uploaded = await fetch(url, {
+      method: "POST",
+      body: file,
+      headers: { "Content-Type": "video/mp4" },
+      signal,
+      credentials: "omit",
+      cache: "no-store",
+      redirect: "error",
+    });
+    if (!uploaded.ok) throw new Error("视频上传失败，请重试。");
+    saved = await api<UploadedVideo>(
+      path + "/" + ticket.upload_id + "/complete",
+      {
+        ...json("POST", declaration),
+        signal,
+      },
+    );
+  } else {
+    signal.throwIfAborted();
+    const content = new Uint8Array(bytes);
+    let binary = "";
+    for (let offset = 0; offset < content.length; offset += 8192)
+      binary += String.fromCharCode(...content.subarray(offset, offset + 8192));
+    saved = await api<UploadedVideo>(path + "/local", {
+      ...json("POST", {
+        ...upload,
+        ...declaration,
+        content_base64: btoa(binary),
+      }),
+      signal,
+    });
+  }
+  signal.throwIfAborted();
   if (
-    !["http:", "https:"].includes(url.protocol) ||
-    url.username ||
-    url.password ||
-    url.hash ||
-    url.search ||
-    !/^\/file-transfers\/[^/]+$/.test(url.pathname) ||
-    ticket.method !== "POST" ||
-    ticket.body !== "raw" ||
-    ticket.headers?.["Content-Type"] !== "video/mp4"
-  )
-    throw new Error("视频上传授权无效，请重新申请。");
-  const uploaded = await fetch(url, {
-    method: "POST",
-    body: file,
-    headers: { "Content-Type": "video/mp4" },
-    signal,
-    credentials: "omit",
-    cache: "no-store",
-    redirect: "error",
-  });
-  if (!uploaded.ok) throw new Error("视频上传失败，请重试。");
-  const saved = await api<{
-    id: string;
-    project_id: string;
-    checksum: string;
-    byte_size: number;
-    media_type: string;
-    rights_confirmed: boolean;
-  }>(path + "/" + ticket.upload_id + "/complete", {
-    ...json("POST", {
-      source_note: source.trim(),
-      rights_note: rights.trim(),
-      rights_confirmed: true,
-    }),
-    signal,
-  });
-  if (
+    !isResourceId(saved.id) ||
     saved.project_id !== projectId ||
     saved.checksum !== checksum ||
     saved.byte_size !== file.size ||
     saved.media_type !== "video/mp4" ||
-    !saved.rights_confirmed
+    saved.original_name !== file.name ||
+    saved.source_note !== declaration.source_note ||
+    saved.rights_note !== declaration.rights_note ||
+    saved.rights_confirmed !== true
   )
     throw new Error("视频上传回执与文件不一致，请刷新后核对。");
   return saved;

@@ -231,30 +231,56 @@ test("lost POST receipt retries the same key without duplicate versions and reta
   const env = await setup(page);
   await page.getByLabel("改写指令", { exact: true }).fill("保留人物动机");
   const keys: string[] = [];
+  const bodies: unknown[] = [];
   let first = true;
   await page.route(
     "**" + env.prefix + "/script-rewrite-runs",
     async (route) => {
       keys.push(route.request().headers()["idempotency-key"]);
+      bodies.push(route.request().postDataJSON());
       if (first) {
         first = false;
         const response = await route.fetch();
         expect(response.status()).toBe(202);
+        // The accepted run must reach the workspace before its POST receipt is lost.
+        // Same-key recovery must not depend on beating the project-event refresh.
+        await expect(
+          page.getByText(
+            "提交结果尚未确认，重试将使用原请求编号恢复任务回执。",
+            { exact: true },
+          ),
+        ).toBeVisible();
         return route.abort("connectionreset");
       }
       return route.continue();
     },
   );
+  const lostReceipt = page.waitForEvent("requestfailed", {
+    predicate: (request) =>
+      request.method() === "POST" &&
+      request.url().endsWith(env.prefix + "/script-rewrite-runs"),
+  });
   await page.getByRole("button", { name: "提交局部改写", exact: true }).click();
+  await lostReceipt;
+  await expect(
+    page.getByText("网络连接失败，请检查网络后重试", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByLabel("改写指令", { exact: true })).toHaveValue(
     "保留人物动机",
   );
+  await expect(page.getByLabel("改写指令", { exact: true })).toBeDisabled();
+  expect(keys).toHaveLength(1);
   await expect(
     page.getByRole("button", { name: "提交局部改写", exact: true }),
   ).toBeEnabled();
   await result(page, env);
   expect(keys).toHaveLength(2);
+  expect(keys[0]).toBeTruthy();
   expect(keys[0]).toBe(keys[1]);
+  expect(bodies[0]).toEqual(bodies[1]);
+  expect(bodies[0]).toMatchObject({
+    instructions: { instruction: "保留人物动机" },
+  });
   expect(
     await (
       await page.request.get(env.prefix + "/runs", { headers: env.headers })

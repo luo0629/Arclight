@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api/v1/projects/{project_id}/files", tags=["files"])
 
 
 class FileRead(Resource):
+    project_id: UUID
     asset_version_id: UUID | None
     checksum: str
     byte_size: int

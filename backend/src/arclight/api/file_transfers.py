@@ -8,10 +8,12 @@ from pydantic import Field, field_validator, model_validator
 
 from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
-from arclight.api.files import find_file
+from arclight.api.files import FileRead, find_file
+from arclight.api.rights import UsageDeclaration
 from arclight.api.schemas import Input
 from arclight.application.commands import require_project
 from arclight.application.file_transfer_grants import issue_ticket
+from arclight.application.local_video_uploads import freeze_local_video
 from arclight.core.errors import DomainError
 from arclight.domain.file_policy import check_file_policy
 from arclight.persistence.models import UploadIntent
@@ -55,6 +57,37 @@ class UploadCreate(TransferExpiry):
     def allowed_file(self) -> "UploadCreate":
         check_file_policy(self.purpose, self.original_name, self.media_type, self.byte_size)
         return self
+
+
+class LocalVideoUpload(UploadCreate, UsageDeclaration):
+    purpose: Literal["VIDEO"]
+    media_type: Literal["video/mp4"]
+    content_base64: str = Field(min_length=1)
+
+
+@router.post("/uploads/local", status_code=201)
+def create_local_video_upload(
+    project_id: UUID,
+    payload: LocalVideoUpload,
+    request: Request,
+    response: Response,
+    db: Database,
+    actor: Actor,
+) -> FileRead:
+    require_project(db, project_id, actor, write=True)
+    row = freeze_local_video(
+        db,
+        request.app.state.settings,
+        project_id,
+        actor,
+        original_name=payload.original_name,
+        byte_size=payload.byte_size,
+        checksum=payload.checksum,
+        content_base64=payload.content_base64,
+        declaration=payload.model_dump(include=set(UsageDeclaration.model_fields)),
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return FileRead.model_validate(row)
 
 
 @router.post("/uploads", status_code=201)

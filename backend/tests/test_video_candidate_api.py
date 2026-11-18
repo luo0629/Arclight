@@ -298,6 +298,7 @@ def test_actual_mp4_upload_and_rights_inventory(client, transfer_setup, valid):
         return
     assert result.status_code == 200, result.text
     receipt = result.json()
+    assert receipt["project_id"] == root.rsplit("/", 1)[1]
     assert client.get(root + f"/files/{receipt['id']}/content").content == data
     rights = client.get(root + "/rights?category=VIDEO")
     assert rights.status_code == 200, rights.text

@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/field";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Notice } from "@/components/ui-kit";
-import { api, json, message } from "@/lib/api/client";
+import { ApiError, api, json, message } from "@/lib/api/client";
 import type { ContentVersion, Episode } from "@/types/api";
 import Dialog from "@/components/shared/app-dialog";
 import { useDraftStore, useSessionDraft } from "@/providers/draft-provider";
@@ -53,6 +53,7 @@ type Draft = {
   narrationLimit: string;
   fingerprint: string;
   key: string;
+  receiptUnknown?: boolean;
 };
 const draftFields = [
   "scope",
@@ -74,6 +75,8 @@ function validDraft(value: unknown): value is Draft {
     ["scene", "chapter", "paragraph"].includes(String(row.scope)) &&
     Number.isSafeInteger(row.start) &&
     Number.isSafeInteger(row.end) &&
+    (row.receiptUnknown === undefined ||
+      typeof row.receiptUnknown === "boolean") &&
     (row.creation === undefined || isCreationOptions(row.creation))
   );
 }
@@ -118,6 +121,7 @@ export default function ScriptRewrite({
       narrationLimit: "",
       fingerprint: "",
       key: "",
+      receiptUnknown: false,
       creation:
         version.content_json.schema_version === "3.0"
           ? {
@@ -166,7 +170,47 @@ export default function ScriptRewrite({
       (draft.end > draft.start &&
         draft.start >= 0 &&
         draft.end <= Array.from(text).length));
+  const target =
+    draft.scope === "chapter"
+      ? {
+          scope: "chapter",
+          scene_ids: scenes
+            .slice(firstIndex, lastIndex + 1)
+            .map((row) => row.scene_id),
+        }
+      : draft.scope === "scene"
+        ? { scope: "scene", scene_id: draft.first }
+        : {
+            scope: "paragraph",
+            scene_id: draft.first,
+            field: draft.field === "action" ? "action" : "dialogue",
+            line_id: draft.field === "action" ? null : draft.field,
+            start: draft.start,
+            end: draft.end,
+          };
+  const body = {
+    ...creationPayload(creation),
+    base_version_id: version.id,
+    target,
+    instructions: {
+      instruction: draft.instruction,
+      tone: draft.tone,
+      dialogue_max_chars: draft.dialogueLimit
+        ? Number(draft.dialogueLimit)
+        : null,
+      narration_max_percent: draft.narrationLimit
+        ? Number(draft.narrationLimit)
+        : null,
+    },
+  };
+  const fingerprint = JSON.stringify(body);
+  const canReplay =
+    draft.receiptUnknown === true &&
+    !!draft.key &&
+    draft.fingerprint === fingerprint;
   const disabled = !writable || busy || submitting || active || !!accepted;
+  const submitDisabled =
+    !writable || busy || submitting || !!accepted || (active && !canReplay);
   const narrativeRequired = version.content_json.schema_version === "3.0";
   const validNarrative = narrativeRequired
     ? creation.professional && !!creation.narrative
@@ -208,7 +252,7 @@ export default function ScriptRewrite({
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (
-      disabled ||
+      submitDisabled ||
       saving.current ||
       !validSelection ||
       !validNarrative ||
@@ -218,45 +262,11 @@ export default function ScriptRewrite({
     saving.current = true;
     setSubmitting(true);
     setError("");
-    const target =
-      draft.scope === "chapter"
-        ? {
-            scope: "chapter",
-            scene_ids: scenes
-              .slice(firstIndex, lastIndex + 1)
-              .map((row) => row.scene_id),
-          }
-        : draft.scope === "scene"
-          ? { scope: "scene", scene_id: draft.first }
-          : {
-              scope: "paragraph",
-              scene_id: draft.first,
-              field: draft.field === "action" ? "action" : "dialogue",
-              line_id: draft.field === "action" ? null : draft.field,
-              start: draft.start,
-              end: draft.end,
-            };
-    const body = {
-      ...creationPayload(creation),
-      base_version_id: version.id,
-      target,
-      instructions: {
-        instruction: draft.instruction,
-        tone: draft.tone,
-        dialogue_max_chars: draft.dialogueLimit
-          ? Number(draft.dialogueLimit)
-          : null,
-        narration_max_percent: draft.narrationLimit
-          ? Number(draft.narrationLimit)
-          : null,
-      },
-    };
-    const fingerprint = JSON.stringify(body);
     const key =
       draft.fingerprint === fingerprint && draft.key
         ? draft.key
         : crypto.randomUUID();
-    const submitted = { ...draft, fingerprint, key };
+    const submitted = { ...draft, fingerprint, key, receiptUnknown: true };
     local.update(submitted);
     try {
       const response = await api<{ run_id: string }>(
@@ -274,7 +284,11 @@ export default function ScriptRewrite({
       write(draftId, undefined, submitted);
       await refresh();
     } catch (error) {
-      if (live.current) setError(message(error));
+      if (live.current) {
+        if (error instanceof ApiError && error.status < 500)
+          local.update({ ...submitted, receiptUnknown: false });
+        setError(message(error));
+      }
     } finally {
       saving.current = false;
       if (live.current) setSubmitting(false);
@@ -285,7 +299,7 @@ export default function ScriptRewrite({
       <Button
         variant="outline"
         size="lg"
-        disabled={!writable || busy || active}
+        disabled={!writable || busy || (active && !canReplay)}
         onClick={() => setOpen(true)}
       >
         局部改写此版本
@@ -311,7 +325,11 @@ export default function ScriptRewrite({
           )}
           {!writable && <Notice>当前项目或剧集只允许查看。</Notice>}
           {active && !accepted && (
-            <Notice>已有未完成任务，请先完成或取消任务。</Notice>
+            <Notice>
+              {canReplay
+                ? "提交结果尚未确认，重试将使用原请求编号恢复任务回执。"
+                : "已有未完成任务，请先完成或取消任务。"}
+            </Notice>
           )}
           {error && <Notice tone="error">{error}</Notice>}
           {accepted ? (
@@ -549,7 +567,7 @@ export default function ScriptRewrite({
               <Button
                 type="submit"
                 disabled={
-                  disabled ||
+                  submitDisabled ||
                   !validSelection ||
                   !validNarrative ||
                   !validCreationOptions(creation) ||
