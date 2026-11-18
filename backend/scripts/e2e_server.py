@@ -10,6 +10,7 @@ import uvicorn
 from alembic import command
 from alembic.config import Config
 from cryptography.fernet import Fernet
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from arclight.application.runtime import execute_run
@@ -30,6 +31,8 @@ def main():
         _env_file=None,
         environment="test",
         provider="mock",
+        # The frozen route does not persist the server key; workers use this fixture key.
+        llm_api_key=SecretStr("offline-only"),
         service_encryption_key=Fernet.generate_key().decode(),
         database_url="sqlite:///" + (folder / "business.db").as_posix(),
         checkpoint_url="sqlite:///" + (folder / "checkpoints.db").as_posix(),
@@ -50,8 +53,6 @@ def main():
     test_s3 = os.getenv("ARCLIGHT_E2E_S3_ENDPOINT")
     if test_s3:
         from uuid import uuid4
-
-        from pydantic import SecretStr
 
         settings.object_storage_backend = "s3"
         settings.s3_endpoint_url = test_s3

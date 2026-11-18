@@ -5,7 +5,6 @@ import json
 from uuid import uuid4
 
 import httpx
-from pydantic import SecretStr
 
 from arclight.agents.contracts import read_script_content
 from arclight.application import production_versions
@@ -20,6 +19,8 @@ from arclight.domain.screenwriter_revision import (
     SERIES_PATCH_TOOL,
 )
 from arclight.providers import llm_transport, text
+
+FIXTURE_HOST = "screenwriter.example"
 
 
 def _completion(value):
@@ -498,8 +499,7 @@ def install():
                     "provider": "openai_compatible",
                     "llm_model": "offline-professional",
                     "llm_supplier": "custom",
-                    "llm_base_url": "https://screenwriter.invalid/v1",
-                    "llm_api_key": SecretStr("offline-only"),
+                    "llm_base_url": f"https://{FIXTURE_HOST}/v1",
                     "llm_agent_capabilities": AgentModelCapabilities(
                         version="e2e:1",
                         supplier="custom",
@@ -532,7 +532,7 @@ def install():
         def handle_request(self, request):
             return (
                 _respond(request)
-                if request.url.host == "screenwriter.invalid"
+                if request.url.host == FIXTURE_HOST
                 else self.real.handle_request(request)
             )
 
