@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
 import httpx
-from openai import OpenAI, OpenAIError
+from openai import OpenAI, OpenAIError, omit
 
 from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayFailure
@@ -93,7 +93,10 @@ def stream_image_generation(
                 timeout=timeout,
                 max_retries=0,
             )
-            with sdk.images.with_streaming_response.generate(**parameters) as response:
+            # Default headers can alter SDK serialization before the transport sees the request.
+            with sdk.images.with_streaming_response.generate(
+                **parameters, extra_headers={name: omit for name in sdk.default_headers}
+            ) as response:
                 yield response.http_response
     except OpenAIError as exc:
         cause = exc.__cause__

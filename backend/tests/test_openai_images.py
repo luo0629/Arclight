@@ -112,7 +112,9 @@ def test_http_adapter_through_gateway_ledger_and_real_candidate_import(
     monkeypatch.setenv("OPENAI_API_KEY", "ambient-key")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://ambient.example/v1")
     monkeypatch.setenv("OPENAI_PROJECT_ID", "ambient-project")
-    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "Cookie: ambient")
+    monkeypatch.setenv(
+        "OPENAI_CUSTOM_HEADERS", "Content-Type: multipart/form-data\nCookie: ambient"
+    )
     requests = []
 
     def handle(request):
@@ -120,6 +122,7 @@ def test_http_adapter_through_gateway_ledger_and_real_candidate_import(
         assert str(request.url) == "https://api.openai.com/v1/images/generations"
         assert request.headers["authorization"] == "Bearer " + CANARY
         assert request.headers["accept-encoding"] == "identity"
+        assert request.headers["content-type"] == "application/json"
         assert not {"idempotency-key", "openai-project", "cookie"}.intersection(request.headers)
         sent = json.loads(request.content)
         assert sent["model"] == OPENAI_IMAGE_MODEL and sent["n"] == 2
