@@ -35,7 +35,8 @@ CONTENT_TARGETS = {
         }
     ),
     "STORYBOARD": frozenset({"STORYBOARD", "SHOT_IMAGE", "SHOT_PREVIEW", "TIMELINE", "VIDEO"}),
-    "AUDIO": frozenset({"AUDIO", "SUBTITLE", "TIMELINE"}),
+    "AUDIO_VOICE_PROFILE": frozenset({"AUDIO"}),
+    "AUDIO": frozenset({"AUDIO", "SUBTITLE", "TIMELINE", "VIDEO"}),
     "SUBTITLE": frozenset({"SUBTITLE", "TIMELINE"}),
     "SHOT_PREVIEW": frozenset({"SHOT_PREVIEW", "TIMELINE"}),
     **{kind: IMAGE_KINDS | {"SHOT_PREVIEW", "TIMELINE"} for kind in IMAGE_KINDS},

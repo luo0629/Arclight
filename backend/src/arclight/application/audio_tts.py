@@ -4,6 +4,7 @@ import hashlib
 import json
 from uuid import UUID, uuid4, uuid5
 
+from pydantic import JsonValue
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -13,11 +14,19 @@ from arclight.application.audio_production import (
     approved_script,
     bind_audio,
     capture_line_inputs,
-    input_context,
+    line_inputs,
     line_target,
+    manifest_matches_line,
     require_line,
+    require_live_line_inputs,
     require_snapshot,
     write_episode,
+)
+from arclight.application.audio_voice_profiles import (
+    manifest_voice,
+    profile_for_line,
+    resolve_selection,
+    script_content,
 )
 from arclight.application.audio_voices import require_voice, voice_spec
 from arclight.application.audit import audit
@@ -25,7 +34,6 @@ from arclight.application.dependencies import attach_output
 from arclight.application.files import record_asset_file
 from arclight.application.generation_attempts import require_writable_target
 from arclight.application.generation_jobs import create_job
-from arclight.application.invalidation import input_expired
 from arclight.application.render_inputs import file_storage
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -37,13 +45,14 @@ from arclight.domain.audio_tts import (
     AudioTTSRegister,
     AudioTTSResultRead,
 )
-from arclight.domain.dependencies import DependencyInput
+from arclight.domain.audio_voice_profiles import VoiceSelection
 from arclight.domain.file_policy import POLICIES
 from arclight.domain.generation_requests import ExpectedAsset, GenerationCreate
 from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.media.validation import probe
 from arclight.persistence.audio_production import AudioLineBinding
 from arclight.persistence.audio_tts import AudioTTSRequest
+from arclight.persistence.audio_voices import AudioVoiceVersion
 from arclight.persistence.models import (
     AssetVersion,
     DependencyManifest,
@@ -54,6 +63,7 @@ from arclight.persistence.models import (
     StoredFile,
     VisualAsset,
 )
+from arclight.providers.media_capabilities import resolve_parameters
 
 
 def fingerprint(value: dict) -> str:
@@ -144,6 +154,33 @@ def require_regeneration_source(
     return asset
 
 
+def performance_parameters(
+    voice: AudioVoiceVersion, selection: VoiceSelection | None, requested: dict[str, JsonValue]
+) -> dict[str, JsonValue]:
+    if selection is None:
+        return requested
+    configuration = voice.configuration_json
+    supported = resolve_parameters(configuration["provider"], configuration["model"])
+    performance = selection.performance
+    if "instructions" not in supported:
+        if performance.emotion or performance.purpose or performance.interactions:
+            raise DomainError(
+                "AUDIO_PERFORMANCE_UNSUPPORTED",
+                "该音色协议不能表达此场景的情绪，请选用支持情绪说明的音色或导入表演录音",
+                422,
+            )
+        return requested
+    note = requested.get("instructions", configuration["parameters"].get("instructions", ""))
+    if not isinstance(note, str):
+        return requested
+    instructions = "；".join(text for text in (performance.instruction(), note.strip()) if text)
+    if len(instructions) > 2000:
+        raise DomainError(
+            "AUDIO_PERFORMANCE_UNSUPPORTED", "场景及人工表演说明合计超出协议长度限制", 422
+        )
+    return {**requested, "instructions": instructions}
+
+
 def create_tts(
     db: Session,
     snapshot_id: UUID,
@@ -159,7 +196,14 @@ def create_tts(
     episode = write_episode(db, snapshot.episode_id, actor)
     request_hash = fingerprint(
         {
-            **payload.model_dump(mode="json", exclude={"expected_revision"}),
+            **payload.model_dump(
+                mode="json", exclude={"expected_revision", "voice_profile_version_id"}
+            ),
+            **(
+                {"voice_profile_version_id": str(payload.voice_profile_version_id)}
+                if payload.voice_profile_version_id is not None
+                else {}
+            ),
             **(
                 {"source_audio_version_id": str(source_audio_version_id)}
                 if source_audio_version_id is not None
@@ -181,10 +225,31 @@ def create_tts(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一配音标识不能更换台词或音色配置", 409)
         return read_tts(db, previous), False
     voice = require_voice(db, episode.project_id, payload.voice_version_id, actor, write=True)
+    content = script_content(db, snapshot)
+    _, profile = profile_for_line(db, episode.project_id, content, line)
+    if payload.voice_profile_version_id != (profile.id if profile else None):
+        raise DomainError("AUDIO_VOICE_PROFILE_CONFLICT", "请重新读取本句当前声音档案再生成", 409)
     if voice.speaker != line.speaker:
         raise DomainError("AUDIO_VOICE_SPEAKER_MISMATCH", "音色版本不属于该台词的说话角色", 422)
+    selection = None
+    if profile is not None:
+        selection = resolve_selection(db, episode.project_id, snapshot, content, line, profile)
+        if (
+            voice.id != selection.voice_version_id
+            or voice.character_asset_id != profile.character_asset_id
+        ):
+            raise DomainError(
+                "AUDIO_VOICE_PROFILE_CONFLICT", "该音色不是当前故事时点的角色音色", 409
+            )
     if source_audio_version_id is None:
-        asset = line_target(db, snapshot, line_id, payload.target_asset_id, actor)
+        asset = line_target(
+            db,
+            snapshot,
+            line_id,
+            payload.target_asset_id,
+            actor,
+            profile_version_id=payload.voice_profile_version_id,
+        )
     else:
         asset = require_regeneration_source(
             db, episode.project_id, snapshot.id, line_id, source_audio_version_id
@@ -201,6 +266,7 @@ def create_tts(
         line_id,
         actor,
         AudioInputCreate(creation_key=payload.creation_key, target_asset_id=asset.id),
+        selection=selection,
     )
     request = AudioTTSRequest(
         project_id=episode.project_id,
@@ -214,7 +280,9 @@ def create_tts(
         request_fingerprint=request_hash,
         created_by=actor,
     )
-    spec = voice_spec(voice, line.text, payload.performance_parameters)
+    spec = voice_spec(
+        voice, line.text, performance_parameters(voice, selection, payload.performance_parameters)
+    )
     job = create_job(
         db,
         episode.project_id,
@@ -232,13 +300,7 @@ def create_tts(
                 current_version_id=asset.current_version_id,
             ),
             task_type="AUDIO",
-            inputs=[
-                DependencyInput(
-                    source_asset_version_id=snapshot.script_version_id,
-                    dependency_type="CONTENT_DEPENDENCY",
-                    selectors=[f"dialogue:{line_id}"],
-                )
-            ],
+            inputs=line_inputs(snapshot, line_id, selection),
             spec=spec,
         ),
         execution_policy=execution_policy,
@@ -298,18 +360,33 @@ def validate_tts_dispatch(db: Session, job: GenerationJob) -> None:
         row.project_id != job.project_id
         or job.target_asset_id != row.target_asset_id
         or job.task_type != "AUDIO"
-        or voice.speaker != line.speaker
         or manifest is None
+        or generation is None
         or manifest.target_asset_id != row.target_asset_id
-        or manifest.snapshot_json["context"] != input_context(snapshot, row.line_id)
-        or len(manifest.snapshot_json["inputs"]) != 1
-        or manifest.snapshot_json["inputs"][0]["source_asset_version_id"]
-        != str(snapshot.script_version_id)
-        or manifest.snapshot_json["inputs"][0]["selectors"] != [f"dialogue:{row.line_id}"]
+        or not manifest_matches_line(manifest, snapshot, row.line_id)
+        or generation.snapshot_json["inputs"] != manifest.snapshot_json["inputs"]
     ):
         raise DomainError("AUDIO_PROVENANCE_REQUIRED", "配音任务的台词或音色来源不匹配", 409)
-    if input_expired(db, row.project_id, manifest.snapshot_json["inputs"][0], "AUDIO"):
-        raise DomainError("AUDIO_LINE_NOT_USABLE", "该台词已被批准修改，不能继续配音", 409)
+    selection = manifest_voice(manifest.snapshot_json["context"])
+    if voice.speaker != line.speaker or (
+        selection is not None
+        and (
+            selection.voice_version_id != voice.id
+            or selection.character_asset_id != voice.character_asset_id
+            or selection.scene_id != UUID(line.scene_id)
+        )
+    ):
+        raise DomainError("AUDIO_PROVENANCE_REQUIRED", "配音任务的音色来源不匹配", 409)
+    if selection is None:
+        content = script_content(db, snapshot)
+        _, profile = profile_for_line(db, row.project_id, content, line)
+        if profile is not None:
+            current = resolve_selection(db, row.project_id, snapshot, content, line, profile)
+            if current.voice_version_id != voice.id:
+                raise DomainError(
+                    "AUDIO_VOICE_PROFILE_CHANGED", "本句声音档案已变化，请重新核对", 409
+                )
+    require_live_line_inputs(db, row.project_id, manifest)
 
 
 def read_result(db: Session, row: AudioTTSRequest) -> AudioTTSResultRead:

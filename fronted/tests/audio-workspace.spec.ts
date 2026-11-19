@@ -677,3 +677,64 @@ for (const size of [
       fullPage: true,
     });
   });
+
+test("AUDIO-09：剧情变声、跨集恢复和本句表演参数", async ({ page }) => {
+  const env = await audioFixture(page);
+  const characterId = crypto.randomUUID();
+  env.controlAudio.voiceCharacterId = characterId;
+  const normal = env.voices[0];
+  normal.character_asset_id = characterId;
+  const changed = {
+    ...normal,
+    id: crypto.randomUUID(),
+    version_no: 2,
+    parameters: { ...normal.parameters, voice: "ash" },
+  };
+  env.voices.push(changed);
+  const panel = await env.open();
+  await panel.getByRole("button", { name: "编辑跨集声音档案" }).click();
+  const form = panel.getByRole("form", { name: "跨集声音档案" });
+  await form.getByRole("button", { name: "添加剧情变声" }).click();
+  await form.getByLabel("故事开始时点").fill("10");
+  await form.getByLabel("恢复默认音色时点").fill("20");
+  await form.getByLabel("剧情原因").fill("回忆中嗓子受伤");
+  await choose(page, form.getByLabel("变声音色"), "v2 · ash");
+  await form.getByRole("button", { name: "保存声音档案" }).click();
+  const resolved = panel.getByRole("region", { name: "本句声音档案" });
+  await expect(resolved).toContainText("音色 v2");
+  await expect(resolved).toContainText("故事时点 10");
+  await expect(resolved).toContainText("回忆中嗓子受伤");
+  await expect(resolved).toContainText("等同伴停步后开口");
+  await panel.getByLabel("本句语速", { exact: true }).fill("0.8");
+  await panel.getByLabel("补充本句表演说明").fill("第二句前稍停");
+  await panel
+    .getByRole("button", { name: "生成本句配音", exact: true })
+    .click();
+  await expect(panel.getByText(/本句配音任务已创建/)).toBeVisible();
+  expect(env.audioMutations.map(({ body }) => body)).toEqual([
+    expect.objectContaining({
+      expected_version_no: 0,
+      default_voice_version_id: normal.id,
+      ledger_version_id: expect.any(String),
+      changes: [
+        {
+          story_start: 10,
+          story_end: 20,
+          voice_version_id: changed.id,
+          reason: "回忆中嗓子受伤",
+        },
+      ],
+    }),
+    expect.objectContaining({
+      voice_version_id: changed.id,
+      voice_profile_version_id: expect.any(String),
+      performance_parameters: { speed: 0.8, instructions: "第二句前稍停" },
+    }),
+  ]);
+  const later = await env.open(1);
+  const restored = later.getByRole("region", { name: "本句声音档案" });
+  await expect(restored).toContainText("档案 v1 · 音色 v1");
+  await expect(restored).toContainText("故事时点 20");
+  await expect(restored.getByText(/回忆中嗓子受伤/)).toHaveCount(0);
+  expect(env.audioMutations).toHaveLength(2);
+});

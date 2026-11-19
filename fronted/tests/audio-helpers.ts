@@ -11,6 +11,8 @@ import type {
   AudioSnapshot,
   AudioTask,
   AudioVoice,
+  VoiceProfile,
+  VoiceProfilePlan,
 } from "../src/features/audio/types";
 import { renderFixture } from "./render-helpers";
 import { closeDirectory } from "./workspace-helpers";
@@ -110,7 +112,10 @@ export async function audioFixture(page: Page) {
   const mutations: { path: string; body: Record<string, unknown> }[] = [];
   const keys = new Map<string, AudioTask>();
   const importKeys = new Map<string, AudioImportResult>();
+  let voiceProfile: VoiceProfile | null = null;
+  const ledgerId = id();
   const control = {
+    voiceCharacterId: null as string | null,
     readStatus: 0,
     taskStatus: "QUEUED",
     failTaskOnce: false,
@@ -266,6 +271,8 @@ export async function audioFixture(page: Page) {
     const audioPath =
       /\/(audio-snapshots|audio-voices|files|uploads)(\/|$)/.test(path) ||
       path.endsWith("/services/speech/configuration") ||
+      path.endsWith("/story-ledger") ||
+      path.endsWith("/voice-profile") ||
       [...assets.keys()].some((value) => path.includes(`/assets/${value}`)) ||
       path.endsWith("/dependency-impact");
     if (!audioPath) return route.fallback();
@@ -289,6 +296,31 @@ export async function audioFixture(page: Page) {
       if (env.control.role === "viewer" || env.control.archived)
         return fail(route, 403, "FORBIDDEN", "只读项目。");
     }
+    if (path.endsWith("/story-ledger"))
+      return route.fulfill({
+        json: {
+          revision: 2,
+          latest_version_id: ledgerId,
+          approved_version_id: ledgerId,
+        },
+      });
+    if (path.includes("/characters/") && path.endsWith("/voice-profile")) {
+      const { creation_key, expected_version_no, ...plan } =
+        request.postDataJSON() as VoiceProfilePlan & {
+          creation_key: string;
+          expected_version_no: number;
+        };
+      expect(creation_key).toBeTruthy();
+      expect(expected_version_no).toBe(voiceProfile?.version_no ?? 0);
+      voiceProfile = {
+        id: id(),
+        character_asset_id: control.voiceCharacterId!,
+        version_no: expected_version_no + 1,
+        plan,
+        invalidation_id: null,
+      };
+      return route.fulfill({ status: 201, json: voiceProfile });
+    }
     if (path.endsWith("/services/speech/configuration"))
       return route.fulfill({
         json: {
@@ -308,7 +340,12 @@ export async function audioFixture(page: Page) {
         return route.fulfill({
           json: paginate(
             voices.filter(
-              (row) => row.speaker === url.searchParams.get("speaker"),
+              (row) =>
+                (!url.searchParams.has("speaker") ||
+                  row.speaker === url.searchParams.get("speaker")) &&
+                (!url.searchParams.has("character_asset_id") ||
+                  row.character_asset_id ===
+                    url.searchParams.get("character_asset_id")),
             ),
             url,
           ),
@@ -325,6 +362,7 @@ export async function audioFixture(page: Page) {
         ...voices[0],
         id: id(),
         speaker: body.speaker,
+        character_asset_id: body.character_asset_id ?? null,
         parameters: body.parameters,
         version_no:
           Math.max(
@@ -364,6 +402,46 @@ export async function audioFixture(page: Page) {
       for (const line of lines) {
         const prefix = `${root}/${line.line_id}`;
         const history = histories.get(`${snapshot.id}:${line.line_id}`) ?? [];
+        if (path === prefix + "/voice-profile") {
+          const character =
+            line.speaker === "林舟" ? control.voiceCharacterId : null;
+          const eligible = character ? voiceProfile : null;
+          const time = snapshot.episode_id === env.episodes[0].id ? 10 : 20;
+          const change = eligible?.plan.changes.find(
+            (item) =>
+              item.story_start <= time &&
+              (item.story_end === null || time < item.story_end),
+          );
+          const voice = voices.find(
+            (row) =>
+              row.id ===
+              (change?.voice_version_id ??
+                eligible?.plan.default_voice_version_id),
+          );
+          return route.fulfill({
+            json: {
+              character_asset_id: character,
+              profile: eligible,
+              voice: voice ?? null,
+              selection: voice
+                ? {
+                    story_time: time,
+                    change_reason: change?.reason ?? null,
+                    performance: {
+                      sequence_no: line.sequence_no + 1,
+                      emotion: line.emotion,
+                      purpose: "让同伴听清方向",
+                      emotion_start: "紧张",
+                      emotion_end: "安心",
+                      interactions: ["等同伴停步后开口"],
+                    },
+                  }
+                : null,
+              supported_parameters: voice ? ["speed", "instructions"] : [],
+              unavailable_reason: null,
+            },
+          });
+        }
         if (path === prefix + "/history")
           return route.fulfill({ json: paginate(history, url) });
         if (path === prefix + "/tts" && method === "GET")

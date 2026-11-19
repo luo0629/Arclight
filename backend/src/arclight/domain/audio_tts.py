@@ -12,6 +12,7 @@ from arclight.domain.audio_production import AudioBindingRead, AudioContract, Au
 class AudioTTSCreate(AudioContract):
     creation_key: UUID
     voice_version_id: UUID
+    voice_profile_version_id: UUID | None = None
     target_asset_id: UUID | None = None
     expected_revision: int = Field(default=0, strict=True, ge=0)
     performance_parameters: dict[str, JsonValue] = Field(default_factory=dict)
@@ -23,6 +24,7 @@ class AudioTTSRegenerate(AudioContract):
     creation_key: UUID
     source_audio_version_id: UUID
     voice_version_id: UUID
+    voice_profile_version_id: UUID | None = None
     expected_revision: int = Field(strict=True, ge=0)
     performance_parameters: dict[str, JsonValue] = Field(default_factory=dict)
     batch_id: UUID | None = None

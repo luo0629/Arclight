@@ -2,12 +2,18 @@
 
 import hashlib
 import json
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import read_script_content
+from arclight.agents.contracts import SceneV3, read_script_content
+from arclight.application.audio_voice_profiles import (
+    character_for,
+    manifest_voice,
+    performance_for,
+    voice_selector,
+)
 from arclight.application.audit import audit
 from arclight.application.commands import require_episode
 from arclight.application.content_dependencies import register_content
@@ -22,10 +28,12 @@ from arclight.domain.audio_production import (
     AudioLine,
     AudioSnapshotCreate,
 )
+from arclight.domain.audio_voice_profiles import VoiceSelection
 from arclight.domain.dependencies import DependencyInput, ManifestCreate
 from arclight.domain.file_policy import POLICIES
 from arclight.media.validation import probe
 from arclight.persistence.audio_production import AudioLineBinding, AudioSnapshot
+from arclight.persistence.audio_tts import AudioTTSRequest
 from arclight.persistence.models import (
     AssetVersion,
     DependencyManifest,
@@ -144,15 +152,75 @@ def input_context(row: AudioSnapshot, line_id: str) -> dict:
     }
 
 
+def line_inputs(
+    row: AudioSnapshot, line_id: str, selection: VoiceSelection | None = None
+) -> list[DependencyInput]:
+    inputs = [
+        DependencyInput(
+            source_asset_version_id=row.script_version_id,
+            dependency_type="CONTENT_DEPENDENCY",
+            selectors=[f"dialogue:{line_id}"],
+        )
+    ]
+    if selection is not None:
+        inputs.append(
+            DependencyInput(
+                source_asset_version_id=selection.profile_version_id,
+                dependency_type="CONTENT_DEPENDENCY",
+                selectors=[voice_selector(row, line_id)],
+            )
+        )
+    return inputs
+
+
+def manifest_matches_line(manifest: DependencyManifest, row: AudioSnapshot, line_id: str) -> bool:
+    frozen = manifest.snapshot_json.get("context")
+    inputs = manifest.snapshot_json.get("inputs")
+    if not isinstance(frozen, dict) or not isinstance(inputs, list):
+        return False
+    context = dict(frozen)
+    selection = manifest_voice(context)
+    context.pop("voice_selection", None)
+    expected = line_inputs(row, line_id, selection)
+    return (
+        context == input_context(row, line_id)
+        and (selection is None or selection.episode_id == row.episode_id)
+        and len(inputs) == len(expected)
+        and all(
+            isinstance(actual, dict)
+            and all(
+                actual.get(key) == value for key, value in source.model_dump(mode="json").items()
+            )
+            for actual, source in zip(inputs, expected, strict=True)
+        )
+        and inputs[0].get("checksum") == row.script_sha256
+    )
+
+
+def require_live_line_inputs(db: Session, project_id: UUID, manifest: DependencyManifest) -> None:
+    script, *profile = manifest.snapshot_json["inputs"]
+    if input_expired(db, project_id, script, "AUDIO"):
+        raise DomainError("AUDIO_LINE_NOT_USABLE", "该台词已被批准修改，请选择新的精确来源", 409)
+    if any(input_expired(db, project_id, item, "AUDIO") for item in profile):
+        raise DomainError("AUDIO_VOICE_PROFILE_CHANGED", "该台词的声音档案已变化，请重新核对", 409)
+
+
 def line_target(
-    db: Session, snapshot: AudioSnapshot, line_id: str, target_id: UUID | None, actor: str
+    db: Session,
+    snapshot: AudioSnapshot,
+    line_id: str,
+    target_id: UUID | None,
+    actor: str,
+    *,
+    profile_version_id: UUID | None = None,
 ) -> VisualAsset:
     """Allocate the same dialogue target for imports and generated recordings."""
-    from uuid import uuid5
-
     line = require_line(snapshot, line_id)
     episode = require_episode(db, snapshot.episode_id, actor, write=True)
-    identity = target_id or uuid5(snapshot.id, f"audio-line:{line_id}")
+    key = f"audio-line:{line_id}"
+    if profile_version_id is not None:
+        key = f"{key}:voice-profile:{profile_version_id}"
+    identity = target_id or uuid5(snapshot.id, key)
     asset = db.get(VisualAsset, identity, populate_existing=True)
     if asset is None:
         if target_id is not None:
@@ -175,7 +243,13 @@ def line_target(
 
 
 def capture_line_inputs(
-    db: Session, snapshot_id: UUID, line_id: str, actor: str, payload: AudioInputCreate
+    db: Session,
+    snapshot_id: UUID,
+    line_id: str,
+    actor: str,
+    payload: AudioInputCreate,
+    *,
+    selection: VoiceSelection | None = None,
 ) -> DependencyManifest:
     row = require_snapshot(db, snapshot_id, actor, write=True)
     require_line(row, line_id)
@@ -186,6 +260,9 @@ def capture_line_inputs(
         raise DomainError("NOT_FOUND", "音频目标不存在", 404)
     if asset.asset_type != "AUDIO":
         raise DomainError("AUDIO_TARGET_INVALID", "台词生产目标必须是音频资产", 422)
+    context = input_context(row, line_id)
+    if selection is not None:
+        context["voice_selection"] = selection.model_dump(mode="json")
     manifest, created = capture_manifest(
         db,
         episode.project_id,
@@ -193,22 +270,12 @@ def capture_line_inputs(
         ManifestCreate(
             creation_key=payload.creation_key,
             target_asset_id=asset.id,
-            inputs=[
-                DependencyInput(
-                    source_asset_version_id=row.script_version_id,
-                    dependency_type="CONTENT_DEPENDENCY",
-                    selectors=[f"dialogue:{line_id}"],
-                )
-            ],
-            context=input_context(row, line_id),
+            inputs=line_inputs(row, line_id, selection),
+            context=context,
         ),
     )
-    if created and input_expired(
-        db, episode.project_id, manifest.snapshot_json["inputs"][0], "AUDIO"
-    ):
-        raise DomainError(
-            "AUDIO_LINE_NOT_USABLE", "该快照台词已被批准修改，请使用更新后的精确剧本", 409
-        )
+    if created:
+        require_live_line_inputs(db, episode.project_id, manifest)
     return manifest
 
 
@@ -243,19 +310,28 @@ def bind_audio(
         or manifest.project_id != episode.project_id
         or manifest.target_asset_id != asset.id
         or version.metadata_json.get("dependency_manifest_id") != str(manifest.id)
-        or manifest.snapshot_json["context"] != input_context(row, line_id)
-        or len(manifest.snapshot_json["inputs"]) != 1
-        or manifest.snapshot_json["inputs"][0]["source_asset_version_id"]
-        != str(row.script_version_id)
-        or manifest.snapshot_json["inputs"][0]["checksum"] != row.script_sha256
-        or manifest.snapshot_json["inputs"][0]["dependency_type"] != "CONTENT_DEPENDENCY"
-        or manifest.snapshot_json["inputs"][0]["selectors"] != [f"dialogue:{line_id}"]
+        or not manifest_matches_line(manifest, row, line_id)
     ):
         raise DomainError(
             "AUDIO_PROVENANCE_REQUIRED", "音频须在创建时固定本快照台词的输入清单", 409
         )
-    if input_expired(db, episode.project_id, manifest.snapshot_json["inputs"][0], "AUDIO"):
-        raise DomainError("AUDIO_LINE_NOT_USABLE", "该快照台词已被批准修改，不能绑定新音频", 409)
+    selection = manifest_voice(manifest.snapshot_json["context"])
+    if selection is not None:
+        request = db.scalar(
+            select(AudioTTSRequest).where(
+                AudioTTSRequest.project_id == episode.project_id,
+                AudioTTSRequest.dependency_manifest_id == manifest.id,
+                AudioTTSRequest.snapshot_id == row.id,
+                AudioTTSRequest.line_id == line_id,
+                AudioTTSRequest.voice_version_id == selection.voice_version_id,
+                AudioTTSRequest.target_asset_id == asset.id,
+            )
+        )
+        if request is None or version.creation_key != uuid5(request.job_id, "audio-tts-result"):
+            raise DomainError(
+                "AUDIO_PROVENANCE_REQUIRED", "声音档案须来自本句的精确配音任务回执", 409
+            )
+    require_live_line_inputs(db, episode.project_id, manifest)
     files = list(db.scalars(select(StoredFile).where(StoredFile.asset_version_id == identity)))
     if len(files) != 1:
         raise DomainError("AUDIO_FILE_REQUIRED", "音频须有唯一的不可变文件回执", 409)
@@ -300,17 +376,56 @@ def bind_audio(
     return binding
 
 
-def validate_audio_line(db: Session, identity: UUID, script_id: UUID, line_id: str) -> None:
-    """Enforce new production provenance, preserving pre-existing audio contracts."""
-    version = db.get(AssetVersion, identity)
-    if version is None:
-        return
+def audio_line_manifest(db: Session, version: AssetVersion) -> DependencyManifest | None:
     raw = version.metadata_json.get("dependency_manifest_id")
     try:
         manifest_id = UUID(raw) if isinstance(raw, str) else None
     except ValueError:
-        manifest_id = None
-    manifest = db.get(DependencyManifest, manifest_id) if manifest_id else None
+        return None
+    return db.get(DependencyManifest, manifest_id) if manifest_id else None
+
+
+def reusable_audio_line(
+    db: Session, version: AssetVersion, snapshot: AudioSnapshot, script_id: UUID, line_id: str
+) -> bool:
+    """Compare the entire recorded performance while keeping the original binding."""
+    manifest = audio_line_manifest(db, version)
+    if manifest is None or not manifest_matches_line(manifest, snapshot, line_id):
+        return False
+    selection = manifest_voice(manifest.snapshot_json["context"])
+    script = db.get(Script, script_id)
+    if selection is None or script is None or script.episode_id != snapshot.episode_id:
+        return False
+    content = read_script_content(script.content_json)
+    original = require_line(snapshot, line_id)
+    if character_for(content, original.speaker) != selection.character_asset_id:
+        return False
+    for scene in content.scenes:
+        if scene.scene_id != original.scene_id:
+            continue
+        if isinstance(scene, SceneV3) and scene.dramatic_beat.story_time != selection.story_time:
+            return False
+        for index, line in enumerate(scene.dialogue, start=1):
+            if line.line_id == line_id:
+                candidate = AudioLine(
+                    **line.model_dump(),
+                    scene_id=scene.scene_id,
+                    scene_no=scene.scene_no,
+                    sequence_no=index,
+                )
+                return (
+                    candidate == original
+                    and performance_for(db, content, scene, candidate) == selection.performance
+                )
+    return False
+
+
+def validate_audio_line(db: Session, identity: UUID, script_id: UUID, line_id: str) -> None:
+    """Enforce precise line provenance, allowing unchanged profiled recordings to be reused."""
+    version = db.get(AssetVersion, identity)
+    if version is None:
+        return
+    manifest = audio_line_manifest(db, version)
     context = manifest.snapshot_json.get("context", {}) if manifest else {}
     if "audio_snapshot_id" not in context:
         return
@@ -320,7 +435,14 @@ def validate_audio_line(db: Session, identity: UUID, script_id: UUID, line_id: s
     if (
         binding is None
         or binding.line_id != line_id
-        or context.get("script_version_id") != str(script_id)
         or context.get("audio_snapshot_id") != str(binding.snapshot_id)
     ):
         raise DomainError("AUDIO_BINDING_REQUIRED", "生产音频须绑定当前精确剧本台词", 409)
+    if context.get("script_version_id") != str(script_id):
+        snapshot = db.get(AudioSnapshot, binding.snapshot_id)
+        if (
+            snapshot is None
+            or version.stale
+            or not reusable_audio_line(db, version, snapshot, script_id, line_id)
+        ):
+            raise DomainError("AUDIO_BINDING_REQUIRED", "生产音频须绑定当前精确剧本台词", 409)

@@ -25,6 +25,8 @@ const voiceId = (row: AudioVoice) => row.id;
 export default function VoicePicker({
   projectId,
   speaker,
+  characterId,
+  profiled,
   scope,
   writable,
   selected,
@@ -33,6 +35,8 @@ export default function VoicePicker({
 }: {
   projectId: string;
   speaker: string;
+  characterId: string | null;
+  profiled: boolean;
   scope: string;
   writable: boolean;
   selected: AudioVoice | null;
@@ -85,6 +89,7 @@ export default function VoicePicker({
           {
             creation_key: pending.key,
             speaker,
+            ...(characterId ? { character_asset_id: characterId } : {}),
             expected_version_no: versionNo,
             parameters,
             output_spec: {},
@@ -101,29 +106,31 @@ export default function VoicePicker({
   }
   return (
     <section aria-label="本句音色" className="flex min-w-0 flex-col gap-3">
-      <Field>
-        <FieldLabel htmlFor="audio-voice-version">
-          {speaker}的音色版本
-        </FieldLabel>
-        <ChoiceSelect
-          id="audio-voice-version"
-          value={selected?.id ?? ""}
-          placeholder="选择已保存音色"
-          disabled={!writable || voices.loading || mutation.busy}
-          options={voices.rows.map((row) => ({
-            value: row.id,
-            label: `${row.speaker} · v${row.version_no} · ${String(row.parameters.voice ?? "未标记音色")} · ${row.model}`,
-          }))}
-          onValueChange={(value) => {
-            const row = voices.rows.find((voice) => voice.id === value);
-            if (row) onSelected(row);
-          }}
-        />
-      </Field>
-      <AudioPagination list={voices} label="音色版本" />
-      {selected && (
+      {!profiled && (
+        <Field>
+          <FieldLabel htmlFor="audio-voice-version">
+            {speaker}的音色版本
+          </FieldLabel>
+          <ChoiceSelect
+            id="audio-voice-version"
+            value={selected?.id ?? ""}
+            placeholder="选择已保存音色"
+            disabled={!writable || voices.loading || mutation.busy}
+            options={voices.rows.map((row) => ({
+              value: row.id,
+              label: `${row.speaker} · v${row.version_no} · ${String(row.parameters.voice ?? "未标记音色")} · ${row.model}`,
+            }))}
+            onValueChange={(value) => {
+              const row = voices.rows.find((voice) => voice.id === value);
+              if (row) onSelected(row);
+            }}
+          />
+        </Field>
+      )}
+      {!profiled && <AudioPagination list={voices} label="音色版本" />}
+      {!profiled && selected && (
         <p className="text-xs text-muted-foreground">
-          本次使用保存时的 {selected.model} 配置与音色 v{selected.version_no}。
+          {selected.model} · 音色 v{selected.version_no}
         </p>
       )}
       {writable && (

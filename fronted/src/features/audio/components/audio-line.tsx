@@ -4,6 +4,8 @@ import { useCallback, useState } from "react";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Button } from "@/components/ui/button";
 import { Field, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Notice } from "@/components/ui-kit";
 import useRenderDetail from "@/features/rendering/hooks/use-render-detail";
 import useRenderMutation, {
@@ -24,6 +26,7 @@ import AudioPlayer from "./audio-player";
 import AudioTaskDetail from "./audio-task";
 import AudioVersionActions from "./audio-version-actions";
 import VoicePicker from "./voice-picker";
+import VoiceProfileEditor from "./voice-profile-editor";
 
 const historyId = (row: AudioHistory) => row.binding.id;
 const jobId = (row: AudioTask) => row.job_id;
@@ -46,7 +49,26 @@ export default function AudioLinePanel({
   unavailable: (cause: unknown) => void;
   onOpenRender: () => void;
 }) {
-  const [voice, setVoice] = useState<AudioVoice | null>(null);
+  const [voiceDraft, setVoice] = useState<AudioVoice | null>(null);
+  const [editProfile, setEditProfile] = useState(false);
+  const [speedDraft, setSpeed] = useState("");
+  const [instructionsDraft, setInstructions] = useState("");
+  const fetchProfile = useCallback(
+    (signal: AbortSignal) =>
+      audioApi.lineVoiceProfile(snapshot.id, line.line_id, signal),
+    [snapshot.id, line.line_id],
+  );
+  const profile = useRenderDetail(scope, fetchProfile, unavailable);
+  const ready = profile.data;
+  const voice = ready?.profile ? ready.voice : voiceDraft;
+  const performance = ready?.selection?.performance;
+  const expressive =
+    performance &&
+    (performance.emotion ||
+      performance.purpose ||
+      performance.interactions.length > 0);
+  const performanceUnavailable =
+    expressive && !ready.supported_parameters.includes("instructions");
   const fetchHistory = useCallback(
     (offset: number | undefined, signal: AbortSignal) =>
       audioApi.history(snapshot.id, line.line_id, offset, signal),
@@ -85,8 +107,7 @@ export default function AudioLinePanel({
     unavailable,
     !!selected,
   );
-  const generationScope = `${scope}:tts:${voice?.id ?? ""}:${selected?.version.id ?? "new"}`;
-  const mutation = useRenderMutation(generationScope, writable, unavailable);
+  const reusing = !!selected && selected.binding.snapshot_id !== snapshot.id;
   const activeJobId = selectedJob || tasks.rows[0]?.job_id;
   const currentAsset = asset.data?.id === assetId ? asset.data : null;
   const currentVersion =
@@ -95,6 +116,30 @@ export default function AudioLinePanel({
       ? version.data
       : null;
   const locked = currentAsset?.status === "LOCKED";
+  const replacingLocked = !!(
+    ready?.selection &&
+    locked &&
+    currentVersion?.stale
+  );
+  const rerunSource = reusing || replacingLocked ? undefined : selected;
+  const lockedSource = locked && !!rerunSource;
+  const supported = ready?.supported_parameters ?? [];
+  const speedMin = voice?.provider === "qwen_audio_tts" ? 0.5 : 0.25;
+  const speedMax = voice?.provider === "qwen_audio_tts" ? 2 : 4;
+  const speed = speedDraft === "" ? undefined : Number(speedDraft);
+  const invalidSpeed =
+    supported.includes("speed") &&
+    speed !== undefined &&
+    (!Number.isFinite(speed) || speed < speedMin || speed > speedMax);
+  const instructions = instructionsDraft.trim();
+  const performanceParameters = {
+    ...(supported.includes("speed") && speed !== undefined ? { speed } : {}),
+    ...(supported.includes("instructions") && instructions
+      ? { instructions }
+      : {}),
+  };
+  const generationScope = `${scope}:tts:${ready?.profile?.id ?? ""}:${voice?.id ?? ""}:${rerunSource?.version.id ?? "new"}`;
+  const mutation = useRenderMutation(generationScope, writable, unavailable);
   const lineagePending =
     !!selected &&
     (!currentAsset || !currentVersion || asset.loading || version.loading);
@@ -114,7 +159,10 @@ export default function AudioLinePanel({
   async function generate() {
     if (
       !voice ||
-      locked ||
+      !ready ||
+      performanceUnavailable ||
+      invalidSpeed ||
+      lockedSource ||
       lineagePending ||
       unknown ||
       !voicePriced ||
@@ -123,7 +171,9 @@ export default function AudioLinePanel({
       tasks.error
     )
       return;
-    const pending = pendingCreationKey(generationScope);
+    const pending = pendingCreationKey(
+      `${generationScope}:${JSON.stringify(performanceParameters)}`,
+    );
     await mutation.mutate(
       (signal) =>
         audioApi.createTask(
@@ -132,14 +182,20 @@ export default function AudioLinePanel({
           {
             creation_key: pending.key,
             voice_version_id: voice.id,
-            ...(selected && currentAsset
+            ...(Object.keys(performanceParameters).length
+              ? { performance_parameters: performanceParameters }
+              : {}),
+            ...(ready.profile
+              ? { voice_profile_version_id: ready.profile.id }
+              : {}),
+            ...(rerunSource && currentAsset
               ? {
-                  source_audio_version_id: selected.version.id,
+                  source_audio_version_id: rerunSource.version.id,
                   expected_revision: currentAsset.revision,
                 }
               : {}),
           },
-          !!selected,
+          !!rerunSource,
           signal,
         ),
       (row) => {
@@ -170,17 +226,110 @@ export default function AudioLinePanel({
       <VoicePicker
         projectId={projectId}
         speaker={line.speaker}
+        characterId={ready?.character_asset_id ?? null}
+        profiled={!!ready?.profile}
         scope={scope + ":voices"}
         writable={writable}
-        selected={voice}
+        selected={voiceDraft}
         onSelected={setVoice}
         unavailable={unavailable}
       />
+      <AudioFeedback error={profile.error} />
+      {ready?.selection && voice && (
+        <section aria-label="本句声音档案" className="grid gap-1 text-sm">
+          <p>
+            声音档案 v{ready.profile?.version_no} · 音色 v{voice.version_no} ·
+            故事时点 {ready.selection.story_time}
+          </p>
+          {ready.selection.change_reason && (
+            <p>剧情变声 · {ready.selection.change_reason}</p>
+          )}
+          {performance?.purpose && <p>场景目的 · {performance.purpose}</p>}
+          {performance?.emotion_start && performance.emotion_end && (
+            <p>
+              情绪变化 · {performance.emotion_start} → {performance.emotion_end}
+            </p>
+          )}
+          {performance?.interactions.map((action, index) => (
+            <p key={index}>{action}</p>
+          ))}
+        </section>
+      )}
+      {ready?.unavailable_reason && <Notice>{ready.unavailable_reason}</Notice>}
+      {performanceUnavailable && (
+        <Notice>
+          当前音色协议缺少情绪说明，请改用支持的音色或导入表演录音。
+        </Notice>
+      )}
+      {writable && ready?.character_asset_id && (
+        <div className="flex min-w-0 flex-col gap-3">
+          <Button
+            className="self-start"
+            type="button"
+            variant="outline"
+            aria-expanded={editProfile}
+            onClick={() => setEditProfile((open) => !open)}
+          >
+            {editProfile ? "关闭声音档案编辑" : "编辑跨集声音档案"}
+          </Button>
+          {editProfile && (
+            <VoiceProfileEditor
+              key={ready.profile?.id ?? "initial"}
+              projectId={projectId}
+              characterId={ready.character_asset_id}
+              profile={ready.profile}
+              selected={voiceDraft}
+              unavailable={unavailable}
+              onSaved={() => {
+                void profile.load();
+                void history.load();
+                if (selected) void version.load();
+              }}
+            />
+          )}
+        </div>
+      )}
       {writable && (
         <div className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">
             生成只作用于本句，可能产生供应商费用，沿用项目现有报价与预算。重生成另存候选，旧配音、字幕来源和已冻结成片保留。
           </p>
+          {ready?.selection && supported.includes("speed") && (
+            <Field>
+              <FieldLabel htmlFor="audio-line-speed">本句语速</FieldLabel>
+              <Input
+                id="audio-line-speed"
+                type="number"
+                min={speedMin}
+                max={speedMax}
+                step="any"
+                value={speedDraft}
+                placeholder={`沿用音色语速 ${voice?.parameters.speed ?? 1}`}
+                disabled={mutation.busy}
+                onChange={(event) => setSpeed(event.target.value)}
+              />
+              {invalidSpeed && (
+                <Notice>
+                  语速须在 {speedMin} 到 {speedMax} 之间。
+                </Notice>
+              )}
+            </Field>
+          )}
+          {ready?.selection && supported.includes("instructions") && (
+            <Field>
+              <FieldLabel htmlFor="audio-line-instructions">
+                补充本句表演说明
+              </FieldLabel>
+              <Textarea
+                id="audio-line-instructions"
+                maxLength={1000}
+                rows={2}
+                value={instructionsDraft}
+                disabled={mutation.busy}
+                onChange={(event) => setInstructions(event.target.value)}
+              />
+            </Field>
+          )}
           {voice && !voicePriced && (
             <Notice>
               此音色的保存配置缺少可信报价，请更新语音服务报价后另存音色版本。
@@ -195,8 +344,11 @@ export default function AudioLinePanel({
             disabled={
               mutation.busy ||
               !voice ||
+              !ready ||
+              !!performanceUnavailable ||
               !voicePriced ||
-              locked ||
+              invalidSpeed ||
+              lockedSource ||
               lineagePending ||
               unknown ||
               history.loading ||
@@ -208,7 +360,7 @@ export default function AudioLinePanel({
           >
             {mutation.busy
               ? "正在创建任务…"
-              : selected
+              : rerunSource
                 ? "仅重生成本句配音"
                 : "生成本句配音"}
           </Button>
@@ -235,7 +387,7 @@ export default function AudioLinePanel({
               disabled={history.loading || mutation.busy}
               options={history.rows.map((row) => ({
                 value: row.version.id,
-                label: `v${row.version.version_no} · ${row.tts_job_id ? "生成配音" : "导入录音"} · ${row.binding.duration_ms} 毫秒`,
+                label: `v${row.version.version_no} · ${row.binding.snapshot_id !== snapshot.id ? "复用录音" : row.tts_job_id ? "生成配音" : "导入录音"} · ${row.binding.duration_ms} 毫秒`,
               }))}
               onValueChange={setVersionId}
             />
@@ -264,9 +416,15 @@ export default function AudioLinePanel({
                   <dd>{line.line_id}</dd>
                 </div>
                 <div>
-                  <dt>剧本版本</dt>
+                  <dt>当前台词剧本版本</dt>
                   <dd>{snapshot.script_version_id}</dd>
                 </div>
+                {reusing && (
+                  <div>
+                    <dt>原始配音来源</dt>
+                    <dd>{selected.binding.snapshot_id}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>音频版本</dt>
                   <dd>{selected.version.id}</dd>
@@ -287,7 +445,10 @@ export default function AudioLinePanel({
                 )}
               </dl>
             </details>
-            {currentAsset && currentVersion && (
+            {reusing && (
+              <Notice>该台词及表演要求保持一致，可直接复用已批准录音。</Notice>
+            )}
+            {currentAsset && currentVersion && !reusing && (
               <AudioVersionActions
                 key={`${currentVersion.id}:${currentVersion.revision}:${currentAsset.revision}`}
                 projectId={projectId}
@@ -351,8 +512,8 @@ export default function AudioLinePanel({
           snapshotId={snapshot.id}
           lineId={line.line_id}
           scope={scope}
-          asset={currentAsset}
-          writable={writable && !locked}
+          asset={reusing ? null : currentAsset}
+          writable={writable && (!locked || reusing)}
           onImported={reloadHistory}
           unavailable={unavailable}
         />

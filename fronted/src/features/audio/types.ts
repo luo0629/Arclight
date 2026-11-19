@@ -133,3 +133,41 @@ export type RightsDeclaration = {
   rights_note: string;
   rights_confirmed: true;
 };
+
+export type VoiceChange = {
+  story_start: number;
+  story_end: number | null;
+  voice_version_id: string;
+  reason: string;
+};
+export type VoiceProfilePlan = {
+  default_voice_version_id: string;
+  ledger_version_id: string;
+  changes: VoiceChange[];
+};
+export type VoiceProfile = {
+  id: string;
+  version_no: number;
+  character_asset_id: string;
+  plan: VoiceProfilePlan;
+  invalidation_id: string | null;
+};
+export type LineVoiceProfile = {
+  character_asset_id: string | null;
+  profile: VoiceProfile | null;
+  voice: AudioVoice | null;
+  selection: {
+    story_time: number;
+    change_reason: string | null;
+    performance: {
+      sequence_no: number;
+      purpose: string;
+      emotion: string;
+      emotion_start: string;
+      emotion_end: string;
+      interactions: string[];
+    };
+  } | null;
+  supported_parameters: string[];
+  unavailable_reason: string | null;
+};

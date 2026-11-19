@@ -7,12 +7,12 @@ from sqlalchemy.orm import Session
 
 from arclight.application.audio_production import (
     approved_script,
-    input_context,
+    manifest_matches_line,
     require_line,
+    require_live_line_inputs,
     require_snapshot,
     write_episode,
 )
-from arclight.application.invalidation import input_expired
 from arclight.application.render_inputs import file_storage
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -50,25 +50,15 @@ def require_audio_version(
         raise DomainError("AUDIO_BINDING_REQUIRED", "音频台词绑定不属于本项目", 409)
     approved_script(db, episode, snapshot.script_version_id, actor)
     manifest = db.get(DependencyManifest, binding.dependency_manifest_id)
-    frozen = manifest.snapshot_json if manifest is not None else {}
-    inputs = frozen.get("inputs")
     if (
         manifest is None
         or manifest.project_id != project_id
         or manifest.target_asset_id != asset.id
         or version.metadata_json.get("dependency_manifest_id") != str(manifest.id)
-        or frozen.get("context") != input_context(snapshot, binding.line_id)
-        or not isinstance(inputs, list)
-        or len(inputs) != 1
-        or not isinstance(inputs[0], dict)
-        or inputs[0].get("source_asset_version_id") != str(snapshot.script_version_id)
-        or inputs[0].get("checksum") != snapshot.script_sha256
-        or inputs[0].get("dependency_type") != "CONTENT_DEPENDENCY"
-        or inputs[0].get("selectors") != [f"dialogue:{binding.line_id}"]
+        or not manifest_matches_line(manifest, snapshot, binding.line_id)
     ):
         raise DomainError("AUDIO_BINDING_REQUIRED", "音频缺少本快照台词的精确输入来源", 409)
-    if input_expired(db, project_id, inputs[0], "AUDIO"):
-        raise DomainError("AUDIO_LINE_NOT_USABLE", "该台词已被批准修改，不能审核或选用旧音频", 409)
+    require_live_line_inputs(db, project_id, manifest)
     files = list(db.scalars(select(StoredFile).where(StoredFile.asset_version_id == version.id)))
     if len(files) != 1:
         raise DomainError("AUDIO_FILE_INVALID", "音频须有唯一的不可变文件回执", 409)

@@ -111,6 +111,19 @@ def content_changes(before: dict, after: dict, kind: str) -> list[tuple[str, lis
 
         def parts(value):
             value = json.loads(json.dumps(value))
+            # A v3 revision must acknowledge the latest ledger approval. Refreshing
+            # that writing receipt alone does not change approved scene or line content.
+            narrative = value.get("narrative_context")
+            if narrative is not None:
+                for field in (
+                    "ledger_version_id",
+                    "expected_ledger_head_revision",
+                    "ledger_content_sha256",
+                    "ledger_source_manifest_sha256",
+                    "ledger_approval_id",
+                    "ledger_source",
+                ):
+                    narrative.pop(field, None)
             lines = {}
             for scene in value["scenes"]:
                 for index, line in enumerate(scene.pop("dialogue", [])):
@@ -125,7 +138,7 @@ def content_changes(before: dict, after: dict, kind: str) -> list[tuple[str, lis
                 for key in old_lines.keys() | new_lines.keys()
                 if old_lines.get(key) != new_lines.get(key)
             )
-            return [("DIALOGUE", ["dialogue:" + key for key in changed])]
+            return [("DIALOGUE", ["dialogue:" + key for key in changed])] if changed else []
     if kind == "STORYBOARD":
 
         def unordered(value):

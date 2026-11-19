@@ -4,7 +4,7 @@ from typing import Annotated
 from uuid import UUID, uuid5
 
 from fastapi import APIRouter, Query, Request, Response
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from arclight.api.asset_versions import VersionRead, read_version
 from arclight.api.audio_tts import router as tts_router
@@ -16,6 +16,7 @@ from arclight.application.audio_production import (
     capture_snapshot,
     require_line,
     require_snapshot,
+    reusable_audio_line,
 )
 from arclight.application.commands import require_episode
 from arclight.domain.audio_production import (
@@ -32,7 +33,7 @@ from arclight.domain.audio_production import (
 )
 from arclight.persistence.audio_production import AudioLineBinding, AudioSnapshot
 from arclight.persistence.audio_tts import AudioTTSRequest
-from arclight.persistence.models import AssetVersion
+from arclight.persistence.models import AssetVersion, VisualAsset
 
 router = APIRouter(prefix="/api/v1", tags=["audio-production"])
 router.include_router(tts_router)
@@ -147,28 +148,53 @@ def history(
     limit: Limit = 100,
     offset: Offset = 0,
     newest_first: bool = False,
+    include_reusable: bool = False,
 ) -> list[AudioHistoryRead]:
     snapshot = require_snapshot(db, snapshot_id, actor)
     require_line(snapshot, line_id)
-    rows = list(
-        db.execute(
-            select(AudioLineBinding, AssetVersion)
-            .join(AssetVersion, AssetVersion.id == AudioLineBinding.asset_version_id)
-            .where(
-                AudioLineBinding.snapshot_id == snapshot.id,
-                AudioLineBinding.line_id == line_id,
+    query = (
+        select(AudioLineBinding, AssetVersion, AudioSnapshot)
+        .join(AssetVersion, AssetVersion.id == AudioLineBinding.asset_version_id)
+        .join(AudioSnapshot, AudioSnapshot.id == AudioLineBinding.snapshot_id)
+        .where(AudioLineBinding.line_id == line_id, AudioSnapshot.episode_id == snapshot.episode_id)
+        .order_by(
+            *(
+                (AudioLineBinding.created_at.desc(), AudioLineBinding.id.desc())
+                if newest_first
+                else (AudioLineBinding.created_at, AudioLineBinding.id)
             )
-            .order_by(
-                *(
-                    (AudioLineBinding.created_at.desc(), AudioLineBinding.id.desc())
-                    if newest_first
-                    else (AudioLineBinding.created_at, AudioLineBinding.id)
-                )
-            )
-            .offset(offset)
-            .limit(limit)
         )
     )
+    own = AudioLineBinding.snapshot_id == snapshot.id
+    if include_reusable:
+        query = query.join(VisualAsset, VisualAsset.id == AssetVersion.asset_id).where(
+            or_(
+                own,
+                and_(
+                    AssetVersion.stale.is_(False),
+                    AssetVersion.status.in_({"APPROVED", "LOCKED"}),
+                    VisualAsset.status.not_in({"ARCHIVED", "REJECTED", "STALE"}),
+                ),
+            )
+        )
+        rows = []
+        with db.execute(query.execution_options(yield_per=100)) as candidates:
+            for binding, version, original in candidates:
+                if original.id != snapshot.id and not reusable_audio_line(
+                    db, version, original, snapshot.script_version_id, line_id
+                ):
+                    continue
+                if offset:
+                    offset -= 1
+                    continue
+                rows.append((binding, version))
+                if len(rows) == limit:
+                    break
+    else:
+        rows = [
+            (binding, version)
+            for binding, version, _ in db.execute(query.where(own).offset(offset).limit(limit))
+        ]
     # Only expose a TTS lineage when its immutable request agrees with this exact result.
     job_ids: dict[UUID, UUID] = {}
     for _, version in rows:
@@ -183,7 +209,6 @@ def history(
             request.job_id: request
             for request in db.scalars(
                 select(AudioTTSRequest).where(
-                    AudioTTSRequest.snapshot_id == snapshot.id,
                     AudioTTSRequest.line_id == line_id,
                     AudioTTSRequest.job_id.in_(job_ids.values()),
                 )
@@ -198,6 +223,7 @@ def history(
         request = requests.get(job_id) if job_id is not None else None
         if request is not None and (
             request.target_asset_id != version.asset_id
+            or request.snapshot_id != binding.snapshot_id
             or version.creation_key != uuid5(request.job_id, "audio-tts-result")
         ):
             request = None

@@ -1,6 +1,7 @@
 import "client-only";
 
 import { api, apiBlob, json } from "@/lib/api/client";
+import type { LedgerHead } from "@/features/story/story-ledger";
 import type { AssetVersion } from "@/types/api";
 import type {
   AudioAsset,
@@ -12,7 +13,10 @@ import type {
   AudioSnapshot,
   AudioTask,
   AudioVoice,
+  LineVoiceProfile,
   RightsDeclaration,
+  VoiceProfile,
+  VoiceProfilePlan,
   SpeechConfiguration,
 } from "./types";
 
@@ -67,6 +71,34 @@ export const audioApi = {
       `${project(projectId)}/audio-voices${page(offset)}&speaker=${id(speaker)}`,
       signal,
     ),
+  characterVoices: (
+    projectId: string,
+    characterId: string,
+    offset: number | undefined,
+    signal: AbortSignal,
+  ) =>
+    read<AudioVoice[]>(
+      `${project(projectId)}/audio-voices${page(offset)}&character_asset_id=${id(characterId)}`,
+      signal,
+    ),
+  lineVoiceProfile: (snapshot: string, lineId: string, signal: AbortSignal) =>
+    read<LineVoiceProfile>(`${line(snapshot, lineId)}/voice-profile`, signal),
+  voiceLedger: (projectId: string, signal: AbortSignal) =>
+    read<LedgerHead>(`${project(projectId)}/story-ledger`, signal),
+  saveVoiceProfile: (
+    projectId: string,
+    characterId: string,
+    body: VoiceProfilePlan & {
+      creation_key: string;
+      expected_version_no: number;
+    },
+    signal: AbortSignal,
+  ) =>
+    write<VoiceProfile>(
+      `${project(projectId)}/characters/${id(characterId)}/voice-profile`,
+      body,
+      signal,
+    ),
   speech: (projectId: string, signal: AbortSignal) =>
     read<SpeechConfiguration>(
       `${project(projectId)}/generation-jobs/services/speech/configuration`,
@@ -81,7 +113,7 @@ export const audioApi = {
     signal: AbortSignal,
   ) =>
     read<AudioHistory[]>(
-      `${line(snapshot, lineId)}/history${page(offset)}&newest_first=true`,
+      `${line(snapshot, lineId)}/history${page(offset)}&newest_first=true&include_reusable=true`,
       signal,
     ),
   tasks: (

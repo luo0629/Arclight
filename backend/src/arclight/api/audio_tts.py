@@ -16,14 +16,25 @@ from arclight.application.audio_tts import (
     register_result,
     require_tts,
 )
+from arclight.application.audio_voice_profiles import (
+    character_asset,
+    get_profile,
+    line_profile_read,
+    save_profile,
+)
 from arclight.application.audio_voices import create_voice_version, read_voice, require_voice
-from arclight.application.commands import require_project
+from arclight.application.commands import require_episode, require_project
 from arclight.domain.audio_tts import (
     AudioTTSCreate,
     AudioTTSRead,
     AudioTTSRegenerate,
     AudioTTSRegister,
     AudioTTSResultRead,
+)
+from arclight.domain.audio_voice_profiles import (
+    LineVoiceProfileRead,
+    VoiceProfileCreate,
+    VoiceProfileRead,
 )
 from arclight.domain.audio_voices import AudioVoiceCreate, AudioVoiceRead
 from arclight.persistence.audio_tts import AudioTTSRequest
@@ -50,6 +61,7 @@ def voices(
     actor: Actor,
     speaker: Annotated[str | None, Query(max_length=100)] = None,
     latest_only: bool = False,
+    character_asset_id: UUID | None = None,
     limit: Limit = 50,
     offset: Offset = 0,
 ) -> list[AudioVoiceRead]:
@@ -57,12 +69,18 @@ def voices(
     query = select(AudioVoiceVersion).where(AudioVoiceVersion.project_id == project_id)
     if speaker is not None:
         query = query.where(AudioVoiceVersion.speaker == speaker)
+    if character_asset_id is not None:
+        character_asset(db, project_id, character_asset_id)
+        query = query.where(AudioVoiceVersion.character_asset_id == character_asset_id)
     if latest_only:
+        latest = select(AudioVoiceVersion.speaker, func.max(AudioVoiceVersion.version_no)).where(
+            AudioVoiceVersion.project_id == project_id
+        )
+        if character_asset_id is not None:
+            latest = latest.where(AudioVoiceVersion.character_asset_id == character_asset_id)
         query = query.where(
             tuple_(AudioVoiceVersion.speaker, AudioVoiceVersion.version_no).in_(
-                select(AudioVoiceVersion.speaker, func.max(AudioVoiceVersion.version_no))
-                .where(AudioVoiceVersion.project_id == project_id)
-                .group_by(AudioVoiceVersion.speaker)
+                latest.group_by(AudioVoiceVersion.speaker)
             )
         )
     return [
@@ -80,6 +98,39 @@ def get_voice(
     project_id: UUID, voice_version_id: UUID, db: Database, actor: Actor
 ) -> AudioVoiceRead:
     return read_voice(require_voice(db, project_id, voice_version_id, actor))
+
+
+@router.get("/projects/{project_id}/characters/{character_id}/voice-profile")
+def read_profile(
+    project_id: UUID, character_id: UUID, db: Database, actor: Actor, version_id: UUID | None = None
+) -> VoiceProfileRead | None:
+    require_project(db, project_id, actor)
+    character_asset(db, project_id, character_id)
+    return get_profile(db, project_id, character_id, version_id)
+
+
+@router.post("/projects/{project_id}/characters/{character_id}/voice-profile", status_code=201)
+def write_profile(
+    project_id: UUID,
+    character_id: UUID,
+    payload: VoiceProfileCreate,
+    response: Response,
+    db: Database,
+    actor: Actor,
+) -> VoiceProfileRead:
+    profile, created = save_profile(db, project_id, character_id, actor, payload)
+    response.status_code = 201 if created else 200
+    return profile
+
+
+@router.get("/audio-snapshots/{snapshot_id}/lines/{line_id}/voice-profile")
+def profile_for_dialogue(
+    snapshot_id: UUID, line_id: str, db: Database, actor: Actor
+) -> LineVoiceProfileRead:
+    snapshot = require_snapshot(db, snapshot_id, actor)
+    line = require_line(snapshot, line_id)
+    episode = require_episode(db, snapshot.episode_id, actor)
+    return line_profile_read(db, episode.project_id, snapshot, line, actor)
 
 
 @router.get("/audio-snapshots/{snapshot_id}/lines/{line_id}/tts")

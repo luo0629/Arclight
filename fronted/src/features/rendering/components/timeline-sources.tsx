@@ -187,10 +187,7 @@ function VoiceLines({
     unavailable,
   );
   const options = history.rows.filter(
-    (row) =>
-      usable(row.version) &&
-      row.binding.snapshot_id === snapshot.id &&
-      row.binding.line_id === selected?.line_id,
+    (row) => usable(row.version) && row.binding.line_id === selected?.line_id,
   );
   const [versionId, setVersion] = useState("");
   const version =
@@ -229,6 +226,7 @@ function VoiceLines({
         {options.map((row) => (
           <option key={row.version.id} value={row.version.id}>
             配音 v{row.version.version_no} · {row.binding.duration_ms} 毫秒
+            {row.binding.snapshot_id !== snapshot.id ? " · 复用录音" : ""}
           </option>
         ))}
       </select>

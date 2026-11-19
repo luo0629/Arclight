@@ -10,7 +10,12 @@ from sqlalchemy.orm import Session
 
 from arclight.application.asset_mutations import change_asset
 from arclight.application.asset_objects import object_key, write_object
-from arclight.application.audio_production import require_line, write_episode
+from arclight.application.audio_production import (
+    require_line,
+    reusable_audio_line,
+    validate_audio_line,
+    write_episode,
+)
 from arclight.application.audio_versions import require_audio_version
 from arclight.application.audit import audit
 from arclight.application.commands import require_episode
@@ -128,6 +133,7 @@ def validate_provenance(
         binding = db.get(AudioLineBinding, cue.audio_binding_id)
         snapshot = db.get(AudioSnapshot, cue.audio_snapshot_id)
         audio = db.get(AssetVersion, cue.audio_asset_version_id)
+        script = db.get(AssetVersion, cue.script_version_id)
         audio_file = db.get(StoredFile, cue.audio_file_id)
         if (
             source_clip is None
@@ -150,9 +156,14 @@ def validate_provenance(
             or cue.source_start_ms + cue.duration_ms > binding.duration_ms
             or snapshot is None
             or snapshot.episode_id != row.episode_id
-            or snapshot.script_version_id != cue.script_version_id
-            or snapshot.script_sha256 != cue.script_sha256
+            or script is None
+            or script.checksum != cue.script_sha256
             or audio is None
+            or (
+                not reusable_audio_line(db, audio, snapshot, cue.script_version_id, cue.line_id)
+                if snapshot.script_version_id != cue.script_version_id
+                else snapshot.script_sha256 != cue.script_sha256
+            )
             or audio.checksum != cue.audio_sha256
             or audio_file is None
             or audio_file.asset_version_id != audio.id
@@ -360,7 +371,7 @@ def source_cues(
         line = require_line(snapshot, binding.line_id)
         if (
             snapshot.episode_id != episode.id
-            or clip.script_version_id != snapshot.script_version_id
+            or clip.script_version_id is None
             or clip.line_id != binding.line_id
             or clip.source_sha256 != version.checksum
             or clip.source_start_ms + clip.duration_ms > binding.duration_ms
@@ -368,6 +379,8 @@ def source_cues(
             raise DomainError(
                 "SUBTITLE_SOURCE_INVALID", "配音片段与精确台词或实测音频范围不符", 422
             )
+        validate_audio_line(db, version.id, clip.script_version_id, binding.line_id)
+        script, _ = exact_version(db, episode.project_id, clip.script_version_id)
         try:
             cue = SubtitleCue(
                 cue_no=len(cues) + 1,
@@ -378,8 +391,8 @@ def source_cues(
                 duration_ms=clip.duration_ms,
                 source_start_ms=clip.source_start_ms,
                 source_clip_id=clip.id,
-                script_version_id=snapshot.script_version_id,
-                script_sha256=snapshot.script_sha256,
+                script_version_id=script.id,
+                script_sha256=script.checksum,
                 line_id=line.line_id,
                 audio_asset_version_id=version.id,
                 audio_sha256=version.checksum,
