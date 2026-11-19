@@ -13,7 +13,7 @@ from arclight.application.context_sources import (
     validate_sources,
     verify_images,
 )
-from arclight.application.dependencies import lock_dependency_graph
+from arclight.application.dependencies import invalidation_sequence, lock_dependency_graph
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.context import (
@@ -143,6 +143,11 @@ def capture_contexts(
             ],
             "context": {"origin": "context_builder", "run_id": str(run.id), "task_context": value},
         }
+        if stage in {"script", "rewrite"} and "narrative_context" in run.input_json:
+            if row is None:
+                snapshot["invalidation_seq"] = invalidation_sequence(db, project_id)
+            elif "invalidation_seq" in row.snapshot_json:
+                snapshot["invalidation_seq"] = row.snapshot_json["invalidation_seq"]
         public = public_startup(run.input_json)
         trace: dict = {
             "trace_version": TRACE_VERSION,

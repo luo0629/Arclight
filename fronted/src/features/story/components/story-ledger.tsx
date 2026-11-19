@@ -13,8 +13,9 @@ import { Notice, FormLabel } from "@/components/ui-kit";
 import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
 import { useDraftStore } from "@/providers/draft-provider";
-import { api, json, message } from "@/lib/api/client";
+import { ApiError, api, json, message } from "@/lib/api/client";
 import type { StoryEntry } from "@/types/api";
+import ImpactButton from "@/features/dependencies/components/impact-button";
 import StoryLedgerEditor from "./story-ledger-editor";
 import {
   emptyLedger,
@@ -42,6 +43,7 @@ type Draft = {
 type ApprovalAttempt = {
   version_id: string;
   expected_revision: number;
+  impact_digest?: string;
   key: string;
 };
 function validDraft(value: unknown): value is Draft {
@@ -61,7 +63,9 @@ function validApproval(value: unknown): value is ApprovalAttempt {
   return (
     typeof row.version_id === "string" &&
     typeof row.key === "string" &&
-    Number.isInteger(row.expected_revision)
+    Number.isInteger(row.expected_revision) &&
+    (row.impact_digest === undefined ||
+      /^[a-f0-9]{64}$/.test(row.impact_digest))
   );
 }
 
@@ -352,14 +356,16 @@ export default function StoryLedger({
       if (active.current) setBusy(false);
     }
   }
-  async function approve() {
-    if (!version || !head || !owner || !writable || submitting.current) return;
+  async function approve(impact_digest?: string) {
+    if (!version || !head || !owner || !writable || submitting.current)
+      return false;
     const request =
       approvalAttempt.current?.version_id === version.id
         ? approvalAttempt.current
         : {
             version_id: version.id,
             expected_revision: head.revision,
+            impact_digest,
             key: crypto.randomUUID(),
           };
     approvalAttempt.current = request;
@@ -379,7 +385,10 @@ export default function StoryLedger({
         head: LedgerHead;
         approval: LedgerApproval;
       }>(path + "/versions/" + request.version_id + "/approve", {
-        ...json("POST", { expected_revision: request.expected_revision }),
+        ...json("POST", {
+          expected_revision: request.expected_revision,
+          impact_digest: request.impact_digest,
+        }),
         headers: { "Idempotency-Key": request.key },
       });
       if (!active.current) return;
@@ -395,8 +404,19 @@ export default function StoryLedger({
       void versions.reload();
       void reloadHead();
     } catch (error) {
-      if (active.current)
+      if (
+        error instanceof ApiError &&
+        ["DEPENDENCY_IMPACT_CHANGED", "DEPENDENCY_IMPACT_REQUIRED"].includes(
+          error.code,
+        )
+      ) {
+        approvalAttempt.current = null;
+        store.write(approvalId, undefined, request);
+        if (active.current) setError(message(error));
+      } else if (active.current) {
         setError(message(error) + "。批准请求与重试凭据已保留。");
+      }
+      return false;
     } finally {
       submitting.current = false;
       if (active.current) setBusy(false);
@@ -570,14 +590,19 @@ export default function StoryLedger({
                 writable &&
                 version.id === head?.latest_version_id &&
                 !version.approval && (
-                  <Button
+                  <ImpactButton
                     type="button"
                     className="justify-self-start"
                     disabled={busy || !!draft}
-                    onClick={() => void approve()}
+                    endpoint={
+                      approvalAttempt.current?.version_id === version.id
+                        ? undefined
+                        : `${path}/versions/${version.id}/approval-impact`
+                    }
+                    onConfirm={approve}
                   >
                     {busy ? "处理中…" : "批准此精确版本"}
-                  </Button>
+                  </ImpactButton>
                 )}
               {!owner && writable && (
                 <p className="text-sm text-muted-foreground">

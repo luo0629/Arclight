@@ -19,6 +19,11 @@ export type DependencyImpact = {
     depth: number;
     action: "REVIEW" | "GENERATE" | "RENDER";
     stale: boolean;
+    episode_no?: number;
+    shot_id?: string;
+    shots?: { id: string; shot_no: number }[];
+    reviews?: { id: string; kind: string }[];
+    reason?: string;
   }[];
 };
 const actions = {
@@ -140,6 +145,31 @@ export default function ImpactButton({
                   {item.asset_name} · v{item.version_no} ·{" "}
                   {actions[item.action]}
                 </strong>
+                {item.episode_no !== undefined && (
+                  <p>第 {item.episode_no} 集</p>
+                )}
+                {item.reason && <p>原因：{item.reason}</p>}
+                {item.shots?.length ? (
+                  <p>
+                    镜头：{item.shots.map((shot) => shot.shot_no).join("、")}
+                  </p>
+                ) : (
+                  item.shot_id && <p>镜头：{item.shot_id}</p>
+                )}
+                {item.reviews?.length ? (
+                  <details>
+                    <summary>
+                      关联审查 {item.reviews.length} 项（保留历史）
+                    </summary>
+                    <ul>
+                      {item.reviews.map((review) => (
+                        <li key={review.id}>
+                          {review.kind} · {review.id}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
                 <p>
                   {item.asset_type} · {item.asset_version_id}
                   {item.stale ? " · 已失效" : ""}

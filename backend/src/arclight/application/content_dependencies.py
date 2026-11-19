@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session
 from arclight.agents.contracts import read_content
 from arclight.application.audit import audit
 from arclight.application.dependencies import attach_output, capture_manifest, lock_dependency_graph
-from arclight.application.invalidation import check_impact, invalidate
+from arclight.application.invalidation import check_impact, impact_preview, invalidate
 from arclight.core.errors import DomainError
-from arclight.domain.dependencies import ManifestCreate
+from arclight.domain.dependencies import ContentManifestCreate
 from arclight.persistence.models import AssetVersion, Episode, Script, Storyboard, VisualAsset
 
 
@@ -63,13 +63,18 @@ def register_content(db: Session, row: Script | Storyboard, actor: str) -> Asset
         inputs.append(
             {"source_asset_version_id": str(script.id), "dependency_type": "CONTENT_DEPENDENCY"}
         )
+    narrative = None
+    if isinstance(row, Script):
+        from arclight.application.narrative_dependencies import capture_narrative_reads
+
+        narrative = capture_narrative_reads(db, row)
     manifest = None
-    if inputs:
+    if inputs or narrative is not None:
         manifest, _ = capture_manifest(
             db,
             episode.project_id,
             actor,
-            ManifestCreate.model_validate(
+            ContentManifestCreate.model_validate(
                 {
                     "creation_key": uuid5(row.id, "original-content-inputs"),
                     "target_asset_id": asset.id,
@@ -77,6 +82,7 @@ def register_content(db: Session, row: Script | Storyboard, actor: str) -> Asset
                     "context": {"resource_type": kind, "resource_id": str(row.id)},
                 }
             ),
+            narrative=narrative,
         )
     registry = AssetVersion(
         id=row.id,
@@ -116,6 +122,9 @@ def content_changes(before: dict, after: dict, kind: str) -> list[tuple[str, lis
             narrative = value.get("narrative_context")
             if narrative is not None:
                 for field in (
+                    "series_plan_version_id",
+                    "plan_sha256",
+                    "plan_source",
                     "ledger_version_id",
                     "expected_ledger_head_revision",
                     "ledger_content_sha256",
@@ -188,6 +197,23 @@ def approval_changes(db: Session, row: Script | Storyboard) -> list[dict]:
     ]
 
 
+def content_approval_impact(db: Session, row: Script | Storyboard) -> dict:
+    from arclight.application.script_state_commit import preview_script_state
+
+    episode = db.get(Episode, row.episode_id)
+    assert episode is not None
+    narrative = None
+    if isinstance(row, Script) and row.status == "READY_FOR_REVIEW":
+        try:
+            narrative = preview_script_state(db, episode, row)
+        except DomainError as error:
+            if error.code not in {"VERSION_CONFLICT", "STORY_STATE_CONFLICT"}:
+                raise
+            # Keep the history/impact read available. Approval independently
+            # rejects a draft whose narrative basis can no longer be committed.
+    return impact_preview(db, episode.project_id, approval_changes(db, row), narrative=narrative)
+
+
 def review_registry(
     db: Session, row: Script | Storyboard, actor: str, impact_digest: str | None = None
 ) -> None:
@@ -195,14 +221,16 @@ def review_registry(
     assert episode is not None
     lock_dependency_graph(db, episode.project_id)
     changes = approval_changes(db, row) if row.status == "APPROVED" else []
-    if row.status == "APPROVED":
-        check_impact(db, episode.project_id, changes, impact_digest)
     registry = register_content(db, row, actor)
     asset = db.get(VisualAsset, registry.asset_id)
     assert asset is not None
     if row.status == "APPROVED":
+        from arclight.application.script_state_commit import preview_script_state
+
         if registry.stale:
             raise DomainError("STALE_DEPENDENCY", "输入已过期，请另存新版本后重新审核", 409)
+        narrative = preview_script_state(db, episode, row) if isinstance(row, Script) else None
+        check_impact(db, episode.project_id, changes, impact_digest, narrative=narrative)
         previous_id = asset.current_version_id
         propagation_id = None
         if previous_id is None:

@@ -14,6 +14,7 @@ import type { Episode, Run } from "@/types/api";
 import { useSessionDraft } from "@/providers/draft-provider";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
+import ImpactButton from "@/features/dependencies/components/impact-button";
 import NarrativeInputs from "@/features/editor/components/narrative-inputs";
 import CreationOptionsFields, {
   creationPayload,
@@ -303,15 +304,15 @@ export default function StoryOutline({
       if (live.current) setBusy(false);
     }
   }
-  async function confirm() {
-    if (!detail || !owner || !writable || saving.current) return;
+  async function confirm(impact_digest?: string) {
+    if (!detail || !owner || !writable || saving.current) return false;
     saving.current = true;
     setBusy(true);
     setError("");
     try {
       const result = await api<Detail>(
         prefix + "/story-outlines/" + detail.id + "/confirm",
-        json("POST", {}),
+        json("POST", { impact_digest }),
       );
       if (!live.current) return;
       setDetail(result);
@@ -319,6 +320,7 @@ export default function StoryOutline({
       await refreshAfterSave();
     } catch (e) {
       if (live.current) setError(message(e));
+      return false;
     } finally {
       saving.current = false;
       if (live.current) setBusy(false);
@@ -636,12 +638,17 @@ export default function StoryOutline({
               )}
               <div className="mb-5 flex flex-wrap gap-2">
                 {detail.status === "DRAFT" && (
-                  <Button
+                  <ImpactButton
                     disabled={!owner || !writable || blocked}
-                    onClick={() => void confirm()}
+                    endpoint={
+                      detail.content.schema_version === "2.0"
+                        ? `${prefix}/story-outlines/${detail.id}/approval-impact`
+                        : undefined
+                    }
+                    onConfirm={confirm}
                   >
                     确认此大纲版本
-                  </Button>
+                  </ImpactButton>
                 )}
                 {detail.status === "APPROVED" && (
                   <Button

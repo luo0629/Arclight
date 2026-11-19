@@ -1,6 +1,7 @@
 """Commit an exact reviewed screenplay and its state changes in one caller transaction."""
 
 import copy
+from dataclasses import dataclass
 from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import select
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 from arclight.agents.contracts import ScriptContentV3, read_script_content
 from arclight.application.audit import audit
 from arclight.application.commands import require_episode, require_project
+from arclight.application.invalidation import invalidate
+from arclight.application.narrative_dependencies import NarrativeReplacement
 from arclight.application.story_ledger import (
     capture_sources,
     check_revision,
@@ -30,6 +33,7 @@ from arclight.persistence.models import (
     Script,
     StoryEntry,
     StoryLedgerApproval,
+    StoryLedgerHead,
     StoryLedgerVersion,
 )
 
@@ -155,6 +159,68 @@ def _snapshot(content: ScriptContentV3, script: Script, baseline: StoryLedgerCon
         raise _conflict("状态提案存在因果、时序或状态冲突，剧本与事实均未批准") from error
 
 
+@dataclass(frozen=True)
+class _ScriptState:
+    head: StoryLedgerHead | None
+    base: StoryLedgerVersion | None
+    next_id: UUID
+    next_no: int
+    snapshot: dict
+
+
+def _prepare_state(
+    db: Session, episode: Episode, script: Script, content: ScriptContentV3
+) -> _ScriptState:
+    context = content.narrative_context
+    head = get_head(db, episode.project_id)
+    check_revision(head, context.expected_ledger_head_revision)
+    if (head.approved_version_id if head else None) != context.ledger_version_id or (
+        head and head.latest_version_id != head.approved_version_id
+    ):
+        raise _conflict("账本基准已有新版本，请重新冻结后另存剧本")
+    base = (
+        require_version(db, episode.project_id, context.ledger_version_id)
+        if context.ledger_version_id
+        else None
+    )
+    baseline = read_ledger_content(base.content_json) if base else StoryLedgerContentV2()
+    return _ScriptState(
+        head,
+        base,
+        uuid5(script.id, "approved-story-state"),
+        base.version_no + 1 if base else 1,
+        _snapshot(content, script, baseline),
+    )
+
+
+def preview_script_state(
+    db: Session, episode: Episode, script: Script
+) -> NarrativeReplacement | None:
+    if script.content_json.get("schema_version") != "3.0":
+        return None
+    content = ScriptContentV3.model_validate(script.content_json)
+    state = _prepare_state(db, episode, script, content)
+    # Projection only uses these receipts to associate visible facts with their source episodes.
+    # The real approval still captures and validates the new script's human decision and hashes.
+    scripts = state.base.source_manifest_json["scripts"] if state.base else []
+    row = StoryLedgerVersion(
+        id=state.next_id,
+        version_no=state.next_no,
+        project_id=episode.project_id,
+        content_json=state.snapshot,
+        source_manifest_json={
+            "scripts": [
+                *scripts,
+                {
+                    "script_version_id": str(script.id),
+                    "episode_no": episode.episode_no,
+                },
+            ]
+        },
+    )
+    return NarrativeReplacement(row, episode.episode_no)
+
+
 def commit_script_state(db: Session, script: Script, actor: str) -> dict | None:
     """Only a persisted, exact human approval can mint the ledger approval below.
 
@@ -186,22 +252,12 @@ def commit_script_state(db: Session, script: Script, actor: str) -> dict | None:
             raise _conflict("同一剧本的状态提交来源发生变化")
         return copy.deepcopy(replay.receipt_json)
     validate_narrative_context(db, episode, actor, context, check_head=True)
-    head = get_head(db, episode.project_id)
-    check_revision(head, context.expected_ledger_head_revision)
-    if (head.approved_version_id if head else None) != context.ledger_version_id or (
-        head and head.latest_version_id != head.approved_version_id
-    ):
-        raise _conflict("账本基准已有新版本，请重新冻结后另存剧本")
-    baseline = (
-        read_ledger_content(
-            require_version(db, episode.project_id, context.ledger_version_id).content_json
-        )
-        if context.ledger_version_id
-        else StoryLedgerContentV2()
+    state = _prepare_state(db, episode, script, content)
+    head, snapshot = state.head, state.snapshot
+    manifest = capture_sources(
+        db, episode.project_id, read_ledger_content(snapshot), approved_base=state.base
     )
-    snapshot = _snapshot(content, script, baseline)
-    manifest = capture_sources(db, episode.project_id, read_ledger_content(snapshot))
-    version_id, approval_id = uuid4(), uuid4()
+    version_id, approval_id = state.next_id, uuid4()
     receipt = head_data(head) | {
         "revision": context.expected_ledger_head_revision + 1,
         "latest_version_id": str(version_id),
@@ -223,11 +279,7 @@ def commit_script_state(db: Session, script: Script, actor: str) -> dict | None:
     row = StoryLedgerVersion(
         id=version_id,
         project_id=episode.project_id,
-        version_no=(
-            require_version(db, episode.project_id, head.latest_version_id).version_no + 1
-            if head and head.latest_version_id
-            else 1
-        ),
+        version_no=state.next_no,
         base_version_id=context.ledger_version_id,
         creation_key=key,
         request_fingerprint=fingerprint,
@@ -265,5 +317,21 @@ def commit_script_state(db: Session, script: Script, actor: str) -> dict | None:
             "approval_id": approval_id,
         },
     )
-    audit(db, episode.project_id, actor, "script.state_committed", script.id, receipt)
+    event, _ = invalidate(
+        db,
+        episode.project_id,
+        actor,
+        uuid5(row.id, "story-ledger-approved"),
+        [],
+        "前集剧本批准并提交剧情事实",
+        narrative=NarrativeReplacement(row, episode.episode_no),
+    )
+    audit(
+        db,
+        episode.project_id,
+        actor,
+        "script.state_committed",
+        script.id,
+        receipt | {"dependency_invalidation_id": str(event.id)},
+    )
     return receipt

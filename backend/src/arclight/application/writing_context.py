@@ -241,7 +241,7 @@ def _bounded(value, *, maximum: int = 6, text_max: int = 800):
     return value
 
 
-def _frozen_script(db: Session, project_id: UUID, proof: dict) -> Script:
+def read_frozen_script(db: Session, project_id: UUID, proof: dict) -> Script:
     """Verify immutable script approval evidence without following mutable current pointers."""
     row = db.get(Script, UUID(proof["script_version_id"]))
     registry = db.get(AssetVersion, UUID(proof["registry_version_id"]))
@@ -306,6 +306,8 @@ def _projection(
     limit: int,
     offset: int,
     script_proofs: list[dict] | None = None,
+    plan_override: StoryOutline | None = None,
+    ledger_override: StoryLedgerVersion | None = None,
 ) -> tuple[dict, list[dict]]:
     if (
         type(story_time) is not int
@@ -321,8 +323,12 @@ def _projection(
         or any(not isinstance(identity, UUID) for identity in causal_ids)
     ):
         _invalid("写作目标或分页范围无效")
-    plan_row = _exact_plan(db, context.project_id, context.series_plan_version_id)
+    plan_row = plan_override or _exact_plan(db, context.project_id, context.series_plan_version_id)
+    if plan_row.project_id != context.project_id:
+        _invalid()
     plan = SeriesOutlineContent.model_validate(plan_row.content_json)
+    if not 1 <= context.episode_no <= plan.target_episode_count:
+        _invalid("规划不再覆盖目标剧集")
     target = _WritingTarget(context.episode_no, scene_no, story_time)
     character_ids = {arc.character_id for arc in plan.series_plan.character_arcs}
     character_name: str | None = None
@@ -343,10 +349,14 @@ def _projection(
         if not isinstance(character_name, str) or not character_name.strip():
             _invalid("冻结的规划人物缺少姓名来源")
     groups: dict[str, list] = {"facts": [], "planned": [], "proposals": []}
-    ledger = None
-    if context.ledger_version_id is not None:
+    ledger = ledger_override
+    if ledger is None and context.ledger_version_id is not None:
         ledger = db.get(StoryLedgerVersion, context.ledger_version_id)
-        assert ledger is not None
+        if ledger is None:
+            _invalid()
+    if ledger is not None:
+        if ledger.project_id != context.project_id:
+            _invalid()
         content = read_ledger_content(ledger.content_json)
         mappings = {item.id: item for item in content.scene_times}
         for entry in sorted(content.entries, key=lambda item: (item.story_start, str(item.id))):
@@ -427,7 +437,7 @@ def _projection(
                 script_proofs.append(proof)
     scripts = {}
     for proof in script_proofs:
-        row = _frozen_script(db, context.project_id, proof)
+        row = read_frozen_script(db, context.project_id, proof)
         scripts[proof["episode_no"]] = (row, proof)
     planned: dict[str, Any] | None = None
     if character_id is None:
@@ -588,6 +598,30 @@ def _projection(
     return result, script_proofs
 
 
+def replay_projection(
+    db: Session,
+    context: NarrativeContext,
+    query: dict,
+    script_proofs: list[dict],
+    *,
+    replacement: StoryOutline | StoryLedgerVersion | None = None,
+) -> dict:
+    value, _ = _projection(
+        db,
+        context,
+        story_time=query["story_time"],
+        scene_no=query["scene_no"],
+        character_id=UUID(query["character_id"]) if query["character_id"] else None,
+        causal_ids=[UUID(identity) for identity in query["causal_ids"]],
+        limit=query["limit"],
+        offset=query["offset"],
+        script_proofs=script_proofs,
+        plan_override=replacement if isinstance(replacement, StoryOutline) else None,
+        ledger_override=replacement if isinstance(replacement, StoryLedgerVersion) else None,
+    )
+    return value
+
+
 def load_narrative_projection(
     db: Session,
     project_id: UUID,
@@ -668,17 +702,7 @@ def validate_narrative_source(db: Session, project_id: UUID, source: dict) -> No
                 _invalid()
         else:
             query = source["query"]
-            result, _ = _projection(
-                db,
-                context,
-                story_time=query["story_time"],
-                scene_no=query["scene_no"],
-                character_id=UUID(query["character_id"]) if query["character_id"] else None,
-                causal_ids=[UUID(value) for value in query["causal_ids"]],
-                limit=query["limit"],
-                offset=query["offset"],
-                script_proofs=source["script_sources"],
-            )
+            result = replay_projection(db, context, query, source["script_sources"])
             identity = str(
                 uuid5(project_id, digest({"context": context.model_dump(mode="json"), **query}))
             )

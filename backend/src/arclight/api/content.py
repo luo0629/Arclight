@@ -19,7 +19,7 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import EpisodeRead, Input, ScriptRead, StoryboardRead
 from arclight.application.commands import require_episode
 from arclight.application.content_dependencies import (
-    approval_changes,
+    content_approval_impact,
     register_content,
 )
 from arclight.application.content_duration import validate_duration
@@ -28,7 +28,6 @@ from arclight.application.content_references import (
     validate_storyboard_assets,
 )
 from arclight.application.episode_copy import copy_episode
-from arclight.application.invalidation import impact_preview
 from arclight.application.text_reviews import complete_manual_review, pause_for_content
 from arclight.core.errors import DomainError
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
@@ -121,8 +120,9 @@ def save_script(
     )
     db.add(version)
     db.flush()
-    register_content(db, version, actor)
-    pause_for_content(db, version, actor)
+    registry = register_content(db, version, actor)
+    if not registry.stale:
+        pause_for_content(db, version, actor)
     audit(
         db,
         episode.project_id,
@@ -212,12 +212,12 @@ def save_storyboard(
 def content_impact(
     episode_id: UUID, resource_type: str, version_id: UUID, db: Database, actor: Actor
 ) -> dict:
-    episode = require_episode(db, episode_id, actor)
+    require_episode(db, episode_id, actor)
     if resource_type not in ("scripts", "storyboards"):
         raise DomainError("NOT_FOUND", "内容类型不存在", 404)
     model = Script if resource_type == "scripts" else Storyboard
     row = require_version(db, model, episode_id, version_id)
-    return impact_preview(db, episode.project_id, approval_changes(db, row))
+    return content_approval_impact(db, row)
 
 
 @router.post("/episodes/{episode_id}/{resource_type}/{version_id}/review")

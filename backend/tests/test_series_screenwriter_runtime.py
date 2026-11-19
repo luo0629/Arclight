@@ -19,6 +19,7 @@ from test_screenwriter_creation import progress, run_once, start
 from test_script_rewrite import body as rewrite_body
 from test_script_rewrite import source as rewrite_source
 from test_script_rewrite import start as start_rewrite
+from test_series_dependencies import _episode, _next_plan, _plan_url
 from test_series_planning import planned_outline as planned_outline
 from test_story_ledger import approve_ledger, approved_script, ledger_content, save_ledger
 from test_writing_context import extended_plan, ledger_baseline, preview
@@ -43,7 +44,8 @@ from arclight.domain.screenwriter_research import (
     InvestigateSeriesStoryParameters,
 )
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
-from arclight.persistence.models import DependencyManifest, Script, WorkflowRun
+from arclight.persistence.human_reviews import HumanReviewRequest
+from arclight.persistence.models import AssetVersion, DependencyManifest, Script, WorkflowRun
 from arclight.persistence.story_ledger import StoryLedgerVersion
 
 
@@ -91,6 +93,36 @@ def install_series(model_service, settings, *, author_limit=None, transform=None
 
 def seeds(sent):
     return [json.loads(payload["messages"][1]["content"])["data"] for payload in sent]
+
+
+def test_late_series_workflow_keeps_stale_script_without_opening_review(
+    client, settings, series_model_service, writing_case
+):
+    _, errors = install_series(series_model_service, settings)
+    case = writing_case
+    later = _episode(client, case, 2)
+    run_id = start(client, later["episode"], narrative=case["request"])
+    replacement = _next_plan(client, case, case["plan"], 2)
+    confirm = client.post(_plan_url(case, replacement) + "/confirm")
+    assert confirm.status_code == 200, confirm.text
+
+    run = run_once(client, settings, run_id)
+    assert not errors
+    assert (run["status"], run["error_code"], run["pending_review"]) == (
+        "FAILED",
+        "REVIEW_INPUT_CHANGED",
+        None,
+    )
+    with client.app.state.session_factory() as db:
+        script = db.scalar(select(Script).where(Script.run_id == run_id))
+        assert script is not None and script.status == "STALE"
+        assert (
+            script.content_json["narrative_context"]["series_plan_version_id"] == case["plan"]["id"]
+        )
+        assert db.get(AssetVersion, script.id).stale
+        assert not db.scalar(
+            select(HumanReviewRequest.id).where(HumanReviewRequest.run_id == run_id)
+        )
 
 
 def test_series_creation_consumes_views_patches_and_saves_complete_v3_without_facts(
@@ -145,6 +177,13 @@ def test_series_creation_consumes_views_patches_and_saves_complete_v3_without_fa
             for value in research
             if value["materials"][0]["content"]["perspective"] == "AUTHOR"
         )
+        registry = db.get(AssetVersion, candidate.id)
+        reads = db.get(DependencyManifest, UUID(registry.metadata_json["dependency_manifest_id"]))
+        narrative = reads.snapshot_json["narrative"]
+        assert narrative["origin"] == "WORKFLOW_READS"
+        assert narrative["context"] == stored_run.input_json["narrative_context"]
+        assert {receipt["query"]["scene_no"] for receipt in narrative["projections"]} == {1, 2}
+        assert any(receipt["query"]["limit"] == 1 for receipt in narrative["projections"])
         projection = author["materials"][0]["content"]
         assert not projection["truncated"] and projection["index_truncated"]
         assert author["has_more"]  # Index pagination is independent from the fact page.

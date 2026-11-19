@@ -4,7 +4,7 @@ import copy
 import hashlib
 import json
 from datetime import UTC
-from uuid import UUID, uuid4
+from uuid import UUID, uuid4, uuid5
 
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
@@ -201,13 +201,51 @@ def script_source(db: Session, project_id: UUID, script_id: UUID) -> tuple[dict,
     }, content
 
 
-def capture_sources(db: Session, project_id: UUID, content: StoryLedgerContent) -> dict:
+def _carryable_sources(content: StoryLedgerContent, base: StoryLedgerVersion | None) -> dict:
+    if base is None:
+        return {}
+    approved = read_ledger_content(base.content_json)
+    mappings = {item.id: item for item in approved.scene_times}
+    entries = {item.id: item for item in approved.entries}
+    changed = {
+        item.script_version_id for item in content.scene_times if mappings.get(item.id) != item
+    } | {item.source_script_version_id for item in content.entries if entries.get(item.id) != item}
+    return {
+        UUID(proof["script_version_id"]): proof
+        for proof in base.source_manifest_json["scripts"]
+        if UUID(proof["script_version_id"]) not in changed
+    }
+
+
+def capture_sources(
+    db: Session,
+    project_id: UUID,
+    content: StoryLedgerContent,
+    *,
+    approved_base: StoryLedgerVersion | None = None,
+    historical_script_ids: set[UUID] | None = None,
+) -> dict:
+    if approved_base is not None and (
+        approved_base.project_id != project_id or version_approval(db, approved_base) is None
+    ):
+        raise source_error()
+    carryable = _carryable_sources(content, approved_base)
+    carried: list[str] = []
     scripts: dict[UUID, tuple[dict, ScriptContent]] = {}
     for mapping in content.scene_times:
         if mapping.script_version_id not in scripts:
-            scripts[mapping.script_version_id] = script_source(
-                db, project_id, mapping.script_version_id
-            )
+            identity = mapping.script_version_id
+            allow_carry = historical_script_ids is None or identity in historical_script_ids
+            proof = carryable.get(identity) if allow_carry else None
+            registry = db.get(AssetVersion, identity, populate_existing=True) if proof else None
+            if proof is not None and registry is not None and registry.stale:
+                from arclight.application.writing_context import read_frozen_script
+
+                frozen = read_frozen_script(db, project_id, proof)
+                scripts[identity] = proof, read_script_content(frozen.content_json)
+                carried.append(str(identity))
+            else:
+                scripts[identity] = script_source(db, project_id, identity)
         receipt, script = scripts[mapping.script_version_id]
         scene = next(
             (item for item in script.scenes if str(item.scene_id) == str(mapping.scene_id)), None
@@ -268,6 +306,7 @@ def capture_sources(db: Session, project_id: UUID, content: StoryLedgerContent) 
         "schema_version": "1.0",
         "scripts": [scripts[identity][0] for identity in sorted(scripts, key=str)],
         "story_entries": entities,
+        **({"historical_script_ids": sorted(carried)} if carried else {}),
     }
 
 
@@ -335,7 +374,12 @@ def create_version(
     check_revision(head, expected_revision)
     if base_version_id != (head.latest_version_id if head else None):
         raise DomainError("VERSION_CONFLICT", "必须从当前精确账本版本创建替代版本", 409)
-    manifest = capture_sources(db, project_id, content)
+    approved_base = (
+        require_version(db, project_id, head.approved_version_id)
+        if head and head.approved_version_id
+        else None
+    )
+    manifest = capture_sources(db, project_id, content, approved_base=approved_base)
     identity = uuid4()
     next_no = (
         db.scalar(
@@ -382,6 +426,16 @@ def create_version(
     return {"head": receipt, "version": version_data(row)}
 
 
+def ledger_approval_impact(db: Session, project_id: UUID, version_id: UUID, actor: str) -> dict:
+    from arclight.application.invalidation import impact_preview
+    from arclight.application.narrative_dependencies import NarrativeReplacement
+
+    require_project(db, project_id, actor)
+    row = require_version(db, project_id, version_id)
+    change = NarrativeReplacement(row) if version_approval(db, row) is None else None
+    return impact_preview(db, project_id, [], narrative=change)
+
+
 def approve_version(
     db: Session,
     project_id: UUID,
@@ -389,13 +443,18 @@ def approve_version(
     actor: str,
     expected_revision: int,
     creation_key: str,
+    impact_digest: str | None = None,
 ) -> dict:
+    from arclight.application.invalidation import check_impact, invalidate
+    from arclight.application.narrative_dependencies import NarrativeReplacement
+
     edit_gate(db, project_id, actor, owner=True)
     fingerprint = digest(
         {
             "actor": actor,
             "version_id": str(version_id),
             "expected_revision": expected_revision,
+            **({"impact_digest": impact_digest} if impact_digest is not None else {}),
         }
     )
     replay = db.scalar(
@@ -416,9 +475,33 @@ def approve_version(
         raise DomainError("VERSION_CONFLICT", "只能批准当前精确账本版本", 409)
     if version_approval(db, row) is not None:
         raise DomainError("ALREADY_APPROVED", "该精确账本版本已经批准", 409)
-    current = capture_sources(db, project_id, read_ledger_content(row.content_json))
+    approved_base = (
+        require_version(db, project_id, head.approved_version_id)
+        if head.approved_version_id
+        else None
+    )
+    current = capture_sources(
+        db,
+        project_id,
+        read_ledger_content(row.content_json),
+        approved_base=approved_base,
+        historical_script_ids={
+            UUID(identity) for identity in row.source_manifest_json.get("historical_script_ids", [])
+        },
+    )
     if current != row.source_manifest_json:
         raise source_error()
+    change = NarrativeReplacement(row)
+    check_impact(db, project_id, [], impact_digest, narrative=change)
+    event, _ = invalidate(
+        db,
+        project_id,
+        actor,
+        uuid5(row.id, "story-ledger-approved"),
+        [],
+        "已批准新版剧情账本",
+        narrative=change,
+    )
     identity = uuid4()
     receipt = head_data(head) | {
         "revision": expected_revision + 1,
@@ -459,6 +542,7 @@ def approve_version(
             "revision": receipt["revision"],
             "content_sha256": row.content_sha256,
             "source_manifest_sha256": row.source_manifest_sha256,
+            "dependency_invalidation_id": str(event.id),
         },
     )
     return {"head": receipt, "approval": approval_data(approval)}

@@ -978,3 +978,115 @@ test("SERIES-01 mobile Viewer reads approved planning with frozen character name
   });
   expect(forbidden.status()).toBe(403);
 });
+
+test("SERIES-05 previews the later episode before confirming a plan revision", async ({
+  page,
+}) => {
+  const data = await setup(page);
+  const planned = await seedPlanned(page, data);
+  const base = `${data.path}/story-outlines/${planned.id}`;
+  expect(
+    (
+      await page.request.post(`${base}/confirm`, { headers: data.headers })
+    ).status(),
+  ).toBe(200);
+  const episodeResult = await page.request.post(
+    `/api/v1/projects/${data.project.id}/episodes`,
+    {
+      headers: data.headers,
+      data: { episode_no: 2, title: "第 2 集读者" },
+    },
+  );
+  expect(episodeResult.status()).toBe(201);
+  const later = await episodeResult.json();
+  const laterPath = `/api/v1/episodes/${later.id}`;
+  const character = data.characters[0];
+  const preview = await page.request.post(`${laterPath}/writing-context`, {
+    headers: data.headers,
+    data: {
+      series_plan_version_id: planned.id,
+      ledger_version_id: null,
+      expected_ledger_head_revision: 0,
+      target_story_time: 10,
+      target_scene_no: 1,
+      character_ids: [character.id],
+    },
+  });
+  expect(preview.status(), await preview.text()).toBe(200);
+  const { context } = await preview.json();
+  const saved = await page.request.post(`${laterPath}/scripts`, {
+    headers: data.headers,
+    data: {
+      expected_version_no: 0,
+      content: {
+        schema_version: "3.0",
+        title: "渡口后续",
+        summary: "阿青在渡口独自等候收信人。",
+        characters: [character.name],
+        estimated_duration_ms: 30000,
+        narrative_context: context,
+        scenes: [
+          {
+            scene_id: crypto.randomUUID(),
+            scene_no: 1,
+            title: "渡口",
+            action: "阿青在渡口等候。",
+            dialogue: [],
+            dramatic_beat: {
+              story_time: 10,
+              conflict: "阿青不确定是否继续等候。",
+              character_objectives: [
+                {
+                  character_id: character.id,
+                  purpose: "亲手交信",
+                  emotion_start: "迟疑",
+                  emotion_end: "决定等候",
+                },
+              ],
+            },
+            state_changes: [],
+          },
+        ],
+      },
+    },
+  });
+  expect(saved.status(), await saved.text()).toBe(201);
+  const script = await saved.json();
+  const content = plannedContent(data);
+  content.series_plan.episode_progressions[1].ending_handoff =
+    "收信人自行决定过河。";
+  const replacement = await page.request.post(`${data.path}/story-outlines`, {
+    headers: { ...data.headers, "Idempotency-Key": crypto.randomUUID() },
+    data: { base_version_id: planned.id, content },
+  });
+  expect(replacement.status(), await replacement.text()).toBe(201);
+  const next = await replacement.json();
+  await reloadVersion(page, next.version_no);
+  const confirm = page.getByRole("button", {
+    name: "确认此大纲版本",
+    exact: true,
+  });
+  await confirm.click();
+  const dialog = page.getByRole("dialog", {
+    name: "确认变更影响",
+    exact: true,
+  });
+  await expect(dialog).toContainText("第 2 集");
+  await expect(dialog).toContainText("读取的全剧规划有变化");
+  await expect(dialog).toContainText(script.id);
+  await dialog.getByRole("button", { name: "取消变更", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  const read = () =>
+    page.request.get(`${laterPath}/scripts/${script.id}`, {
+      headers: data.headers,
+    });
+  expect((await (await read()).json()).status).toBe("READY_FOR_REVIEW");
+  await confirm.click();
+  await dialog
+    .getByRole("button", { name: "确认影响并继续", exact: true })
+    .click();
+  await expect(dialog).toHaveCount(0);
+  const stale = await (await read()).json();
+  expect(stale.status).toBe("STALE");
+  expect(stale.content_json).toEqual(script.content_json);
+});

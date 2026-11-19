@@ -12,6 +12,7 @@ from arclight.api.schemas import AcceptedRun, Input, Resource
 from arclight.application.commands import require_episode
 from arclight.application.story_outline import (
     confirm_outline,
+    outline_approval_impact,
     require_outline,
     save_outline,
     start_outline,
@@ -142,8 +143,25 @@ def edit_outline(
     )
 
 
+class OutlineConfirm(Input):
+    impact_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+@router.get("/story-outlines/{version_id}/approval-impact")
+def outline_impact(episode_id: UUID, version_id: UUID, db: Database, actor: Actor) -> dict:
+    return outline_approval_impact(db, episode_id, actor, version_id)
+
+
 @router.post("/story-outlines/{version_id}/confirm")
 def approve_outline(
-    episode_id: UUID, version_id: UUID, db: Database, actor: Actor
+    episode_id: UUID,
+    version_id: UUID,
+    db: Database,
+    actor: Actor,
+    payload: OutlineConfirm | None = None,
 ) -> OutlineDetail:
-    return detail(confirm_outline(db, episode_id, actor, version_id))
+    return detail(
+        confirm_outline(
+            db, episode_id, actor, version_id, payload.impact_digest if payload else None
+        )
+    )

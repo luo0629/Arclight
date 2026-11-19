@@ -123,15 +123,30 @@ def input_usable(db: Session, version: AssetVersion, asset: VisualAsset, target_
     )
 
 
+def invalidation_sequence(db: Session, project_id: UUID) -> int:
+    return (
+        db.scalar(
+            select(func.max(DependencyInvalidation.event_no)).where(
+                DependencyInvalidation.project_id == project_id
+            )
+        )
+        or 0
+    )
+
+
 def capture_manifest(
-    db: Session, project_id: UUID, actor: str, payload: ManifestCreate
+    db: Session,
+    project_id: UUID,
+    actor: str,
+    payload: ManifestCreate,
+    *,
+    narrative: dict | None = None,
 ) -> tuple[DependencyManifest, bool]:
     lock_dependency_graph(db, project_id)
-    fingerprint = hashlib.sha256(
-        json.dumps(
-            payload.model_dump(mode="json", exclude={"creation_key"}), sort_keys=True
-        ).encode()
-    ).hexdigest()
+    request = payload.model_dump(mode="json", exclude={"creation_key"})
+    if narrative is not None:
+        request["narrative"] = narrative
+    fingerprint = hashlib.sha256(json.dumps(request, sort_keys=True).encode()).hexdigest()
     previous = db.scalar(
         select(DependencyManifest).where(
             DependencyManifest.project_id == project_id,
@@ -147,6 +162,8 @@ def capture_manifest(
         raise DomainError("NOT_FOUND", "目标资产不存在", 404)
     if target.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "目标资产只读", 409)
+    if narrative is not None and target.asset_type != "SCRIPT":
+        raise DomainError("INVALID_DEPENDENCY_INPUT", "叙事依赖的目标必须是剧本", 409)
     inputs = []
     for item in payload.inputs:
         version, asset = exact_version(db, project_id, item.source_asset_version_id)
@@ -171,15 +188,11 @@ def capture_manifest(
         created_by=actor,
         snapshot_json={
             "schema_version": 1,
-            "invalidation_seq": db.scalar(
-                select(func.max(DependencyInvalidation.event_no)).where(
-                    DependencyInvalidation.project_id == project_id
-                )
-            )
-            or 0,
+            "invalidation_seq": invalidation_sequence(db, project_id),
             "target": {"asset_id": str(target.id), "asset_type": target.asset_type},
             "inputs": inputs,
             "context": payload.context,
+            **({"narrative": narrative} if narrative is not None else {}),
         },
     )
     db.add(row)
@@ -283,7 +296,12 @@ def attach_output(
             after_event_no=manifest.snapshot_json.get("invalidation_seq", 0),
         )
     ]
-    if expired:
+    narrative_expiry = None
+    if narrative := manifest.snapshot_json.get("narrative"):
+        from arclight.application.narrative_dependencies import expired_narrative_event
+
+        narrative_expiry = expired_narrative_event(db, project_id, narrative)
+    if expired or narrative_expiry:
         mark_stale(db, output)
         db.flush()
     audit(
@@ -306,6 +324,7 @@ def attach_output(
                 for edge in rows
             ],
             "expired_input_version_ids": expired,
+            **({"narrative_invalidation_id": str(narrative_expiry)} if narrative_expiry else {}),
             "stale": output.stale,
             "status": output.status,
             "revision": output.revision,

@@ -16,6 +16,7 @@ from arclight.application.story_ledger import (
     create_version,
     get_head,
     head_data,
+    ledger_approval_impact,
     list_sources,
     query_version,
     require_version,
@@ -38,6 +39,7 @@ class LedgerCreate(Input):
 
 class LedgerApprove(Input):
     expected_revision: int = Field(strict=True, ge=0)
+    impact_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class LedgerQueryRequest(Input):
@@ -109,6 +111,11 @@ def create(
     )
 
 
+@router.get("/versions/{version_id}/approval-impact")
+def ledger_impact(project_id: UUID, version_id: UUID, db: Database, actor: Actor) -> dict:
+    return ledger_approval_impact(db, project_id, version_id, actor)
+
+
 @router.post("/versions/{version_id}/approve")
 def approve(
     project_id: UUID,
@@ -119,7 +126,13 @@ def approve(
     idempotency_key: Key,
 ) -> dict:
     return approve_version(
-        db, project_id, version_id, actor, payload.expected_revision, idempotency_key
+        db,
+        project_id,
+        version_id,
+        actor,
+        payload.expected_revision,
+        idempotency_key,
+        payload.impact_digest,
     )
 
 

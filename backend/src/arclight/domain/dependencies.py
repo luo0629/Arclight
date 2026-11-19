@@ -104,3 +104,9 @@ class ManifestCreate(BaseModel):
         if len(json.dumps(self.context, ensure_ascii=False).encode()) > 65536:
             raise ValueError("输入上下文超出大小限制")
         return self
+
+
+class ContentManifestCreate(ManifestCreate):
+    """Internal capture also permits a screenplay with only narrative inputs."""
+
+    inputs: list[DependencyInput] = Field(max_length=64)

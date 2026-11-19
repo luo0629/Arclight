@@ -3,7 +3,7 @@
 import hashlib
 import json
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -309,7 +309,26 @@ def save_outline(
     return row
 
 
-def confirm_outline(db: Session, episode_id: UUID, actor: str, version_id: UUID) -> StoryOutline:
+def outline_approval_impact(db: Session, episode_id: UUID, actor: str, version_id: UUID) -> dict:
+    from arclight.application.invalidation import impact_preview
+    from arclight.application.narrative_dependencies import NarrativeReplacement
+
+    episode = require_episode(db, episode_id, actor)
+    row = require_outline(db, episode.project_id, version_id)
+    change = (
+        NarrativeReplacement.plan(db, row)
+        if row.status == "DRAFT" and row.content_json.get("schema_version") == "2.0"
+        else None
+    )
+    return impact_preview(db, episode.project_id, [], narrative=change)
+
+
+def confirm_outline(
+    db: Session, episode_id: UUID, actor: str, version_id: UUID, impact_digest: str | None = None
+) -> StoryOutline:
+    from arclight.application.invalidation import check_impact, invalidate
+    from arclight.application.narrative_dependencies import NarrativeReplacement
+
     begin_serialized(db)
     episode = require_episode(db, episode_id, actor, write=True, owner=True)
     db.refresh(episode)
@@ -320,18 +339,33 @@ def confirm_outline(db: Session, episode_id: UUID, actor: str, version_id: UUID)
         return row
     idle(db, episode_id)
     content = read_outline_content(row.content_json)
+    change = None
     if isinstance(content, SeriesOutlineContent):
         validate_planning_source(db, episode.project_id, content, row.source_snapshot)
+        change = NarrativeReplacement.plan(db, row)
+    check_impact(db, episode.project_id, [], impact_digest, narrative=change)
     row.status = "APPROVED"
     row.confirmed_by = actor
     row.confirmed_at = datetime.now(UTC)
+    details = {}
+    if change is not None and change.replaces_plans:
+        event, _ = invalidate(
+            db,
+            episode.project_id,
+            actor,
+            uuid5(row.id, "series-plan-approved"),
+            [],
+            "已批准新版全剧规划",
+            narrative=change,
+        )
+        details["dependency_invalidation_id"] = str(event.id)
     db.add(
         AuditEvent(
             project_id=episode.project_id,
             actor_id=actor,
             action="story_outline.confirmed",
             resource_id=row.id,
-            details_json={},
+            details_json=details,
         )
     )
     db.flush()
