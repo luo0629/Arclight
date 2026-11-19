@@ -1,20 +1,24 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type Ref } from "react";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
 import { message } from "@/lib/api/client";
 import { loadVideoBlob } from "../api";
-import type { VideoCandidate } from "../types";
+import type { MouthRegion, VideoCandidate } from "../types";
 
 export default function VideoPreview({
   projectId,
   candidate,
   unavailable,
+  playerRef,
+  mouth,
 }: {
   projectId: string;
   candidate: VideoCandidate;
   unavailable: (cause: unknown) => void;
+  playerRef?: Ref<HTMLVideoElement>;
+  mouth?: MouthRegion | null;
 }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
@@ -86,23 +90,47 @@ export default function VideoPreview({
       }
     }
   }
+  const media = candidate.media_check?.video;
+  const calibration = playerRef && media;
   return (
     <section
       aria-label="视频候选预览与下载"
       className="flex min-w-0 flex-col gap-3"
     >
       {url && (
-        <video
-          src={url}
-          controls
-          playsInline
-          preload="metadata"
-          aria-label={"视频候选 v" + candidate.version?.version_no + " 预览"}
-          className="max-h-80 w-full rounded-lg bg-black"
-          onError={() =>
-            setError("浏览器无法播放此视频，请核对编码或下载检查。")
+        <div
+          className="relative"
+          style={
+            calibration
+              ? { maxWidth: `${(20 * media.width) / media.height}rem` }
+              : undefined
           }
-        />
+        >
+          <video
+            ref={playerRef}
+            src={url}
+            controls
+            playsInline
+            preload="metadata"
+            aria-label={"视频候选 v" + candidate.version?.version_no + " 预览"}
+            className="block max-h-80 w-full rounded-lg bg-black"
+            onError={() =>
+              setError("浏览器无法播放此视频，请核对编码或下载检查。")
+            }
+          />
+          {calibration && mouth && (
+            <span
+              aria-hidden="true"
+              className="pointer-events-none absolute border-2 border-accent ring-1 ring-foreground"
+              style={{
+                left: `${mouth.x / 100}%`,
+                top: `${mouth.y / 100}%`,
+                width: `${mouth.width / 100}%`,
+                height: `${mouth.height / 100}%`,
+              }}
+            />
+          )}
+        </div>
       )}
       <div className="flex flex-wrap gap-2">
         <Button

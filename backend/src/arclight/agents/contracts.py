@@ -329,7 +329,7 @@ class PerformanceDialogue(Contract):
     line_id: Identifier
     speaker: str = Field(min_length=1, max_length=100)
     text: str = Field(min_length=1, max_length=2000)
-    presentation: Literal["visible", "voice_over", "off_screen"]
+    presentation: Literal["visible", "voice_over", "off_screen", "obscured"]
     emotion: str = Field(min_length=1, max_length=300)
     pacing: str = Field(min_length=1, max_length=500)
     lipsync: Literal["required", "not_applicable"]
@@ -341,7 +341,7 @@ class PerformanceDialogue(Contract):
             if self.lipsync != "required" or self.exemption_reason:
                 raise ValueError("可见对白必须标记口型适用，不可用豁免代替")
         elif self.lipsync != "not_applicable" or not self.exemption_reason.strip():
-            raise ValueError("旁白或画外音必须记录口型不适用的具体理由")
+            raise ValueError("旁白、画外音或口部遮挡必须记录口型不适用的具体理由")
         return self
 
 

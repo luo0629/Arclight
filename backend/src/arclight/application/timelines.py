@@ -15,6 +15,7 @@ from arclight.application.dependencies import (
     exact_version,
     lock_dependency_graph,
 )
+from arclight.application.lip_sync_admission import lip_sync_receipt
 from arclight.application.text_reviews import require_performance_production
 from arclight.application.timeline_store import append_timeline, read_timeline, replay_timeline
 from arclight.application.video_candidates import require_video_version
@@ -114,10 +115,24 @@ def selected_video_clip(
         raise DomainError("OBJECT_UNAVAILABLE", "视频缺少精确私有文件回执", 409)
     if not (file.source_note.strip() and file.rights_note.strip()):
         raise DomainError("RENDER_RIGHTS_REQUIRED", "视频须保留来源与使用权声明", 409)
-    trim = trim or VideoTrim(duration_ms=min(default_duration_ms, media.duration_ms))
+    sync = lip_sync_receipt(version)
+    if trim is None:
+        duration_ms = min(default_duration_ms, media.duration_ms)
+        if sync:
+            duration_ms = max(duration_ms, *(line.end_ms for line in sync.lines))
+        trim = VideoTrim(duration_ms=duration_ms)
     end_ms = trim.source_start_ms + trim.duration_ms
     if end_ms > media.duration_ms:
         raise DomainError("TIMELINE_SOURCE_RANGE_INVALID", "视频出点超出精确源视频时长", 409)
+    if sync and (
+        trim.keep_audio
+        or any(line.start_ms < trim.source_start_ms or line.end_ms > end_ms for line in sync.lines)
+    ):
+        raise DomainError(
+            "LIP_SYNC_TIMELINE_MISMATCH",
+            "须保留完整口型对白范围，并由配音轨使用精确音频，不能重复混入候选试听轨",
+            409,
+        )
     if trim.keep_audio and not media.has_audio:
         raise DomainError("TIMELINE_VIDEO_AUDIO_MISSING", "源视频没有可保留的原声轨", 409)
     return ClipSnapshot(
@@ -224,6 +239,79 @@ def selected_clip_facts(
     )
 
 
+def lip_sync_voices(db: Session, clips: list[ClipSnapshot]) -> list[ClipSnapshot]:
+    """Keep the exact source audio on VOICE; the candidate audio is for review only."""
+    voices: list[ClipSnapshot] = []
+    for clip in clips:
+        if clip.video is None:
+            continue
+        version = db.get(AssetVersion, clip.source_asset_version_id)
+        assert version is not None
+        sync = lip_sync_receipt(version)
+        if sync is None:
+            continue
+        for line in sync.lines:
+            if len(voices) >= 256:
+                raise DomainError("LIP_SYNC_TIMELINE_LIMIT", "请分段安排超过 256 句的校正对白", 422)
+            if clip.visual is not None and any(
+                crop.x > line.mouth.x
+                or crop.y > line.mouth.y
+                or crop.x + crop.width < line.mouth.x + line.mouth.width
+                or crop.y + crop.height < line.mouth.y + line.mouth.height
+                for crop in (clip.visual.crop, clip.visual.motion.end_crop)
+                if crop is not None
+            ):
+                raise DomainError("LIP_SYNC_TIMELINE_MISMATCH", "画面裁切不能隐藏校正过的口部", 409)
+            voice = ClipSnapshot(
+                id=uuid4(),
+                ordinal=len(voices),
+                source_asset_version_id=line.audio_version_id,
+                source_sha256=line.audio_sha256,
+                shot_id=clip.shot_id,
+                script_version_id=sync.script_version_id,
+                line_id=line.line_id,
+                start_ms=clip.start_ms + line.start_ms - clip.source_start_ms,
+                duration_ms=line.duration_ms,
+            )
+            voices.append(voice)
+    return voices
+
+
+def require_lip_sync_voices(db: Session, tracks: list[TrackSnapshot]) -> None:
+    visual = next(track for track in tracks if track.kind == "VIDEO")
+    expected = lip_sync_voices(db, visual.clips)
+    if not expected or not visual.enabled:
+        return
+    voice = next(track for track in tracks if track.kind == "VOICE")
+    for cue in expected:
+        matches = [
+            clip
+            for clip in voice.clips
+            if clip.script_version_id == cue.script_version_id
+            and clip.line_id == cue.line_id
+            and clip.start_ms < cue.start_ms + cue.duration_ms
+            and cue.start_ms < clip.start_ms + clip.duration_ms
+        ]
+        if (
+            not voice.enabled
+            or len(matches) != 1
+            or any(
+                getattr(matches[0], field) != getattr(cue, field)
+                for field in (
+                    "shot_id",
+                    "source_asset_version_id",
+                    "source_sha256",
+                    "start_ms",
+                    "source_start_ms",
+                    "duration_ms",
+                )
+            )
+        ):
+            raise DomainError(
+                "LIP_SYNC_TIMELINE_MISMATCH", "可见对白须同步使用校正时的精确配音版本与时点", 409
+            )
+
+
 def create_timeline(
     db: Session, settings: Settings, episode_id: UUID, actor: str, payload: TimelineCreate
 ) -> TimelineRead:
@@ -264,6 +352,7 @@ def create_timeline(
         cursor += clip.duration_ms
     project = db.get(Project, episode.project_id)
     assert project is not None
+    sources = {"VIDEO": clips, "VOICE": lip_sync_voices(db, clips)}
     snapshot = TimelineSnapshot(
         episode_id=episode.id,
         storyboard_id=board.id,
@@ -271,12 +360,12 @@ def create_timeline(
         duration_ms=cursor,
         output_profile=deepcopy(project.output_profile),
         tracks=[
-            TrackSnapshot(
-                id=uuid4(), kind=kind, ordinal=index, clips=clips if kind == "VIDEO" else []
-            )
+            TrackSnapshot(id=uuid4(), kind=kind, ordinal=index, clips=sources.get(kind, []))
             for index, kind in enumerate(TRACK_KINDS)
         ],
     )
+    if sources["VOICE"]:
+        validate_snapshot_facts(db, episode, snapshot)
     return append_timeline(db, episode, actor, payload.creation_key, request_hash, snapshot)
 
 
@@ -454,6 +543,7 @@ def validate_snapshot_facts(
                 validate_subtitle_clip(db, episode, clip)
             if clip.audio_version_id:
                 require_track_source(db, episode, clip.audio_version_id, "AUDIO")
+    require_lip_sync_voices(db, value.tracks)
 
 
 def save_timeline(

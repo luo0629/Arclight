@@ -36,6 +36,52 @@ export type VideoCandidateSummary = {
   asset_revision: number;
   content_path: string | null;
 };
+export type MouthRegion = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+export type LipSyncCue = {
+  line_id: string;
+  audio_version_id: string;
+  start_ms: number;
+  closed_frame_ms: number;
+  open_frame_ms: number;
+  mouth: MouthRegion;
+};
+export type LipSyncRequest = {
+  creation_key: string;
+  expected_revision: number;
+  source_rights_note?: string;
+  cues: LipSyncCue[];
+};
+export type LipSyncOptions = {
+  candidate_id: string;
+  requires_video_rights_confirmation: boolean;
+  dialogue: {
+    line_id: string;
+    speaker: string;
+    text: string;
+    presentation: "visible" | "voice_over" | "off_screen" | "obscured";
+    lipsync: "required" | "not_applicable";
+    exemption_reason: string;
+    sources: { audio_version_id: string; duration_ms: number; name: string }[];
+  }[];
+};
+export type LipSyncReceipt = {
+  engine: "local-mouth-pose/1";
+  source_candidate_id: string;
+  source_video_version_id: string;
+  source_video_sha256: string;
+  script_version_id: string;
+  output_sha256: string;
+  lines: (LipSyncCue & {
+    audio_file_id: string;
+    audio_sha256: string;
+    duration_ms: number;
+  })[];
+};
 export type VideoCandidate = {
   id: string;
   project_id: string;
@@ -53,6 +99,8 @@ export type VideoCandidate = {
   version: AssetVersion | null;
   content_path: string | null;
   video_source: VideoSource | null;
+  lip_sync_required?: boolean;
+  lip_sync?: LipSyncReceipt | null;
   production: {
     provider?: string;
     model?: string;
@@ -114,7 +162,8 @@ export type VideoCandidate = {
     | "can_restore"
     | "can_start_review"
     | "can_decide_review"
-    | "can_revise",
+    | "can_revise"
+    | "can_lip_sync",
     boolean
   > | null;
 };

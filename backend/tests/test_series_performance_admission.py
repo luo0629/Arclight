@@ -57,6 +57,7 @@ def performance_case(
     insufficient=False,
     duration_ms=30000,
     generation_routes=None,
+    dialogue_presentation="off_screen",
 ):
     content = legacy_script()
     prop = None
@@ -114,13 +115,21 @@ def performance_case(
                     "line_id": line.line_id,
                     "speaker": line.speaker,
                     "text": line.text,
-                    "presentation": "voice_over" if line.line_type == "narration" else "off_screen",
+                    "presentation": "voice_over"
+                    if line.line_type == "narration"
+                    else dialogue_presentation,
                     "emotion": "克制",
                     "pacing": "一句后留半拍。",
-                    "lipsync": "not_applicable",
+                    "lipsync": "required"
+                    if line.line_type != "narration" and dialogue_presentation == "visible"
+                    else "not_applicable",
                     "exemption_reason": "旁白不出镜。"
                     if line.line_type == "narration"
-                    else "声音来自门后，说话者嘴部不在画面内。",
+                    else {
+                        "off_screen": "声音来自门后，说话者嘴部不在画面内。",
+                        "obscured": "正面人物用来信遮住嘴部。",
+                        "visible": "",
+                    }[dialogue_presentation],
                 }
                 for line in scene.dialogue
             ],

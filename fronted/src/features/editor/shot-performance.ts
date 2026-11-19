@@ -16,7 +16,7 @@ export type PerformanceDialogue = {
   line_id: string;
   speaker: string;
   text: string;
-  presentation: "visible" | "voice_over" | "off_screen";
+  presentation: "visible" | "voice_over" | "off_screen" | "obscured";
   emotion: string;
   pacing: string;
   lipsync: "required" | "not_applicable";
@@ -125,7 +125,7 @@ export function isShotPerformance(value: unknown): value is ShotPerformance {
           "pacing",
           "exemption_reason",
         ]) &&
-        ["visible", "voice_over", "off_screen"].includes(
+        ["visible", "voice_over", "off_screen", "obscured"].includes(
           String(entry.presentation),
         ) &&
         ["required", "not_applicable"].includes(String(entry.lipsync)),

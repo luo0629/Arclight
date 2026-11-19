@@ -105,6 +105,8 @@ def record_temporal_review(
     ]
     if evidence_gap is not None:
         limitations.append(evidence_gap)
+    if evidence.dialogue_review is not None:
+        limitations.append(evidence.dialogue_review)
     issues = []
     observations = {}
     conclusion = "HUMAN_REVIEW"
@@ -129,6 +131,7 @@ def record_temporal_review(
         elif (
             evidence.end_covered
             and evidence_gap is None
+            and evidence.dialogue_review is None
             and all(item.status == "CLEAR" for item in assessment.findings())
         ):
             conclusion = "PASS"

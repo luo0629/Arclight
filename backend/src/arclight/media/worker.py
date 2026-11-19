@@ -17,7 +17,10 @@ def main() -> None:
         # fixed implementation before sealing, while input is still unread.
         from arclight.media.render_inspection import inspect_render
 
-    restrict_process(render=operation in {"render", "inspect"})
+    if operation == "lip-sync":
+        from arclight.media.lip_sync import encode_lip_sync
+
+    restrict_process(render=operation in {"render", "inspect", "lip-sync"})
     seal_process()
     data = sys.stdin.buffer.read(-1 if command.input_limit is None else command.input_limit + 1)
     if not data or (command.input_limit is not None and len(data) > command.input_limit):
@@ -38,6 +41,8 @@ def main() -> None:
         from arclight.media.video_frames import sample_video
 
         result = sample_video(data)
+    elif operation == "lip-sync":
+        result = encode_lip_sync(data)
     else:
         from arclight.media.probe import inspect_media
 

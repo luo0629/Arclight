@@ -383,7 +383,12 @@ def select_version(
     db: Database,
     actor: Actor,
 ) -> AssetRead:
-    from arclight.application.continuity_completion import lock_selection_run
+    from arclight.application.continuity_completion import (
+        complete_selected_review,
+        complete_selected_video_review,
+        lock_selection_run,
+    )
+    from arclight.application.video_review import require_video_review
 
     require_project(db, project_id, actor)
     lock_selection_run(db, project_id, version_id)
@@ -401,7 +406,8 @@ def select_version(
     row = find_version(db, asset_id, version_id)
     if asset.status in {"ARCHIVED", "LOCKED"}:
         raise DomainError("ASSET_READ_ONLY", "已归档或锁定资产不能更改选用", 409)
-    reviewed = require_candidate_review(row, db)
+    video = require_video_review(db, row) if asset.asset_type == "VIDEO" else None
+    reviewed = require_candidate_review(row, db) if video is None else None
     if reviewed is not None:
         require_project(db, project_id, actor, owner=True)
     if row.status != "APPROVED" or row.stale:
@@ -441,9 +447,9 @@ def select_version(
         )
     change_selection(db, asset, payload, current_version_id=row.id)
     if reviewed is not None:
-        from arclight.application.continuity_completion import complete_selected_review
-
         complete_selected_review(db, reviewed)
+    if video is not None:
+        complete_selected_video_review(db, video)
     propagation_id = None
     if previous is not None and previous != row.id:
         old = find_version(db, asset_id, previous)

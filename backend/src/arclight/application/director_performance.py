@@ -56,6 +56,7 @@ from arclight.domain.director_revision import (
     DirectorWorkingSeed,
     DirectorWorkingStoryboard,
 )
+from arclight.domain.lip_sync import MAX_SYNC_LINES, MAX_SYNC_MS
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoopAction
 from arclight.persistence.models import Episode, WorkflowRun
@@ -367,14 +368,21 @@ def check_performance_storyboard(
                     message=f"镜头需要{kind}、至少{required_refs}张精确参考及足够时长，已调查真实路线无法满足；须修订或人工决定，不能降为静图运镜",
                 )
             )
-        if any(line.lipsync == "required" for line in shot.performance.dialogue):
-            # Installed MediaCapabilities has no declared audio-driven/lip-sync feature.
+        visible = sum(line.lipsync == "required" for line in shot.performance.dialogue)
+        if visible:
+            bounded = visible <= MAX_SYNC_LINES and shot.duration_ms <= MAX_SYNC_MS
             issues.append(
                 DirectorIssue(
-                    code="PERFORMANCE_LIPSYNC_UNDECLARED",
+                    code="PERFORMANCE_LIPSYNC_UNVERIFIED"
+                    if bounded
+                    else "PERFORMANCE_LIPSYNC_LIMIT",
                     scene_id=shot.scene_id,
                     slot=slot,
-                    message="可见说话要求口型，当前真实能力合同未声明音频驱动/口型支持；须保留要求并转人工，不能假装已可生产",
+                    message=(
+                        "可走本机口型校正；仍须选用实际台词音频、校正并复核该镜头"
+                        if bounded
+                        else "可见对白超出本机口型范围；请拆分镜头，不能用豁免代替"
+                    ),
                 )
             )
     return issues

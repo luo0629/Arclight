@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from arclight.application.generation_video_inputs import load_video_images
+from arclight.application.lip_sync_admission import shot_dialogue
 from arclight.application.render_inputs import file_storage
 from arclight.application.video_review_work import VideoReviewInputs
 from arclight.core.config import Settings
@@ -33,6 +34,7 @@ class VideoEvidence:
     references: tuple[ContextImage, ...]
     end_covered: bool
     shot_context: dict
+    dialogue_review: str | None = None
 
     @property
     def sheet_sha256(self) -> str:
@@ -92,12 +94,23 @@ def collect_evidence(db: Session, settings: Settings, inputs: VideoReviewInputs)
         )
         for ref in load_video_images(db, inputs.job, original.snapshot_json)
     )
+    dialogue_review = None
+    if inputs.version.metadata_json.get("lip_sync") is not None:
+        dialogue_review = (
+            "请播放此精确版本及其对白音轨，核对开口、停顿与选用声音，检查局部校正是否自然。"
+        )
+    exemptions = [line for line in shot_dialogue(inputs.shot) if line.lipsync == "not_applicable"]
+    if exemptions:
+        reason = "请核对分镜记录的旁白、画外或遮挡豁免和实际画面一致。"
+        examples = "；".join(f"{line.speaker}：{line.exemption_reason}" for line in exemptions)
+        dialogue_review = ((dialogue_review or "") + reason + examples)[:1000]
     return VideoEvidence(
         samples,
         sheet,
         references,
         times[0] == 0 and times[-1] >= max(1, video.duration_ms - ceil(1000 / video.frame_rate)),
         approved_shot_context(db, inputs.shot),
+        dialogue_review,
     )
 
 

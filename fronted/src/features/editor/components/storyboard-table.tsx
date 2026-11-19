@@ -406,7 +406,9 @@ export default function StoryboardTable({
                               ? "可见对白／需口型"
                               : line.presentation === "voice_over"
                                 ? "旁白／不适用口型"
-                                : "画外音／不适用口型",
+                                : line.presentation === "obscured"
+                                  ? "口部遮挡／不适用口型"
+                                  : "画外音／不适用口型",
                           )
                           .join("、")}
                       </p>

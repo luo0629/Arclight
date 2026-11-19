@@ -147,7 +147,9 @@ PERFORMANCE_INTENT_BLOCKERS = frozenset(
         "PERFORMANCE_MOTION_UNVERIFIED",
         "PERFORMANCE_CAPABILITY_UNSUPPORTED",
         "PERFORMANCE_CAPABILITY_UNVERIFIED",
-        "PERFORMANCE_LIPSYNC_UNDECLARED",
+        "PERFORMANCE_LIPSYNC_UNDECLARED",  # Historical intent-only decisions.
+        "PERFORMANCE_LIPSYNC_UNVERIFIED",
+        "PERFORMANCE_LIPSYNC_LIMIT",
         "PERFORMANCE_MOCK_NOT_PRODUCTION",
     }
 )
@@ -283,7 +285,8 @@ def validate_manual_approval(
                     (
                         item
                         for item in facts.blockers
-                        if item.code != "PERFORMANCE_MOTION_UNVERIFIED"
+                        if item.code
+                        not in {"PERFORMANCE_MOTION_UNVERIFIED", "PERFORMANCE_LIPSYNC_UNVERIFIED"}
                     ),
                     None,
                 )

@@ -34,6 +34,7 @@ const presentationLabels = {
   visible: "可见对白",
   voice_over: "旁白",
   off_screen: "画外音",
+  obscured: "口部遮挡",
 };
 
 function TextField({
@@ -426,6 +427,9 @@ export default function ShotPerformanceDetails({
                         </NativeSelectOption>
                         <NativeSelectOption value="off_screen">
                           画外音
+                        </NativeSelectOption>
+                        <NativeSelectOption value="obscured">
+                          口部遮挡
                         </NativeSelectOption>
                       </>
                     )}

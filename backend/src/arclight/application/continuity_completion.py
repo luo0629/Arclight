@@ -1,4 +1,4 @@
-"""Finish a production review only after its latest image is explicitly selected."""
+"""Finish a production review only after its exact candidate is explicitly selected."""
 
 from uuid import UUID
 
@@ -13,6 +13,8 @@ from arclight.application.production_versions import checked_snapshot
 from arclight.domain.agent_state import restore_agent_state, transition_agent_step
 from arclight.domain.continuity_reviews import ReviewContractRecord
 from arclight.domain.continuity_workflow import REVIEW_WORK_RESOURCE, CandidateReviewWork
+from arclight.domain.video_review import VideoReviewRecord
+from arclight.domain.video_temporal_reviewer import TEMPORAL_WORKFLOW_VERSION, TemporalWork
 from arclight.persistence.models import (
     AssetVersion,
     GenerationCandidate,
@@ -33,7 +35,7 @@ def lock_selection_run(db: Session, project_id: UUID, version_id: UUID) -> None:
         version is None
         or asset is None
         or asset.project_id != project_id
-        or not requires_continuity_review(version, asset)
+        or (asset.asset_type != "VIDEO" and not requires_continuity_review(version, asset))
     ):
         return  # Ordinary references do not depend on the later generation tables.
     candidate = db.scalar(
@@ -42,7 +44,15 @@ def lock_selection_run(db: Session, project_id: UUID, version_id: UUID) -> None:
             GenerationCandidate.asset_version_id == version_id,
         )
     )
-    work = read_work(db, project_id, candidate.id) if candidate is not None else None
+    if candidate is None:
+        return
+    work: CandidateReviewWork | TemporalWork | None
+    if asset.asset_type == "VIDEO":
+        from arclight.application.video_review_work import read_temporal_work
+
+        work = read_temporal_work(db, project_id, candidate.id)
+    else:
+        work = read_work(db, project_id, candidate.id)
     if work is not None:
         db.get(WorkflowRun, work.run_id, populate_existing=True, with_for_update=True)
 
@@ -82,7 +92,49 @@ def complete_selected_review(db: Session, record: ReviewContractRecord) -> None:
         or version.stale
     ):
         return
-    scope = scope_for_run(run, review.project_id)
+    finish_review(
+        db,
+        run,
+        review.project_id,
+        {
+            "review_id": str(review.result_id),
+            "candidate_id": str(review.target.candidate_id),
+            "asset_version_id": str(version.id),
+            "reason": "OWNER_SELECTED_REVIEWED_IMAGE",
+        },
+    )
+
+
+def complete_selected_video_review(db: Session, record: VideoReviewRecord) -> None:
+    from arclight.application.video_review_work import read_temporal_work
+
+    report = record.report
+    work = read_temporal_work(db, report.project_id, report.target.candidate_id)
+    if work is None or work.target != report.target:
+        return
+    run = db.get(WorkflowRun, work.run_id, populate_existing=True, with_for_update=True)
+    if (
+        run is None
+        or run.workflow_version != TEMPORAL_WORKFLOW_VERSION
+        or run.status != "WAITING_REVIEW"
+        or (run.pending_review or {}).get("report_id") != str(report.report_id)
+    ):
+        return
+    finish_review(
+        db,
+        run,
+        report.project_id,
+        {
+            "review_id": str(report.report_id),
+            "candidate_id": str(report.target.candidate_id),
+            "asset_version_id": str(report.target.asset_version_id),
+            "reason": "OWNER_SELECTED_REVIEWED_VIDEO",
+        },
+    )
+
+
+def finish_review(db: Session, run: WorkflowRun, project_id: UUID, event: dict) -> None:
+    scope = scope_for_run(run, project_id)
     state = restore_agent_state(run.agent_state_json, None, scope)
     run.agent_state_json = transition_agent_step(
         state,
@@ -94,14 +146,4 @@ def complete_selected_review(db: Session, record: ReviewContractRecord) -> None:
     ).model_dump(mode="json")
     run.status, run.pending_review = "SUCCEEDED", None
     run.revision += 1
-    emit(
-        db,
-        run,
-        "workflow.finished",
-        {
-            "review_id": str(review.result_id),
-            "candidate_id": str(review.target.candidate_id),
-            "asset_version_id": str(version.id),
-            "reason": "OWNER_SELECTED_REVIEWED_IMAGE",
-        },
-    )
+    emit(db, run, "workflow.finished", event)

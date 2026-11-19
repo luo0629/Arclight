@@ -78,6 +78,10 @@ def review_inputs(db: Session, project_id: UUID, candidate_id: UUID) -> VideoRev
     require_shot_binding(db, project_id, binding, job.episode_id)
     shot = db.get(Shot, binding.shot_id)
     assert shot is not None
+    if version.metadata_json.get("lip_sync") is not None:
+        from arclight.application.lip_sync_admission import require_lip_sync
+
+        require_lip_sync(db, project_id, shot, version)
     target = VideoReviewTarget(
         candidate_id=candidate.id,
         asset_id=asset.id,

@@ -110,7 +110,7 @@ def test_performance_definitions_register_complete_shared_schemas():
     assert {"characters", "interactions", "props", "dialogue"} <= performance["properties"].keys()
 
 
-def test_video_declaration_cannot_certify_motion_or_lipsync(monkeypatch):
+def test_video_declaration_and_local_route_cannot_certify_motion_or_lipsync(monkeypatch):
     script, value = performance_scene()
     value["generation_routes"] = [{"provider": "installed", "model": "declared-video"}]
     monkeypatch.setattr(
@@ -121,8 +121,13 @@ def test_video_declaration_cannot_certify_motion_or_lipsync(monkeypatch):
     issues = check_performance_storyboard(None, board, script)
     codes = {issue.code for issue in issues}
     assert "PERFORMANCE_CAPABILITY_UNSUPPORTED" not in codes
-    assert {"PERFORMANCE_MOTION_UNVERIFIED", "PERFORMANCE_LIPSYNC_UNDECLARED"} <= codes
+    assert {"PERFORMANCE_MOTION_UNVERIFIED", "PERFORMANCE_LIPSYNC_UNVERIFIED"} <= codes
+    assert "PERFORMANCE_LIPSYNC_LIMIT" not in codes
     assert board.shots[0].performance.motion_requirement == "dynamic_required"
+    value["shots"][0]["duration_ms"] = 15001
+    oversized = StoryboardContentV3.model_validate(value)
+    issues = check_performance_storyboard(None, oversized, script)
+    assert any(issue.code == "PERFORMANCE_LIPSYNC_LIMIT" and issue.slot == 0 for issue in issues)
 
 
 def test_mock_capability_is_visible_and_not_treated_as_real():

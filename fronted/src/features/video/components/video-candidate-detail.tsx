@@ -17,7 +17,7 @@ import {
 } from "../history";
 import type { VideoCandidate } from "../types";
 import useVideoCandidate from "../hooks/use-video-candidate";
-import VideoPreview from "./video-preview";
+import VideoLipSyncPanel from "./video-lip-sync";
 import VideoTemporalReview from "./video-temporal-review";
 
 type Replacement = {
@@ -277,9 +277,11 @@ export default function VideoCandidateDetail({
             <dd>
               {version?.restored_from_version_id
                 ? "历史视频另存"
-                : data.source === "GENERATED"
-                  ? "原生成结果"
-                  : "人工上传替换"}{" "}
+                : data.lip_sync
+                  ? "本机口型校正"
+                  : data.source === "GENERATED"
+                    ? "原生成结果"
+                    : "人工上传替换"}{" "}
               · 原始结果 {origin?.artifact_id ?? "无独立生成结果"} · 文件{" "}
               {origin?.source_file_id}
             </dd>
@@ -406,14 +408,15 @@ export default function VideoCandidateDetail({
             state={state}
             onChanged={onChanged}
           />
-          {state.fresh && (
-            <VideoPreview
-              key={data.id + ":" + version?.checksum}
-              projectId={projectId}
-              candidate={data}
-              unavailable={unavailable}
-            />
-          )}
+          <VideoLipSyncPanel
+            key={data.id + ":" + version?.checksum}
+            candidate={data}
+            state={state}
+            disabled={disabled}
+            unavailable={unavailable}
+            onChanged={onChanged}
+            onCreated={onCreated}
+          />
           <label htmlFor={id + "-comment"} className="text-sm">
             视频版本说明
           </label>

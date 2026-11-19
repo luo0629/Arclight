@@ -26,6 +26,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.candidate_checks import CandidateVideoCheck, CheckedVideo
 from arclight.domain.file_policy import POLICIES
 from arclight.domain.generation_requests import ShotReviewBinding
+from arclight.domain.lip_sync import LipSyncReceipt
 from arclight.media.validation import probe
 from arclight.persistence.models import (
     AssetVersion,
@@ -131,7 +132,27 @@ def video_sources(
             {key: item.get(key) for key in identity_fields}
             for item in effective.snapshot_json["inputs"]
         ]
-        if effective_inputs != original_inputs:
+        sync = sync_manifest_receipt(effective)
+        if sync is not None:
+            # Only add the exact selected dialogue to the original generation inputs.
+            core, extra = (
+                effective_inputs[: len(original_inputs)],
+                effective_inputs[len(original_inputs) :],
+            )
+            if (
+                core != original_inputs
+                or len(extra) != len(sync.lines)
+                or any(
+                    item["asset_type"] != "AUDIO"
+                    or item["dependency_type"] != "CONTENT_DEPENDENCY"
+                    or item["source_asset_version_id"] != str(line.audio_version_id)
+                    or item["checksum"] != line.audio_sha256
+                    or item["selectors"] != ["dialogue:" + line.line_id]
+                    for item, line in zip(extra, sync.lines, strict=True)
+                )
+            ):
+                raise DomainError("LIP_SYNC_RECEIPT_INVALID", "口型清单不能改写原视频来源", 409)
+        elif effective_inputs != original_inputs:
             raise DomainError("VIDEO_SOURCE_CHANGED", "旧视频不能改称由新的输入版本生成", 409)
         validate_manifest_inputs(db, job.project_id, effective, "VIDEO")
     return effective, {
@@ -143,6 +164,16 @@ def video_sources(
         **binding.model_dump(mode="json"),
         "video_images": deepcopy(context["video_images"]),
     }
+
+
+def sync_manifest_receipt(manifest: DependencyManifest) -> LipSyncReceipt | None:
+    value = manifest.snapshot_json["context"].get("lip_sync")
+    if value is None:
+        return None
+    try:
+        return LipSyncReceipt.model_validate(value)
+    except ValidationError as error:
+        raise DomainError("LIP_SYNC_RECEIPT_INVALID", "口型清单缺少完整校正回执", 409) from error
 
 
 def check_video_candidate_media(
@@ -163,6 +194,9 @@ def check_video_candidate_media(
         if video is not None:
             expected = attempt.input_snapshot_json["context"]["generation"]["output_spec"]
             actual = video.check
+            sync = sync_manifest_receipt(effective)
+            if sync is not None and (sync.output_sha256 != actual.checksum or not actual.has_audio):
+                error_code = error_code or "LIP_SYNC_RECEIPT_INVALID"
             tolerance = max(50, round(1000 / actual.frame_rate))
             if (
                 any(
@@ -211,6 +245,7 @@ def append_video_candidate_version(
     restored_from_version_id: UUID | None = None,
     restoration_note: str | None = None,
     expected_revision: int | None = None,
+    lip_sync: LipSyncReceipt | None = None,
 ) -> AssetVersion:
     from arclight.application.generation_candidates import candidate_asset
 
@@ -220,6 +255,8 @@ def append_video_candidate_version(
             check.error_code or "VIDEO_SOURCE_INVALID", "视频文件或生产来源不符合冻结合同", 409
         )
     effective, origin = video_sources(db, job, attempt, manifest)
+    if sync_manifest_receipt(effective) != lip_sync:
+        raise DomainError("LIP_SYNC_RECEIPT_INVALID", "不能继承其他视频的口型校正回执", 409)
     source = db.get(StoredFile, source_file_id)
     if (
         source is None
@@ -298,6 +335,7 @@ def append_video_candidate_version(
                 "source_file_id": str(source.id),
             },
             "video_check": video.check.model_dump(mode="json"),
+            **({"lip_sync": lip_sync.model_dump(mode="json")} if lip_sync else {}),
             "candidate_id": str(candidate_id),
             "asset_snapshot": {
                 "id": str(asset.id),
@@ -381,6 +419,30 @@ def require_video_candidate_media_check(
     if asset is None or asset.project_id != project_id or asset.asset_type != "VIDEO":
         raise DomainError("MEDIA_CHECK_REQUIRED", "视频资产身份不匹配", 409)
     _, origin = video_sources(db, job, attempt, manifest)
+    sync = sync_manifest_receipt(manifest)
+    if sync is not None:
+        prior = db.get(GenerationCandidate, sync.source_candidate_id)
+        prior_version = db.get(AssetVersion, sync.source_video_version_id)
+        if (
+            version.metadata_json.get("lip_sync") != sync.model_dump(mode="json")
+            or not check.video.has_audio
+            or check.video.checksum != sync.output_sha256
+            or candidate.source != "REPLACEMENT"
+            or candidate.replaces_candidate_id != sync.source_candidate_id
+            or prior is None
+            or prior.project_id != project_id
+            or prior.job_id != job.id
+            or prior.attempt_id != attempt.id
+            or prior.asset_version_id != sync.source_video_version_id
+            or prior_version is None
+            or prior_version.asset_id != version.asset_id
+            or prior_version.checksum != sync.source_video_sha256
+            or prior_version.stale
+            or any(line.end_ms > check.video.duration_ms for line in sync.lines)
+        ):
+            raise DomainError("LIP_SYNC_RECEIPT_INVALID", "口型回执与精确音视频候选不一致", 409)
+    elif version.metadata_json.get("lip_sync") is not None:
+        raise DomainError("LIP_SYNC_RECEIPT_INVALID", "口型校正缺少精确清单", 409)
     recorded = version.metadata_json.get("video_source", {})
     if any(recorded.get(key) != value for key, value in origin.items()):
         raise DomainError("MEDIA_CHECK_REQUIRED", "视频生产来源已变化", 409)
@@ -486,6 +548,10 @@ def restore_video_version_as_new(
         "rebuild_from_version_id"
     ) != str(source.id):
         raise DomainError("INVALID_REBUILD_INPUT", "视频恢复清单与原版本不匹配", 409)
+    if source.metadata_json.get("lip_sync") is not None:
+        raise DomainError(
+            "LIP_SYNC_REBUILD_REQUIRED", "请从精确原视频和当前选用音频重新校正口型", 409
+        )
     video = require_video_version(db, settings, project_id, asset, source, actor)
     prior = db.scalar(
         select(GenerationCandidate).where(GenerationCandidate.asset_version_id == source.id)

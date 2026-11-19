@@ -62,6 +62,10 @@ def command_for(operation: str, argument: str) -> MediaCommand:
         from arclight.media.render_plan import MAX_INPUT_BYTES, MAX_OUTPUT_BYTES
 
         return MediaCommand(argument, MAX_INPUT_BYTES, MAX_OUTPUT_BYTES)
+    if operation == "lip-sync" and argument == "mouth-pose":
+        from arclight.media import lip_sync
+
+        return MediaCommand(argument, lip_sync.MAX_INPUT_BYTES, lip_sync.MAX_OUTPUT_BYTES)
     if operation == "inspect" and argument == "render":
         from arclight.media.render_plan import MAX_OUTPUT_BYTES
 

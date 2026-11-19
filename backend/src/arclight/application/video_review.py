@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from arclight.application.continuity_workflow import require_shot_binding
 from arclight.application.human_reviews import require_review_actor
+from arclight.application.lip_sync_admission import require_lip_sync
 from arclight.application.production_versions import checked_snapshot, find_binding
 from arclight.application.video_candidates import require_video_candidate_media_check
 from arclight.core.errors import DomainError
@@ -32,6 +33,7 @@ from arclight.persistence.models import (
     GenerationCandidate,
     GenerationJob,
     ProductionVersion,
+    Shot,
     VersionBinding,
     VisualAsset,
 )
@@ -173,11 +175,15 @@ def video_review_facts(db: Session, version: AssetVersion) -> VideoReviewFacts:
         raise DomainError("VIDEO_REVIEW_REQUIRED", "视频须有独立候选、媒体检查和时序审查", 409)
     check = require_video_candidate_media_check(db, asset.project_id, candidate.id)
     assert check.video is not None
+    source = version.metadata_json["video_source"]
+    shot = db.get(Shot, UUID(source["shot_id"]))
+    if shot is None:
+        raise DomainError("REVIEW_TARGET_INVALID", "缺少精确镜头", 409)
+    lip_sync = require_lip_sync(db, asset.project_id, shot, version)
     record = latest_video_review(db, asset.project_id, candidate.id)
     report = record.report
     manifest = db.get(DependencyManifest, candidate.input_manifest_id)
     job = db.get(GenerationJob, candidate.job_id)
-    source = version.metadata_json.get("video_source", {})
     if (
         manifest is None
         or job is None
@@ -242,6 +248,8 @@ def video_review_facts(db: Session, version: AssetVersion) -> VideoReviewFacts:
         or (admission.human_review_request_id is not None)
     ):
         decision = _human_acceptance(db, record, admission, version, manifest)
+    if lip_sync is not None and decision is None:
+        raise DomainError("HUMAN_DECISION_REQUIRED", "口型校正须人工核对真实开口、停顿与声音", 409)
     return VideoReviewFacts(record=record, media=check.video, decision=decision)
 
 

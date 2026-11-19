@@ -48,7 +48,7 @@ PERFORMANCE_WORKING_PROMPT = (
     + """
 每镜必须交付schema_version=3.0和完整performance。记录场景/叙事目的、情绪节奏，
 每个出镜人物的目的、动作/情绪/位置/视线起止，两人互动的行动与反应，空间/道具起止。
-台词必须保留精确line_id、speaker、text和情绪/语速；明确visible/voice_over/off_screen。
+台词必须保留精确line_id、speaker、text和情绪/语速；明确visible/voice_over/off_screen/obscured（口部被遮挡）；豁免须说明具体画面依据。
 visible必须口型required并dynamic_required；旁白/画外音须给出不适用口型的合理理由。
 动作、互动、可见说话或状态变化必须dynamic_required，不能用静图运镜冒充人物运动。
 同场景后续镜头明确continuity_from_shot，continuous保持位置、视线、空间和道具接续；

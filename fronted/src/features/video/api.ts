@@ -3,7 +3,12 @@ import "client-only";
 import { api, apiBlob, ApiError, json } from "@/lib/api/client";
 import { isResourceId } from "@/lib/routes";
 import { sha256 } from "@/features/audio/api";
-import type { VideoCandidate, VideoAsset } from "./types";
+import type {
+  LipSyncOptions,
+  LipSyncRequest,
+  VideoCandidate,
+  VideoAsset,
+} from "./types";
 
 export const candidatePath = (projectId: string, candidateId: string) => {
   if (![projectId, candidateId].every(isResourceId))
@@ -26,6 +31,43 @@ export async function readVideoCandidate(
     throw new Error("视频候选与当前项目或精确版本不一致。");
   if (row.version && row.version.id !== row.asset_version_id)
     throw new Error("视频资产版本回执不一致。");
+  return row;
+}
+export async function readLipSyncOptions(
+  projectId: string,
+  candidateId: string,
+  signal: AbortSignal,
+) {
+  const row = await api<LipSyncOptions>(
+    candidatePath(projectId, candidateId) + "/lip-sync",
+    { signal },
+  );
+  if (row.candidate_id !== candidateId)
+    throw new Error("台词音频选项不属于当前视频候选。");
+  return row;
+}
+export async function saveLipSync(
+  projectId: string,
+  source: VideoCandidate,
+  payload: LipSyncRequest,
+  signal: AbortSignal,
+) {
+  const row = await api<VideoCandidate>(
+    candidatePath(projectId, source.id) + "/lip-sync",
+    {
+      ...json("POST", payload),
+      signal,
+    },
+  );
+  if (
+    row.project_id !== projectId ||
+    row.id === source.id ||
+    row.replaces_candidate_id !== source.id ||
+    row.lip_sync?.source_video_version_id !== source.asset_version_id ||
+    row.lip_sync?.source_video_sha256 !== source.version?.checksum ||
+    row.lip_sync?.output_sha256 !== row.version?.checksum
+  )
+    throw new Error("校正结果与原精确候选不匹配，请刷新候选历史核对。");
   return row;
 }
 export async function readVideoAsset(

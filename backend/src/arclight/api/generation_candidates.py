@@ -19,6 +19,7 @@ from arclight.application.candidate_checks import check_candidate_media
 from arclight.application.commands import require_project
 from arclight.application.generation_candidates import append_candidate_version
 from arclight.application.generation_state import find_job
+from arclight.application.lip_sync_admission import lip_sync_receipt, required_lines
 from arclight.application.production_versions import digest
 from arclight.application.render_inputs import file_storage
 from arclight.application.uploads import validated_image
@@ -27,10 +28,12 @@ from arclight.application.video_candidates import (
     check_video_candidate_media,
     validated_video,
 )
+from arclight.application.video_lip_sync import available_cues, create_lip_sync
 from arclight.application.video_review import read_admission
 from arclight.core.errors import DomainError
 from arclight.domain.candidate_checks import CandidateMediaCheck, CandidateVideoCheck
 from arclight.domain.file_policy import POLICIES
+from arclight.domain.lip_sync import LipSyncCreate, LipSyncOptions, LipSyncReceipt
 from arclight.persistence.models import (
     AssetVersion,
     DependencyManifest,
@@ -38,6 +41,7 @@ from arclight.persistence.models import (
     GenerationAttempt,
     GenerationCandidate,
     GenerationJob,
+    Shot,
     StoredFile,
     VisualAsset,
 )
@@ -66,6 +70,8 @@ class CandidateRead(Resource):
     video_source: dict | None = None
     production: dict | None = None
     admission: dict | None = None
+    lip_sync_required: bool = False
+    lip_sync: LipSyncReceipt | None = None
     actions: dict[str, bool] = Field(default_factory=dict)
 
     @field_validator("created_at", "updated_at")
@@ -112,6 +118,10 @@ def read_candidate(
                 f"/projects/{row.project_id}/generation-candidates/{row.id}/content"
             )
             result.video_source = version.metadata_json.get("video_source")
+            if result.video_source is not None and result.video_source.get("shot_id"):
+                shot = db.get(Shot, UUID(result.video_source["shot_id"]))
+                result.lip_sync_required = bool(shot is not None and required_lines(shot))
+            result.lip_sync = lip_sync_receipt(version)
             manifest = db.get(DependencyManifest, job.input_manifest_id) if job else None
             if manifest is not None:
                 specification = manifest.snapshot_json.get("context", {}).get("generation", {})
@@ -177,7 +187,12 @@ def read_candidate(
                     and result.admission["revision_id"] is None
                 ),
                 "can_replace": editable,
-                "can_restore": editable,
+                "can_restore": editable and result.lip_sync is None,
+                "can_lip_sync": editable
+                and version.status in {"DRAFT", "READY_FOR_REVIEW", "APPROVED"}
+                and not version.stale
+                and result.lip_sync_required
+                and result.lip_sync is None,
             }
     return result
 
@@ -300,6 +315,31 @@ def candidate_image(
     )
 
 
+@router.get("/generation-candidates/{candidate_id}/lip-sync")
+def lip_sync_cues(
+    project_id: UUID, candidate_id: UUID, db: Database, actor: Actor
+) -> LipSyncOptions:
+    require_project(db, project_id, actor)
+    return available_cues(db, project_id, candidate_id)
+
+
+@router.post("/generation-candidates/{candidate_id}/lip-sync", status_code=201)
+def correct_lip_sync(
+    project_id: UUID,
+    candidate_id: UUID,
+    payload: LipSyncCreate,
+    request: Request,
+    actor: Actor,
+) -> CandidateRead:
+    state = request.app.state
+    identity = create_lip_sync(
+        state.session_factory, state.settings, project_id, candidate_id, actor, payload
+    )
+    with state.session_factory() as db:
+        require_project(db, project_id, actor)
+        return read_candidate(db, find_candidate(db, project_id, identity), actor)
+
+
 @router.post("/generation-candidates/{candidate_id}/replacements", status_code=201)
 def replace_candidate(
     project_id: UUID,
@@ -340,7 +380,12 @@ def replace_candidate(
             raise DomainError("VIDEO_RIGHTS_REQUIRED", "替换视频须确认来源与使用权", 422)
         video = validated_video(request.app.state.settings, file)
         identity = uuid4()
-        manifest = db.get(DependencyManifest, source.input_manifest_id)
+        manifest_id = (
+            job.input_manifest_id
+            if version is not None and version.metadata_json.get("lip_sync") is not None
+            else source.input_manifest_id
+        )
+        manifest = db.get(DependencyManifest, manifest_id)
         check = check_video_candidate_media(db, job, attempt, identity, video, manifest=manifest)
         if check.status != "PASSED":
             raise DomainError(
@@ -371,7 +416,7 @@ def replace_candidate(
             project_id=project_id,
             job_id=job.id,
             attempt_id=attempt.id,
-            input_manifest_id=source.input_manifest_id,
+            input_manifest_id=manifest_id,
             source="REPLACEMENT",
             asset_version_id=output.id,
             source_file_id=file.id,
