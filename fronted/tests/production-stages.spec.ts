@@ -375,20 +375,19 @@ test("UI-09：声音查询失败独立重试，空时间轴保持待核对", asy
 
   // Finish ready reconciliation before opening audio. Keep periodic refresh
   // paused so it cannot remount the failed audio query before manual retry.
-  const readyRead = page.waitForResponse(
-    (response) =>
-      new URL(response.url()).pathname ===
+  const readyRead = page.waitForEvent(
+    "requestfinished",
+    (request) =>
+      new URL(request.url()).pathname ===
         `/api/v1/episodes/${env.episodes[0].id}/production-state` &&
-      response.request().method() === "GET",
+      request.method() === "GET",
   );
   await streams.push(0, [frame(env.project.id)]);
   await expect(page.getByLabel("实时更新连接", { exact: true })).toContainText(
     "已连接",
   );
   await page.clock.runFor(150);
-  const response = await readyRead;
-  expect(response.status()).toBe(200);
-  await response.finished();
+  expect((await readyRead).existingResponse()?.status()).toBe(200);
   await expect(
     env.panel.getByRole("button", { name: "刷新阶段状态", exact: true }),
   ).toBeEnabled();

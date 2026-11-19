@@ -135,22 +135,28 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
   const env = await setup(page);
   await streams.count(1);
   const connection = page.getByLabel("实时更新连接", { exact: true });
-  const refreshStages = page
-    .getByRole("region", { name: "剧集生产阶段", exact: true })
-    .getByRole("button", { name: "刷新阶段状态", exact: true });
+  const stages = page.getByRole("region", {
+    name: "剧集生产阶段",
+    exact: true,
+  });
+  const refreshStages = stages.getByRole("button", {
+    name: "刷新阶段状态",
+    exact: true,
+  });
   await expect(refreshStages).toBeEnabled();
   async function ready(index: number) {
-    const read = page.waitForResponse(
-      (response) =>
-        new URL(response.url()).pathname ===
+    // Project reconciliation can supersede a read after its headers arrive.
+    const read = page.waitForEvent(
+      "requestfinished",
+      (request) =>
+        new URL(request.url()).pathname ===
           `/api/v1/episodes/${env.episode.id}/production-state` &&
-        response.request().method() === "GET",
+        request.method() === "GET",
     );
     await streams.push(index, [frame(env.project.id)]);
     await expect(connection.getByRole("status")).toHaveText("实时更新已连接");
-    const response = await read;
-    expect(response.status()).toBe(200);
-    await response.finished();
+    expect((await read).existingResponse()?.status()).toBe(200);
+    await expect(stages.getByRole("status")).toHaveText("分镜待审核");
     await expect(refreshStages).toBeEnabled();
   }
   // Measure after the ready notification has reconciled authoritative state.
