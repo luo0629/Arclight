@@ -1,4 +1,7 @@
-"""One synchronous Images SDK call on the frozen account route."""
+"""Single-submit Images SDK transport for account and server routes."""
+
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 import httpx
 from openai import OpenAI, OpenAIError
@@ -9,11 +12,24 @@ from arclight.providers.media_io import JSON_RESPONSE_LIMIT, read_provider_respo
 from arclight.providers.sdk_logging import suppress_sdk_logging
 
 
+def _validate_account_response(response: httpx.Response) -> None:
+    if not response.is_success:
+        read_provider_response(response, maximum=JSON_RESPONSE_LIMIT)
+        raise GatewayFailure("INVALID_RESPONSE")
+
+
 class _ImageTransport(httpx.BaseTransport):
-    def __init__(self, url: str, api_key: str, transport: httpx.BaseTransport):
+    def __init__(
+        self,
+        url: str,
+        api_key: str,
+        transport: httpx.BaseTransport,
+        validate_response: Callable[[httpx.Response], None] = _validate_account_response,
+    ):
         self.url = httpx.URL(url)
         self.api_key = api_key
         self.transport = transport
+        self.validate_response = validate_response
         self.sent = False
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
@@ -36,32 +52,33 @@ class _ImageTransport(httpx.BaseTransport):
         )
         self.sent = True
         response = self.transport.handle_request(outbound)
-        if response.is_success:
-            return response
         try:
-            # The SDK otherwise buffers non-success responses before raising.
-            read_provider_response(response, maximum=JSON_RESPONSE_LIMIT)
-            raise GatewayFailure("INVALID_RESPONSE")
-        finally:
+            # Validate before the SDK can read an error body or remap a provider status.
+            self.validate_response(response)
+        except BaseException:
             response.close()
+            raise
+        return response
 
     def close(self) -> None:
         self.transport.close()
 
 
-def generate_image(
+@contextmanager
+def stream_image_generation(
     *,
     base_url: str,
-    url: str,
     api_key: str,
     parameters: dict,
     timeout: float,
     transport: httpx.BaseTransport,
-) -> bytes:
+    path: str = "/images/generations",
+    validate_response: Callable[[httpx.Response], None] = _validate_account_response,
+) -> Iterator[httpx.Response]:
     suppress_sdk_logging()
     try:
         with httpx.Client(
-            transport=_ImageTransport(url, api_key, transport),
+            transport=_ImageTransport(base_url + path, api_key, transport, validate_response),
             timeout=timeout,
             trust_env=False,
             follow_redirects=False,
@@ -77,8 +94,7 @@ def generate_image(
                 max_retries=0,
             )
             with sdk.images.with_streaming_response.generate(**parameters) as response:
-                # Retain the native JSON envelope and the existing media read contract.
-                return read_provider_response(response.http_response, maximum=None)
+                yield response.http_response
     except OpenAIError as exc:
         cause = exc.__cause__
         if isinstance(cause, (GatewayFailure, DomainError, httpx.HTTPError)):

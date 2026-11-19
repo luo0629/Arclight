@@ -163,17 +163,18 @@ class NativeMediaProvider:
             is not None
             and policy.use_openai_image_sdk
         ):
-            from arclight.providers.openai_image_sdk import generate_image
+            from arclight.providers.openai_image_sdk import stream_image_generation
 
-            raw = generate_image(
+            with stream_image_generation(
                 base_url=base,
-                url=base + path,
+                path=path,
                 api_key=self.connection.api_key,
                 parameters=body,
                 timeout=self.settings.media_execution_policy.call_timeout_seconds,
                 transport=self.transport
                 or PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),
-            )
+            ) as response:
+                raw = read_provider_response(response, maximum=None)
         else:
             raw, _, _ = self._read(method, base + path, payload=body, extra=extra, maximum=maximum)
         value = json.loads(raw)

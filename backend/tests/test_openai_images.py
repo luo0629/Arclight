@@ -1,6 +1,7 @@
 """GEN-09: actual adapter HTTP contracts, durable candidates and safe uncertainty."""
 
 import base64
+import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
 from decimal import Decimal
@@ -22,6 +23,7 @@ from test_generation_delivery import deliver, event_for
 from test_generation_jobs import base, capture, capture_ok, payload
 from test_generation_queues import messages
 from test_generation_reconciliation import QueryFake, query
+from test_openai_image_sdk import sdk_calls as sdk_calls
 
 from arclight.application.generation_candidates import import_attempt
 from arclight.application.generation_jobs import create_job
@@ -31,6 +33,7 @@ from arclight.domain.generation_requests import GenerationCreate, GenerationSpec
 from arclight.domain.versions import digest
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import DependencyManifest, GenerationAttempt, GenerationJob
+from arclight.providers.media_io import JSON_RESPONSE_LIMIT
 from arclight.providers.media_outputs import get_media_output_provider
 from arclight.providers.media_query import QueryReceipt
 from arclight.providers.media_submission import MediaSubmission, get_media_submission_provider
@@ -94,7 +97,9 @@ def attempt_for(client, job):
         )
 
 
-def test_http_adapter_through_gateway_ledger_and_real_candidate_import(configured, client, episode):
+def test_http_adapter_through_gateway_ledger_and_real_candidate_import(
+    configured, client, episode, monkeypatch, sdk_calls
+):
     project_id = episode["project_id"]
     set_policy(client, project_id, "20")
     target = create(client, project_id)
@@ -104,25 +109,30 @@ def test_http_adapter_through_gateway_ledger_and_real_candidate_import(configure
     assert first.status_code == 201, first.text
     job = first.json()
     assert capture(client, project_id, body, key).json() == job
+    monkeypatch.setenv("OPENAI_API_KEY", "ambient-key")
+    monkeypatch.setenv("OPENAI_BASE_URL", "https://ambient.example/v1")
+    monkeypatch.setenv("OPENAI_PROJECT_ID", "ambient-project")
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "Cookie: ambient")
     requests = []
 
     def handle(request):
         requests.append(request)
         assert str(request.url) == "https://api.openai.com/v1/images/generations"
         assert request.headers["authorization"] == "Bearer " + CANARY
-        assert "idempotency-key" not in request.headers
+        assert request.headers["accept-encoding"] == "identity"
+        assert not {"idempotency-key", "openai-project", "cookie"}.intersection(request.headers)
         sent = json.loads(request.content)
         assert sent["model"] == OPENAI_IMAGE_MODEL and sent["n"] == 2
         assert sent["size"] == "1024x1024" and sent["output_format"] == "jpeg"
         assert sent["output_compression"] == 85 and sent["quality"] == "low"
         assert "Avoid these elements" in sent["prompt"]
-        return response(success(2, private_response=CANARY))
+        return response(success(2, private_response=CANARY, padding="x" * JSON_RESPONSE_LIMIT))
 
     provider = OpenAIImageProvider(configured, transport=httpx.MockTransport(handle))
     dispatch = event_for(client, job)
     assert deliver(client, job, provider, dispatch) == "SUCCEEDED"
     assert deliver(client, job, provider, dispatch) == "SUCCEEDED"
-    assert len(requests) == 1
+    assert len(requests) == 1 and sdk_calls == [0]
     attempt = attempt_for(client, job)
     assert attempt.provider_request_id == "req_image_contract"
     assert attempt.cost is None and attempt.result_json["usage"]["images"] == 2
@@ -234,6 +244,16 @@ def test_server_config_change_fails_before_attempt_and_public_config_is_secret_f
     assert CANARY not in public.text and "api_key" not in public.text
 
 
+class UnreadableErrorBody(httpx.SyncByteStream):
+    closed = False
+
+    def __iter__(self):
+        raise httpx.ReadTimeout(CANARY)
+
+    def close(self):
+        self.closed = True
+
+
 @pytest.mark.parametrize("status", [401, 403, 404, 422, 429])
 def test_definite_http_rejection_releases_reservation_and_never_retries_inline(
     configured, client, episode, status
@@ -241,10 +261,11 @@ def test_definite_http_rejection_releases_reservation_and_never_retries_inline(
     set_policy(client, episode["project_id"], "20")
     job = capture_ok(client, episode["project_id"], image_request(configured))
     requests = []
+    error_body = UnreadableErrorBody()
 
     def reject(request):
         requests.append(request)
-        return response({"error": {"message": CANARY}}, status)
+        return httpx.Response(status, stream=error_body)
 
     provider = OpenAIImageProvider(configured, transport=httpx.MockTransport(reject))
     assert deliver(client, job, provider) == "FAILED"
@@ -252,11 +273,24 @@ def test_definite_http_rejection_releases_reservation_and_never_retries_inline(
     assert len(requests) == 1
     attempt = attempt_for(client, job)
     assert attempt.cost == 0 and CANARY not in str(attempt.result_json)
+    assert error_body.closed
     costs = client.get(f"/api/v1/projects/{episode['project_id']}/costs").json()["summary"]
     assert costs["actual_cost"] == "0.000000" and costs["pending_estimate"] == "0.000000"
 
 
-@pytest.mark.parametrize("failure", ["timeout", "server", "invalid", "batch", "encoding", "empty"])
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "timeout",
+        "server",
+        "invalid",
+        "batch",
+        "encoding",
+        "empty",
+        "unexpected_status",
+        "compressed",
+    ],
+)
 def test_uncertain_response_holds_budget_and_goes_to_manual_without_resubmit(
     configured, client, episode, failure
 ):
@@ -277,6 +311,12 @@ def test_uncertain_response_holds_budget_and_goes_to_manual_without_resubmit(
             return response(success(2))
         if failure == "encoding":
             return response({"data": [{"b64_json": "%%%"}]})
+        if failure == "unexpected_status":
+            return response(success(), 201)
+        if failure == "compressed":
+            compressed = response(success())
+            compressed.headers["content-encoding"] = "gzip"
+            return compressed
         return response({"data": [{"b64_json": ""}]})
 
     provider = OpenAIImageProvider(configured, transport=httpx.MockTransport(fail))
@@ -315,7 +355,13 @@ def test_key_file_and_output_handles_are_private_and_bound_to_the_attempt(
         UUID(job["id"]), attempt.id, attempt.input_manifest_id, attempt.input_snapshot_json, None
     )
     handle = attempt.result_json["output_handles"][0]
-    assert provider.download(request, handle, 1024 * 1024).data
+    data = image_bytes("JPEG", (1024, 1024))
+    checksum = hashlib.sha256(data).hexdigest()
+    assert handle == f"openai/image/{request.job_id.hex}/{request.attempt_id.hex}/0/{checksum}.jpeg"
+    object_key = "provider-results/openai/" + hashlib.sha256(handle.encode()).hexdigest()
+    assert provider.store.read(object_key, None, checksum) == data
+    reader = get_media_output_provider("openai", configured)
+    assert reader.download(request, handle, 1024 * 1024).data == data
     foreign = MediaSubmission(
         uuid4(), attempt.id, attempt.input_manifest_id, attempt.input_snapshot_json, None
     )
@@ -591,7 +637,10 @@ def test_provider_output_variants_keep_actual_metadata_and_cost_evidence(
     project_id = episode["project_id"]
     set_policy(client, project_id, "20")
     configured.image_service = configured.image_service.model_copy(
-        update={"base_url": "https://image-provider.example/v1", "model": "gpt-image-2.5-sunburst"}
+        update={
+            "base_url": "https://image-provider.example/api/v1",
+            "model": "gpt-image-2.5-sunburst",
+        }
     )
     target = create(client, project_id)
     job = capture_ok(client, project_id, image_request(configured, target))
@@ -599,6 +648,7 @@ def test_provider_output_variants_keep_actual_metadata_and_cost_evidence(
 
     def handle(request):
         requests.append(request)
+        assert str(request.url) == "https://image-provider.example/api/v1/images/generations"
         assert json.loads(request.content)["size"] == "1024x1024"
         assert json.loads(request.content)["output_format"] == "jpeg"
         data = b"not an image" if kind == "INVALID" else image_bytes(kind, size)

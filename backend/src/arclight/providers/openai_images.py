@@ -18,6 +18,7 @@ from arclight.providers.media_capabilities import OPENAI_IMAGE_CAPABILITIES, res
 from arclight.providers.media_outputs import MediaOutput
 from arclight.providers.media_submission import MediaSubmission, SubmissionReceipt
 from arclight.providers.network import PublicHTTPTransport
+from arclight.providers.openai_image_sdk import stream_image_generation
 from arclight.storage.objects import ObjectStorage
 
 
@@ -58,6 +59,16 @@ def _actual_image_kind(data: bytes, requested_kind: str) -> str:
     if data.startswith(b"\xff\xd8"):
         return "jpeg"
     return requested_kind
+
+
+def _validate_server_response(response: httpx.Response) -> None:
+    if response.status_code in {401, 403, 404, 422, 429}:
+        raise GatewayFailure(
+            "PROVIDER_UNAVAILABLE", not_accepted=True, transient=response.status_code == 429
+        )
+    encoding = response.headers.get("content-encoding", "identity")
+    if response.status_code != 200 or encoding not in {"", "identity"}:
+        raise GatewayFailure("INVALID_RESPONSE")
 
 
 class OpenAIImageProvider:
@@ -105,30 +116,14 @@ class OpenAIImageProvider:
         }
         started = time.monotonic()
         try:
-            with (
-                httpx.Client(
-                    timeout=service.timeout_seconds,
-                    transport=self.transport or PublicHTTPTransport(service.dns_timeout_seconds),
-                    trust_env=False,
-                    follow_redirects=False,
-                ) as client,
-                client.stream(
-                    "POST",
-                    service.base_url + "/images/generations",
-                    headers={"Authorization": f"Bearer {secret}", "Accept-Encoding": "identity"},
-                    json=body,
-                ) as response,
-            ):
-                if response.status_code in {401, 403, 404, 422, 429}:
-                    raise GatewayFailure(
-                        "PROVIDER_UNAVAILABLE",
-                        not_accepted=True,
-                        transient=response.status_code == 429,
-                    )
-                if response.status_code != 200 or response.headers.get(
-                    "content-encoding", "identity"
-                ) not in {"", "identity"}:
-                    raise GatewayFailure("INVALID_RESPONSE")
+            with stream_image_generation(
+                base_url=service.base_url,
+                api_key=secret,
+                parameters=body,
+                timeout=service.timeout_seconds,
+                transport=self.transport or PublicHTTPTransport(service.dns_timeout_seconds),
+                validate_response=_validate_server_response,
+            ) as response:
                 raw = bytearray()
                 for chunk in response.iter_raw(chunk_size=65536):
                     raw.extend(chunk)
