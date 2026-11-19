@@ -4,7 +4,6 @@ import asyncio
 import atexit
 import hmac
 import json
-import logging
 import os
 import re
 from collections import OrderedDict
@@ -26,6 +25,7 @@ from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
 from arclight.providers.llm_transport import Exchange, LLMTransport, active_exchange, turn_url
 from arclight.providers.network import validate_endpoint
+from arclight.providers.sdk_logging import suppress_sdk_logging
 
 
 @dataclass(repr=False)
@@ -86,23 +86,6 @@ def _close_async(client: httpx.AsyncClient) -> None:
         asyncio.run(client.aclose())
     else:
         loop.create_task(client.aclose())
-
-
-def _private_sdk_logging() -> None:
-    for name in (
-        "openai",
-        "google.genai",
-        "dashscope",
-        "dashscope._logging",
-        "httpx",
-        "httpcore",
-        "langchain_openai",
-    ):
-        logger = logging.getLogger(name)
-        logger.setLevel(logging.CRITICAL + 1)
-        logger.propagate = False
-        if not logger.handlers:
-            logger.addHandler(logging.NullHandler())
 
 
 class LLMService:
@@ -173,7 +156,7 @@ class LLMService:
     def _build(self, settings: Settings) -> _Entry:
         from arclight.providers.llm_models import DisabledAsyncTransport, build_model
 
-        _private_sdk_logging()
+        suppress_sdk_logging()
         http = httpx.Client(
             transport=LLMTransport(settings.llm_dns_timeout_seconds, self._offline_transport),
             timeout=settings.llm_timeout_seconds,

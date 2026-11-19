@@ -58,11 +58,12 @@ def restart(client, source_id):
     return UUID(response.json()["id"])
 
 
+@pytest.mark.parametrize("protocol,sdk", [("cogview", False), ("openai_image", True)])
 def test_native_concept_rounds_preserve_original_key_after_rotation_and_process_restart(
-    client, settings, model_service
+    client, settings, model_service, protocol, sdk
 ):
     episode = account_episode(client)
-    configure(client, settings)
+    configure(client, settings, protocol=protocol, sdk=sdk)
     set_policy(client, episode["project_id"], "20")
     model_requests, errors, _ = install_concept_model(model_service)
     config = client.get(
@@ -83,7 +84,7 @@ def test_native_concept_rounds_preserve_original_key_after_rotation_and_process_
         },
     )
     assert drive(client, settings, run_id)["status"] == "RUNNING"
-    configure(client, settings, revision=1, key="next-task-key")
+    configure(client, settings, protocol=protocol, revision=1, key="next-task-key", sdk=sdk)
     sent_keys = []
     data = image_bytes("PNG", (1024, 1024))
 

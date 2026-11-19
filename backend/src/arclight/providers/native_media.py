@@ -17,8 +17,10 @@ from arclight.core.errors import DomainError
 from arclight.domain.dependencies import IMAGE_KINDS
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
 from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
+from arclight.domain.service_models import matching_policy
 from arclight.providers.chat import raise_for_provider_status
 from arclight.providers.media_cancel import CancellationReceipt
+from arclight.providers.media_io import JSON_RESPONSE_LIMIT, read_provider_response
 from arclight.providers.media_outputs import MediaOutput
 from arclight.providers.media_query import ProviderLookup, QueryReceipt
 from arclight.providers.media_submission import MediaImageInput, MediaSubmission, SubmissionReceipt
@@ -114,7 +116,7 @@ class NativeMediaProvider:
         payload: dict | None = None,
         extra: dict | None = None,
         download: bool = False,
-        maximum: int | None = 2097152,
+        maximum: int | None = JSON_RESPONSE_LIMIT,
     ) -> tuple[bytes, str, dict]:
         headers = {"Accept-Encoding": "identity"}
         if not download or (
@@ -133,20 +135,8 @@ class NativeMediaProvider:
             ) as client,
             client.stream(method, url, json=payload, headers=headers) as response,
         ):
-            raw = bytearray()
-            for chunk in response.iter_bytes():
-                if maximum is not None and len(raw) + len(chunk) > maximum:
-                    raise GatewayFailure("INVALID_RESPONSE")
-                raw.extend(chunk)
-            try:
-                error = json.loads(raw) if response.is_error else {}
-            except ValueError:
-                error = {}
-            if isinstance(error, dict) and error.get("code") and not error.get("error"):
-                error = {"error": error}
-            raise_for_provider_status(response, error if isinstance(error, dict) else {})
             return (
-                bytes(raw),
+                read_provider_response(response, maximum=maximum),
                 response.headers.get("content-type", "").split(";")[0],
                 dict(response.headers),
             )
@@ -158,10 +148,34 @@ class NativeMediaProvider:
         body: dict | None = None,
         extra: dict | None = None,
         *,
-        maximum: int | None = 2097152,
+        maximum: int | None = JSON_RESPONSE_LIMIT,
     ) -> dict:
         base = validate_endpoint(self.connection.configuration["base_url"])
-        raw, _, _ = self._read(method, base + path, payload=body, extra=extra, maximum=maximum)
+        if (
+            method == "POST"
+            and self.name == "openai_image"
+            and body is not None
+            and (
+                policy := matching_policy(
+                    self.settings.service_model_policies, self.connection.configuration
+                )
+            )
+            is not None
+            and policy.use_openai_image_sdk
+        ):
+            from arclight.providers.openai_image_sdk import generate_image
+
+            raw = generate_image(
+                base_url=base,
+                url=base + path,
+                api_key=self.connection.api_key,
+                parameters=body,
+                timeout=self.settings.media_execution_policy.call_timeout_seconds,
+                transport=self.transport
+                or PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),
+            )
+        else:
+            raw, _, _ = self._read(method, base + path, payload=body, extra=extra, maximum=maximum)
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise GatewayFailure("INVALID_RESPONSE")
@@ -352,7 +366,7 @@ class NativeMediaProvider:
                 extra,
                 maximum=None
                 if self.name not in ASYNC and KINDS[self.name] in {"IMAGE", "VIDEO"}
-                else 2097152,
+                else JSON_RESPONSE_LIMIT,
             )
             if self.name in ASYNC:
                 identity = value.get("id") or value.get("request_id")

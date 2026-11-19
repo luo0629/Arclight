@@ -20,6 +20,7 @@ class ServiceModelPolicy(BaseModel):
         default=None, gt=0, le=1000000, decimal_places=6
     )
     pricing_version: str = Field(default="", max_length=100)
+    use_openai_image_sdk: bool = False
 
 
 def matching_policy(

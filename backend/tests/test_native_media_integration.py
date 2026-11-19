@@ -37,7 +37,9 @@ from arclight.persistence.models import (
 from arclight.providers.native_media import NativeMediaProvider
 
 
-def configure(client, settings, kind="image", protocol="cogview", revision=0, key="first-key"):
+def configure(
+    client, settings, kind="image", protocol="cogview", revision=0, key="first-key", *, sdk=False
+):
     if not settings.service_encryption_key.get_secret_value():
         settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     model = "wan2.7-t2v" if protocol == "wan" else "native-model"
@@ -50,6 +52,7 @@ def configure(client, settings, kind="image", protocol="cogview", revision=0, ke
             base_url="https://native.example/v1",
             maximum_cost_per_output=Decimal("1"),
             pricing_version="test-native:1",
+            use_openai_image_sdk=sdk,
         )
     ]
     response = client.put(
@@ -333,19 +336,21 @@ def test_two_accounts_and_owner_replay_keep_the_original_credential_owner(client
         provider_for(client, settings, replay, lambda req: httpx.Response(200))
 
 
-def test_completed_download_failure_keeps_unknown_cost_in_both_ledgers(client, settings):
+@pytest.mark.parametrize("protocol,sdk", [("cogview", False), ("openai_image", True)])
+def test_completed_download_failure_keeps_unknown_cost_in_both_ledgers(
+    client, settings, protocol, sdk
+):
     account(client)
-    configure(client, settings)
+    configure(client, settings, protocol=protocol, sdk=sdk)
     pid = project(client)
     set_policy(client, pid)
     job = capture_ok(client, pid, body_for(client, pid))
 
     def handler(req):
-        return (
-            httpx.Response(401)
-            if req.method == "GET"
-            else httpx.Response(200, json={"data": [{"url": "https://cdn.example/image"}]})
-        )
+        if req.method == "GET":
+            assert "authorization" not in req.headers
+            return httpx.Response(401)
+        return httpx.Response(200, json={"data": [{"url": "https://cdn.example/image"}]})
 
     assert deliver(client, job, provider_for(client, settings, job, handler)) == "FAILED"
     with client.app.state.session_factory() as db:
@@ -355,6 +360,34 @@ def test_completed_download_failure_keeps_unknown_cost_in_both_ledgers(client, s
         receipt = db.scalar(select(GatewayReceipt).where(GatewayReceipt.call_id == call.id))
         assert receipt.status == "FAILED" and receipt.actual_cost is None
         assert receipt.usage_json["images"] == 1
+
+
+def test_sdk_timeout_rollback_keeps_original_attempt_without_resubmission(client, settings):
+    account(client)
+    configure(client, settings, protocol="openai_image", sdk=True)
+    pid = project(client)
+    set_policy(client, pid)
+    job = capture_ok(client, pid, body_for(client, pid))
+    requests = []
+
+    def timeout(request):
+        requests.append(request)
+        raise httpx.ReadTimeout("synthetic response loss", request=request)
+
+    assert deliver(client, job, provider_for(client, settings, job, timeout)) == "RESULT_UNKNOWN"
+    original_attempt = attempt_for(client, job)
+    settings.service_model_policies = [
+        settings.service_model_policies[0].model_copy(update={"use_openai_image_sdk": False})
+    ]
+    assert deliver(client, job, provider_for(client, settings, job, timeout)) == "RESULT_UNKNOWN"
+    assert len(requests) == 1
+    assert attempt_for(client, job) == original_attempt
+    with client.app.state.session_factory() as db:
+        call = db.scalar(
+            select(GatewayCall).where(GatewayCall.generation_attempt_id == original_attempt)
+        )
+        receipt = db.scalar(select(GatewayReceipt).where(GatewayReceipt.call_id == call.id))
+        assert receipt.status == "RESULT_UNKNOWN" and receipt.actual_cost is None
 
 
 def test_generated_flac_and_mp4_are_fully_decoded_and_truncation_is_rejected():
