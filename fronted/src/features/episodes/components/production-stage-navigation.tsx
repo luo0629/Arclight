@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
 import { api } from "@/lib/api/client";
@@ -22,7 +22,7 @@ import {
   type ProductionStage,
 } from "../production-stages";
 
-import { EpisodeSeriesToggle } from "./episode-series-evidence";
+import EpisodeSeriesEvidence from "./episode-series-evidence";
 
 const ignore = () => {};
 export default function ProductionStageNavigation({
@@ -39,6 +39,7 @@ export default function ProductionStageNavigation({
   onOpen: (view: EpisodeView, node?: string) => void;
 }) {
   const { stage, navigate } = useEpisodeNavigation();
+  const [seriesOpen, setSeriesOpen] = useState(false);
   const read = useCallback(
     async (signal: AbortSignal) => {
       const state = await api<ProductionState>(
@@ -122,14 +123,24 @@ export default function ProductionStageNavigation({
               ? phaseLabel(state.phase)
               : "生产状态暂不可用"}
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={status.loading}
-          onClick={() => void status.load()}
-        >
-          刷新阶段状态
-        </Button>
+        <div className="flex flex-wrap items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-expanded={seriesOpen}
+            onClick={() => setSeriesOpen((value) => !value)}
+          >
+            {seriesOpen ? "收起本集连续剧来源" : "本集连续剧来源"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={status.loading}
+            onClick={() => void status.load()}
+          >
+            刷新阶段状态
+          </Button>
+        </div>
       </div>
       <nav aria-label="制作阶段" className="overflow-x-auto">
         <ol className="flex min-w-max gap-1">
@@ -157,11 +168,11 @@ export default function ProductionStageNavigation({
           ))}
         </ol>
       </nav>
-      <EpisodeSeriesToggle
-        key={episodeId}
-        projectId={projectId}
-        episodeId={episodeId}
-      />
+      {seriesOpen && (
+        <div className="mt-2">
+          <EpisodeSeriesEvidence projectId={projectId} episodeId={episodeId} />
+        </div>
+      )}
       {status.error && (
         <Notice tone="error" role="alert">
           无法读取当前剧集的生产状态。旧状态已清空，请确认权限或稍后重试。

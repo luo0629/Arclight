@@ -1187,4 +1187,97 @@ test("SERIES-08 launches the exact approved scope from overview and replays the 
     ),
   );
   await page.unrouteAll({ behavior: "wait" });
+
+  const original = catalog.items[0].id;
+  const readProgress = async (runId = original) => {
+    const response = await page.request.get(`/api/v1/runs/${runId}/producer`, {
+      headers: data.headers,
+    });
+    expect(response.status(), await response.text()).toBe(200);
+    return response.json();
+  };
+  const openSeries = async () => {
+    await page.goto(overview);
+    await page
+      .getByRole("button", { name: "查看连续剧详情", exact: true })
+      .click();
+  };
+  const entries = history.getByRole("link", { name: /查看多集运行/ });
+  const target = entries.filter({ hasText: original.slice(0, 8) });
+  const scope = page.getByRole("region", { name: "多集制作范围", exact: true });
+  const pause = scope.getByRole("button", {
+    name: "暂停多集制作",
+    exact: true,
+  });
+  const resume = scope.getByRole("button", {
+    name: "恢复多集制作",
+    exact: true,
+  });
+  await target.click();
+  await expect(
+    scope.getByRole("link", { name: "第 2 集制作列表", exact: true }),
+  ).toHaveAttribute(
+    "href",
+    `/projects/${data.project.id}/episodes/${later.id}?view=list`,
+  );
+  // The isolated worker settles the initial planning command before controls are allowed.
+  await expect(pause).toBeEnabled({ timeout: 20000 });
+  const budget = (await readProgress()).budget;
+  await pause.click();
+  await expect(resume).toBeEnabled();
+  expect((await readProgress()).series.paused).toBe(true);
+  await openSeries();
+  await expect(history.getByText("已暂停", { exact: true })).toBeVisible();
+  await target.click();
+  await resume.click();
+  await expect(pause).toBeEnabled();
+  const restored = await readProgress();
+  expect(restored.run_id).toBe(original);
+  expect(restored.series.paused).toBe(false);
+  expect(restored.budget).toEqual(budget);
+
+  // Store real history without violating the one-active-scope rule.
+  const cancel = async (runId: string) => {
+    await expect(async () => {
+      const run = await readProgress(runId);
+      if (run.status === "CANCELLED") return;
+      const response = await page.request.post(
+        `/api/v1/runs/${runId}/producer/commands`,
+        {
+          headers: {
+            ...data.headers,
+            "Idempotency-Key": `history-stop-${runId}`,
+          },
+          data: { action: "CANCEL", expected_revision: run.revision },
+        },
+      );
+      expect(response.status(), await response.text()).toBe(202);
+    }).toPass({ timeout: 10000 });
+    expect((await readProgress(runId)).status).toBe("CANCELLED");
+  };
+  await cancel(original);
+  for (let index = 0; index < 10; index++) {
+    const response = await page.request.post(`${root}/producer-runs`, {
+      headers: { ...data.headers, "Idempotency-Key": crypto.randomUUID() },
+      data: payload,
+    });
+    expect(response.status(), await response.text()).toBe(202);
+    await cancel((await response.json()).run_id);
+  }
+  await openSeries();
+  const previous = history.getByRole("button", {
+    name: "上一页运行",
+    exact: true,
+  });
+  const next = history.getByRole("button", { name: "下一页运行", exact: true });
+  await expect(previous).toBeDisabled();
+  await expect(entries).toHaveCount(10);
+  await expect(target).toHaveCount(0);
+  await next.click();
+  await expect(entries).toHaveCount(1);
+  await expect(next).toBeDisabled();
+  await expect(previous).toBeEnabled();
+  await expect(target).toHaveAttribute("href", new RegExp(`run=${original}$`));
+  await previous.click();
+  await expect(entries).toHaveCount(10);
 });

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Notice } from "@/components/ui-kit";
+import { Notice, StatusBadge } from "@/components/ui-kit";
 import type { DependencyImpact } from "@/features/dependencies/components/impact-button";
 import useScopedRead from "@/features/projects/hooks/use-scoped-read";
 import { useProjectEvents } from "@/features/projects/project-events";
@@ -30,8 +30,29 @@ type Evidence = {
   dynamic_shots: number;
   reviewed_dynamic_shots: number;
   visible_dialogue_shots: number;
+  required_lip_sync_shots: number;
+  reviewed_videos: {
+    version_id: string;
+    shot_no: number;
+    temporal_review_id: string;
+    lip_sync_reviewed: boolean;
+  }[];
   audio_snapshot_id: string | null;
   audio_line_count: number | null;
+  bound_audio_total: number;
+  bound_audio: {
+    version_id: string;
+    line_id: string;
+    version_no: number;
+    status: string;
+    stale: boolean;
+    voice: {
+      version_id: string;
+      version_no: number;
+      speaker: string;
+      profile_version_id: string | null;
+    } | null;
+  }[];
   delivery_id: string | null;
   delivery_reviewed: boolean;
   shared_versions: {
@@ -44,29 +65,6 @@ type Evidence = {
 };
 
 type Props = { projectId: string; episodeId: string };
-export function EpisodeSeriesToggle(props: Props) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="mt-2 grid min-w-0 gap-2">
-      <Button
-        className="justify-self-start"
-        size="sm"
-        variant="ghost"
-        aria-expanded={open}
-        onClick={() => setOpen((value) => !value)}
-      >
-        {open ? "收起本集连续剧来源" : "本集连续剧来源"}
-      </Button>
-      {open && (
-        <EpisodeSeriesEvidence
-          key={`${props.projectId}:${props.episodeId}`}
-          {...props}
-        />
-      )}
-    </div>
-  );
-}
-
 export default function EpisodeSeriesEvidence({ projectId, episodeId }: Props) {
   const read = useScopedRead<Evidence>(
     `/episodes/${episodeId}/series-evidence`,
@@ -151,8 +149,12 @@ export default function EpisodeSeriesEvidence({ projectId, episodeId }: Props) {
           </dd>
           {board && (
             <p className="text-muted-foreground">
-              可见对白镜头 {data.visible_dialogue_shots}{" "}
-              个；口型状态在精确视频候选中核对。
+              可见对白镜头 {data.visible_dialogue_shots} 个 · 已选并通过口型重审{" "}
+              {
+                data.reviewed_videos.filter((row) => row.lip_sync_reviewed)
+                  .length
+              }
+              /{data.required_lip_sync_shots} 个必需镜头
             </p>
           )}
         </div>
@@ -160,7 +162,7 @@ export default function EpisodeSeriesEvidence({ projectId, episodeId }: Props) {
           <dt className="font-medium">声音</dt>
           <dd>
             {data.audio_snapshot_id
-              ? `当前剧本已固定 ${data.audio_line_count ?? 0} 句配音来源，试听及审核以逐句记录为准。`
+              ? `当前剧本 ${data.audio_line_count ?? 0} 句，${data.bound_audio_total} 句已绑定音频。绑定不等于批准或选入成片。`
               : "当前剧本尚无配音来源快照。"}
           </dd>
         </div>
@@ -203,6 +205,65 @@ export default function EpisodeSeriesEvidence({ projectId, episodeId }: Props) {
           查看项目待审
         </Link>
       </nav>
+      {!!data.reviewed_videos.length && (
+        <details className="border-t pt-2">
+          <summary className="cursor-pointer font-medium">
+            已选用并通过时序审核的视频
+          </summary>
+          <ul className="grid gap-1 pt-2">
+            {data.reviewed_videos.map((video) => (
+              <li key={video.version_id}>
+                <Link
+                  className="underline"
+                  href={`${list}&node=asset-version:${video.version_id}`}
+                >
+                  镜头 {video.shot_no} · 查看精确视频／审核
+                </Link>
+                {video.lip_sync_reviewed && <span> · 已完成口型重审</span>}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+      {!!data.bound_audio.length && (
+        <details className="border-t pt-2">
+          <summary className="cursor-pointer font-medium">
+            逐句绑定状态与实际使用的音色版本
+          </summary>
+          <p className="pt-2 text-muted-foreground">
+            每句显示最近绑定；当前显示 {data.bound_audio.length} /{" "}
+            {data.bound_audio_total} 句，完整历史请打开逐句声音版本。
+          </p>
+          <ul className="grid gap-2 pt-2">
+            {data.bound_audio.map((version) => (
+              <li key={version.version_id} className="grid gap-1 break-words">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    className="underline"
+                    href={`${list}&node=asset-version:${version.version_id}`}
+                  >
+                    台词 {version.line_id} · 音频 v{version.version_no}
+                  </Link>
+                  <StatusBadge
+                    status={version.stale ? "STALE" : version.status}
+                  />
+                </div>
+                {version.voice && (
+                  <span
+                    className="text-muted-foreground"
+                    title={version.voice.version_id}
+                  >
+                    {version.voice.speaker} · 音色 v{version.voice.version_no}
+                    {version.voice.profile_version_id && (
+                      <> · 跨集声音档案 {version.voice.profile_version_id}</>
+                    )}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       {!!data.shared_versions.length && (
         <details className="border-t pt-2">
           <summary className="cursor-pointer font-medium">

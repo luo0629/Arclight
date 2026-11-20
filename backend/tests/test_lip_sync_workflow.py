@@ -223,6 +223,10 @@ def test_visible_dialogue_resynchronizes_locally_and_survives_formal_render(
     )
     assert corrected["version"]["status"] == "DRAFT"
     assert corrected["admission"]["blocked_code"] == "VIDEO_REVIEW_REQUIRED"
+    evidence_url = f"/api/v1/episodes/{case['episode_id']}/series-evidence"
+    pending = ok(client.get(evidence_url), 200)
+    assert pending["required_lip_sync_shots"] == 1 and pending["reviewed_videos"] == []
+    assert pending["reviewed_dynamic_shots"] == 0
     assert ok(client.get(case["root"]), 200)["current_version_id"] is None
     assert client.get(endpoint + "/content").content == case["raw"]
     receipt = corrected["lip_sync"]
@@ -268,6 +272,22 @@ def test_visible_dialogue_resynchronizes_locally_and_survives_formal_render(
         400,
         800,
     )
+    evidence = ok(client.get(evidence_url), 200)
+    assert evidence["reviewed_dynamic_shots"] == 1
+    assert evidence["reviewed_videos"] == [
+        {
+            "version_id": repaired["asset_version_id"],
+            "shot_no": case["shot"]["shot_no"],
+            "temporal_review_id": picture["clips"][0]["review_id"],
+            "lip_sync_reviewed": True,
+        }
+    ]
+    assert evidence["bound_audio_total"] == 2
+    assert {item["version_id"] for item in evidence["bound_audio"]} == {
+        audio["id"],
+        narration["id"],
+    }
+    assert all(item["voice"] is None for item in evidence["bound_audio"])
     edited = deepcopy(timeline["snapshot"])
     edited["tracks"][1]["clips"][0]["start_ms"] = 401
     change = {
@@ -359,6 +379,8 @@ def test_visible_dialogue_resynchronizes_locally_and_survives_formal_render(
         assert db.get(AssetVersion, target).stale
         assert db.get(AssetVersion, UUID(timeline["id"])).stale
         assert not db.get(AssetVersion, UUID(narration["id"])).stale
+    invalidated = ok(client.get(evidence_url), 200)
+    assert invalidated["reviewed_videos"] == [] and invalidated["reviewed_dynamic_shots"] == 0
     assert client.get(endpoint + "/content").content == case["raw"]
     assert (
         client.get(candidate_endpoint(case, corrected["id"]) + "/content").content

@@ -357,6 +357,24 @@ def test_profile_change_invalidates_exact_consumers_and_keeps_locked_history(
     assert history[0]["version"]["status"] == "LOCKED"
     assert history[0]["version"]["stale"] is True
     assert read_ok(client, independent_url) == independent
+    for source_case, recording, stale in (
+        (first, original, True),
+        (second, independent, False),
+    ):
+        evidence = read_ok(
+            client, f"/api/v1/episodes/{source_case['episode']['id']}/series-evidence"
+        )
+        assert evidence["bound_audio_total"] == 1
+        (item,) = evidence["bound_audio"]
+        assert item["version_id"] == recording["id"]
+        assert item["status"] == ("LOCKED" if stale else "APPROVED")
+        assert item["stale"] is stale
+        assert item["voice"] == {
+            "version_id": case["normal"]["id"],
+            "version_no": case["normal"]["version_no"],
+            "speaker": case["normal"]["speaker"],
+            "profile_version_id": profile["id"],
+        }
     with client.app.state.session_factory() as db:
         invalidation = db.get(DependencyInvalidation, UUID(updated["invalidation_id"]))
         assert {item["asset_version_id"] for item in invalidation.snapshot_json["affected"]} == {
