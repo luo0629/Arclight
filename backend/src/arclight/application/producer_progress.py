@@ -22,10 +22,11 @@ from arclight.application.producer_interaction import (
     validate_delegation,
 )
 from arclight.application.producer_plan_history import find_task_delegation
+from arclight.application.producer_series import task_context
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.producer_planning import WORKFLOW_VERSION, DelegationRequest, ProducerPlan
-from arclight.domain.producer_replanning import REPLAN_VERSION
+from arclight.domain.producer_planning import DelegationRequest
+from arclight.domain.producer_series import PRODUCER_VERSIONS, REPLAN_VERSIONS, plan_model
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoopDecision
 from arclight.persistence.base import utcnow
@@ -40,7 +41,7 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
     lock_gate(db)
     db.expire_all()
     run = require_run(db, run_id, actor)
-    if run.workflow_type != "producer" or run.workflow_version != WORKFLOW_VERSION:
+    if run.workflow_type != "producer" or run.workflow_version not in PRODUCER_VERSIONS:
         raise DomainError("NOT_FOUND", "生产协调运行不存在", 404)
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
@@ -97,7 +98,7 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
             {
                 "loop_id": str(loop.id),
                 "kind": "replan"
-                if loop.seed_json.get("result_schema_version") == REPLAN_VERSION
+                if loop.seed_json.get("result_schema_version") in REPLAN_VERSIONS
                 else "plan",
                 "status": loop.status,
                 "stop_code": public_diagnostic(outcome.get("stop_code")),
@@ -131,7 +132,7 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
     plans = []
     for index, binding in enumerate(bindings):
         snapshot = binding.snapshot_json
-        plan = ProducerPlan.model_validate(snapshot["plan"])
+        plan = plan_model(run.workflow_version).model_validate(snapshot["plan"])
         tasks = []
         for task in plan.tasks:
             request = DelegationRequest(
@@ -162,10 +163,12 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
                 from arclight.application.producer_observation import _unknown_result
 
                 unknown = _unknown_result(db, child)
+            selected = task_context(run, plan, task.task_key)
             tasks.append(
                 {
                     "task_key": task.task_key,
                     "kind": task.task.kind,
+                    "episode_id": str(selected.episode_id if selected else run.episode_id),
                     "reason": task.reason,
                     "depends_on": task.depends_on,
                     "child_run_id": str(child.id) if child else None,
@@ -187,6 +190,8 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
             }
         )
     usage = action_usage(db, run.id)
+    from arclight.application.producer_series_delivery import public_series_progress
+
     return {
         "run_id": str(run.id),
         "episode_id": str(episode.id),
@@ -194,6 +199,7 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
         "status": run.status,
         "revision": run.revision,
         "goal": run.input_json["goal"],
+        "series": public_series_progress(db, run, actor),
         "can_operate": can_operate,
         "readonly_reason": reason,
         "can_recover": can_operate and pending is not None and not has_lease,

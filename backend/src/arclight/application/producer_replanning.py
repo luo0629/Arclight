@@ -1,5 +1,6 @@
 """Local revisions share the original Producer root and durable Agent runtime."""
 
+from typing import cast
 from uuid import UUID, uuid5
 
 from pydantic import ValidationError
@@ -18,6 +19,7 @@ from arclight.application.producer_plan_history import (
     read_plan_record,
 )
 from arclight.application.producer_planning import producer_registry
+from arclight.application.producer_series import task_context
 from arclight.application.production_versions import bind, component, find_binding, text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -27,11 +29,18 @@ from arclight.domain.producer_observation import ProducerObservation
 from arclight.domain.producer_planning import DelegationRequest, ProducerPlan
 from arclight.domain.producer_replanning import (
     REPLAN_VERSION,
-    REPLANNING_PROMPT,
     ProducerReplan,
     ProducerReplanSeed,
 )
 from arclight.domain.producer_research import RESEARCH_TOOL
+from arclight.domain.producer_series import (
+    SERIES_PRODUCER_VERSION,
+    SeriesProducerReplan,
+    SeriesProducerReplanSeed,
+    replan_model,
+    replan_version,
+    replanning_instruction,
+)
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import AgentToolInvocation, AuditEvent, WorkflowRun
@@ -65,17 +74,23 @@ def _loop(db: Session, run_id: UUID, observation_id: UUID) -> AgentLoop | None:
     )
 
 
-def _definitions() -> list[tuple[str, dict]]:
+def _definitions(version: str = "producer/1") -> list[tuple[str, dict]]:
     return [
-        ("AGENT", {"workflow_version": "producer/1", "operation_version": REPLAN_VERSION}),
-        ("PROMPT", {"instruction": REPLANNING_PROMPT}),
-        ("SCHEMA", ProducerReplan.model_json_schema()),
+        ("AGENT", {"workflow_version": version, "operation_version": replan_version(version)}),
+        ("PROMPT", {"instruction": replanning_instruction(version)}),
+        ("SCHEMA", replan_model(version).model_json_schema()),
     ]
 
 
 def _versions(
     db: Session, root: WorkflowRun, observation: ProducerObservation, *, capture: bool = False
 ) -> None:
+    version = replan_version(root.workflow_version)
+    name = (
+        "producer-series-replan"
+        if root.workflow_version == SERIES_PRODUCER_VERSION
+        else "producer-replan"
+    )
     identity = uuid5(root.id, "producer-replan-spec:" + str(observation.id))
     binding = find_binding(db, observation.project_id, "PRODUCER_REPLAN_SPEC", identity)
     workflow = find_binding(db, observation.project_id, "WORKFLOW", root.id)
@@ -88,11 +103,11 @@ def _versions(
                 observation.project_id,
                 "TEXT",
                 kind,
-                "producer-replan",
-                REPLAN_VERSION,
+                name,
+                version,
                 definition,
             )
-            for kind, definition in _definitions()
+            for kind, definition in _definitions(root.workflow_version)
         ]
         binding = bind(
             db,
@@ -114,18 +129,20 @@ def _versions(
             or value["run_id"] != str(root.id)
             or value["observation_id"] != str(observation.id)
             or value["workflow_sha256"] != digest(workflow.snapshot_json)
-            or len(value["components"]) != len(_definitions())
+            or len(value["components"]) != len(_definitions(root.workflow_version))
         ):
             raise ValueError("Replan component scope changed")
-        for entry, (kind, definition) in zip(value["components"], _definitions(), strict=True):
+        for entry, (kind, definition) in zip(
+            value["components"], _definitions(root.workflow_version), strict=True
+        ):
             row = db.get(ProductionVersion, UUID(entry["id"]))
             if (
                 row is None
                 or row.project_id != observation.project_id
                 or row.family != "TEXT"
                 or row.kind != kind
-                or row.name != "producer-replan"
-                or row.version != REPLAN_VERSION
+                or row.name != name
+                or row.version != version
                 or row.definition_json != definition
                 or row.digest != digest(definition)
                 or entry
@@ -141,6 +158,12 @@ def _versions(
                 raise ValueError("Replan definitions changed")
     except (KeyError, ValueError, TypeError) as exc:
         raise DomainError("PRODUCER_REPLAN_INVALID", "重规划须使用原冻结提示词和合同", 409) from exc
+
+
+def _same_context(base: ProducerPlanRecord, plan: ProducerPlan, old_key: str, new_key: str) -> bool:
+    old = task_context(base.root, base.plan, old_key)
+    new = task_context(base.root, plan, new_key)
+    return old.model_copy(update={"task_key": new_key}) == new if old else new is None
 
 
 def carry_tasks(
@@ -165,11 +188,16 @@ def carry_tasks(
         if (
             previous is not None
             and previous.task == task.task
+            and task_context(base.root, base.plan, task.task_key)
+            == task_context(base.root, plan, task.task_key)
             and set(previous.depends_on) == set(task.depends_on)
             and all(key in carried for key in task.depends_on)
         ):
             carried[task.task_key] = canonical_task(base, task.task_key)
-        elif previous is None and any(other.task == task.task for other in base.plan.tasks):
+        elif previous is None and any(
+            other.task == task.task and _same_context(base, plan, other.task_key, task.task_key)
+            for other in base.plan.tasks
+        ):
             raise DomainError("PRODUCER_REPLAN_REUSE", "既有任务不能改名或复制以重复委派", 409)
     for key in old:
         if key in carried:
@@ -202,7 +230,15 @@ def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObser
         first = request.messages[0]
         if not isinstance(first, AgentUserMessage):
             raise ValueError("Replan seed must start with user data")
-        frozen = ProducerReplanSeed.model_validate(first.data)
+        root = db.get(WorkflowRun, loop.run_id)
+        assert root is not None
+        version = replan_version(root.workflow_version)
+        seed_model = (
+            SeriesProducerReplanSeed
+            if root.workflow_version == SERIES_PRODUCER_VERSION
+            else ProducerReplanSeed
+        )
+        frozen = seed_model.model_validate(first.data)
         observation = read_observation(db, loop.run_id, frozen.observation.id, actor)
         base = frozen.base_plan
         binding = find_binding(db, loop.project_id, "PRODUCER_PLAN", base.plan_id)
@@ -219,13 +255,14 @@ def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObser
             or binding.snapshot_json["run_id"] != str(loop.run_id)
             or request.agent_name != "producer"
             or request.stage != "producer"
-            or request.agent_version != REPLAN_VERSION
+            or request.agent_version != version
             or request.operation_key != operation_key(observation.id)
-            or request.prompt_version != REPLAN_VERSION
-            or request.result_schema_version != REPLAN_VERSION
-            or request.system_instruction != REPLANNING_PROMPT
+            or request.prompt_version != version
+            or request.result_schema_version != version
+            or request.system_instruction != replanning_instruction(root.workflow_version)
             or loop.operation_sha256 != _operation(loop.run_id, observation.id)
-            or loop.result_schema_sha256 != digest(ProducerReplan.model_json_schema())
+            or loop.result_schema_sha256
+            != digest(replan_model(root.workflow_version).model_json_schema())
         ):
             raise ValueError("Replan immutable seed changed")
         root = db.get(WorkflowRun, loop.run_id)
@@ -244,7 +281,16 @@ def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObser
 def require_completed_replan(db: Session, loop: AgentLoop) -> AgentLoopResult[ProducerReplan]:
     observation = _seed_observation(db, loop, loop.actor_id)
     try:
-        outcome = AgentLoopResult[ProducerReplan].model_validate(loop.outcome_json)
+        root = db.get(WorkflowRun, loop.run_id)
+        assert root is not None
+        outcome = (
+            cast(
+                AgentLoopResult[ProducerReplan],
+                AgentLoopResult[SeriesProducerReplan].model_validate(loop.outcome_json),
+            )
+            if root.workflow_version == SERIES_PRODUCER_VERSION
+            else AgentLoopResult[ProducerReplan].model_validate(loop.outcome_json)
+        )
         proposal = outcome.result
         if (
             loop.status != "COMPLETED"
@@ -278,6 +324,7 @@ def _fresh_evidence(db: Session, loop: AgentLoop, plan: ProducerPlan) -> None:
         if call["tool_name"] == RESEARCH_TOOL
     }
     evidence = set()
+    investigated: set[str] = set()
     for action in actions:
         feedback = action.result_json or {}
         if (
@@ -301,8 +348,20 @@ def _fresh_evidence(db: Session, loop: AgentLoop, plan: ProducerPlan) -> None:
             and action.action_key in visible
         ):
             evidence.add((visible[action.action_key], feedback["result"]["evidence_sha256"]))
+            if (visible[action.action_key], feedback["result"]["evidence_sha256"]) in {
+                (row.tool_call_key, row.evidence_sha256) for row in plan.evidence
+            }:
+                investigated.add(feedback["result"]["episode_id"])
     if not {(row.tool_call_key, row.evidence_sha256) for row in plan.evidence} <= evidence:
         raise DomainError("PRODUCER_PLAN_EVIDENCE", "新版依据须来自本重规划循环的成功调查", 422)
+    root = db.get(WorkflowRun, loop.run_id)
+    assert root is not None
+    if (
+        root.workflow_version == SERIES_PRODUCER_VERSION
+        and not {item["episode_id"] for item in root.input_json["series_scope"]["episodes"]}
+        <= investigated
+    ):
+        raise DomainError("PRODUCER_PLAN_EVIDENCE", "多集重规划须重新调查冻结范围内各集", 422)
 
 
 def _validate(
@@ -458,10 +517,10 @@ def replan_producer(
                 agent_name="producer",
                 stage="producer",
                 operation_key=operation_key(observation.id),
-                agent_version=REPLAN_VERSION,
-                prompt_version=REPLAN_VERSION,
-                result_schema_version=REPLAN_VERSION,
-                system_instruction=REPLANNING_PROMPT,
+                agent_version=replan_version(root.workflow_version),
+                prompt_version=replan_version(root.workflow_version),
+                result_schema_version=replan_version(root.workflow_version),
+                system_instruction=replanning_instruction(root.workflow_version),
                 max_tokens=16000,
                 messages=[
                     AgentUserMessage(
@@ -489,7 +548,7 @@ def replan_producer(
         settings,
         request,
         AgentToolRegistry([research]),
-        ProducerReplan,
+        replan_model(root.workflow_version),
         validate_result=lambda db, proposal: _validate(
             db, run_id, observation_id, proposal, settings
         ),
@@ -532,7 +591,7 @@ def resume_producer_replan(
         plan_id,
         actor,
         AgentToolRegistry([research]),
-        ProducerReplan,
+        replan_model(root.workflow_version),
         decision=decision,
         validate_result=lambda db, proposal: _validate(
             db, run_id, observation.id, proposal, settings

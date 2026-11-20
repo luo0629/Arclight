@@ -17,6 +17,7 @@ from arclight.domain.producer_planning import (
     DelegationResult,
     ProducerPlan,
 )
+from arclight.domain.producer_series import plan_model
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import AgentToolInvocation, WorkflowRun
@@ -75,7 +76,7 @@ def _read(
             or scope_for_run(root, project_id).input_sha256 != loop.input_sha256
         ):
             raise ValueError("Plan loop authority changed")
-        plan = ProducerPlan.model_validate(value["plan"])
+        plan = plan_model(root.workflow_version).model_validate(value["plan"])
         version_no = value["version_no"]
         checksum = digest(plan.model_dump(mode="json"))
         if (
@@ -92,7 +93,8 @@ def _read(
         previous_id = None
         if value["schema_version"] == 1 and version_no == 1:
             if (
-                loop.result_schema_sha256 != digest(ProducerPlan.model_json_schema())
+                loop.result_schema_sha256
+                != digest(plan_model(root.workflow_version).model_json_schema())
                 or require_completed_plan(loop).result != plan
             ):
                 raise ValueError("Original plan outcome changed")

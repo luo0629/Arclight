@@ -1,5 +1,6 @@
 """Versioned Producer plans use the existing durable Agent runtime and authority gates."""
 
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import select
@@ -28,13 +29,21 @@ from arclight.domain.agent_tools import AgentToolGrantRequest
 from arclight.domain.producer_planning import (
     DELEGATE_TOOL,
     PLAN_VERSION,
-    PLANNING_PROMPT,
     WORKFLOW_VERSION,
     ProducerGoal,
     ProducerPlan,
     ProducerPlanReference,
 )
 from arclight.domain.producer_research import RESEARCH_TOOL
+from arclight.domain.producer_series import (
+    PRODUCER_VERSIONS,
+    SERIES_PLAN_VERSION,
+    SERIES_PRODUCER_VERSION,
+    SeriesProducerPlan,
+    SeriesProducerScope,
+    plan_model,
+    planning_instruction,
+)
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import AgentToolInvocation, AuditEvent, Episode, WorkflowRun
@@ -57,6 +66,7 @@ def start_producer(
     request_id: str,
     *,
     limits: AgentRunLimits | None = None,
+    series: SeriesProducerScope | None = None,
 ) -> WorkflowRun:
     """Trusted application entry; UI and automatic observation belong to PROD-03/04.
 
@@ -70,8 +80,10 @@ def start_producer(
     lock_gate(db)
     episode = require_episode(db, episode_id, actor, write=True)
     db.refresh(episode, with_for_update=True)
+    version = SERIES_PRODUCER_VERSION if series else WORKFLOW_VERSION
     fingerprint = digest(
-        {"workflow": WORKFLOW_VERSION, "goal": value.goal, "limits": limits.model_dump(mode="json")}
+        {"workflow": version, "goal": value.goal, "limits": limits.model_dump(mode="json")}
+        | ({"series": series.model_dump(mode="json")} if series else {})
     )
     previous = db.scalar(
         select(WorkflowRun).where(
@@ -82,6 +94,9 @@ def start_producer(
         if previous.request_fingerprint != fingerprint or execution_actor(db, previous) != actor:
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一幂等键不能更换生产目标或调用者", 409)
         return previous
+    from arclight.application.producer_series import require_available_episode
+
+    require_available_episode(db, episode)
     if db.scalar(
         select(WorkflowRun.id).where(
             WorkflowRun.episode_id == episode_id,
@@ -97,13 +112,17 @@ def start_producer(
         "target_duration_ms": episode.target_duration_ms,
         "producer": {"agent_limits": limits.model_dump(mode="json")},
     }
+    if series is not None:
+        from arclight.application.producer_series import capture_scope
+
+        inputs["series_scope"] = capture_scope(db, episode, actor, series)
     service = text_snapshot(db, actor)
     if service:
         inputs["_text_service"] = service
     run = WorkflowRun(
         episode_id=episode.id,
         workflow_type="producer",
-        workflow_version=WORKFLOW_VERSION,
+        workflow_version=version,
         status="RUNNING",
         trace_id=request_id,
         idempotency_key=value.key,
@@ -112,6 +131,10 @@ def start_producer(
     )
     db.add(run)
     db.flush()
+    if series is not None:
+        from arclight.application.producer_series import save_scope
+
+        save_scope(db, episode.project_id, run)
     state = initialize_run_state(run, episode.project_id)
     state = transition_agent_step(
         state,
@@ -179,6 +202,7 @@ def _validate(db: Session, run_id: UUID, plan: ProducerPlan, settings: Settings)
         if call["tool_name"] == RESEARCH_TOOL
     }
     evidence = set()
+    investigated: set[str] = set()
     for action in actions:
         feedback = action.result_json or {}
         if (
@@ -202,8 +226,17 @@ def _validate(db: Session, run_id: UUID, plan: ProducerPlan, settings: Settings)
             and action.action_key in visible_keys
         ):
             evidence.add((visible_keys[action.action_key], feedback["result"]["evidence_sha256"]))
+            cited = (visible_keys[action.action_key], feedback["result"]["evidence_sha256"])
+            if cited in {(row.tool_call_key, row.evidence_sha256) for row in plan.evidence}:
+                investigated.add(feedback["result"]["episode_id"])
     if not {(row.tool_call_key, row.evidence_sha256) for row in plan.evidence} <= evidence:
         raise DomainError("PRODUCER_PLAN_EVIDENCE", "计划依据须来自本循环真实成功调查", 422)
+    if (
+        run.workflow_version == SERIES_PRODUCER_VERSION
+        and not {row["episode_id"] for row in run.input_json["series_scope"]["episodes"]}
+        <= investigated
+    ):
+        raise DomainError("PRODUCER_PLAN_EVIDENCE", "多集计划须引用逐集真实调查", 422)
     validate_plan_tasks(db, run, plan, execution_actor(db, run), settings)
 
 
@@ -213,16 +246,26 @@ def require_completed_plan(loop: AgentLoop) -> AgentLoopResult[ProducerPlan]:
 
     try:
         seed = AgentModelRequest.model_validate(loop.seed_json)
-        outcome = AgentLoopResult[ProducerPlan].model_validate(loop.outcome_json)
+        outcome = (
+            cast(
+                AgentLoopResult[ProducerPlan],
+                AgentLoopResult[SeriesProducerPlan].model_validate(loop.outcome_json),
+            )
+            if seed.agent_version == SERIES_PRODUCER_VERSION
+            else AgentLoopResult[ProducerPlan].model_validate(loop.outcome_json)
+        )
+        version = (
+            SERIES_PLAN_VERSION if seed.agent_version == SERIES_PRODUCER_VERSION else PLAN_VERSION
+        )
         if (
             loop.status != "COMPLETED"
             or loop.operation_sha256 != _operation(loop.run_id)
             or seed.agent_name != "producer"
             or seed.stage != "producer"
-            or seed.agent_version != WORKFLOW_VERSION
+            or seed.agent_version not in PRODUCER_VERSIONS
             or seed.operation_key != PLAN_VERSION
-            or seed.prompt_version != PLAN_VERSION
-            or seed.result_schema_version != PLAN_VERSION
+            or seed.prompt_version != version
+            or seed.result_schema_version != version
             or outcome.status != "COMPLETED"
             or outcome.run_id != loop.run_id
             or outcome.project_id != loop.project_id
@@ -294,7 +337,7 @@ def plan_producer(
         validate_publication(db, run.id)
         if (
             run.workflow_type != "producer"
-            or run.workflow_version != WORKFLOW_VERSION
+            or run.workflow_version not in PRODUCER_VERSIONS
             or execution_actor(db, run) != actor
         ):
             raise DomainError("PRODUCER_SCOPE_INVALID", "此运行不是当前调用者的生产协调运行", 403)
@@ -311,10 +354,14 @@ def plan_producer(
                 agent_name="producer",
                 stage="producer",
                 operation_key=PLAN_VERSION,
-                agent_version=WORKFLOW_VERSION,
-                prompt_version=PLAN_VERSION,
-                result_schema_version=PLAN_VERSION,
-                system_instruction=PLANNING_PROMPT,
+                agent_version=run.workflow_version,
+                prompt_version=SERIES_PLAN_VERSION
+                if run.workflow_version == SERIES_PRODUCER_VERSION
+                else PLAN_VERSION,
+                result_schema_version=SERIES_PLAN_VERSION
+                if run.workflow_version == SERIES_PRODUCER_VERSION
+                else PLAN_VERSION,
+                system_instruction=planning_instruction(run.workflow_version),
                 messages=[
                     AgentUserMessage(
                         data={
@@ -322,6 +369,14 @@ def plan_producer(
                             "episode_id": str(episode.id),
                             "goal": run.input_json["goal"],
                             "goal_sha256": run.input_json["goal_sha256"],
+                            **(
+                                {
+                                    "series_scope": run.input_json["series_scope"],
+                                    "series_scope_sha256": digest(run.input_json["series_scope"]),
+                                }
+                                if "series_scope" in run.input_json
+                                else {}
+                            ),
                         }
                     )
                 ],
@@ -337,7 +392,7 @@ def plan_producer(
         settings,
         request,
         AgentToolRegistry([research]),
-        ProducerPlan,
+        plan_model(run.workflow_version),
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings),
     )
     _save(factory, settings, run_id, outcome)
@@ -359,6 +414,9 @@ def resume_producer_plan(
         if loop.operation_sha256 != _operation(loop.run_id):
             raise DomainError("PRODUCER_PLAN_SCOPE", "此循环不属于生产计划", 409)
         run_id = loop.run_id
+        run = db.get(WorkflowRun, run_id)
+        assert run is not None
+        result_model = plan_model(run.workflow_version)
     research = producer_registry(settings).get(RESEARCH_TOOL)
     assert research is not None
     outcome = resume_agent_loop(
@@ -367,7 +425,7 @@ def resume_producer_plan(
         plan_id,
         actor,
         AgentToolRegistry([research]),
-        ProducerPlan,
+        result_model,
         decision=decision,
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings),
     )

@@ -41,6 +41,22 @@ logger = logging.getLogger(__name__)
 def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revision: int) -> None:
     from arclight.application.gateway_text import runtime_scope
 
+    with factory.begin() as db:
+        run = db.get(WorkflowRun, run_id)
+        if run is not None and (
+            run.workflow_version == "producer-series/1"
+            or "producer_series_context" in run.input_json
+        ):
+            from arclight.application.agent_workflows import WorkflowExecutionDeferred
+            from arclight.application.model_gateway import lock_gate
+            from arclight.application.producer_series_delivery import paused
+            from arclight.persistence.agent_limits import AgentRunLimit
+
+            lock_gate(db)
+            control = db.get(AgentRunLimit, run.id)
+            root = db.get(WorkflowRun, control.root_run_id) if control else None
+            if root is not None and root.status == "RUNNING" and paused(db, root):
+                raise WorkflowExecutionDeferred("Series Producer is paused; retain delivery")
     with runtime_scope(factory, settings, run_id, revision):
         from arclight.application.art_execution import execute_art
         from arclight.application.continuity_execution import execute_continuity
@@ -298,6 +314,10 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     run.pending_review = None
                     emit(db, run, "workflow.finished", {"status": run.status})
         except Exception as exc:
+            if isinstance(exc, DomainError) and exc.code == "PRODUCER_PAUSED":
+                from arclight.application.agent_workflows import WorkflowExecutionDeferred
+
+                raise WorkflowExecutionDeferred("Series Producer is paused") from exc
             # 不把供应商响应、凭证、输入正文或内部路径写到业务错误响应。
             logger.error(
                 "workflow_failed run_id=%s error_type=%s code=%s agent_state_error=%s",

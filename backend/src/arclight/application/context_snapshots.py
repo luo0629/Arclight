@@ -101,6 +101,20 @@ def capture_contexts(
             {
                 "task": stage,
                 "episode_id": run.episode_id,
+                "asset_version_ids": list(
+                    dict.fromkeys(
+                        [
+                            identity
+                            for name in ("shared_version_ids", "prerequisite_script_version_ids")
+                            for identity in (run.input_json.get("producer_series_context") or {})
+                            .get("task_context", {})
+                            .get(name, [])
+                        ]
+                        + (run.input_json.get("producer_series_context") or {}).get(
+                            "dependency_script_version_ids", []
+                        )
+                    )
+                ),
                 "script_version_id": script_id if stage in {"storyboard", "rewrite"} else None,
                 "rewrite_target": run.input_json["rewrite_input"]["request"]["target"]
                 if stage == "rewrite"

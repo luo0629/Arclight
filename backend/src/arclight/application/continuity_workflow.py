@@ -113,6 +113,7 @@ def start_candidate_review(
     payload: CandidateReviewCreate,
     *,
     producer_parent_run_id: UUID | None = None,
+    producer_context: dict | None = None,
 ) -> WorkflowRun:
     lock_gate(db)
     lock_dependency_graph(db, project_id)
@@ -133,6 +134,7 @@ def start_candidate_review(
             actor,
             payload,
             producer_parent_run_id=producer_parent_run_id,
+            producer_context=producer_context,
         )
     checked = require_candidate_media_check(db, project_id, candidate.id)
     manifest = db.get(DependencyManifest, candidate.input_manifest_id)
@@ -176,6 +178,13 @@ def start_candidate_review(
             raise DomainError("REVIEW_TASK_CONFLICT", "同一候选不能更换精确送审目标", 409)
         run = db.get(WorkflowRun, previous.run_id)
         assert run is not None
+        if (
+            producer_parent_run_id is not None
+            and run.input_json.get("producer_series_context") != producer_context
+        ):
+            raise DomainError(
+                "PRODUCER_DELEGATION_CONFLICT", "已有审查不能更换原多集任务上下文", 409
+            )
         if producer_parent_run_id is not None:
             from arclight.persistence.agent_limits import AgentRunLimit
 
@@ -218,6 +227,13 @@ def start_candidate_review(
         run = db.get(WorkflowRun, source_route.run_id, with_for_update=True)
         if run is None or run.workflow_type != "continuity_review":
             raise DomainError("REVIEW_RUN_REQUIRED", "修订须沿用原连续性审查运行", 409)
+        if (
+            producer_parent_run_id is not None
+            and run.input_json.get("producer_series_context") != producer_context
+        ):
+            raise DomainError(
+                "PRODUCER_DELEGATION_CONFLICT", "已有审查不能更换原多集任务上下文", 409
+            )
         if producer_parent_run_id is not None:
             from arclight.persistence.agent_limits import AgentRunLimit
 
@@ -258,6 +274,8 @@ def start_candidate_review(
             },
         )
         snapshot = text_snapshot(db, actor)
+        if producer_context is not None:
+            run.input_json = run.input_json | {"producer_series_context": producer_context}
         if snapshot:
             run.input_json = run.input_json | {"_text_service": snapshot}
         db.add(run)

@@ -87,6 +87,10 @@ def _active_chain(
             raise DomainError("AGENT_SCOPE_INVALID", "Agent 委派作用范围不匹配", 409)
         if run.status == "CANCELLED":
             raise DomainError("AGENT_CANCELLED", "Agent 运行已取消", 409)
+        from arclight.application.producer_series_delivery import paused
+
+        if paused(db, run):
+            raise DomainError("PRODUCER_PAUSED", "多集制片已暂停，恢复前不允许新的执行动作", 409)
         if utcnow() >= utc(root.deadline_at):
             raise DomainError("AGENT_DEADLINE_EXCEEDED", "Agent 已达到总执行时限", 409)
         completed_review = False
@@ -277,6 +281,12 @@ def _check_action(
     if control is None:
         raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 调用尚未建立运行限制", 409)
     limits = _active_chain(db, control, context.stage)
+    if context.kind == "MODEL" or amount > 0:
+        from arclight.application.producer_series import require_known_costs
+
+        root_run = db.get(WorkflowRun, control.root_run_id)
+        assert root_run is not None
+        require_known_costs(db, root_run, control.actor_id)
     usage = action_usage(db, control.root_run_id)
     if limits.maximum_cost is not None and usage["unknown_cost"]:
         raise DomainError("AGENT_LIMITS_INVALID", "受限调用缺少预算来源", 409)

@@ -29,7 +29,7 @@ from arclight.domain.agent_state import terminate_agent_state
 from arclight.domain.agent_tools import AgentToolCall
 from arclight.domain.producer_observation import ProducerObservationRequest
 from arclight.domain.producer_planning import DELEGATE_TOOL
-from arclight.domain.producer_replanning import REPLAN_VERSION
+from arclight.domain.producer_series import REPLAN_VERSIONS
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import Episode, WorkflowRun
 
@@ -54,7 +54,7 @@ def _invoke(factory: sessionmaker[Session], settings: Settings, command_id: UUID
             loop = db.get(AgentLoop, UUID(payload["loop_id"]))
             if loop is None or loop.run_id != run_id or loop.actor_id != actor:
                 raise DomainError("PRODUCER_SCOPE_INVALID", "生产恢复循环作用范围无效", 409)
-            replan = loop.seed_json.get("result_schema_version") == REPLAN_VERSION
+            replan = loop.seed_json.get("result_schema_version") in REPLAN_VERSIONS
         if action == "DELEGATE":
             feedback = execute_agent_tool(
                 db,

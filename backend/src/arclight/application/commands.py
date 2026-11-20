@@ -157,6 +157,7 @@ def start_run(
     art_task: ArtDirectionTask | None = None,
     art_concept_plan: ArtConceptPlan | None = None,
     producer_parent_run_id: UUID | None = None,
+    producer_context: dict | None = None,
 ) -> WorkflowRun:
     options = ScreenwriterRevisionOptions(
         professional=professional or professional_director or art_task is not None,
@@ -260,6 +261,10 @@ def start_run(
         payload["narrative"] = narrative.model_dump(mode="json")
     if producer_parent_run_id is not None:
         payload["producer_parent_run_id"] = str(producer_parent_run_id)
+    if producer_context is not None:
+        if producer_parent_run_id is None:
+            raise DomainError("PRODUCER_PARENT_INVALID", "多集输入必须属于原制片父运行", 409)
+        payload["producer_series_context"] = producer_context
     fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
     existing = db.scalar(
         select(WorkflowRun).where(
@@ -270,6 +275,9 @@ def start_run(
         if existing.request_fingerprint != fingerprint:
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一幂等键不能用于不同请求体")
         return existing
+    from arclight.application.producer_series import require_available_episode
+
+    require_available_episode(db, episode, producer_parent_run_id)
     active = db.scalar(
         select(WorkflowRun).where(
             WorkflowRun.episode_id == episode_id,
@@ -439,6 +447,8 @@ def start_run(
         version = WORKFLOW_VERSION if script_version_id is None else DIRECTOR_WORKFLOW_VERSION
     if producer_parent_run_id is not None:
         inputs["created_by"] = actor
+    if producer_context is not None:
+        inputs["producer_series_context"] = producer_context
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,

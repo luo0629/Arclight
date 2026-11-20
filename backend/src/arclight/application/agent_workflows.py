@@ -102,6 +102,8 @@ def wait_for_agent(
 
 
 def fail_workflow(factory: sessionmaker[Session], run_id: UUID, revision: int, code: str) -> None:
+    if code == "PRODUCER_PAUSED":
+        raise WorkflowExecutionDeferred("Series Producer is paused; retain original delivery")
     with factory.begin() as db:
         lock_gate(db)
         run = db.get(WorkflowRun, run_id, populate_existing=True, with_for_update=True)

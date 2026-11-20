@@ -92,6 +92,9 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
         )
 
     def _stop(self, state: AgentLoopState, code: str) -> AgentLoopState:
+        if code == "PRODUCER_PAUSED":
+            # A reversible admission pause must not become a terminal journal outcome.
+            raise DomainError(code, "多集制片暂停，原行动等待恢复", 409)
         if code == "GATEWAY_RECONCILIATION_REQUIRED":
             # Do not checkpoint a terminal result over the pending action. After explicit
             # NOT_ACCEPTED evidence, the same logical action may safely continue.

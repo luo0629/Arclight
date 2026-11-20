@@ -176,6 +176,23 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
         return series_text_definitions(stage, workflow_version)
     if stage == "producer":
         from arclight.domain import producer_planning as producer
+        from arclight.domain.producer_series import (
+            SERIES_PLAN_VERSION,
+            SERIES_PRODUCER_VERSION,
+            plan_model,
+            planning_instruction,
+        )
+
+        if workflow_version == SERIES_PRODUCER_VERSION:
+            return [
+                ("AGENT", workflow_version, {"workflow_version": workflow_version}),
+                (
+                    "PROMPT",
+                    SERIES_PLAN_VERSION,
+                    {"instruction": planning_instruction(workflow_version)},
+                ),
+                ("SCHEMA", SERIES_PLAN_VERSION, plan_model(workflow_version).model_json_schema()),
+            ]
 
         if workflow_version != producer.WORKFLOW_VERSION:
             raise DomainError("PRODUCER_VERSION_INVALID", "不兼容的 Producer 版本", 409)

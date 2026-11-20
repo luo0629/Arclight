@@ -28,6 +28,7 @@ from arclight.application.producer_plan_history import (
     read_plan_record,
 )
 from arclight.application.producer_research import investigate_project
+from arclight.application.producer_series import contains_episode, task_context
 from arclight.application.production_events import consume_stage_event, recheck_stage_event
 from arclight.application.production_versions import bind, find_binding
 from arclight.core.config import Settings
@@ -120,7 +121,7 @@ def _family(db: Session, root: WorkflowRun, child_id: UUID, actor: str) -> Workf
     control = db.get(AgentRunLimit, child_id, populate_existing=True)
     if (
         child is None
-        or child.episode_id != root.episode_id
+        or not contains_episode(db, root, child.episode_id)
         or control is None
         or control.root_run_id != root.id
         or execution_actor(db, child) != actor
@@ -138,7 +139,7 @@ def _event(db: Session, root: WorkflowRun, control: AgentRunLimit, actor: str, e
     if (
         event.event_id != row.id
         or event.project_id != control.project_id
-        or event.episode_id != root.episode_id
+        or not contains_episode(db, root, event.episode_id)
         or event.actor_id != actor
         or digest(row.event_json) != row.request_sha256
         or row.source_kind != event.source_kind
@@ -187,7 +188,7 @@ def _human(
         if (
             review is None
             or review.project_id != control.project_id
-            or review.episode_id != root.episode_id
+            or not contains_episode(db, root, review.episode_id)
             or review.run_id not in children
         ):
             raise DomainError("PRODUCER_OBSERVATION_SCOPE", "人工决定不属于当前计划", 409)
@@ -236,7 +237,7 @@ def _human(
                     )
                 if (
                     content is None
-                    or content.episode_id != root.episode_id
+                    or content.episode_id != source_run.episode_id
                     or content.run_id != source_run.id
                     or digest(content.content_json) != frozen.content_sha256
                     or digest({"startup": source_run.input_json, "sources": inputs})
@@ -560,7 +561,15 @@ def _tasks(
         receipt = find_task_delegation(db, root.id, origin)
         input_error = None
         try:
-            validate_producer_task(db, root, planned, actor, settings)
+            validate_producer_task(
+                db,
+                root,
+                planned,
+                actor,
+                settings,
+                task_context(root, record.plan, planned.task_key),
+                db.get(WorkflowRun, receipt.child_run_id) if receipt else None,
+            )
         except DomainError as exc:
             if exc.status_code in {401, 403}:
                 raise
@@ -570,7 +579,14 @@ def _tasks(
         output_sha = digest({})
         unknown = invalid = False
         if receipt is not None:
-            validate_saved_child(context, root, planned, receipt, control)
+            validate_saved_child(
+                context,
+                root,
+                planned,
+                receipt,
+                control,
+                task_context(root, record.plan, planned.task_key),
+            )
             child = db.get(WorkflowRun, receipt.child_run_id, populate_existing=True)
             assert child is not None
             identities, output_sha, invalid = _outputs(db, child)

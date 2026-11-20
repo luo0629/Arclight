@@ -116,6 +116,7 @@ def start_temporal_review(
     payload: CandidateReviewCreate,
     *,
     producer_parent_run_id: UUID | None = None,
+    producer_context: dict | None = None,
 ) -> WorkflowRun:
     # Called by the common intake with the gate and dependency graph held.
     require_project(db, project_id, actor, write=True)
@@ -132,6 +133,14 @@ def start_temporal_review(
     previous = read_temporal_work(db, project_id, candidate_id)
     if previous is not None:
         run = db.get(WorkflowRun, previous.run_id)
+        if (
+            producer_parent_run_id is not None
+            and run is not None
+            and run.input_json.get("producer_series_context") != producer_context
+        ):
+            raise DomainError(
+                "PRODUCER_DELEGATION_CONFLICT", "已有视频审查不能更换原多集任务上下文", 409
+            )
         if run is None or previous.target != target:
             raise DomainError("REVIEW_TASK_CONFLICT", "同一候选不能更换送审目标", 409)
         if parent is None and run.input_json["video_temporal_review"][
@@ -178,6 +187,8 @@ def start_temporal_review(
             },
         )
         snapshot = text_snapshot(db, actor)
+        if producer_context is not None:
+            run.input_json = run.input_json | {"producer_series_context": producer_context}
         if snapshot:
             run.input_json = run.input_json | {"_text_service": snapshot}
         db.add(run)
