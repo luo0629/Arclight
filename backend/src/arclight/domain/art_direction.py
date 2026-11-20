@@ -26,7 +26,21 @@ draft.evidence中的回执。proposal.origin=AGENT，project_id／episode_id／v
 全部task.constraints来自seed，精确SCRIPT来源使用seed.script_version_id／script_sha256。
 seed.visual_bible_source非空时必须直接引用该来源；规范设计的content_sha256也复制该凭证，
 version_id／version_no从实际visual调查读取，不要自行计算或猜测哈希。
+每张reference还必须在proposal.sources中声明自己的精确资产版本来源：
+对于实际读图的ASSET material M，创建{kind:"VERSION",source_id:S,
+resource_type:"ASSET_VERSION",resource_id:M.source_id,content_sha256:M.content.checksum}。
+S是本提案内唯一的来源UUID；reference.source_id=S，reference.asset.asset_id取
+M.content.asset_id，reference.asset.asset_version_id=M.source_id。不要把取证material的
+content_sha256当作资产内容checksum，也不要只声明SCRIPT／VISUAL_BIBLE来源。
+option.source_ids须包含其每张reference对应的S；每个prompt也须列出所用reference的S。
+option.reference_ids与assessment.reference_ids一致；assessment.evidence_manifest_ids须
+包括对应ASSET material的manifest_id，draft.evidence保留这些material的五个身份字段。
+每个可提交option至少包含一项design和一段非空prompt，prompt.design_ids引用该案设计，
+source_ids／reference_ids从该案已声明的列表中选择。来源、参考、方案、设计和prompt的
+各自UUID必须唯一，不能删空方案或构造未决问题来规避引用错误。
 先调用compare_art_options({draft: ...})检查真实锁差异；修改draft后须重新比较。
+工具参数必须是完整合法JSON，不含Markdown或省略号；若比较失败，按错误修复完整draft
+并重新调用，失败或仅调查成功不算比较成功。
 只有证据齐全且比较成功才COMPLETE，返回{draft,comparison_sha256}。已批准或锁定规范
 只能提出变更，绝不批准、解锁、选用、生成正式资产或调用任意Provider。必要图片、授权、
 规范或能力不足，无法解决的冲突或低置信度时HUMAN_REVIEW，明确请求补充材料或决定。

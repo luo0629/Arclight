@@ -19,6 +19,7 @@ from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
 
 from arclight.application import agent_loop_recovery as recovery
+from arclight.application import art_direction
 from arclight.application.art_direction import propose_art, resume_art_direction
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -28,7 +29,7 @@ from arclight.persistence.models import AgentToolGrant, AssetVersion, Project, U
 
 
 def test_human_pause_restart_and_idempotent_answer_preserve_original_art_loop(
-    client, episode, settings, model_service
+    client, episode, settings, model_service, monkeypatch
 ):
     reference_set(client, episode)
     run_id, actor, _, task = prepare_direction(client, episode, settings)
@@ -43,11 +44,20 @@ def test_human_pause_restart_and_idempotent_answer_preserve_original_art_loop(
     with factory() as db:
         control = db.get(AgentRunLimit, run_id)
         original = (control.deadline_at, control.limits_json, control.root_run_id)
+        frozen = db.get(AgentLoop, waiting.loop_id).seed_json
+    monkeypatch.setattr(art_direction, "DIRECTION_PROMPT", "A later instruction for new runs.")
+    assert propose_art(factory, settings, run_id, actor, task) == waiting
     decision = answer(waiting)
     finished = resume_art_direction(factory, settings, waiting.loop_id, actor, decision=decision)
     assert not errors, errors
     assert finished.status == "COMPLETED" and len(sent) == 5, finished.model_dump_json()
     assert finished.loop_id == waiting.loop_id and finished.input_sha256 == waiting.input_sha256
+    assert all(
+        payload["messages"][0]["content"].startswith(frozen["system_instruction"])
+        for payload in sent
+    )
+    with factory() as db:
+        assert db.get(AgentLoop, waiting.loop_id).seed_json == frozen
     assert (
         resume_art_direction(factory, settings, waiting.loop_id, actor, decision=decision)
         == finished

@@ -108,6 +108,7 @@ def install_reviewer_model(
     human=False,
     difference=None,
     uncertainty=None,
+    uncertainty_rule="COSTUME",
     mutate_final=None,
     on_http=None,
     no_images=False,
@@ -195,7 +196,7 @@ def install_reviewer_model(
                         summary="The red case changes state across the adjacent images.",
                     )
                 if uncertainty:
-                    item = next(c for c in comparisons if c["rule_id"] == "COSTUME")
+                    item = next(c for c in comparisons if c["rule_id"] == uncertainty_rule)
                     item.update(status="UNDETERMINED", uncertainty=uncertainty)
                 if bypass:
                     fake_check = deepcopy(checks[-1])

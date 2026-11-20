@@ -45,7 +45,13 @@ SourceKind = Literal["CANDIDATE", "STORYBOARD", "SCRIPT", "SHOT", "ASSET", "VISU
 class RuleCitation(AgentToolContract):
     source_kind: SourceKind
     source_id: UUID
-    content_sha256: Checksum
+    content_sha256: Checksum = Field(
+        description=(
+            "Copy this material-envelope hash from the current rules index context_sources "
+            "with the same source_kind/source_id. For CANDIDATE this is NOT the image file "
+            "checksum or seed ReviewReference.content_sha256."
+        )
+    )
     region: ReviewRegion | None = None
     basis: Brief
 
@@ -77,8 +83,18 @@ class RuleComparison(AgentToolContract):
 
 class ContinuityRulesParameters(AgentToolContract):
     target: ReviewTarget
-    evidence_manifest_id: UUID
-    comparisons: list[RuleComparison] = Field(default_factory=list, max_length=10)
+    evidence_manifest_id: UUID = Field(
+        description="Copy result.manifest_id from a completed investigate_continuity call."
+    )
+    comparisons: list[RuleComparison] = Field(
+        default_factory=list,
+        max_length=10,
+        description=(
+            "First use [] for the current investigation's source ledger and required references. "
+            "Then submit visual observations citing those exact context_sources triples. "
+            "An empty list alone does not complete a comparison."
+        ),
+    )
 
     @model_validator(mode="after")
     def unique_comparisons(self):

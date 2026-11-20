@@ -647,6 +647,7 @@ def test_explicit_scene_change_preserves_adjacent_evidence_without_same_scene_co
     "change,code",
     [
         ("hash", "REVIEW_REFERENCE_CHANGED"),
+        ("candidate_file_hash", "REVIEW_REFERENCE_CHANGED"),
         ("source", "REVIEW_REFERENCE_INVALID"),
         ("manifest", "REVIEW_REFERENCE_INVALID"),
         ("target", "REVIEW_TARGET_INVALID"),
@@ -661,6 +662,14 @@ def test_forged_precise_sources_targets_and_text_regions_are_refused(
     args = {}
     if change == "hash":
         values[0]["citations"][0]["content_sha256"] = "0" * 64
+    elif change == "candidate_file_hash":
+        material = next(
+            m for m in rules_case["evidence"]["materials"] if m["source_kind"] == "CANDIDATE"
+        )
+        checksum = material["content"]["asset"]["checksum"]
+        assert checksum != material["content_sha256"]
+        citation = next(c for c in values[0]["citations"] if c["source_kind"] == "CANDIDATE")
+        citation["content_sha256"] = checksum
     elif change == "source":
         values[0]["citations"][0]["source_id"] = str(uuid4())
     elif change == "manifest":

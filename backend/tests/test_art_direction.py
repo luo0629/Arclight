@@ -156,7 +156,18 @@ def test_missing_required_images_escalate_without_formal_writes(
         assert tool_feedback(sent[-1])[-1]["error"]["code"] == "ART_EVIDENCE_REQUIRED"
 
 
-@pytest.mark.parametrize("fault", ["source", "evidence", "goal", "constraints", "scope"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "source",
+        "missing_asset_source",
+        "asset_checksum",
+        "evidence",
+        "goal",
+        "constraints",
+        "scope",
+    ],
+)
 def test_unobserved_or_retargeted_drafts_cannot_pass_comparison(
     client, episode, settings, model_service, fault
 ):
@@ -166,6 +177,17 @@ def test_unobserved_or_retargeted_drafts_cannot_pass_comparison(
     def mutate(draft):
         if fault == "source":
             draft["proposal"]["sources"][0]["resource_id"] = str(uuid4())
+        elif fault == "missing_asset_source":
+            draft["proposal"]["sources"] = [
+                source
+                for source in draft["proposal"]["sources"]
+                if source["resource_type"] != "ASSET_VERSION"
+            ]
+        elif fault == "asset_checksum":
+            source = next(
+                s for s in draft["proposal"]["sources"] if s["resource_type"] == "ASSET_VERSION"
+            )
+            source["content_sha256"] = "f" * 64
         elif fault == "evidence":
             draft["evidence"][0]["manifest_id"] = str(uuid4())
             for assessment in draft["assessments"]:
@@ -183,7 +205,14 @@ def test_unobserved_or_retargeted_drafts_cannot_pass_comparison(
     assert not errors, errors
     assert result.status == "HUMAN_REVIEW", result.model_dump_json()
     feedback = tool_feedback(sent[-1])[-1]
-    assert feedback["error"]["code"] in {"ART_EVIDENCE_INVALID", "ART_DIRECTION_SCOPE"}
+    expected = (
+        "INVALID_ARGUMENTS"
+        if fault == "missing_asset_source"
+        else "ART_EVIDENCE_INVALID"
+        if fault in {"source", "asset_checksum", "evidence"}
+        else "ART_DIRECTION_SCOPE"
+    )
+    assert feedback["error"]["code"] == expected
     assert facts(client) == before
 
 
