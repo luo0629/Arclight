@@ -120,8 +120,9 @@ def save_script(
     )
     db.add(version)
     db.flush()
-    registry = register_content(db, version, actor)
-    if not registry.stale:
+    register_content(db, version, actor)
+    # Graph registration can invalidate a saved draft before it reaches review.
+    if version.status == "READY_FOR_REVIEW":
         pause_for_content(db, version, actor)
     audit(
         db,
