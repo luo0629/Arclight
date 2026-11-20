@@ -148,13 +148,20 @@ def receipts(client, run_id):
         ]
 
 
+@pytest.mark.parametrize("supplier", ["custom", "qwen"])
 def test_real_gateway_three_turn_tool_pairing_execution_errors_and_final(
     client,
     episode,
     settings,
     model_service,
     caplog,
+    supplier,
 ):
+    settings.llm_supplier = supplier
+    settings.llm_model = "qwen3.8-flash"
+    settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
+        update={"supplier": supplier, "model": settings.llm_model}
+    )
     entry_id = create_entry(client, episode["project_id"])
     run_id, actor = active_run(client, episode)
     registry = build_agent_tool_registry()
@@ -164,6 +171,10 @@ def test_real_gateway_three_turn_tool_pairing_execution_errors_and_final(
     def handler(req):
         body = json.loads(req.content)
         requests.append(body)
+        if supplier == "qwen":
+            assert body["enable_thinking"] is False
+        else:
+            assert "enable_thinking" not in body
         assert req.headers["authorization"] == "Bearer private-agent-transport-key"
         assert body["tools"] == [
             {
@@ -452,15 +463,24 @@ def test_vendor_tool_calls_are_untrusted_and_must_follow_protocol(settings, mode
 
 
 @pytest.mark.parametrize(
-    "response_format,supplier", [("json_schema", "openai"), ("json_object", "deepseek")]
+    "response_format,supplier,model",
+    [
+        ("json_schema", "openai", "exact-model"),
+        ("json_object", "deepseek", "exact-model"),
+        ("json_object", "qwen", "qwen3.8-flash"),
+        ("json_schema", "qwen", "qwen3.8-flash"),
+        ("json_object", "qwen", "deepseek-v4.1-flash-1017"),
+        ("json_object", "custom", "qwen3.8-flash"),
+    ],
 )
 def test_wire_dialects_and_strict_final_contract(
-    settings, model_service, response_format, supplier
+    settings, model_service, response_format, supplier, model
 ):
     settings.llm_response_format = response_format
     settings.llm_supplier = supplier
+    settings.llm_model = model
     settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
-        update={"supplier": supplier}
+        update={"supplier": supplier, "model": model}
     )
 
     def handler(req):
@@ -468,9 +488,15 @@ def test_wire_dialects_and_strict_final_contract(
         token_parameter = "max_completion_tokens" if supplier == "openai" else "max_tokens"
         assert body[token_parameter] == 4096
         assert body["response_format"]["type"] == response_format
+        if supplier == "qwen" and model.startswith("qwen"):
+            assert body["enable_thinking"] is False
+        else:
+            assert "enable_thinking" not in body
         if supplier == "deepseek":
             assert body["thinking"] == {"type": "disabled"}
             assert "JSON Schema" in body["messages"][0]["content"]
+        else:
+            assert "thinking" not in body
         return httpx.Response(
             200, json=final_response(usage={"prompt_tokens": True, "completion_tokens": 7})
         )
@@ -489,9 +515,15 @@ def add_image(client, episode):
     return state(client, asset, ready, "APPROVED").json()
 
 
+@pytest.mark.parametrize("supplier", ["custom", "qwen"])
 def test_multiple_images_use_pinned_controlled_references_and_never_persist_bytes(
-    client, episode, settings, model_service, caplog
+    client, episode, settings, model_service, caplog, supplier
 ):
+    settings.llm_supplier = supplier
+    settings.llm_model = "qwen3.8-flash"
+    settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
+        update={"supplier": supplier, "model": settings.llm_model}
+    )
     versions = [add_image(client, episode), add_image(client, episode)]
     run_id, _ = active_run(client, episode)
     added = evidence(client, str(run_id), asset_version_ids=[version["id"] for version in versions])
@@ -501,6 +533,10 @@ def test_multiple_images_use_pinned_controlled_references_and_never_persist_byte
 
     def handler(req):
         payload = json.loads(req.content)
+        if supplier == "qwen":
+            assert payload["enable_thinking"] is False
+        else:
+            assert "enable_thinking" not in payload
         blocks = payload["messages"][1]["content"]
         urls = [block["image_url"]["url"] for block in blocks if block["type"] == "image_url"]
         assert len(urls) == 2

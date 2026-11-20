@@ -22,6 +22,8 @@ from arclight.application.director_performance import (
     performance_text_definitions,
 )
 from arclight.application.production_versions import text_definitions
+from arclight.domain.art_direction import DIRECTION_PROMPT
+from arclight.domain.director_collaboration import OPINION_PROMPT
 from arclight.domain.director_performance import PerformanceRevisionSeed
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.versions import VersionRegistration, digest
@@ -49,8 +51,18 @@ LEGACY_DEFINITIONS = {
 
 
 @pytest.mark.parametrize("version,expected", LEGACY_DEFINITIONS.items())
-def test_archived_director_and_production_definitions_stay_exact(version, expected):
-    assert digest(text_definitions("storyboard", version)) == expected
+def test_archived_definitions_preserve_contracts_and_use_current_art_instruction(version, expected):
+    definitions = text_definitions("storyboard", version)
+    for kind, _, definition in definitions:
+        if kind != "PROMPT" or "art_opinion" not in definition:
+            continue
+        assert definition["art_opinion"] == DIRECTION_PROMPT + OPINION_PROMPT
+        # Prompt updates apply directly; all other historical fields remain exact.
+        archived_prompt = (
+            Path(__file__).parent / "fixtures/archived_art_direction_prompt.txt"
+        ).read_text(encoding="utf-8")
+        definition["art_opinion"] = archived_prompt + OPINION_PROMPT
+    assert digest(definitions) == expected
 
 
 def test_performance_definitions_register_complete_shared_schemas():

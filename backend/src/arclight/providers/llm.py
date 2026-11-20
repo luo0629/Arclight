@@ -229,6 +229,9 @@ class LLMService:
             extra = {token_parameter: max_tokens, "response_format": response_format}
             if settings.llm_supplier == "deepseek":
                 extra["thinking"] = {"type": "disabled"}
+            if settings.llm_supplier == "qwen" and settings.llm_model.startswith("qwen"):
+                # Match the native Qwen path; hybrid models can default to thinking.
+                extra["enable_thinking"] = False
             if re.match(r"^o\d", settings.llm_model):
                 # Keep the historical system role for custom o-series gateways.
                 extra["messages"] = message_dicts(messages)
