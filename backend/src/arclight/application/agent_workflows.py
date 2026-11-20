@@ -26,12 +26,13 @@ def versions_for_agent(agent_name: str) -> set[str]:
     from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
     from arclight.domain.continuity_workflow import REVIEW_WORKFLOW_VERSION
     from arclight.domain.director_creation import DIRECTOR_VERSIONS
+    from arclight.domain.narrative_review import NARRATIVE_REVIEW_VERSION
 
     return {
         "screenwriter": PROFESSIONAL_VERSIONS,
         "director": DIRECTOR_VERSIONS,
         "art_director": set(ART_WORKFLOW_VERSIONS),
-        "continuity_reviewer": {REVIEW_WORKFLOW_VERSION},
+        "continuity_reviewer": {REVIEW_WORKFLOW_VERSION, NARRATIVE_REVIEW_VERSION},
     }.get(agent_name, set())
 
 
@@ -216,6 +217,14 @@ def queue_answer(
     ):
         raise DomainError("NOT_FOUND", "当前工作问题不存在", 404)
     assert episode is not None
+    from arclight.domain.narrative_review import NARRATIVE_REVIEW_VERSION
+
+    if run.workflow_version == NARRATIVE_REVIEW_VERSION:
+        from arclight.application.dependencies import lock_dependency_graph
+        from arclight.application.narrative_review import current_work
+
+        lock_dependency_graph(db, episode.project_id)
+        current_work(db, episode.project_id, run.id)
     if (
         decision.input_sha256 != loop.input_sha256
         or question.input_sha256 != loop.input_sha256

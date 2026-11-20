@@ -70,6 +70,7 @@ ReviewKind = Literal[
     "EXPORT",
     "DELIVERY",
     "WORKFLOW",
+    "NARRATIVE",
 ]
 ReviewBlocker = Literal[
     "PROJECT_ARCHIVED",

@@ -82,6 +82,8 @@ def startup_input(run: WorkflowRun, stage: str) -> dict:
 def capture_contexts(
     db: Session, project_id: UUID, run: WorkflowRun, settings: Settings, actor: str | None = None
 ) -> dict[str, str]:
+    from arclight.domain.narrative_review import NARRATIVE_REVIEW_VERSION
+
     previous = manifest_references(db, project_id, run.id)
     if previous is not None:
         read_contexts(db, project_id, run)
@@ -114,6 +116,10 @@ def capture_contexts(
             frozen_input=run.input_json,
             deferred_script_run=run.id
             if run.workflow_type == "script_storyboard" and stage == "storyboard"
+            else None,
+            narrative_review_run=run.id
+            if run.workflow_type == "continuity_review"
+            and run.workflow_version == NARRATIVE_REVIEW_VERSION
             else None,
         )
         check_call(value, startup_input(run, stage))

@@ -10,7 +10,14 @@ from arclight.domain.production_state import ProductionContract
 from arclight.domain.workflow_contracts import Checksum
 
 ReviewKind = Literal[
-    "SCRIPT", "STORYBOARD", "REFERENCE", "VISUAL_SPEC", "EXCEPTIONAL_SHOT", "EXPORT", "DELIVERY"
+    "SCRIPT",
+    "STORYBOARD",
+    "REFERENCE",
+    "VISUAL_SPEC",
+    "EXCEPTIONAL_SHOT",
+    "EXPORT",
+    "DELIVERY",
+    "NARRATIVE",
 ]
 
 
@@ -52,6 +59,26 @@ class PerformanceIntentApproval(ProductionContract):
     blockers: list[DirectorIssue] = Field(default_factory=list, max_length=4096)
 
 
+class NarrativeContentApproval(ProductionContract):
+    report_id: UUID
+    input_sha256: Checksum
+    continuous_viewing_confirmed: Literal[True]
+    episode_ids: list[UUID] = Field(min_length=1, max_length=100)
+    limitation_resolutions: list[str] = Field(max_length=500)
+    warning_resolutions: list[str] = Field(max_length=600)
+
+    @model_validator(mode="after")
+    def explicit_coverage(self):
+        if len(self.episode_ids) != len(set(self.episode_ids)):
+            raise ValueError("Continuous viewing must name each episode once")
+        if any(
+            not value.strip() or len(value) > 2000
+            for value in [*self.limitation_resolutions, *self.warning_resolutions]
+        ):
+            raise ValueError("Each human resolution needs a bounded explanation")
+        return self
+
+
 class HumanDecision(ProductionContract):
     version_id: UUID
     request_sha256: Checksum
@@ -61,6 +88,9 @@ class HumanDecision(ProductionContract):
     performance_intent: PerformanceIntentApproval | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    narrative_content: NarrativeContentApproval | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def explicit_intent(self):
@@ -68,6 +98,12 @@ class HumanDecision(ProductionContract):
             self.decision != "APPROVE" or not self.comment.strip()
         ):
             raise ValueError("仅确认表演意图须明确批准并填写理由")
+        if self.narrative_content is not None and (
+            self.decision != "APPROVE"
+            or not self.comment.strip()
+            or self.performance_intent is not None
+        ):
+            raise ValueError("叙事内容批准须独立确认连续观片并填写理由")
         return self
 
 

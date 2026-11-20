@@ -24,10 +24,12 @@ from arclight.domain.context import (
     TASK_CONTRACTS,
     ContextLimits,
     ContextRequest,
+    TaskContract,
     check_size,
 )
 from arclight.domain.generation_requests import MediaErrorCode
 from arclight.domain.project_settings import ProjectStorySettings
+from arclight.domain.versions import digest
 from arclight.persistence.models import (
     Episode,
     GenerationAttempt,
@@ -331,6 +333,7 @@ def build_context(
     *,
     frozen_input: dict | None = None,
     deferred_script_run: UUID | None = None,
+    narrative_review_run: UUID | None = None,
 ) -> dict:
     project = require_project(db, project_id, actor)
     episode = db.get(Episode, request.episode_id)
@@ -339,6 +342,14 @@ def build_context(
     if episode.status == "ARCHIVED":
         raise DomainError("CONTEXT_INPUT_NOT_USABLE", "归档剧集不能组装新上下文", 409)
     contract = TASK_CONTRACTS[request.task]
+    narrative_work = None
+    if narrative_review_run is not None:
+        from arclight.application.narrative_review import current_work
+
+        narrative_work = current_work(db, project_id, narrative_review_run)
+        if request.task != "storyboard" or request.script_version_id is not None:
+            raise DomainError("CONTEXT_SCOPE_NOT_ALLOWED", "叙事审查须使用独立精确输入", 422)
+        contract = TaskContract(editable=("narrative.assessment",))
     if (
         (request.asset_version_ids and not contract.assets)
         or (request.story_entry_ids and not contract.entries)
@@ -359,6 +370,7 @@ def build_context(
         and request.script_version_id is None
         and request.shot_id is None
         and deferred_script_run is None
+        and narrative_work is None
     ):
         missing("此任务必须指定精确剧本")
     limits = settings.context_limits.restrict(request.limits)
@@ -395,6 +407,12 @@ def build_context(
         required["local"]["deferred_script"] = {
             "run_id": str(deferred_script_run),
             "policy": "EXACT_APPROVED_OUTPUT_OF_THIS_RUN",
+        }
+    if narrative_work is not None:
+        required["local"]["narrative_review"] = {
+            "run_id": str(narrative_work.run_id),
+            "input_sha256": digest(narrative_work.model_dump(mode="json")),
+            "policy": "EXPLICIT_FROZEN_NARRATIVE_EVIDENCE_ONLY",
         }
     if contract.assets:
         required["assets"] = resolve_assets(

@@ -67,6 +67,12 @@ def invoke_agent[T: BaseModel](
         if episode is None:
             raise DomainError("NOT_FOUND", "工作流作用范围不存在", 404)
         actor = execution_actor(db, run)
+        from arclight.domain.narrative_review import NARRATIVE_REVIEW_VERSION
+
+        if run.workflow_version == NARRATIVE_REVIEW_VERSION:
+            from arclight.application.narrative_review import current_work
+
+            current_work(db, episode.project_id, run.id)
         definitions = available_agent_tools(
             db, registry, run.id, request.agent_name, actor, request.stage
         )
@@ -165,6 +171,8 @@ def invoke_agent[T: BaseModel](
 
     def check_binding(db: Session, call_id: UUID) -> None:
         recheck_text_credential(db, request.run_id, snapshot, settings)
+        if run.workflow_version == NARRATIVE_REVIEW_VERSION:
+            current_work(db, episode.project_id, request.run_id)
         if on_admit is not None:
             on_admit(db, call_id)
 

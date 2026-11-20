@@ -35,6 +35,7 @@ def handlers() -> Mapping[str, ReviewHandler]:
     from arclight.application.art_reviews import ART_HANDLERS
     from arclight.application.continuity_escalations import CONTINUITY_HANDLERS
     from arclight.application.continuity_feedback_store import FEEDBACK_HANDLERS
+    from arclight.application.narrative_review_human import NARRATIVE_HANDLERS
     from arclight.application.render_reports import DELIVERY_HANDLERS
     from arclight.application.render_reviews import EXPORT_HANDLERS
     from arclight.application.text_reviews import TEXT_HANDLERS
@@ -48,6 +49,7 @@ def handlers() -> Mapping[str, ReviewHandler]:
         **EXPORT_HANDLERS,
         **DELIVERY_HANDLERS,
         **VIDEO_REVIEW_HANDLERS,
+        **NARRATIVE_HANDLERS,
     }
 
 
@@ -200,6 +202,8 @@ def submit_decision(
     row = require_review(db, request_id, actor)
     require_review_authority(db, row, actor, owner=True)
     snapshot = ReviewSnapshot.model_validate(row.snapshot_json)
+    if decision.narrative_content is not None and snapshot.kind != "NARRATIVE":
+        raise DomainError("REVIEW_DECISION_INVALID", "叙事内容确认不能用于其他领域审核", 422)
     if decision.version_id != snapshot.version_id or decision.request_sha256 != row.request_sha256:
         raise DomainError("REVIEW_INPUT_CHANGED", "人工决定不属于当前精确审核对象", 409)
     # A preview can be inspected/rejected but never mint a formal approval.

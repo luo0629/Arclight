@@ -169,6 +169,10 @@ def _episode_url(project_id: UUID, episode_id: UUID | None, view: str) -> str:
 def _human_review_url(project_id: UUID, data: dict[str, Any]) -> str:
     episode_id = data["episode_id"]
     kind = data["kind"]
+    if kind == "NARRATIVE" and data["run_id"] is not None:
+        return f"/projects/{project_id}?section=reviews&narrative_run={data['run_id']}" + (
+            f"&review={data['id']}"
+        )
     if kind in {"SCRIPT", "STORYBOARD"} and episode_id is not None:
         destination = _episode_url(project_id, episode_id, "list") + (
             f"&node={kind.lower()}:{data['version_id']}"

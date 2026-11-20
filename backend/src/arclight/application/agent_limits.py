@@ -48,7 +48,13 @@ def _enabled_actor(db: Session, actor: str) -> None:
         raise DomainError("FORBIDDEN", "Agent 调用者不可执行", 403)
 
 
-def _active_chain(db: Session, control: AgentRunLimit, stage: str | None = None) -> AgentRunLimits:
+def _active_chain(
+    db: Session,
+    control: AgentRunLimit,
+    stage: str | None = None,
+    *,
+    successor_run: WorkflowRun | None = None,
+) -> AgentRunLimits:
     from arclight.application.model_gateway import utc
 
     root_id, project_id, actor = control.root_run_id, control.project_id, control.actor_id
@@ -56,6 +62,7 @@ def _active_chain(db: Session, control: AgentRunLimit, stage: str | None = None)
     require_project(db, project_id, actor, write=True)
     visited: set[UUID] = set()
     current = control
+    child_run = successor_run
     root = db.get(AgentRunLimit, root_id)
     if root is None:
         raise DomainError("AGENT_LIMITS_INVALID", "Agent 根运行限制缺失", 409)
@@ -82,7 +89,12 @@ def _active_chain(db: Session, control: AgentRunLimit, stage: str | None = None)
             raise DomainError("AGENT_CANCELLED", "Agent 运行已取消", 409)
         if utcnow() >= utc(root.deadline_at):
             raise DomainError("AGENT_DEADLINE_EXCEEDED", "Agent 已达到总执行时限", 409)
-        if run.status != "RUNNING" or episode.status == "ARCHIVED":
+        completed_review = False
+        if child_run is not None and run.status in {"SUCCEEDED", "REJECTED"}:
+            from arclight.application.narrative_review_human import completed_review_parent
+
+            completed_review = completed_review_parent(db, run, child_run)
+        if (run.status != "RUNNING" and not completed_review) or episode.status == "ARCHIVED":
             raise DomainError("AGENT_NOT_ACTIVE", "Agent 或其父运行当前不可执行", 409)
         scope = scope_for_run(run, project_id)
         if scope.input_sha256 != current.input_sha256:
@@ -94,7 +106,9 @@ def _active_chain(db: Session, control: AgentRunLimit, stage: str | None = None)
         except AgentStateError:
             raise DomainError("RUN_STATE_INVALID", "Agent 运行状态无效", 409) from None
         active = [step.step_id for step in state.steps if step.status == "RUNNING"]
-        if (
+        if completed_review and state.status != run.status:
+            raise DomainError("AGENT_NOT_ACTIVE", "已结束叙事父审查的运行状态不一致", 409)
+        if not completed_review and (
             state.status != "RUNNING"
             or len(active) != 1
             or (current.run_id == control.run_id and stage is not None and active != [stage])
@@ -107,7 +121,7 @@ def _active_chain(db: Session, control: AgentRunLimit, stage: str | None = None)
         parent = db.get(AgentRunLimit, current.parent_run_id)
         if parent is None or parent.depth + 1 != current.depth:
             raise DomainError("AGENT_LIMITS_INVALID", "Agent 父运行记录无效", 409)
-        current = parent
+        child_run, current = run, parent
 
 
 def validate_agent_execution(db: Session, run_id: UUID, stage: str) -> AgentRunLimits:
@@ -187,7 +201,7 @@ def configure_agent_run(
         raise DomainError("AGENT_LIMITS_LATE", "已有调用的运行不能补建限制", 409)
     root_id, depth, deadline = run.id, 0, utcnow() + timedelta(seconds=limits.max_duration_seconds)
     if parent is not None:
-        _active_chain(db, parent)
+        _active_chain(db, parent, successor_run=run)
         root_id, depth, deadline = parent.root_run_id, parent.depth + 1, parent.deadline_at
         if depth > limits.max_delegation_depth:
             raise DomainError("AGENT_DELEGATION_DEPTH", "Agent 委派深度已达上限", 409)

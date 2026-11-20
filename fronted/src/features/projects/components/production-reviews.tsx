@@ -14,6 +14,7 @@ import { productionReviewPath } from "@/lib/routes";
 import { useProject } from "../project-context";
 import useProductionList from "../hooks/use-production-list";
 import type { ProductionReview } from "../production-types";
+import NarrativeReviews from "./narrative-reviews";
 
 const kinds: Record<string, string> = {
   SCRIPT: "剧本",
@@ -24,6 +25,7 @@ const kinds: Record<string, string> = {
   EXCEPTIONAL_SHOT: "画面例外",
   EXPORT: "导出审核",
   DELIVERY: "成片交付",
+  NARRATIVE: "叙事内容审查",
 };
 const blockers: Record<string, string> = {
   PROJECT_ARCHIVED: "项目已归档，仅供查阅",
@@ -46,6 +48,7 @@ export default function ProductionReviews() {
       title="待审队列"
       description="汇总项目待审版本、工作流与人工处理请求。进入对应工作区核对精确版本后处理，批准和恢复仍分别记录。"
     >
+      <NarrativeReviews key={project.id} />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           共 {rows.total} 项待处理 · 按创建时间从新到旧

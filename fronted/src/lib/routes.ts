@@ -101,6 +101,8 @@ export function productionReviewPath(row: {
   const version = row.version_id ?? row.object_id;
   if (!isResourceId(version)) return null;
   if (row.source === "HUMAN_REVIEW") {
+    if (row.kind === "NARRATIVE" && row.run_id && isResourceId(row.run_id))
+      return `${projectPath(row.project_id, "reviews")}&narrative_run=${row.run_id}&review=${row.id}`;
     if (["REFERENCE", "VISUAL_SPEC"].includes(row.kind))
       return `${projectPath(row.project_id, "assets")}&proposal=${row.object_id}&proposal_version=${version}`;
     if (

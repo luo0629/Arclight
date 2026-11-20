@@ -144,6 +144,26 @@ def component(
 
 
 def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+    from arclight.domain.narrative_review import (
+        NARRATIVE_REVIEW_PROMPT,
+        NARRATIVE_REVIEW_VERSION,
+        NarrativeAssessment,
+    )
+
+    if workflow_version == NARRATIVE_REVIEW_VERSION and stage == "storyboard":
+        return [
+            (
+                "AGENT",
+                workflow_version,
+                {
+                    "agent": "continuity_reviewer",
+                    "workflow_version": workflow_version,
+                    "authority": "advisory-only/1",
+                },
+            ),
+            ("PROMPT", workflow_version, {"instruction": NARRATIVE_REVIEW_PROMPT}),
+            ("SCHEMA", "narrative-assessment/1", NarrativeAssessment.model_json_schema()),
+        ]
     from arclight.domain.director_performance import is_performance_director
 
     if stage == "storyboard" and is_performance_director(workflow_version):
@@ -548,6 +568,17 @@ def input_summary(inputs: dict) -> dict:
     return {"sha256": digest(value), "references": sorted(references, key=digest)}
 
 
+def text_stages(run: WorkflowRun) -> tuple[str, ...]:
+    from arclight.domain.narrative_review import NARRATIVE_REVIEW_VERSION
+
+    return (
+        ("storyboard",)
+        if run.workflow_type == "continuity_review"
+        and run.workflow_version == NARRATIVE_REVIEW_VERSION
+        else TEXT_STAGES.get(run.workflow_type, ())
+    )
+
+
 def capture_text(
     db: Session, project_id: UUID, run: WorkflowRun, settings: Settings, *, actor: str | None = None
 ) -> None:
@@ -586,7 +617,7 @@ def capture_text(
             version,
             definition,
         )
-        for stage in TEXT_STAGES[run.workflow_type]
+        for stage in text_stages(run)
         for kind, version, definition in text_definitions(stage, run.workflow_version)
     ]
     entries.append(
@@ -641,7 +672,7 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
     snapshot = checked_snapshot(db, binding)
     expected = {
         (stage, kind): digest(definition)
-        for stage in TEXT_STAGES.get(run.workflow_type, ())
+        for stage in text_stages(run)
         for kind, _, definition in text_definitions(stage, run.workflow_version)
     }
     if (
