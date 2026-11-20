@@ -14,7 +14,11 @@ from test_assets import create as create_asset
 from test_collaboration import create_episode, create_project, register
 from test_context_trace import evidence
 
-from arclight.application.agent_tools import build_agent_tool_registry, execute_agent_tool
+from arclight.application.agent_tools import (
+    AgentToolRegistry,
+    build_agent_tool_registry,
+    execute_agent_tool,
+)
 from arclight.application.gateway_agent import invoke_agent
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import (
@@ -24,6 +28,7 @@ from arclight.domain.agent_model import (
     AgentToolDeclaration,
     AgentToolMessage,
     AgentUserMessage,
+    ContextImage,
     ModelToolCall,
 )
 from arclight.domain.agent_tools import AgentToolFeedback, ReadStoryEntryParameters
@@ -435,7 +440,16 @@ def test_timeout_stays_unknown_prevents_retry_and_does_not_reuse_previous_usage(
 
 @pytest.mark.parametrize(
     "variant",
-    ["unknown_tool", "duplicate_id", "bad_args", "missing_id", "wrong_type", "unpaired_stop"],
+    [
+        "unknown_tool",
+        "duplicate_id",
+        "bad_args",
+        "missing_id",
+        "wrong_type",
+        "unpaired_stop",
+        "text_tool_arguments",
+        "fenced_final",
+    ],
 )
 def test_vendor_tool_calls_are_untrusted_and_must_follow_protocol(settings, model_service, variant):
     body = call_response(("one", "read_story_entry", {"entry_id": str(uuid4())}))
@@ -451,6 +465,14 @@ def test_vendor_tool_calls_are_untrusted_and_must_follow_protocol(settings, mode
         del call["id"]
     elif variant == "wrong_type":
         call["type"] = "shell"
+    elif variant in {"text_tool_arguments", "fenced_final"}:
+        content = (
+            call["function"]["arguments"]
+            if variant == "text_tool_arguments"
+            else "```json\n" + final_response()["choices"][0]["message"]["content"] + "\n```"
+        )
+        choice["message"] = {"role": "assistant", "content": content}
+        choice["finish_reason"] = "stop"
     else:
         choice["finish_reason"] = "stop"
     service = model_service(lambda _: httpx.Response(200, json=body))
@@ -515,33 +537,85 @@ def add_image(client, episode):
     return state(client, asset, ready, "APPROVED").json()
 
 
-@pytest.mark.parametrize("supplier", ["custom", "qwen"])
+@pytest.mark.parametrize("response_format", ["json_schema", "json_object"])
+@pytest.mark.parametrize("combined_format", [False, True])
+@pytest.mark.parametrize("with_images,with_tools", [(True, True), (True, False), (False, True)])
+def test_response_format_follows_declared_feature_combination(
+    settings, model_service, response_format, combined_format, with_images, with_tools
+):
+    settings.llm_response_format = response_format
+    settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
+        update={"structured_output_with_visual_tools": combined_format}
+    )
+    identity = uuid4()
+    images = {identity: ContextImage(identity, "image/png", image_bytes())} if with_images else {}
+    request = model_request(messages=[AgentUserMessage(data={}, image_file_ids=list(images))])
+    seen = []
+
+    def handler(req):
+        seen.append(json.loads(req.content))
+        return httpx.Response(200, json=final_response())
+
+    provider = OpenAICompatibleAgentProvider(settings, service=model_service(handler))
+    result = provider.complete(request, (declaration(),) if with_tools else (), FinalResult, images)
+    assert result.status == "FINAL" and len(seen) == 1
+    payload = seen[0]
+    if with_images and with_tools and not combined_format:
+        assert "response_format" not in payload
+    else:
+        assert payload["response_format"]["type"] == response_format
+    if response_format == "json_object" or (with_images and with_tools and not combined_format):
+        schema_text = payload["messages"][0]["content"].split("JSON Schema:\n", 1)[1]
+        assert json.loads(schema_text) == FinalResult.model_json_schema()
+    assert bool(payload.get("tools")) is with_tools
+
+
+@pytest.mark.parametrize(
+    "supplier,response_format,with_tools,combined_format",
+    [
+        ("custom", "json_schema", True, False),
+        ("custom", "json_object", True, False),
+        ("qwen", "json_schema", True, True),
+        ("qwen", "json_object", True, True),
+        ("qwen", "json_schema", True, False),
+        ("qwen", "json_object", True, False),
+        ("qwen", "json_schema", False, False),
+        ("qwen", "json_object", False, False),
+    ],
+)
 def test_multiple_images_use_pinned_controlled_references_and_never_persist_bytes(
-    client, episode, settings, model_service, caplog, supplier
+    client,
+    episode,
+    settings,
+    model_service,
+    caplog,
+    supplier,
+    response_format,
+    with_tools,
+    combined_format,
 ):
     settings.llm_supplier = supplier
     settings.llm_model = "qwen3.8-flash"
+    settings.llm_response_format = response_format
     settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
-        update={"supplier": supplier, "model": settings.llm_model}
+        update={
+            "supplier": supplier,
+            "model": settings.llm_model,
+            "structured_output_with_visual_tools": combined_format,
+        }
     )
     versions = [add_image(client, episode), add_image(client, episode)]
-    run_id, _ = active_run(client, episode)
+    run_id, actor = active_run(client, episode)
+    registry = build_agent_tool_registry() if with_tools else AgentToolRegistry()
+    if with_tools:
+        grant(client, run_id, actor, registry)
     added = evidence(client, str(run_id), asset_version_ids=[version["id"] for version in versions])
     assert added.status_code == 201, added.text
     identities = [source["object_ref"]["file_id"] for source in added.json()["sources"]]
     seen = []
 
     def handler(req):
-        payload = json.loads(req.content)
-        if supplier == "qwen":
-            assert payload["enable_thinking"] is False
-        else:
-            assert "enable_thinking" not in payload
-        blocks = payload["messages"][1]["content"]
-        urls = [block["image_url"]["url"] for block in blocks if block["type"] == "image_url"]
-        assert len(urls) == 2
-        assert all(base64.b64decode(url.split(",", 1)[1]) == image_bytes() for url in urls)
-        seen.append(1)
+        seen.append(json.loads(req.content))
         return httpx.Response(200, json=final_response())
 
     model_service(handler)
@@ -560,14 +634,35 @@ def test_multiple_images_use_pinned_controlled_references_and_never_persist_byte
         client.app.state.session_factory,
         settings,
         request,
-        build_agent_tool_registry(),
+        registry,
         FinalResult,
     )
-    assert result.status == "FINAL" and seen == [1]
+    assert result.status == "FINAL" and len(seen) == 1
+    payload = seen[0]
+    assert bool(payload.get("tools")) is with_tools
+    if supplier == "qwen":
+        assert payload["enable_thinking"] is False
+    else:
+        assert "enable_thinking" not in payload
+    if with_tools and not combined_format:
+        assert "response_format" not in payload
+    else:
+        assert payload["response_format"]["type"] == response_format
+    if response_format == "json_object" or (with_tools and not combined_format):
+        schema_text = payload["messages"][0]["content"].split("JSON Schema:\n", 1)[1]
+        assert json.loads(schema_text) == FinalResult.model_json_schema()
+    blocks = payload["messages"][1]["content"]
+    urls = [block["image_url"]["url"] for block in blocks if block["type"] == "image_url"]
+    assert len(urls) == 2
+    assert all(base64.b64decode(url.split(",", 1)[1]) == image_bytes() for url in urls)
     with client.app.state.session_factory() as db:
         run = db.get(WorkflowRun, run_id)
         call = db.scalar(select(GatewayCall).where(GatewayCall.workflow_id == run_id))
         assert call.parameters_json["input_images"] == 2
+        assert (
+            call.route_json["capabilities"]["agent"]["structured_output_with_visual_tools"]
+            is combined_format
+        )
         persisted = (
             json.dumps(run.input_json)
             + json.dumps(run.agent_state_json)
@@ -696,6 +791,31 @@ def test_legacy_capability_serialization_stays_stable():
         GatewayFailure("INVALID_RESPONSE", usage=GatewayUsage(input_tokens=1))
 
 
+def test_legacy_agent_capabilities_keep_combined_format_default():
+    legacy = {"version": "test:1", "supplier": "custom", "model": "exact-model"}
+    capabilities = AgentModelCapabilities.model_validate(legacy)
+    assert capabilities.structured_output_with_visual_tools is True
+    explicit = {**legacy, "structured_output_with_visual_tools": False}
+    capabilities = AgentModelCapabilities.model_validate(explicit)
+    assert capabilities.structured_output_with_visual_tools is False
+    assert (
+        AgentModelCapabilities.model_validate_json(capabilities.model_dump_json()) == capabilities
+    )
+
+
+@pytest.mark.parametrize("value", [None, 0, 1, "false", "true"])
+def test_combined_format_capability_requires_explicit_boolean(value):
+    with pytest.raises(ValidationError):
+        AgentModelCapabilities.model_validate(
+            {
+                "version": "test:1",
+                "supplier": "custom",
+                "model": "exact-model",
+                "structured_output_with_visual_tools": value,
+            }
+        )
+
+
 def test_existing_text_adapter_preserves_usage_on_invalid_final(settings, stub_llm):
     service = stub_llm(lambda _: httpx.Response(200, json=final_response()))
     provider = OpenAICompatibleTextProvider(settings, service=service)
@@ -743,6 +863,9 @@ def test_http_error_usage_receipt_is_preserved_without_inventing_zero_cost(
 def test_frozen_model_and_capabilities_survive_server_configuration_changes(
     client, episode, settings, model_service
 ):
+    settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
+        update={"structured_output_with_visual_tools": False}
+    )
     run_id, _ = active_run(client, episode)
     settings.llm_model = "changed-server-default"
     settings.llm_agent_capabilities = None
@@ -763,6 +886,12 @@ def test_frozen_model_and_capabilities_survive_server_configuration_changes(
         == "FINAL"
     )
     assert receipts(client, run_id)[0][0]["capabilities"]["agent"]["version"] == "test:1"
+    assert (
+        receipts(client, run_id)[0][0]["capabilities"]["agent"][
+            "structured_output_with_visual_tools"
+        ]
+        is False
+    )
 
 
 def test_foreign_context_images_are_rejected_before_transport(

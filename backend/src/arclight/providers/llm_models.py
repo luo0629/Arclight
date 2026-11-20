@@ -3,7 +3,10 @@
 import base64
 import json
 import os
+import re
 from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 import dashscope
@@ -16,12 +19,60 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from openai import AsyncOpenAI, OpenAI
-from pydantic import PrivateAttr, SecretStr
+from pydantic import JsonValue, PrivateAttr, SecretStr
 
 from arclight.core.config import Settings
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.providers.llm_transport import active_exchange, gemini_model_path
 from arclight.providers.native_text import gemini_payload
+
+
+@dataclass(frozen=True)
+class _ChatOptions:
+    token_parameter: str = "max_tokens"
+    parameters: tuple[tuple[str, JsonValue], ...] = ()
+
+
+# Wire spelling/defaults only, never a declaration of vision or tool capabilities.
+# Unknown compatible endpoints retain the standard request without vendor parameters.
+_CHAT_OPTIONS = {
+    "openai": ((r".*", _ChatOptions(token_parameter="max_completion_tokens")),),
+    "deepseek": ((r".*", _ChatOptions(parameters=(("thinking", {"type": "disabled"}),))),),
+    "qwen": ((r"^qwen", _ChatOptions(parameters=(("enable_thinking", False),))),),
+}
+
+
+def invocation_kwargs(
+    settings: Settings,
+    messages: list[BaseMessage],
+    *,
+    max_tokens: int,
+    response_format: dict,
+    tools: list[dict],
+) -> dict:
+    """Translate common inference options at the SDK boundary, not in the runtime."""
+    if settings.llm_protocol != "openai_chat":
+        return {"max_tokens": max_tokens, "response_format": response_format, "tools": tools}
+    options = next(
+        (
+            options
+            for pattern, options in _CHAT_OPTIONS.get(settings.llm_supplier, ())
+            if re.match(pattern, settings.llm_model)
+        ),
+        _ChatOptions(),
+    )
+    # extra_body prevents SDK token-field and message-role rewriting for every model.
+    extra = {
+        **deepcopy(dict(options.parameters)),
+        options.token_parameter: max_tokens,
+        "messages": message_dicts(messages),
+    }
+    if response_format:
+        extra["response_format"] = response_format
+    kwargs: dict = {"extra_body": extra}
+    if tools:
+        kwargs.update(tools=tools, tool_choice="auto")
+    return kwargs
 
 
 def message_dicts(messages: list[BaseMessage], *, native_ids: bool = False) -> list[dict]:

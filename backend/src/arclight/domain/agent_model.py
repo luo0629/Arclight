@@ -35,6 +35,8 @@ class AgentModelCapabilities(AgentModelValue):
     model: str = Field(min_length=1, max_length=160)
     tools: bool = False
     response_formats: frozenset[Literal["json_schema", "json_object"]] = frozenset()
+    # Some models support each feature separately, but not this combination.
+    structured_output_with_visual_tools: bool = Field(default=True, strict=True)
     max_input_images: int = Field(default=0, strict=True, ge=0, le=8)
     max_image_bytes: int | None = Field(default=None, strict=True, ge=1)
     max_total_image_bytes: int | None = Field(default=None, strict=True, ge=1)

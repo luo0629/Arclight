@@ -10,7 +10,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tracers.langchain import LangChainTracer
 from pydantic import SecretStr
 from test_agent_model import FinalResult, final_response, model_request
@@ -22,6 +22,7 @@ from arclight.domain.model_gateway import GatewayFailure
 from arclight.providers import llm_transport, network
 from arclight.providers.agent_model import OpenAICompatibleAgentProvider
 from arclight.providers.llm import LLMService, dispatch_inference
+from arclight.providers.llm_models import invocation_kwargs
 from arclight.providers.text import OpenAICompatibleTextProvider
 
 PROTOCOLS = ["openai_chat", "gemini", "qwen_chat"]
@@ -70,6 +71,72 @@ def test_no_live_inference_without_gateway_admission(settings, monkeypatch):
         with pytest.raises(DomainError) as error:
             call()
         assert error.value.code == "GATEWAY_ADMISSION_REQUIRED"
+
+
+@pytest.mark.parametrize("model", ["ordinary-model", "o1-exact-model", "o3-exact-model"])
+def test_compatible_models_preserve_roles_and_tool_history_without_name_exceptions(
+    settings, stub_llm, model
+):
+    settings.llm_model = model
+    settings.llm_supplier = "custom"
+    messages = [
+        SystemMessage("instruction"),
+        HumanMessage("input"),
+        AIMessage(
+            "",
+            tool_calls=[{"id": "call_1", "name": "inspect", "args": {"text": "中文"}}],
+            additional_kwargs={"native_calls": {"call_1": {"provider_signature": "native-only"}}},
+        ),
+        ToolMessage('{"result":"ok"}', tool_call_id="call_1"),
+    ]
+    before = [message.model_dump() for message in messages]
+    tools = [{"type": "function", "function": {"name": "inspect", "parameters": {}}}]
+    sent = []
+
+    def handler(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=final_response())
+
+    result = stub_llm(handler).invoke(
+        settings, messages, max_tokens=31, response_format={"type": "json_object"}, tools=tools
+    )
+    assert result.reason == "stop" and len(sent) == 1
+    assert sent[0]["messages"] == [
+        {"role": "system", "content": "instruction"},
+        {"role": "user", "content": "input"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "inspect",
+                        "arguments": json.dumps({"text": "中文"}, ensure_ascii=False),
+                    },
+                }
+            ],
+        },
+        {"role": "tool", "content": '{"result":"ok"}', "tool_call_id": "call_1"},
+    ]
+    assert sent[0]["max_tokens"] == 31 and "max_completion_tokens" not in sent[0]
+    assert sent[0]["tools"] == tools and sent[0]["tool_choice"] == "auto"
+    assert [message.model_dump() for message in messages] == before
+
+
+def test_dialect_request_parameters_do_not_leak_between_calls(settings):
+    settings.llm_supplier = "deepseek"
+    messages = [HumanMessage("input")]
+    options = {"max_tokens": 31, "response_format": {"type": "json_object"}, "tools": []}
+    first = invocation_kwargs(settings, messages, **options)
+    first["extra_body"]["thinking"]["type"] = "enabled"
+    second = invocation_kwargs(settings, messages, **options)
+    assert second["extra_body"]["thinking"] == {"type": "disabled"}
+    assert "tools" not in second and "tool_choice" not in second
+    settings.llm_supplier = "custom"
+    third = invocation_kwargs(settings, messages, **options)
+    assert "thinking" not in third["extra_body"] and "enable_thinking" not in third["extra_body"]
 
 
 @pytest.mark.parametrize("protocol", PROTOCOLS)

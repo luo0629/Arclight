@@ -5,7 +5,6 @@ import atexit
 import hmac
 import json
 import os
-import re
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -190,7 +189,7 @@ class LLMService:
         tools: list[dict] | None = None,
         strict_finish: bool = True,
     ) -> LLMCompletion:
-        from arclight.providers.llm_models import message_dicts
+        from arclight.providers.llm_models import invocation_kwargs
 
         admission = _admission.get()
         identity: tuple[str, ...]
@@ -215,29 +214,13 @@ class LLMService:
         visual = _has_inline_images(messages)
         turn = Exchange(turn_url(settings, visual=visual), settings.llm_protocol, strict_finish)
         tools = tools or []
-        kwargs: dict = {
-            "max_tokens": max_tokens,
-            "response_format": response_format,
-            "tools": tools,
-        }
-        if settings.llm_protocol == "openai_chat":
-            token_parameter = (
-                "max_completion_tokens" if settings.llm_supplier == "openai" else "max_tokens"
-            )
-            # Public SDK extra_body avoids ChatOpenAI max_tokens renaming and the
-            # SDK parse() path which requires strict tools even in json_object mode.
-            extra = {token_parameter: max_tokens, "response_format": response_format}
-            if settings.llm_supplier == "deepseek":
-                extra["thinking"] = {"type": "disabled"}
-            if settings.llm_supplier == "qwen" and settings.llm_model.startswith("qwen"):
-                # Match the native Qwen path; hybrid models can default to thinking.
-                extra["enable_thinking"] = False
-            if re.match(r"^o\d", settings.llm_model):
-                # Keep the historical system role for custom o-series gateways.
-                extra["messages"] = message_dicts(messages)
-            kwargs = {"extra_body": extra}
-            if tools:
-                kwargs.update(tools=tools, tool_choice="auto")
+        kwargs = invocation_kwargs(
+            settings,
+            messages,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            tools=tools,
+        )
         reset = active_exchange.set(turn)
         try:
             set_debug(False)

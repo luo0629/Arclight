@@ -147,9 +147,11 @@ class OpenAICompatibleAgentProvider:
             raise DomainError("GATEWAY_CAPABILITY_REJECTED", "模型图片输入缺失或超限", 422)
         response_format, schema = response_contract(result_model, self.settings)
         safe_metadata(schema)
+        if image_ids and tools and not capabilities.structured_output_with_visual_tools:
+            response_format = {}
         suffix = (
             "\nJSON Schema:\n" + json.dumps(schema, ensure_ascii=False)
-            if self.settings.llm_response_format == "json_object"
+            if response_format.get("type") != "json_schema"
             else ""
         )
         result = self.service.invoke(

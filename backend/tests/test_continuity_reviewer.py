@@ -75,6 +75,11 @@ def test_dynamic_review_consumes_exact_images_and_keeps_existing_state(
     assert result.result.conclusion == "PASS"
     assert result.result.confidence.kind == "ORDINAL_UNCALIBRATED"
     assert len(sent) == result.model_turns == 7
+    assert all(
+        "Use API-native tool_calls" in payload["messages"][0]["content"]
+        and "without Markdown fences" in payload["messages"][0]["content"]
+        for payload in sent
+    )
     hashes = {
         hashlib.sha256(base64.b64decode(part["image_url"]["url"].split(",", 1)[1])).hexdigest()
         for payload in sent
