@@ -12,6 +12,45 @@ export type ProducerLimits = {
 };
 
 export type ProducerStartPayload = { goal: string; limits?: ProducerLimits };
+export type SeriesEpisode = {
+  episode_id: string;
+  requires_episode_ids: string[];
+};
+export type SeriesStartPayload = ProducerStartPayload & {
+  scope: {
+    series_plan_version_id: string;
+    ledger_version_id: string | null;
+    expected_ledger_head_revision: number;
+    episodes: SeriesEpisode[];
+    confirmation: string;
+  };
+};
+export type SeriesControlPayload = {
+  action: "PAUSE" | "RESUME";
+  expected_revision: number;
+  reason: string;
+};
+export type ProducerSeriesProgress = {
+  scope: {
+    request: SeriesStartPayload["scope"];
+    target_episode_count: number;
+    episodes: (SeriesEpisode & {
+      episode_no: number;
+      target_duration_ms: number;
+    })[];
+  };
+  paused: boolean;
+  completion_current: boolean;
+  whole_series_complete: boolean;
+  completion_blocking_code: string | null;
+  completion: {
+    payload: {
+      scope: "BATCH" | "SERIES";
+      deliveries: { episode_id: string; artifact_id: string }[];
+      narrative_report_id: string;
+    };
+  } | null;
+};
 export type ProducerCommandPayload =
   | {
       action: "DELEGATE";
@@ -55,6 +94,7 @@ export type ProducerPlan = {
   reason: string | null;
   tasks: {
     task_key: string;
+    episode_id?: string;
     kind: "screenwriter" | "director" | "art_director" | "continuity_reviewer";
     reason: string;
     depends_on: string[];
@@ -87,6 +127,7 @@ export type ProducerProgress = {
   goal: string;
   can_operate: boolean;
   readonly_reason: string | null;
+  series?: ProducerSeriesProgress | null;
   can_recover: boolean;
   can_replan: boolean;
   can_cancel: boolean;

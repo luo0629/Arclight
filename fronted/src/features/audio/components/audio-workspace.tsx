@@ -1,5 +1,9 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
+import useScopedRead from "@/features/projects/hooks/use-scoped-read";
+
 import { useCallback, useState, type ReactNode } from "react";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Button } from "@/components/ui/button";
@@ -97,10 +101,29 @@ function AudioWorkspaceBody({
     snapshotId,
     unavailable,
   );
-  const [selectedId, setSelectedId] = useState("");
+  const requested = useSearchParams().get("audio_snapshot");
+  const requestedId = requested && isResourceId(requested) ? requested : "";
+  const [selection, setSelection] = useState({ requestedId, id: requestedId });
+  const selectedId =
+    selection.requestedId === requestedId ? selection.id : requestedId;
+  const setSelectedId = (id: string) => setSelection({ requestedId, id });
+  const exact = useScopedRead<AudioSnapshot>(
+    requestedId && selectedId === requestedId
+      ? `/audio-snapshots/${requestedId}`
+      : null,
+  );
   const [scriptId, setScriptId] = useState("");
+  const exactSnapshot =
+    exact.data?.id === requestedId && exact.data.episode_id === episode.id
+      ? exact.data
+      : null;
+  const rows =
+    exactSnapshot && !snapshots.rows.some((row) => row.id === exactSnapshot.id)
+      ? [exactSnapshot, ...snapshots.rows]
+      : snapshots.rows;
   const selected =
-    snapshots.rows.find((row) => row.id === selectedId) ?? snapshots.rows[0];
+    rows.find((row) => row.id === selectedId) ??
+    (requestedId && selectedId === requestedId ? undefined : rows[0]);
   const creationScope = `${scope}:snapshot:${scriptId}`;
   const mutation = useRenderMutation(creationScope, writable, unavailable);
   async function create() {
@@ -174,14 +197,21 @@ function AudioWorkspaceBody({
           当前为只读模式，可以查看音频历史和试听，不能生成、替换或审核音频。
         </Notice>
       )}
-      {snapshots.rows.length > 0 && (
+      {exact.loading && <p role="status">正在读取精确配音来源…</p>}
+      {exact.error && (
+        <Notice tone="error">精确配音来源不可用：{exact.error}</Notice>
+      )}
+      {exact.data && !exactSnapshot && (
+        <Notice tone="error">指定配音来源不属于当前剧集。</Notice>
+      )}
+      {rows.length > 0 && (
         <Field>
           <FieldLabel htmlFor="audio-snapshot">已保存的配音来源</FieldLabel>
           <ChoiceSelect
             id="audio-snapshot"
             value={selected?.id ?? ""}
             disabled={snapshots.loading || mutation.busy}
-            options={snapshots.rows.map((row) => ({
+            options={rows.map((row) => ({
               value: row.id,
               label: `${row.created_at} · ${row.line_count} 句`,
             }))}
@@ -203,7 +233,8 @@ function AudioWorkspaceBody({
         />
       ) : (
         !snapshots.loading &&
-        !snapshots.error && (
+        !snapshots.error &&
+        !requestedId && (
           <EmptyState>
             <h3>先为这一集准备台词</h3>
             <p>从已批准剧本固定配音来源后，就可以逐句制作、试听和替换声音。</p>

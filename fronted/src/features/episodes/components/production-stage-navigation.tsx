@@ -22,6 +22,8 @@ import {
   type ProductionStage,
 } from "../production-stages";
 
+import { EpisodeSeriesToggle } from "./episode-series-evidence";
+
 const ignore = () => {};
 export default function ProductionStageNavigation({
   episodeId,
@@ -155,6 +157,11 @@ export default function ProductionStageNavigation({
           ))}
         </ol>
       </nav>
+      <EpisodeSeriesToggle
+        key={episodeId}
+        projectId={projectId}
+        episodeId={episodeId}
+      />
       {status.error && (
         <Notice tone="error" role="alert">
           无法读取当前剧集的生产状态。旧状态已清空，请确认权限或稍后重试。

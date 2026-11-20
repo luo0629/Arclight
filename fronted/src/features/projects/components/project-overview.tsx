@@ -11,6 +11,7 @@ import { statusText } from "@/lib/status";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import ProjectCosts, { CostSummary, type CostTotals } from "./project-costs";
+import ProjectSeriesOverview from "./project-series-overview";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   EmptyState,
@@ -186,6 +187,7 @@ export default function ProjectOverview({
           刷新总览
         </Button>
       </div>
+      <ProjectSeriesOverview episodes={data?.episodes ?? []} />
       {error && (
         <Notice tone="error">
           {error}

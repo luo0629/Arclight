@@ -1,5 +1,7 @@
 "use client";
 
+import useScopedRead from "@/features/projects/hooks/use-scoped-read";
+
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,16 +38,29 @@ export default function AssetVersions({
   writable,
   owner,
   onSaved,
+  initialVersionId,
 }: {
   asset: VisualAsset;
   path: string;
   writable: boolean;
   owner: boolean;
   onSaved: (row: VisualAsset) => Promise<void>;
+  initialVersionId?: string;
 }) {
   const endpoint = path + "/" + asset.id + "/versions";
   const list = usePagedList<AssetVersion>(endpoint);
+  const exact = useScopedRead<AssetVersion>(
+    initialVersionId ? `${endpoint}/${initialVersionId}` : null,
+  );
   const [selected, setSelected] = useState<AssetVersion | null>(null);
+  useEffect(() => {
+    if (
+      exact.data &&
+      exact.data.id === initialVersionId &&
+      exact.data.asset_id === asset.id
+    )
+      setSelected(exact.data);
+  }, [asset.id, exact.data, initialVersionId]);
   const [importing, setImporting] = useState(false);
   const [rebuildManifestId, setRebuildManifestId] = useState<
     string | undefined
@@ -242,6 +257,16 @@ export default function AssetVersions({
           </Button>
         )}
       {notice && <Notice role="status">{notice}</Notice>}
+      {exact.loading && <p role="status">正在核对指定精确版本…</p>}
+      {exact.error && (
+        <Notice tone="error">指定精确版本不可用：{exact.error}</Notice>
+      )}
+      {exact.data &&
+        (exact.data.id !== initialVersionId ||
+          exact.data.asset_id !== asset.id) && (
+          <Notice tone="error">指定版本不属于当前资产。</Notice>
+        )}
+
       {error && (
         <Notice role="alert" tone="error">
           {error}

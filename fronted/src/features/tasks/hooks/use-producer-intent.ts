@@ -8,10 +8,14 @@ import type {
   ProducerAnswerPayload,
   ProducerCommandPayload,
   ProducerStartPayload,
+  SeriesStartPayload,
+  SeriesControlPayload,
 } from "../producer-types";
 
 type NewIntent =
   | { kind: "START"; payload: ProducerStartPayload }
+  | { kind: "SERIES_START"; payload: SeriesStartPayload }
+  | { kind: "SERIES_CONTROL"; payload: SeriesControlPayload }
   | { kind: "COMMAND"; payload: ProducerCommandPayload }
   | { kind: "ANSWER"; loopId: string; payload: ProducerAnswerPayload };
 
@@ -27,7 +31,11 @@ function storageKey(scope: string) {
   return `arclight:producer-intent:${scope}`;
 }
 
-function readIntent(scope: string, runId: string): ProducerIntent | null {
+function readIntent(
+  scope: string,
+  runId: string,
+  seriesStart: boolean,
+): ProducerIntent | null {
   const raw = sessionStorage.getItem(storageKey(scope));
   if (!raw) return null;
   const value: ProducerIntent = JSON.parse(raw);
@@ -37,10 +45,10 @@ function readIntent(scope: string, runId: string): ProducerIntent | null {
     typeof value.key !== "string" ||
     !/^[A-Za-z0-9_.:-]{1,100}$/.test(value.key) ||
     typeof value.body !== "string" ||
-    value.body.length > 16000 ||
+    value.body.length > (seriesStart ? 240000 : 16000) ||
     (runId
-      ? !["COMMAND", "ANSWER"].includes(value.kind)
-      : value.kind !== "START") ||
+      ? !["COMMAND", "ANSWER", "SERIES_CONTROL"].includes(value.kind)
+      : value.kind !== (seriesStart ? "SERIES_START" : "START")) ||
     (value.kind === "ANSWER" && (!value.loopId || !isResourceId(value.loopId)))
   )
     throw new Error("原操作记录无法读取，请保留当前会话并核验执行记录。");
@@ -57,14 +65,18 @@ export default function useProducerIntent({
   episodeId,
   runId = "",
   writable,
+  seriesStart = false,
 }: {
   userId: string;
   projectId: string;
   episodeId: string;
   runId?: string;
   writable: boolean;
+  seriesStart?: boolean;
 }) {
-  const scope = `${userId}:${projectId}:${episodeId}:${runId || "start"}`;
+  const scope = seriesStart
+    ? `${userId}:${projectId}:series-start`
+    : `${userId}:${projectId}:${episodeId}:${runId || "start"}`;
   const [pending, setPending] = useState<ProducerIntent | null>(null);
   const [ready, setReady] = useState(false);
   const [mutating, setMutating] = useState(false);
@@ -89,7 +101,7 @@ export default function useProducerIntent({
     setError("");
     setNotice("");
     try {
-      setPending(readIntent(scope, runId));
+      setPending(readIntent(scope, runId, seriesStart));
       setReady(true);
     } catch (cause) {
       setError(message(cause));
@@ -99,7 +111,7 @@ export default function useProducerIntent({
       epoch.current++;
       controller.current?.abort();
     };
-  }, [scope, runId, writable]);
+  }, [scope, runId, writable, seriesStart]);
 
   const execute = useCallback(
     async (
@@ -125,15 +137,17 @@ export default function useProducerIntent({
       const request = new AbortController();
       controller.current = request;
       try {
-        const stored = readIntent(scope, runId);
+        const stored = readIntent(scope, runId, seriesStart);
         if (stored?.key !== intent.key || stored.body !== intent.body)
           throw new Error("原操作记录已变化，请刷新页面后核验。");
-        const path =
-          intent.kind === "START"
-            ? `/episodes/${episodeId}/producer-runs`
-            : intent.kind === "ANSWER"
-              ? `/runs/${runId}/producer/${intent.loopId}/answers`
-              : `/runs/${runId}/producer/commands`;
+        const paths: Record<ProducerIntent["kind"], string> = {
+          START: `/episodes/${episodeId}/producer-runs`,
+          SERIES_START: `/projects/${projectId}/producer-runs`,
+          SERIES_CONTROL: `/runs/${runId}/producer/series-controls`,
+          ANSWER: `/runs/${runId}/producer/${intent.loopId}/answers`,
+          COMMAND: `/runs/${runId}/producer/commands`,
+        };
+        const path = paths[intent.kind];
         const accepted = await api<ProducerAccepted>(path, {
           method: "POST",
           body: intent.body,
@@ -146,7 +160,7 @@ export default function useProducerIntent({
           (runId && accepted.run_id !== runId)
         )
           throw new Error("操作响应无法核验，请刷新状态后重发原操作。");
-        if (readIntent(scope, runId)?.key === intent.key)
+        if (readIntent(scope, runId, seriesStart)?.key === intent.key)
           sessionStorage.removeItem(storageKey(scope));
         if (!isCurrent()) return null;
         setPending(null);
@@ -170,7 +184,7 @@ export default function useProducerIntent({
             ].includes(cause.code));
         if (release) {
           try {
-            if (readIntent(scope, runId)?.key === intent.key)
+            if (readIntent(scope, runId, seriesStart)?.key === intent.key)
               sessionStorage.removeItem(storageKey(scope));
           } catch {
             // An unreadable stored record must continue to block replacement writes.
@@ -192,14 +206,14 @@ export default function useProducerIntent({
         }
       }
     },
-    [scope, runId, episodeId],
+    [scope, runId, episodeId, projectId, seriesStart],
   );
 
   const submit = useCallback(
     async (intent: NewIntent) => {
       if (!ready || busy.current || !allowed.current) return null;
       try {
-        if (readIntent(scope, runId)) {
+        if (readIntent(scope, runId, seriesStart)) {
           setError("请先核验并重发原操作，不能更换尚未确认的请求。");
           return null;
         }
@@ -218,7 +232,7 @@ export default function useProducerIntent({
         return null;
       }
     },
-    [ready, scope, runId, execute],
+    [ready, scope, runId, seriesStart, execute],
   );
 
   return {

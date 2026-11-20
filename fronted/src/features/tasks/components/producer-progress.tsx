@@ -10,7 +10,12 @@ import {
 } from "@/components/ui/native-select";
 import { FormLabel, Notice, StatusBadge } from "@/components/ui-kit";
 import { useAuth } from "@/features/auth/auth-context";
-import { episodePath, isResourceId } from "@/lib/routes";
+import {
+  episodePath,
+  isResourceId,
+  productionDeliveryPath,
+  projectPath,
+} from "@/lib/routes";
 import { message } from "@/lib/api/client";
 import type { Run } from "@/types/api";
 import AgentAnswer from "./agent-answer";
@@ -20,6 +25,7 @@ import type {
   ProducerAnswerPayload,
   ProducerCommandPayload,
   ProducerOperation,
+  ProducerSeriesProgress,
 } from "../producer-types";
 
 const agents = {
@@ -114,6 +120,22 @@ function Progress({
     }
     await refreshAfterWrite();
     return true;
+  }
+
+  async function controlSeries() {
+    if (locked || !data?.series || !data.can_cancel || data.pending_command)
+      return;
+    const resume = data.series.paused;
+    const accepted = await intent.submit({
+      kind: "SERIES_CONTROL",
+      payload: {
+        action: resume ? "RESUME" : "PAUSE",
+        expected_revision: data.revision,
+        reason: resume ? "创作者恢复原多集制作。" : "创作者暂停本次多集制作。",
+      },
+    });
+    if (accepted) await refreshAfterWrite();
+    else await progress.refresh();
   }
 
   async function answer(operation: ProducerOperation, value?: string) {
@@ -215,6 +237,14 @@ function Progress({
             </div>
             <StatusBadge status={data.status} />
           </div>
+          {data.series && (
+            <SeriesScopePanel
+              projectId={projectId}
+              series={data.series}
+              disabled={locked || !data.can_cancel || !!data.pending_command}
+              onControl={() => void controlSeries()}
+            />
+          )}
           {(!writable || !data.can_operate) && (
             <Notice>
               {!writable
@@ -364,6 +394,9 @@ function Progress({
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <strong className="break-words text-sm">
                           {task.task_key} · {agents[task.kind]}
+                          {data.series &&
+                            task.episode_id &&
+                            ` · 第 ${data.series.scope.episodes.find((item) => item.episode_id === task.episode_id)?.episode_no ?? "—"} 集`}
                         </strong>
                         <StatusBadge status={task.status ?? "NOT_STARTED"} />
                       </div>
@@ -388,10 +421,11 @@ function Progress({
                       )}
                       <div className="flex flex-wrap gap-2">
                         {task.child_run_id &&
-                          isResourceId(task.child_run_id) && (
+                          isResourceId(task.child_run_id) &&
+                          isResourceId(task.episode_id ?? run.episode_id) && (
                             <Button asChild variant="outline">
                               <Link
-                                href={`${episodePath(projectId, run.episode_id, "tasks")}&run=${task.child_run_id}`}
+                                href={`${episodePath(projectId, task.episode_id ?? run.episode_id, "tasks")}&run=${task.child_run_id}`}
                               >
                                 查看子任务 {task.task_key}
                               </Link>
@@ -590,6 +624,113 @@ function Progress({
           )}
         </>
       )}
+    </section>
+  );
+}
+
+function SeriesScopePanel({
+  projectId,
+  series,
+  disabled,
+  onControl,
+}: {
+  projectId: string;
+  series: ProducerSeriesProgress;
+  disabled: boolean;
+  onControl: () => void;
+}) {
+  const byId = new Map(
+    series.scope.episodes.map((episode) => [
+      episode.episode_id,
+      episode.episode_no,
+    ]),
+  );
+  const deliveries = series.completion?.payload.deliveries ?? [];
+  const result = series.whole_series_complete
+    ? "全剧内容与正式成片已确认"
+    : series.completion_current
+      ? "本批次作品已确认，不等于全剧完成"
+      : series.completion
+        ? "历史作品回执 · 当前来源需复核"
+        : "等待正式成片及独立内容确认";
+  return (
+    <section
+      className="grid min-w-0 gap-3 rounded-lg border p-3"
+      aria-label="多集制作范围"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="font-medium">
+          多集制作范围 · {series.scope.episodes.length} /{" "}
+          {series.scope.target_episode_count} 集
+        </h4>
+        {series.paused && (
+          <span role="status" className="text-sm">
+            多集制作已暂停
+          </span>
+        )}
+      </div>
+      <p className="text-sm text-muted-foreground">{result}</p>
+      {series.completion_blocking_code && (
+        <Notice>作品仍待复核：{series.completion_blocking_code}</Notice>
+      )}
+      <ol className="grid list-decimal gap-2 pl-5 text-sm">
+        {series.scope.episodes.map((episode) => {
+          const artifact = deliveries.find(
+            (row) => row.episode_id === episode.episode_id,
+          );
+          const path =
+            artifact &&
+            productionDeliveryPath({
+              id: artifact.artifact_id,
+              project_id: projectId,
+              episode_id: episode.episode_id,
+            });
+          return (
+            <li key={episode.episode_id}>
+              <Link
+                className="underline"
+                href={episodePath(projectId, episode.episode_id, "list")}
+              >
+                第 {episode.episode_no} 集制作列表
+              </Link>
+              <span className="text-muted-foreground">
+                {" "}
+                · {episode.target_duration_ms / 1000} 秒
+              </span>
+              {!!episode.requires_episode_ids.length && (
+                <span>
+                  {" "}
+                  · 前置集{" "}
+                  {episode.requires_episode_ids
+                    .map((id) => byId.get(id))
+                    .join("、")}
+                </span>
+              )}
+              {path && (
+                <Link className="ml-2 underline" href={path}>
+                  查看{series.completion_current ? "正式" : "历史"}成片
+                </Link>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled}
+          onClick={onControl}
+        >
+          {series.paused ? "恢复多集制作" : "暂停多集制作"}
+        </Button>
+        <Link
+          className="text-sm underline"
+          href={projectPath(projectId, "reviews")}
+        >
+          核对待审与内容确认
+        </Link>
+      </div>
     </section>
   );
 }

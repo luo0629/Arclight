@@ -1,10 +1,11 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
 from arclight.api.dependencies import Actor, Database
 from arclight.application.project_overview import ProjectOverview, project_overview
+from arclight.application.series_workspace import SeriesWorkspace, series_workspace
 
 router = APIRouter(prefix="/api/v1", tags=["projects"])
 
@@ -18,3 +19,16 @@ def get_overview(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ProjectOverview:
     return project_overview(db, project_id, actor, limit=limit, offset=offset)
+
+
+@router.get("/projects/{project_id}/series-overview")
+def get_series_overview(
+    project_id: UUID,
+    db: Database,
+    actor: Actor,
+    response: Response,
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> SeriesWorkspace:
+    response.headers["Cache-Control"] = "no-store"
+    return series_workspace(db, project_id, actor, limit=limit, offset=offset)

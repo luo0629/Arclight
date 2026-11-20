@@ -1,5 +1,7 @@
 "use client";
 
+import useScopedRead from "@/features/projects/hooks/use-scoped-read";
+
 import { useSearchParams } from "next/navigation";
 import { isResourceId } from "@/lib/routes";
 import ContinuityComparisonButton from "@/features/continuity/components/continuity-comparison";
@@ -63,6 +65,16 @@ export default function VisualAssets({
   const searchParams = useSearchParams();
   const requestedAsset = searchParams.get("asset");
   const requestedReview = searchParams.get("asset_review");
+  const requestedVersion = searchParams.get("asset_version");
+  const exact = useScopedRead<VisualAsset>(
+    requestedVersion &&
+      isResourceId(requestedVersion) &&
+      requestedAsset &&
+      isResourceId(requestedAsset)
+      ? `${path}/${requestedAsset}`
+      : null,
+  );
+
   useEffect(() => {
     live.current = true;
     void list.reload().catch(() => {});
@@ -167,6 +179,30 @@ export default function VisualAssets({
               versionId={requestedReview}
               initiallyOpen
               onChanged={refresh}
+            />
+          </section>
+        )}
+      {exact.loading && <p role="status">正在读取精确资产版本…</p>}
+      {exact.error && (
+        <Notice tone="error">精确资产不可用：{exact.error}</Notice>
+      )}
+      {exact.data &&
+        exact.data.id === requestedAsset &&
+        exact.data.project_id === projectId &&
+        requestedVersion && (
+          <section
+            className="rounded-xl border p-4"
+            aria-label="指定精确资产版本"
+          >
+            <h3 className="mb-3 font-semibold">{exact.data.name} · 引用版本</h3>
+            <AssetVersions
+              key={`${requestedAsset}:${requestedVersion}`}
+              asset={exact.data}
+              path={path}
+              writable={writable}
+              owner={owner}
+              initialVersionId={requestedVersion}
+              onSaved={saved}
             />
           </section>
         )}

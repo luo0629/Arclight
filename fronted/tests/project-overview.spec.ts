@@ -309,6 +309,15 @@ test("viewer can inspect an archived project without production actions", async 
       { exact: true },
     ),
   ).toBeVisible();
+  await page
+    .getByRole("button", { name: "查看连续剧详情", exact: true })
+    .click();
+  await expect(
+    page.getByText("当前只能查看。需由可编辑项目的拥有者发起多集制作。"),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "发起多集制作", exact: true }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "进入第 1 集", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "第 1 集 · 总览剧集1", exact: true }),
@@ -319,4 +328,92 @@ test("viewer can inspect an archived project without production actions", async 
   await expect(
     page.getByRole("button", { name: "项目设置与归档", exact: true }),
   ).toHaveCount(0);
+});
+
+test("SERIES-08 ignores a late episode projection and opens the selected exact script in list mode", async ({
+  page,
+}) => {
+  const env = await setup(page, 2);
+  const [first, second] = env.episodes;
+  const response = await page.request.post(
+    `/api/v1/episodes/${second.id}/scripts`,
+    {
+      headers: env.headers,
+      data: {
+        expected_version_no: 0,
+        content: {
+          title: "保留的版本",
+          summary: "只修订第二集。",
+          estimated_duration_ms: 30000,
+          characters: ["女孩"],
+          scenes: [
+            {
+              scene_no: 1,
+              title: "回信",
+              action: "她翻开信封。",
+              dialogue: [],
+            },
+          ],
+        },
+      },
+    },
+  );
+  expect(response.status(), await response.text()).toBe(201);
+  const script = await response.json();
+  let seen!: () => void;
+  let release!: () => void;
+  const entered = new Promise<void>((resolve) => (seen = resolve));
+  const wait = new Promise<void>((resolve) => (release = resolve));
+  await page.route(`**/episodes/${first.id}/series-evidence`, async (route) => {
+    seen();
+    await wait;
+    await route.fulfill({
+      json: {
+        project_id: env.project.id,
+        episode_id: first.id,
+        phase: "DRAFT",
+        issues: [],
+        target_story_time: 76543,
+        shared_versions: [],
+      },
+    });
+  });
+  try {
+    await page.goto(`/projects/${env.project.id}?section=overview`);
+    await page
+      .getByRole("button", { name: "查看连续剧详情", exact: true })
+      .click();
+    const picker = page.getByLabel("选择查看制作状态的剧集", { exact: true });
+    await picker.selectOption(first.id);
+    await entered;
+    await picker.selectOption(second.id);
+    const panel = page.getByRole("region", {
+      name: "本集连续剧证据",
+      exact: true,
+    });
+    const local = panel.getByRole("link", {
+      name: "查看剧本／局部返修",
+      exact: true,
+    });
+    await expect(local).toHaveAttribute(
+      "href",
+      `/projects/${env.project.id}/episodes/${second.id}?view=list&node=script:${script.id}`,
+    );
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+    await expect(
+      panel.getByText("故事时点 76543", { exact: true }),
+    ).toHaveCount(0);
+    await local.click();
+    await expect(page).toHaveURL(
+      new RegExp(
+        `/episodes/${second.id}\\?view=list&node=script%3A${script.id}|/episodes/${second.id}\\?view=list&node=script:${script.id}`,
+      ),
+    );
+    await expect(
+      page.getByRole("button", { name: "本集连续剧来源", exact: true }),
+    ).toBeVisible();
+  } finally {
+    release();
+  }
 });

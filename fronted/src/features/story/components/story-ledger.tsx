@@ -1,5 +1,8 @@
 "use client";
 
+import { useSearchParams } from "next/navigation";
+import { isResourceId } from "@/lib/routes";
+
 import {
   useCallback,
   useEffect,
@@ -170,7 +173,13 @@ export default function StoryLedger({
   );
   const [recovered, setRecovered] = useState(() => !!store.drafts[draftId]);
   const [head, setHead] = useState<LedgerHead | null>(null);
-  const [selectedId, setSelectedId] = useState("");
+  const requestedVersion = useSearchParams().get("ledger");
+  const requestedId =
+    requestedVersion && isResourceId(requestedVersion) ? requestedVersion : "";
+  const [selectedId, setSelectedId] = useState(requestedId);
+  useEffect(() => {
+    if (requestedId) setSelectedId(requestedId);
+  }, [requestedId]);
   const [version, setVersion] = useState<LedgerVersion | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -745,14 +754,14 @@ export default function StoryLedger({
   );
 }
 
-function LedgerQueryPanel({
+export function LedgerQueryPanel({
   path,
   version,
   entities,
 }: {
   path: string;
   version: LedgerVersion;
-  entities: StoryEntry[];
+  entities: Pick<StoryEntry, "id" | "name" | "kind" | "archived">[];
 }) {
   const [targetId, setTargetId] = useState("");
   const [perspective, setPerspective] = useState<"AUTHOR" | "CHARACTER">(

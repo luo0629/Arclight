@@ -1090,3 +1090,101 @@ test("SERIES-05 previews the later episode before confirming a plan revision", a
   expect(stale.status).toBe("STALE");
   expect(stale.content_json).toEqual(script.content_json);
 });
+
+test("SERIES-08 launches the exact approved scope from overview and replays the same request after a lost receipt", async ({
+  page,
+}) => {
+  const data = await setup(page);
+  const planned = await seedPlanned(page, data);
+  const confirmed = await page.request.post(
+    `${data.path}/story-outlines/${planned.id}/confirm`,
+    { headers: data.headers },
+  );
+  expect(confirmed.status(), await confirmed.text()).toBe(200);
+  const root = `/api/v1/projects/${data.project.id}`;
+  const laterResponse = await page.request.post(`${root}/episodes`, {
+    headers: data.headers,
+    data: { episode_no: 2, title: "渡口后续" },
+  });
+  expect(laterResponse.status()).toBe(201);
+  const later = await laterResponse.json();
+  const overview = `/projects/${data.project.id}?section=overview`;
+  const history = page.getByRole("region", { name: "多集运行记录" });
+  const start = page.getByRole("region", { name: "按批准范围发起多集制作" });
+  const calls: { key: string; body: string }[] = [];
+  await page.route(`**${root}/producer-runs`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    calls.push({
+      key: route.request().headers()["idempotency-key"],
+      body: route.request().postData()!,
+    });
+    if (calls.length !== 1) return route.continue();
+    const committed = await route.fetch();
+    expect(committed.status(), await committed.text()).toBe(202);
+    await route.abort();
+  });
+  await page.goto(overview);
+  await page
+    .getByRole("button", { name: "查看连续剧详情", exact: true })
+    .click();
+  await expect(page.getByText("主线 · 送达失落的信")).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "打开精确规划" }),
+  ).toHaveAttribute("href", new RegExp(`outline=${planned.id}$`));
+  await start.getByRole("button", { name: /第 1 集 · 雨夜拾信/ }).click();
+  await start.getByRole("button", { name: /第 2 集 · 渡口后续/ }).click();
+  await start.getByLabel("等待第 1 集确认", { exact: true }).check();
+  await start
+    .getByLabel("制作目标", { exact: true })
+    .fill("依批准的主线制作前两集。");
+  await start.getByLabel("跨集预算上限（USD）", { exact: true }).fill("0");
+  const submit = start.getByRole("button", {
+    name: "发起多集制作",
+    exact: true,
+  });
+  await expect(submit).toBeDisabled();
+  await start
+    .getByLabel("确认上述范围和预算；所有集共用同一上限及截止时间。")
+    .check();
+  await submit.click();
+  await expect(
+    start.getByRole("button", { name: "重发原多集发起", exact: true }),
+  ).toBeVisible();
+  await page.reload();
+  await page
+    .getByRole("button", { name: "查看连续剧详情", exact: true })
+    .click();
+  const replay = start.getByRole("button", {
+    name: "重发原多集发起",
+    exact: true,
+  });
+  await replay.click();
+  await expect(history.getByRole("link", { name: /查看多集运行/ })).toHaveCount(
+    1,
+  );
+  await expect(
+    start.getByRole("link", { name: "打开本次多集运行" }),
+  ).toBeVisible();
+  expect(calls).toHaveLength(2);
+  expect(calls[1]).toEqual(calls[0]);
+  const payload = JSON.parse(calls[0].body);
+  expect(payload.scope.series_plan_version_id).toBe(planned.id);
+  expect(payload.scope.episodes).toEqual([
+    { episode_id: data.episode.id, requires_episode_ids: [] },
+    { episode_id: later.id, requires_episode_ids: [data.episode.id] },
+  ]);
+  expect(payload.limits.maximum_cost).toBe("0");
+  const catalog = await (
+    await page.request.get(`${root}/series-overview`, { headers: data.headers })
+  ).json();
+  expect(catalog.total).toBe(1);
+  await expect(
+    history.getByRole("link", { name: /查看多集运行/ }),
+  ).toHaveAttribute(
+    "href",
+    new RegExp(
+      `/episodes/${data.episode.id}\\?view=tasks&run=${catalog.items[0].id}$`,
+    ),
+  );
+  await page.unrouteAll({ behavior: "wait" });
+});
