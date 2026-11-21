@@ -7,9 +7,10 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 from test_continuity_reviews import review_case
 from test_timeline_saves import save_counts, save_url, saved_case, saved_timeline
-from test_timelines import created_timeline, timeline_case
+from test_timelines import timeline_case
+from timeline_history_helpers import seed_schema1_timeline
 
-from arclight.application import timeline_store, timelines
+from arclight.application import timeline_store
 from arclight.application.timelines import save_timeline
 from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.timelines import TimelineSave, TimelineSnapshot
@@ -320,26 +321,9 @@ def test_legacy_version_without_schema_marker_reads_and_upgrades_without_hash_dr
         kwargs["metadata_json"].pop("timeline_schema_version", None)
         return version_model(**kwargs)
 
-    def legacy_snapshot(**values):
-        tracks = values.pop("tracks")
-        return TimelineSnapshot(
-            schema_version=1,
-            tracks=[
-                track.model_copy(
-                    update={
-                        "clips": [clip.model_copy(update={"visual": None}) for clip in track.clips]
-                    }
-                )
-                for track in tracks
-            ],
-            **values,
-        )
-
     with monkeypatch.context() as patch:
         patch.setattr(timeline_store, "AssetVersion", legacy_version)
-        patch.setattr(timelines, "CurrentTimelineSnapshot", legacy_snapshot)
-        original = created_timeline(client, episode, create)
-    assert original["snapshot"]["schema_version"] == 1
+        original = seed_schema1_timeline(client, episode, create, patch)
     with client.app.state.session_factory() as db:
         assert (
             "timeline_schema_version"

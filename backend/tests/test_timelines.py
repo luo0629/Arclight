@@ -358,23 +358,18 @@ def test_sealed_parent_tracks_and_clips_reject_rewriting_deletion_and_appending(
     with pytest.raises(DBAPIError), client.app.state.session_factory.begin() as db:
         db.add(TimelineTrack(timeline_id=UUID(original["id"]), kind="VIDEO", ordinal=0))
         db.flush()
-    with pytest.raises(DBAPIError), client.app.state.session_factory.begin() as db:
-        clip = original["snapshot"]["tracks"][0]["clips"][0]
-        db.add(
-            TimelineClip(
-                **{
-                    **clip,
-                    "id": uuid4(),
-                    "shot_id": UUID(clip["shot_id"]),
-                    "source_asset_version_id": UUID(clip["source_asset_version_id"]),
-                    "review_id": UUID(clip["review_id"]),
-                    "review_storyboard_id": UUID(clip["review_storyboard_id"]),
-                    "review_shot_id": UUID(clip["review_shot_id"]),
-                },
-                timeline_id=UUID(original["id"]),
-                track_id=UUID(original["snapshot"]["tracks"][0]["id"]),
-            )
-        )
+    with (
+        pytest.raises(DBAPIError, match="IMMUTABLE_HISTORY"),
+        client.app.state.session_factory.begin() as db,
+    ):
+        track = original["snapshot"]["tracks"][0]
+        stored = db.get(TimelineClip, UUID(track["clips"][0]["id"]))
+        assert stored is not None
+        # Copy only stored clip columns; visual settings belong to a separate frozen row.
+        columns = {
+            column.key: getattr(stored, column.key) for column in TimelineClip.__table__.columns
+        }
+        db.add(TimelineClip(**(columns | {"id": uuid4(), "ordinal": len(track["clips"])})))
         db.flush()
     assert client.get(f"/api/v1/timelines/{original['id']}").json() == original
 

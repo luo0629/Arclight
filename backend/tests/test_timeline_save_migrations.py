@@ -9,18 +9,20 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import inspect, text
 from test_continuity_reviews import review_case  # noqa: F401
-from test_timeline_saves import save_url, saved_case, saved_timeline  # noqa: F401
-from test_timelines import timeline_case  # noqa: F401
+from test_timeline_saves import save_url
+from test_timelines import timeline_case
+from timeline_history_helpers import seed_schema1_revision, seed_schema1_timeline
 
 from arclight.persistence.timelines import Timeline
 
-__all__ = ["review_case", "timeline_case", "saved_case"]
+__all__ = ["review_case", "timeline_case"]
 
 
 def test_0055_roundtrip_keeps_preexisting_timeline_and_frozen_children(
-    client, saved_case, migrated
+    client, episode, timeline_case, migrated, monkeypatch
 ):
-    original, _, _ = saved_case
+    body, _ = timeline_case
+    original = seed_schema1_timeline(client, episode, body, monkeypatch)
     command.downgrade(migrated, "0054")
     assert "timeline_revisions" not in inspect(client.app.state.engine).get_table_names()
     with client.app.state.session_factory() as db:
@@ -31,10 +33,11 @@ def test_0055_roundtrip_keeps_preexisting_timeline_and_frozen_children(
 
 
 def test_0055_nonempty_downgrade_keeps_full_schema_head_and_both_versions(
-    client, saved_case, migrated
+    client, episode, timeline_case, migrated, monkeypatch
 ):
-    original, body, _ = saved_case
-    successor = saved_timeline(client, original, body)
+    body, _ = timeline_case
+    original = seed_schema1_timeline(client, episode, body, monkeypatch)
+    successor, _ = seed_schema1_revision(client, original)
     before = set(inspect(client.app.state.engine).get_table_names())
     with client.app.state.session_factory() as db:
         head = db.scalar(text("SELECT version_num FROM alembic_version"))

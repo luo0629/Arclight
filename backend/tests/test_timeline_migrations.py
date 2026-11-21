@@ -9,7 +9,8 @@ from alembic.config import Config
 from sqlalchemy import inspect, select
 from test_api_workflow import start
 from test_continuity_reviews import review_case  # noqa: F401
-from test_timelines import created_timeline, timeline_case  # noqa: F401
+from test_timelines import timeline_case
+from timeline_history_helpers import seed_schema1_timeline
 
 from arclight.persistence.models import OutboxEvent
 from arclight.persistence.timelines import Timeline
@@ -32,10 +33,10 @@ def test_empty_timeline_migration_roundtrip_preserves_existing_workflow(client, 
 
 
 def test_nonempty_timeline_downgrade_is_rejected_before_any_table_is_dropped(
-    client, episode, timeline_case, migrated
+    client, episode, timeline_case, migrated, monkeypatch
 ):
     body, _ = timeline_case
-    original = created_timeline(client, episode, body)
+    original = seed_schema1_timeline(client, episode, body, monkeypatch)
     with pytest.raises(RuntimeError, match="Cannot discard timeline history"):
         command.downgrade(migrated, "0053")
     tables = inspect(client.app.state.engine).get_table_names()
