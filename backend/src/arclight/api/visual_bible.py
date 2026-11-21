@@ -10,11 +10,11 @@ from sqlalchemy import select
 from arclight.api.collaboration import audit
 from arclight.api.dependencies import Actor, Database
 from arclight.api.routes import Limit, Offset
-from arclight.api.schemas import Input
+from arclight.api.schemas import Input, VisualBibleEdit
 from arclight.application.commands import require_project
-from arclight.application.visual_bible import append_version, state
+from arclight.application.visual_bible import append_version, save_fields, state
 from arclight.core.errors import DomainError
-from arclight.domain.visual_bible import FIELD_NAMES, VisualField, VisualFields, VisualPatch
+from arclight.domain.visual_bible import FIELD_NAMES, VisualField, VisualFields
 from arclight.persistence.models import VisualBibleVersion
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/visual-bible", tags=["visual-bible"])
@@ -36,12 +36,6 @@ class VisualRead(BaseModel):
         if value is None:
             return None
         return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
-
-
-class Edit(Input):
-    expected_version_no: int = Field(strict=True, ge=0)
-    creation_key: UUID
-    fields: VisualPatch
 
 
 class Locks(Input):
@@ -100,19 +94,13 @@ def version(project_id: UUID, version_id: UUID, db: Database, actor: Actor) -> V
 
 
 @router.post("/versions", status_code=201)
-def edit(project_id: UUID, payload: Edit, db: Database, actor: Actor) -> VisualRead:
+def edit(project_id: UUID, payload: VisualBibleEdit, db: Database, actor: Actor) -> VisualRead:
     project = require_project(db, project_id, actor, write=True)
-    row, created = append_version(
-        db,
-        project,
-        actor,
-        payload.expected_version_no,
-        payload.creation_key,
-        patch=payload.fields.model_dump(exclude_unset=True),
+    return read_version(
+        save_fields(
+            db, project, actor, payload.expected_version_no, payload.creation_key, payload.fields
+        )
     )
-    if created:
-        audit(db, project_id, actor, "visual_bible.saved", row.id, {"version_no": row.version_no})
-    return read_version(row)
 
 
 @router.post("/locks", status_code=201)

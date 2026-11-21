@@ -125,7 +125,7 @@ def _seed(run: WorkflowRun, settings: Settings) -> AgentModelRequest:
             target_duration_ms=inputs["target_duration_ms"],
             duration_tolerance_percent=settings.text_duration_tolerance_percent,
         )
-    series = run.workflow_version in SERIES_WORKFLOWS
+    series = "narrative_context" in run.input_json
     seed = (
         SeriesPlanningSeed(constraints=constraints, narrative_context=inputs["narrative_context"])
         if series
@@ -149,7 +149,7 @@ def _validate(db: Session, run_id: UUID, plan: ScreenwriterPlan, attempt: int = 
     run = db.get(WorkflowRun, run_id)
     assert run is not None
     stage = _stage(run)
-    series = run.workflow_version in SERIES_WORKFLOWS
+    series = "narrative_context" in run.input_json
     loop = _loop(db, run_id, stage, attempt, series=series)
     if loop is None:
         raise DomainError("SCREENWRITER_PLAN_INVALID", "规划缺少持久运行", 409)
@@ -312,7 +312,7 @@ def plan_screenwriter(
         validate_publication(db, run.id)
         if execution_actor(db, run) != actor:
             raise DomainError("FORBIDDEN", "规划启动须使用原运行发起者", 403)
-        series = run.workflow_version in SERIES_WORKFLOWS
+        series = "narrative_context" in run.input_json
         previous = _loop(db, run.id, _stage(run), attempt, series=series)
         try:
             request = (
@@ -353,7 +353,7 @@ def resume_screenwriter_plan(
         run = db.get(WorkflowRun, loop.run_id)
         assert run is not None
         seed = AgentModelRequest.model_validate(loop.seed_json)
-        series = run.workflow_version in SERIES_WORKFLOWS
+        series = "narrative_context" in run.input_json
         version = SERIES_PLAN_VERSION if series else PLAN_VERSION
         attempt = 0
         if seed.operation_key.startswith(version + ":attempt:"):

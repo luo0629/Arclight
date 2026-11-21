@@ -23,6 +23,7 @@ from render_manifest_helpers import (
 )
 from test_media_validation import wave_bytes
 
+from arclight.application import render_manifests
 from arclight.application.render_audio import validate_line_audio
 from arclight.core.errors import DomainError
 from arclight.domain.render_manifests import LineAudioDecision, RenderManifestCreate
@@ -33,12 +34,12 @@ from arclight.persistence.models import Shot
 __all__ = ["audio_case", "render_case", "review_case", "timeline_case"]
 
 
-def test_decisions_are_frozen_canonical_idempotent_and_preserve_schema1_hash(client, render_case):
-    legacy, body = manifest(client, render_case)
-    assert legacy["snapshot"]["schema_version"] == 1
-    assert "line_audio_decisions" not in legacy["snapshot"]
-    assert legacy["content_sha256"] == digest(legacy["snapshot"])
-    assert client.post(manifest_url(render_case), json=body).json() == legacy
+def test_current_manifests_and_audio_decisions_are_frozen_and_idempotent(client, render_case):
+    empty, body = manifest(client, render_case)
+    assert empty["snapshot"]["schema_version"] == 2
+    assert "line_audio_decisions" not in empty["snapshot"]
+    assert empty["content_sha256"] == digest(empty["snapshot"])
+    assert client.post(manifest_url(render_case), json=body).json() == empty
     decisions = line_decisions(client, render_case)
     assert len(decisions) == 2  # Includes a narrator outside the first dialogue line.
     body = {"creation_key": str(uuid4()), "line_audio_decisions": decisions}
@@ -202,7 +203,9 @@ def test_static_images_and_subtitles_reject_nonzero_media_inpoints(client, audio
     assert_blocked(client.post(render_path(value, "admission")), "RENDER_SOURCE_RANGE_INVALID")
 
 
-def test_legacy_schema1_with_all_real_voices_can_still_be_admitted(client, episode, render_case):
+def test_legacy_schema1_with_all_real_voices_can_still_be_admitted(
+    client, episode, render_case, monkeypatch
+):
     _, identity, checksum = stored_file(
         client, episode["project_id"], wave_bytes(), "audio/wav", kind="AUDIO"
     )
@@ -221,8 +224,17 @@ def test_legacy_schema1_with_all_real_voices_can_still_be_admitted(client, episo
         for i, item in enumerate(line_decisions(client, render_case))
     ]
     timeline = edited(client, render_case, snapshot)
-    value, _ = manifest(client, timeline)
+    snapshot_type = render_manifests.RenderManifestSnapshot
+
+    class HistoricalManifest(snapshot_type):
+        def __init__(self, **values):
+            super().__init__(**(values | {"schema_version": 1}))
+
+    with monkeypatch.context() as historical:
+        historical.setattr(render_manifests, "RenderManifestSnapshot", HistoricalManifest)
+        value, _ = manifest(client, timeline)
     assert value["snapshot"]["schema_version"] == 1
+    assert value["content_sha256"] == digest(value["snapshot"])
     response = client.post(render_path(value, "admission"))
     assert response.status_code == 200, response.text
 

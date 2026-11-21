@@ -15,7 +15,7 @@ from arclight.application.production_versions import check_media
 from arclight.application.visual_bible import state as visual_bible_state
 from arclight.core.errors import DomainError
 from arclight.domain.continuity_revisions import PromptAmendment, append_prompt_amendments
-from arclight.domain.generation_requests import GenerationCreate, GenerationSpec
+from arclight.domain.generation_requests import GenerationCreate
 from arclight.domain.media_capabilities import validate_capabilities
 from arclight.domain.shot_revisions import (
     OPERATION_LABELS,
@@ -79,7 +79,9 @@ def read_revision_source(
         raise DomainError("SHOT_REVISION_SOURCE_INVALID", "来源候选已失效、锁定或不可修订", 409)
     context = manifest.snapshot_json["context"]
     expected = {"storyboard_id": str(intent.storyboard_id), "shot_id": str(intent.shot_id)}
-    if context.get("continuity_review") != expected or job.episode_id is None:
+    from arclight.application.continuity_workflow import frozen_review_binding
+
+    if frozen_review_binding(context) != expected or job.episode_id is None:
         raise DomainError("SHOT_REVISION_TARGET_INVALID", "候选不属于此精确分镜与镜头", 409)
     check_media(db, project_id, job.id, manifest.id)
     composition = context.get("prompt_composition")
@@ -165,7 +167,12 @@ def prepare_shot_revision(
         found.job.episode_id,
     )
     context = found.manifest.snapshot_json["context"]
-    original = GenerationSpec.model_validate(context["generation"])
+    from arclight.application.continuity_workflow import (
+        frozen_review_binding,
+        generation_spec_for_new_job,
+    )
+
+    original = generation_spec_for_new_job(context)
     spec, composition = append_prompt_amendments(
         original,
         found.composition,
@@ -198,7 +205,7 @@ def prepare_shot_revision(
                 "current_version_id": asset.current_version_id,
             },
             "task_type": "IMAGE",
-            "review_target": context["continuity_review"],
+            "review_target": frozen_review_binding(context),
             "inputs": [
                 {
                     key: item[key]

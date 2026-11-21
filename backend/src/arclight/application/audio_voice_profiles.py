@@ -43,7 +43,7 @@ from arclight.persistence.models import (
     StoryOutline,
     VisualAsset,
 )
-from arclight.providers.media_capabilities import resolve_parameters
+from arclight.providers.media_capabilities import parameter_ranges, resolve_parameters
 
 PROFILE_KIND = "AUDIO_VOICE_PROFILE"
 
@@ -416,12 +416,16 @@ def line_profile_read(
             profile=profile,
             unavailable_reason="本句说话者与已保存音色的台词名称不一致，请核对剧本角色。",
         )
+    supported = {"speed", "instructions"} & resolve_parameters(voice.provider, voice.model)
     return LineVoiceProfileRead(
         character_asset_id=identity,
         profile=profile,
         voice=voice,
         selection=selection,
-        supported_parameters=sorted(
-            {"speed", "instructions"} & resolve_parameters(voice.provider, voice.model)
-        ),
+        supported_parameters=sorted(supported),
+        parameter_ranges={
+            name: limits
+            for name, limits in parameter_ranges(voice.provider, voice.model).items()
+            if name in supported
+        },
     )

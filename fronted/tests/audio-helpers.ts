@@ -331,6 +331,9 @@ export async function audioFixture(page: Page) {
             ? {
                 model: "gpt-4o-mini-tts",
                 supported_parameters: control.supported,
+                parameter_ranges: control.supported.includes("speed")
+                  ? { speed: { minimum: 0.5, maximum: 2 } }
+                  : {},
               }
             : {}),
         },
@@ -438,6 +441,9 @@ export async function audioFixture(page: Page) {
                   }
                 : null,
               supported_parameters: voice ? ["speed", "instructions"] : [],
+              parameter_ranges: voice
+                ? { speed: { minimum: 0.5, maximum: 2 } }
+                : {},
               unavailable_reason: null,
             },
           });

@@ -139,7 +139,7 @@ export default function ServiceSettings({
   useEffect(() => {
     let live = true;
     setError("");
-    void api<Configuration>("/me/model-services?catalog_version=2")
+    void api<Configuration>("/me/model-services")
       .then((result) => {
         if (!live) return;
         const next = initialDrafts();
@@ -247,7 +247,6 @@ export default function ServiceSettings({
       const profile = await api<Profile>(
         "/me/model-services/" + kind,
         json("PUT", {
-          contract_version: 2,
           mode: draft.mode,
           supplier: draft.supplier,
           supplier_name: draft.supplier_name,

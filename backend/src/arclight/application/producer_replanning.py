@@ -19,7 +19,7 @@ from arclight.application.producer_plan_history import (
     read_plan_record,
 )
 from arclight.application.producer_planning import producer_registry
-from arclight.application.producer_series import task_context
+from arclight.application.producer_series import has_series_scope, task_context
 from arclight.application.production_versions import bind, component, find_binding, text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -34,7 +34,6 @@ from arclight.domain.producer_replanning import (
 )
 from arclight.domain.producer_research import RESEARCH_TOOL
 from arclight.domain.producer_series import (
-    SERIES_PRODUCER_VERSION,
     SeriesProducerReplan,
     SeriesProducerReplanSeed,
     replan_model,
@@ -86,11 +85,7 @@ def _versions(
     db: Session, root: WorkflowRun, observation: ProducerObservation, *, capture: bool = False
 ) -> None:
     version = replan_version(root.workflow_version)
-    name = (
-        "producer-series-replan"
-        if root.workflow_version == SERIES_PRODUCER_VERSION
-        else "producer-replan"
-    )
+    name = "producer-series-replan" if has_series_scope(root) else "producer-replan"
     identity = uuid5(root.id, "producer-replan-spec:" + str(observation.id))
     binding = find_binding(db, observation.project_id, "PRODUCER_REPLAN_SPEC", identity)
     workflow = find_binding(db, observation.project_id, "WORKFLOW", root.id)
@@ -233,11 +228,7 @@ def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObser
         root = db.get(WorkflowRun, loop.run_id)
         assert root is not None
         version = replan_version(root.workflow_version)
-        seed_model = (
-            SeriesProducerReplanSeed
-            if root.workflow_version == SERIES_PRODUCER_VERSION
-            else ProducerReplanSeed
-        )
+        seed_model = SeriesProducerReplanSeed if has_series_scope(root) else ProducerReplanSeed
         frozen = seed_model.model_validate(first.data)
         observation = read_observation(db, loop.run_id, frozen.observation.id, actor)
         base = frozen.base_plan
@@ -288,7 +279,7 @@ def require_completed_replan(db: Session, loop: AgentLoop) -> AgentLoopResult[Pr
                 AgentLoopResult[ProducerReplan],
                 AgentLoopResult[SeriesProducerReplan].model_validate(loop.outcome_json),
             )
-            if root.workflow_version == SERIES_PRODUCER_VERSION
+            if has_series_scope(root)
             else AgentLoopResult[ProducerReplan].model_validate(loop.outcome_json)
         )
         proposal = outcome.result
@@ -357,7 +348,7 @@ def _fresh_evidence(db: Session, loop: AgentLoop, plan: ProducerPlan) -> None:
     root = db.get(WorkflowRun, loop.run_id)
     assert root is not None
     if (
-        root.workflow_version == SERIES_PRODUCER_VERSION
+        has_series_scope(root)
         and not {item["episode_id"] for item in root.input_json["series_scope"]["episodes"]}
         <= investigated
     ):

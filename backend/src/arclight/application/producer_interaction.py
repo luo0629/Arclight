@@ -24,7 +24,6 @@ from arclight.domain.producer_interaction import ProducerCommand, ProducerRunCre
 from arclight.domain.producer_planning import DELEGATE_TOOL, DelegationRequest
 from arclight.domain.producer_series import (
     PRODUCER_VERSIONS,
-    SERIES_PRODUCER_VERSION,
     SeriesProducerCreate,
 )
 from arclight.domain.versions import digest
@@ -240,6 +239,7 @@ def validate_delegation(
         return
     planned = next(task for task in record.plan.tasks if task.task_key == request.task_key)
     from arclight.application.producer_series import (
+        has_series_scope,
         require_episode_prerequisites,
         require_known_costs,
         task_context,
@@ -263,7 +263,7 @@ def validate_delegation(
     if delegation_count(db, run.id) >= limits.max_delegations:
         raise DomainError("AGENT_DELEGATION_LIMIT", "Agent 委派次数已达上限", 409)
     usage = action_usage(db, run.id)
-    if (run.workflow_version == SERIES_PRODUCER_VERSION and usage["unknown_cost"]) or (
+    if (has_series_scope(run) and usage["unknown_cost"]) or (
         limits.maximum_cost is not None
         and (
             usage["unknown_cost"]

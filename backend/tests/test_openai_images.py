@@ -242,7 +242,7 @@ def test_server_config_change_fails_before_attempt_and_public_config_is_secret_f
     )
     assert deliver(client, job, provider) == "FAILED"
     assert not requests and attempt_for(client, job) is None
-    public = client.get(base(episode["project_id"]) + "/providers/openai/configuration")
+    public = client.get(base(episode["project_id"]) + "/services/image/configuration?source=server")
     assert public.status_code == 200 and public.json()["enabled"]
     assert CANARY not in public.text and "api_key" not in public.text
 

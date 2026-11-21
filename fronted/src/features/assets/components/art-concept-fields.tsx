@@ -9,7 +9,7 @@ import {
 } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { ChoiceSelect } from "@/components/choice-select";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Notice } from "@/components/ui-kit";
 import { api, message } from "@/lib/api/client";
 
@@ -60,16 +60,39 @@ export default function ArtConceptFields({
 }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [maxBatch, setMaxBatch] = useState(
-    value?.spec.provider && !["mock", "openai"].includes(value.spec.provider)
-      ? 1
-      : 4,
+  const provider = value?.spec.provider;
+  const model = value?.spec.model;
+  const capabilityKey = JSON.stringify([projectId, provider, model]);
+  const [batchLimit, setBatchLimit] = useState<{
+    key: string;
+    maximum: number;
+  }>();
+  const maxBatch = Math.min(
+    4,
+    batchLimit?.key === capabilityKey
+      ? batchLimit.maximum
+      : (value?.spec.batch_size ?? 1),
   );
+  useEffect(() => {
+    if (!provider || !model || batchLimit?.key === capabilityKey) return;
+    const controller = new AbortController();
+    void api<{ max_batch_size: number }>(
+      `/projects/${projectId}/generation-jobs/providers/${encodeURIComponent(provider)}/capabilities?model=${encodeURIComponent(model)}`,
+      { signal: controller.signal },
+    )
+      .then(({ max_batch_size }) => {
+        if (!controller.signal.aborted)
+          setBatchLimit({ key: capabilityKey, maximum: max_batch_size });
+      })
+      .catch(() => {
+        // A saved batch can be displayed as-is; do not infer a larger capacity.
+      });
+    return () => controller.abort();
+  }, [projectId, provider, model, batchLimit?.key, capabilityKey]);
   async function chooseProvider(provider: string) {
     if (!value) return;
     setError("");
     if (provider === "mock") {
-      setMaxBatch(4);
       onChange({
         ...value,
         spec: {
@@ -95,9 +118,14 @@ export default function ArtConceptFields({
         throw new Error(
           config.message || "图像服务尚未启用，请先配置图像服务与可信报价。",
         );
-      const maximum = config.capabilities?.max_batch_size ?? 4;
+      if (!config.capabilities)
+        throw new Error("图像服务没有声明批量生成能力。");
+      const maximum = Math.min(4, config.capabilities.max_batch_size);
       const batch = Math.min(maximum, value.spec.batch_size);
-      setMaxBatch(maximum);
+      setBatchLimit({
+        key: JSON.stringify([projectId, config.provider, config.model]),
+        maximum,
+      });
       onChange({
         ...value,
         spec: {

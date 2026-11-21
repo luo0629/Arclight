@@ -100,39 +100,37 @@ def test_workspace_tasks_recheck_membership_and_archived_deleted_projects(client
     assert client.get(tts_case["url"]).status_code == 401
 
 
-def test_workspace_newest_history_is_optional_and_preserves_legacy_default(
-    client, settings, tts_case
-):
+def test_workspace_history_is_newest_first_and_preserves_pagination(client, settings, tts_case):
     first, _, _, _ = registered_audio(client, settings, tts_case)
     registered_audio(client, settings, regeneration_case(tts_case, first))
     path = tts_case["url"].removesuffix("/tts") + "/history"
     before = boundary_state(client)
-    legacy = client.get(path).json()
-    assert [row["version"]["version_no"] for row in legacy] == [1, 2]
-    assert client.get(path, params={"newest_first": True}).json() == legacy[::-1]
-    assert (
-        client.get(path, params={"newest_first": True, "limit": 1, "offset": 1}).json()
-        == legacy[:1]
-    )
+    current = client.get(path).json()
+    assert [row["version"]["version_no"] for row in current] == [2, 1]
+    assert client.get(path, params={"limit": 1, "offset": 1}).json() == current[1:]
     assert boundary_state(client) == before
 
 
-def test_workspace_newest_snapshots_preserve_old_order_and_page_contract(client, tts_case):
+def test_workspace_snapshots_are_newest_first_and_preserve_pagination(client, tts_case):
     second = snapshot(client, tts_case["episode"], tts_case["script"])
     assert second.status_code == 201, second.text
     path = f"/api/v1/episodes/{tts_case['episode']['id']}/audio-snapshots"
-    legacy = client.get(path).json()
-    assert [row["id"] for row in legacy] == [tts_case["snapshot"]["id"], second.json()["id"]]
-    assert client.get(path, params={"newest_first": True}).json() == legacy[::-1]
-    assert (
-        client.get(path, params={"newest_first": True, "limit": 1, "offset": 1}).json()
-        == legacy[:1]
-    )
+    current = client.get(path).json()
+    assert [row["id"] for row in current] == [second.json()["id"], tts_case["snapshot"]["id"]]
+    assert client.get(path, params={"limit": 1, "offset": 1}).json() == current[1:]
 
 
-@pytest.mark.parametrize("protocol", ["openai_tts", "qwen_tts", "siliconflow_tts"])
+@pytest.mark.parametrize(
+    ("protocol", "speed"),
+    [
+        ("openai_tts", {"minimum": 0.25, "maximum": 4}),
+        ("siliconflow_tts", {"minimum": 0.25, "maximum": 4}),
+        ("qwen_audio_tts", {"minimum": 0.5, "maximum": 2}),
+        ("qwen_tts", None),
+    ],
+)
 def test_workspace_speech_fields_match_installed_protocol_without_credentials(
-    client, settings, tts_case, protocol
+    client, settings, tts_case, protocol, speed
 ):
     configure(client, settings, "speech", protocol, revision=1)
     path = f"/api/v1/projects/{tts_case['pid']}/generation-jobs/services/speech/configuration"
@@ -143,6 +141,7 @@ def test_workspace_speech_fields_match_installed_protocol_without_credentials(
         resolve_parameters(protocol, configuration["model"])
     )
     assert configuration["configured"] is True
+    assert configuration["parameter_ranges"] == ({"speed": speed} if speed else {})
     assert "api_key" not in response.text and "first-key" not in response.text
 
 
@@ -153,7 +152,6 @@ def test_workspace_speech_fields_respect_exact_model_restrictions(
     response = client.put(
         "/api/v1/me/model-services/speech",
         json={
-            "contract_version": 2,
             "mode": "custom",
             "supplier": "custom",
             "model": model,

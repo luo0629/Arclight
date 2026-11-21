@@ -114,13 +114,16 @@ def start_rewrite(
     validate_script_assets(db, episode.project_id, source)
     validate_duration(source, episode.target_duration_ms, settings.text_duration_tolerance_percent)
     project = require_project(db, episode.project_id, actor)
+    from arclight.application.visual_bible import prompt_style
     from arclight.application.visual_bible import snapshot as visual_snapshot
+
+    visual = visual_snapshot(db, project)
 
     context = {
         **provider_context(source, request.target),
         "instructions": request.instructions.model_dump(),
-        "style_guide": project.style_guide,
-        "visual_bible": visual_snapshot(db, project),
+        "style_guide": prompt_style(db, project, visual),
+        "visual_bible": visual,
         "story_settings": project.story_settings,
         "target_duration_ms": episode.target_duration_ms,
         "duration_range_ms": duration_bounds(

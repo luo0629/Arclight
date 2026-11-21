@@ -17,6 +17,13 @@ from uuid import uuid4
 
 ROOT = Path(__file__).resolve().parents[2]
 RISKS = ("migration", "concurrency", "storage", "broker", "media", "api")
+# This operator-only acceptance cannot run in preflight, which strips all live credentials.
+# Match both the exact case and its authorization condition; ordinary skips still block.
+OPERATOR_ONLY_CHECKS = {
+    "tests.test_audio_tts_live::test_three_authorized_original_tts_lines": (
+        "Paid TTS requires explicit authorization, dedicated credentials and a USD cap"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -38,6 +45,7 @@ class Plan:
 class Evidence:
     passed: set[str] = field(default_factory=set)
     skipped: dict[str, str] = field(default_factory=dict)
+    operator_only: dict[str, str] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
 
@@ -298,6 +306,9 @@ def junit_evidence(paths: list[Path], selected: tuple[str, ...]) -> Evidence:
             evidence.missing.append(f"{path.name}: missing or invalid JUnit report")
     evidence.missing.extend(f"No execution evidence for {p}" for p in selected if p not in seen)
     for name, reason, database in skipped_cases:
+        if OPERATOR_ONLY_CHECKS.get(name) == reason:
+            evidence.operator_only[name] = reason
+            continue
         counterpart = "postgres" if database == "sqlite" else "sqlite"
         if not (
             database in {"sqlite", "postgres"}
@@ -468,6 +479,9 @@ def execute(
         {
             "passed": sum(len(e.passed) for e in evidence),
             "skipped": skips,
+            "operator_only": {
+                name: reason for e in evidence for name, reason in e.operator_only.items()
+            },
             "databases": databases,
             "services": services,
             "deferred_checks": deferred,
@@ -620,6 +634,8 @@ def verify_push(root: Path, updates: str = "") -> None:
                 and deferred.get(f"case:{name}") == reason
             ):
                 del result.skipped[name]
+        if result.operator_only != data.get("evidence", {}).get("operator_only", {}):
+            raise ValueError("Missing or inconsistent operator-only acceptance evidence")
         evidence.append(result)
     if plan.web and plan.web_mode != "defer":
         evidence.append(browser_evidence(path.parent / "playwright.json", plan.web))
@@ -727,6 +743,8 @@ def main(argv: list[str] | None = None, *, root: Path = ROOT) -> int:
     print("Risks:", ", ".join(summary.get("risks", [])) or "none")
     for issue in summary["issues"]:
         print(issue)
+    for name, reason in summary.get("evidence", {}).get("operator_only", {}).items():
+        print(f"Not run (operator authorization required): {name}: {reason}")
     for name, reason in summary.get("deferred_checks", {}).items():
         print(f"Deferred to exact-SHA CI: {name}: {reason}")
     return {"planned": 0, "passed": 0, "failed": 1, "incomplete": 2}[summary["status"]]

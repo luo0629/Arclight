@@ -196,10 +196,16 @@ class TimelineSnapshot(TimelineContract):
         }
 
 
+class CurrentTimelineSnapshot(TimelineSnapshot):
+    """Only the current format is accepted for new timeline writes."""
+
+    schema_version: Literal[2] = 2  # type: ignore[assignment]
+
+
 class TimelineSave(TimelineContract):
     creation_key: UUID
     expected_version_no: int = Field(strict=True, ge=1)
-    snapshot: TimelineSnapshot
+    snapshot: CurrentTimelineSnapshot
 
 
 class TimelineRead(TimelineContract):

@@ -55,19 +55,12 @@ def snapshots(
     actor: Actor,
     limit: Limit = 100,
     offset: Offset = 0,
-    newest_first: bool = False,
 ) -> list[AudioSnapshotRead]:
     require_episode(db, episode_id, actor)
     rows = db.scalars(
         select(AudioSnapshot)
         .where(AudioSnapshot.episode_id == episode_id)
-        .order_by(
-            *(
-                (AudioSnapshot.created_at.desc(), AudioSnapshot.id.desc())
-                if newest_first
-                else (AudioSnapshot.created_at, AudioSnapshot.id)
-            )
-        )
+        .order_by(AudioSnapshot.created_at.desc(), AudioSnapshot.id.desc())
         .offset(offset)
         .limit(limit)
     )
@@ -147,7 +140,6 @@ def history(
     actor: Actor,
     limit: Limit = 100,
     offset: Offset = 0,
-    newest_first: bool = False,
     include_reusable: bool = False,
 ) -> list[AudioHistoryRead]:
     snapshot = require_snapshot(db, snapshot_id, actor)
@@ -157,13 +149,7 @@ def history(
         .join(AssetVersion, AssetVersion.id == AudioLineBinding.asset_version_id)
         .join(AudioSnapshot, AudioSnapshot.id == AudioLineBinding.snapshot_id)
         .where(AudioLineBinding.line_id == line_id, AudioSnapshot.episode_id == snapshot.episode_id)
-        .order_by(
-            *(
-                (AudioLineBinding.created_at.desc(), AudioLineBinding.id.desc())
-                if newest_first
-                else (AudioLineBinding.created_at, AudioLineBinding.id)
-            )
-        )
+        .order_by(AudioLineBinding.created_at.desc(), AudioLineBinding.id.desc())
     )
     own = AudioLineBinding.snapshot_id == snapshot.id
     if include_reusable:

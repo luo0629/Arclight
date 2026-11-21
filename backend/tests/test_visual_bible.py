@@ -10,6 +10,7 @@ from alembic.config import Config
 from sqlalchemy import func, select
 from test_collaboration import create_project, register
 
+from arclight.application.visual_bible import prompt_style, snapshot
 from arclight.persistence.models import (
     AuditEvent,
     Project,
@@ -91,23 +92,34 @@ def test_legacy_preservation_patch_bypass_and_provider_snapshot(client, episode)
         client.patch(endpoint, json={"style_guide": {**legacy, "description": "无CAS"}}).status_code
         == 422
     )
-    response = client.patch(
-        endpoint,
-        json={"style_guide": {**legacy, "description": "新版"}, "expected_visual_version_no": 0},
-    )
+    body = {
+        "visual_bible": {
+            "expected_version_no": 0,
+            "creation_key": str(uuid4()),
+            "fields": {"art_style": "新版"},
+        },
+        "output_profile": {"width": 1920},
+    }
+    response = client.patch(endpoint, json=body)
     assert response.status_code == 200, response.text
-    assert response.json()["style_guide"] == {**legacy, "description": "新版"}
+    assert response.json()["style_guide"] == legacy
+    assert response.json()["output_profile"] == {"width": 1920}
+    assert client.get(path(project)).json()["fields"]["art_style"] == "新版"
+    assert client.patch(endpoint, json=body).status_code == 200
     lock(client, project, 1, ["art_style"])
-    assert (
-        client.patch(
-            endpoint,
-            json={
-                "style_guide": {**legacy, "description": "绕过锁"},
-                "expected_visual_version_no": 2,
+    locked = client.patch(
+        endpoint,
+        json={
+            "visual_bible": {
+                "expected_version_no": 2,
+                "creation_key": str(uuid4()),
+                "fields": {"art_style": "绕过锁"},
             },
-        ).status_code
-        == 409
+            "output_profile": {"width": 72},
+        },
     )
+    assert locked.status_code == 409
+    assert client.get(endpoint).json()["output_profile"] == {"width": 1920}
     assert client.patch(endpoint, json={"output_profile": {"width": 100}}).status_code == 200
     version = client.get(path(project)).json()
     assert version["legacy_snapshot"] == legacy
@@ -122,13 +134,71 @@ def test_legacy_preservation_patch_bypass_and_provider_snapshot(client, episode)
         frozen = run.input_json["visual_bible"]
         assert frozen["version_id"] == version["id"]
         assert frozen["fields"]["art_style"] == "新版"
+        frozen_style = run.input_json["style_guide"]
+        assert frozen_style["description"] == "新版"
+        assert run.input_json["style_guide"]["palette"] == legacy["palette"]
+        assert run.input_json["style_guide"]["unknown"] == legacy["unknown"]
+        assert db.get(Project, UUID(project["id"])).style_guide == legacy
         assert frozen["locked_fields"] == ["art_style"]
     # New snapshots can be maintained during a run; existing inputs remain fixed.
     assert edit(client, project, 2, line_style="细线").status_code == 201
     with client.app.state.session_factory() as db:
-        assert (
-            db.get(WorkflowRun, UUID(started.json()["run_id"])).input_json["visual_bible"] == frozen
-        )
+        inputs = db.get(WorkflowRun, UUID(started.json()["run_id"])).input_json
+        assert inputs["visual_bible"] == frozen
+        assert inputs["style_guide"] == frozen_style
+
+
+def test_prompt_style_does_not_resurrect_an_explicitly_cleared_field(client, episode):
+    project = {"id": episode["project_id"]}
+    project_id = UUID(project["id"])
+    legacy = {"description": {"preserved": True}, "palette": ["旧色"]}
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, project_id).style_guide = legacy
+    assert lock(client, project, 0, ["lighting"]).status_code == 201
+    with client.app.state.session_factory() as db:
+        row = db.get(Project, project_id)
+        assert prompt_style(db, row, snapshot(db, row)) == legacy
+    assert edit(client, project, 1, palette="新版").status_code == 201
+    assert edit(client, project, 2, palette="").status_code == 201
+    with client.app.state.session_factory() as db:
+        row = db.get(Project, project_id)
+        assert prompt_style(db, row, snapshot(db, row)) == {**legacy, "palette": ""}
+        assert row.style_guide == legacy
+
+
+@pytest.mark.parametrize(("field", "key"), [("palette", "palette"), ("art_style", "description")])
+def test_first_visual_clear_respects_locks_and_exact_history(client, episode, field, key):
+    project = {"id": episode["project_id"]}
+    project_id = UUID(project["id"])
+    original = {key: {"extension": True}, "unrelated": ["retained"]}
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, project_id).style_guide = original
+    assert lock(client, project, 0, [field]).status_code == 201
+    response = edit(client, project, 1, **{field: ""})
+    assert response.status_code == 409, response.text
+    assert lock(client, project, 1, []).status_code == 201
+    with client.app.state.session_factory() as db:
+        row = db.get(Project, project_id)
+        before = snapshot(db, row)
+        assert prompt_style(db, row, before) == original
+
+    body = {"expected_version_no": 2, "creation_key": str(uuid4()), "fields": {field: ""}}
+    response = client.post(path(project) + "/versions", json=body)
+    assert response.status_code == 201, response.text
+    assert client.post(path(project) + "/versions", json=body).json() == response.json()
+    assert edit(client, project, 3, **{field: ""}).status_code == 422
+    assert edit(client, project, 3, lighting="moonlight").status_code == 201
+
+    with client.app.state.session_factory() as db:
+        row = db.get(Project, project_id)
+        assert prompt_style(db, row, snapshot(db, row)) == {
+            **original,
+            key: "",
+            "lighting": "moonlight",
+        }
+        assert prompt_style(db, row, before) == original
+        assert row.style_guide == original
+    assert client.get(path(project)).json()["legacy_snapshot"] == original
 
 
 def test_idempotency_and_audit_once(client, episode):

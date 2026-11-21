@@ -239,13 +239,13 @@ export default function CreationOptionsFields({
               variant="outline"
               className="w-full flex-wrap"
               aria-label="导演分镜合同"
-              value={value.performance ? "performance" : "legacy"}
+              value={value.performance ? "performance" : "standard"}
               onValueChange={(mode) => {
                 if (mode && (mode !== "performance" || performanceAvailable))
                   onChange({ ...value, performance: mode === "performance" });
               }}
             >
-              <ToggleGroupItem value="legacy">常规文字分镜</ToggleGroupItem>
+              <ToggleGroupItem value="standard">常规文字分镜</ToggleGroupItem>
               <ToggleGroupItem
                 value="performance"
                 disabled={!performanceAvailable}

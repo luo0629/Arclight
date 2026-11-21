@@ -17,7 +17,6 @@ from arclight.core.errors import DomainError
 from arclight.domain.dependencies import IMAGE_KINDS
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
 from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
-from arclight.domain.service_models import matching_policy
 from arclight.providers.chat import raise_for_provider_status
 from arclight.providers.media_cancel import CancellationReceipt
 from arclight.providers.media_io import JSON_RESPONSE_LIMIT, read_provider_response
@@ -151,18 +150,7 @@ class NativeMediaProvider:
         maximum: int | None = JSON_RESPONSE_LIMIT,
     ) -> dict:
         base = validate_endpoint(self.connection.configuration["base_url"])
-        if (
-            method == "POST"
-            and self.name == "openai_image"
-            and body is not None
-            and (
-                policy := matching_policy(
-                    self.settings.service_model_policies, self.connection.configuration
-                )
-            )
-            is not None
-            and policy.use_openai_image_sdk
-        ):
+        if method == "POST" and self.name == "openai_image" and body is not None:
             from arclight.providers.openai_image_sdk import stream_image_generation
 
             with stream_image_generation(
@@ -174,7 +162,7 @@ class NativeMediaProvider:
                 transport=self.transport
                 or PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),
             ) as response:
-                raw = read_provider_response(response, maximum=None)
+                raw = read_provider_response(response, maximum=maximum)
         else:
             raw, _, _ = self._read(method, base + path, payload=body, extra=extra, maximum=maximum)
         value = json.loads(raw)

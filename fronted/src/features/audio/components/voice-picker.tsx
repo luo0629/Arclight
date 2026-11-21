@@ -59,10 +59,11 @@ export default function VoicePicker({
   const [instructions, setInstructions] = useState("");
   const [language, setLanguage] = useState("");
   const supported = configuration.data?.supported_parameters ?? [];
+  const speedRange = configuration.data?.parameter_ranges?.speed;
   const parameters: Record<string, string | number> = {
     voice: voiceName.trim(),
   };
-  if (supported.includes("speed") && speed) parameters.speed = Number(speed);
+  if (speedRange && speed) parameters.speed = Number(speed);
   if (supported.includes("instructions") && instructions.trim())
     parameters.instructions = instructions.trim();
   if (supported.includes("language_type") && language.trim())
@@ -182,7 +183,7 @@ export default function VoicePicker({
                   填写所选模型支持的音色。保存不会调用供应商生成配音。
                 </FieldDescription>
               </Field>
-              {supported.includes("speed") && (
+              {speedRange && (
                 <Field>
                   <FieldLabel htmlFor="audio-voice-speed">
                     默认语速（可选）
@@ -190,9 +191,9 @@ export default function VoicePicker({
                   <Input
                     id="audio-voice-speed"
                     type="number"
-                    min={0.25}
-                    max={4}
-                    step={0.05}
+                    min={speedRange.minimum}
+                    max={speedRange.maximum}
+                    step="any"
                     value={speed}
                     disabled={mutation.busy}
                     onChange={(event) => setSpeed(event.target.value)}

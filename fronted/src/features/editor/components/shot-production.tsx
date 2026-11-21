@@ -93,7 +93,8 @@ function ProductionBody({
       }>(`/projects/${projectId}/generation-jobs/services/image/configuration`);
       if (!next.enabled)
         throw new Error(next.message ?? "图像服务未启用或缺少可信报价。");
-      const maximum = next.capabilities?.max_batch_size ?? 1;
+      if (!next.capabilities) throw new Error("图像服务没有声明批量生成能力。");
+      const maximum = next.capabilities.max_batch_size;
       setMaximumBatch(maximum);
       setConfig((current) => ({
         ...current,

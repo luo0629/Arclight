@@ -39,12 +39,16 @@ const presets = [
 ];
 const numericText = (value: unknown) =>
   typeof value === "number" || typeof value === "string" ? String(value) : "";
-function values(project: Project) {
+type VisualStyle = {
+  version_no: number;
+  fields: { art_style: string };
+  locked_fields: string[];
+  legacy_snapshot: Record<string, unknown>;
+};
+
+function values(project: Project, description = "") {
   return {
-    description:
-      typeof project.style_guide.description === "string"
-        ? project.style_guide.description
-        : "",
+    description,
     width: numericText(project.output_profile.width),
     height: numericText(project.output_profile.height),
     fps: numericText(project.output_profile.fps),
@@ -78,17 +82,18 @@ export default function ProjectProductionSettings({
   const saving = useRef(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
-  const [visual, setVisual] = useState<{
-    version_no: number;
-    locked_fields: string[];
-  } | null>(null);
+  const [visual, setVisual] = useState<VisualStyle | null>(null);
   useEffect(() => {
     let live = true;
-    void api<{ version_no: number; locked_fields: string[] }>(
-      `/projects/${project.id}/visual-bible`,
-    )
+    void api<VisualStyle>(`/projects/${project.id}/visual-bible`)
       .then((row) => {
-        if (live) setVisual(row);
+        if (live) {
+          setVisual(row);
+          setDraft((current) => ({
+            ...current,
+            description: row.fields.art_style,
+          }));
+        }
       })
       .catch((error) => {
         if (live) setError(message(error));
@@ -99,8 +104,9 @@ export default function ProjectProductionSettings({
   }, [project.id]);
   const locked = disabled || busy || project.archived;
   const legacyDescription =
-    Object.hasOwn(project.style_guide, "description") &&
-    typeof project.style_guide.description !== "string";
+    visual?.version_no === 0 &&
+    Object.hasOwn(visual.legacy_snapshot, "description") &&
+    typeof visual.legacy_snapshot.description !== "string";
   const width = Number(draft.width),
     height = Number(draft.height);
   const validSize =
@@ -112,7 +118,7 @@ export default function ProjectProductionSettings({
     height <= 8192;
 
   function restore() {
-    setDraft(values(project));
+    setDraft(values(project, visual?.fields.art_style));
     setPreset(presetFor(project));
     setError("");
     setNotice("");
@@ -157,31 +163,38 @@ export default function ProjectProductionSettings({
     setError("");
     setNotice("");
     try {
-      // PATCH 替换整个对象，因此必须保留表单未管理的键及旧格式内容。
-      const styleGuide = { ...project.style_guide };
-      if (
+      const description = draft.description.trim();
+      const visualEdit =
+        visual &&
         !legacyDescription &&
-        draft.description !== values(project).description
-      )
-        styleGuide.description = draft.description.trim();
-      const styleChanged =
-        styleGuide.description !== project.style_guide.description;
-      if (styleChanged && !visual)
-        throw new Error("请先重新载入视觉规范，再修改风格说明。");
+        draft.description !== visual.fields.art_style &&
+        description !== visual.fields.art_style
+          ? {
+              expected_version_no: visual.version_no,
+              creation_key: crypto.randomUUID(),
+              fields: { art_style: description },
+            }
+          : null;
       const updated = await api<Project>(
         "/projects/" + project.id,
         json("PATCH", {
-          style_guide: styleGuide,
-          ...(styleChanged && visual
-            ? { expected_visual_version_no: visual.version_no }
-            : {}),
+          ...(visualEdit ? { visual_bible: visualEdit } : {}),
           output_profile: { ...project.output_profile, width, height, fps },
         }),
       );
       onSaved(updated);
-      if (styleChanged && visual)
-        setVisual({ ...visual, version_no: visual.version_no + 1 });
-      setDraft(values(updated));
+      if (visualEdit && visual)
+        setVisual({
+          ...visual,
+          version_no: visual.version_no + 1,
+          fields: visualEdit.fields,
+        });
+      setDraft(
+        values(
+          updated,
+          visualEdit?.fields.art_style ?? visual?.fields.art_style,
+        ),
+      );
       setPreset(presetFor(updated));
       setNotice("风格与画幅已保存");
     } catch (error) {
@@ -394,6 +407,7 @@ export default function ProjectProductionSettings({
         <pre>
           {JSON.stringify(
             {
+              visual_bible: visual?.fields,
               style_guide: project.style_guide,
               output_profile: project.output_profile,
             },

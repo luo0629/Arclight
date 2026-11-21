@@ -140,9 +140,9 @@ def _refresh_concepts(
     if not frozen:
         return
     from arclight.application.art_concepts import freeze_concept_plan
-    from arclight.application.media_services import account_selection
+    from arclight.application.media_services import account_selection, server_configuration
     from arclight.domain.art_concepts import ArtConceptPlan
-    from arclight.providers.native_media_protocols import KINDS
+    from arclight.providers.media_capabilities import credential_source
 
     plan = ArtConceptPlan.model_validate(frozen["plan"])
     selection = account_selection(db, actor, "IMAGE")
@@ -155,14 +155,15 @@ def _refresh_concepts(
             model_config_version=config["configuration_version"],
         )
         inputs["_image_service"] = selection.private_snapshot()
-    elif spec["provider"] in KINDS or spec["provider"] == "openai":
-        config = db.info["settings"].image_service
-        if not config.enabled:
+    elif credential_source(spec["provider"]) in {"SERVER", "ACCOUNT_SNAPSHOT"}:
+        server = server_configuration(db, "IMAGE")
+        if server is None or not server[0]:
             raise DomainError("SERVICE_INCOMPLETE", "请先配置当前账号或服务器图片服务", 422)
+        config = server[1]
         spec.update(
-            provider="openai",
-            model=config.model,
-            model_config_version=config.public_configuration()["configuration_version"],
+            provider=config["provider"],
+            model=config["model"],
+            model_config_version=config["configuration_version"],
         )
     plan = ArtConceptPlan.model_validate(plan.model_dump(mode="json") | {"spec": spec})
     inputs["art_direction"]["concept"] = freeze_concept_plan(

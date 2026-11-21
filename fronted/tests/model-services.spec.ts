@@ -261,7 +261,7 @@ for (const viewport of [
     await page.setViewportSize(viewport);
     const { dialog, headers } = await openSettings(page);
     const catalogResponse = await page.request.get(
-      "/api/v1/me/model-services?catalog_version=2",
+      "/api/v1/me/model-services",
       { headers },
     );
     expect(catalogResponse.ok()).toBeTruthy();

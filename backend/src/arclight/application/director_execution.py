@@ -18,7 +18,6 @@ from arclight.domain.director_creation import (
     COLLABORATIVE_DIRECTOR_VERSION,
     DIRECTOR_VERSION,
     ITERATIVE_DIRECTOR_VERSION,
-    ITERATIVE_DIRECTOR_VERSIONS,
     DirectorFragment,
 )
 from arclight.domain.director_revision import DirectorWorkingFragment
@@ -46,7 +45,7 @@ def generate_storyboard(
     with factory() as db:
         current = db.get(WorkflowRun, run_id)
         assert current is not None
-        iterative = current.workflow_version in ITERATIVE_DIRECTOR_VERSIONS
+        iterative = current.input_json["director"].get("revision_rounds") is not None
     if iterative:
         from arclight.application.director_revision import revise_storyboard
         from arclight.application.director_working import assemble_working, create_working_fragment

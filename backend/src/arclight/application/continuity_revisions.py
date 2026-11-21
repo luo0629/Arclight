@@ -165,8 +165,13 @@ def request_revision(
     )
     job = None
     if not stopped:
+        from arclight.application.continuity_workflow import (
+            frozen_review_binding,
+            generation_spec_for_new_job,
+        )
+
         context = manifest.snapshot_json["context"]
-        original = GenerationSpec.model_validate(context["generation"])
+        original = generation_spec_for_new_job(context)
         if video_review:
             spec, amended = amend_video_spec(original, request), None
         else:
@@ -213,7 +218,7 @@ def request_revision(
                             "shot_id": target.shot_id,
                         }
                     }
-                    if video_review
+                    if video_review or frozen_review_binding(context) is not None
                     else {}
                 ),
                 "inputs": inputs,

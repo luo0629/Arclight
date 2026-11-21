@@ -9,7 +9,7 @@ from test_continuity_reviews import review_case
 from test_timeline_saves import save_counts, save_url, saved_case, saved_timeline
 from test_timelines import created_timeline, timeline_case
 
-from arclight.application import timeline_store
+from arclight.application import timeline_store, timelines
 from arclight.application.timelines import save_timeline
 from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.timelines import TimelineSave, TimelineSnapshot
@@ -91,7 +91,22 @@ def test_five_shots_reorder_retime_and_freeze_exact_crop_motion_and_transitions(
     assert client.get(save_url(original)).json() == before
     assert client.get(save_url(value)).json() == value
     with client.app.state.session_factory() as db:
-        rows = list(db.scalars(select(TimelineClipVisual)))
+        rows = list(
+            db.scalars(
+                select(TimelineClipVisual).where(
+                    TimelineClipVisual.timeline_id == UUID(value["id"])
+                )
+            )
+        )
+        initial = list(
+            db.scalars(
+                select(TimelineClipVisual).where(
+                    TimelineClipVisual.timeline_id == UUID(original["id"])
+                )
+            )
+        )
+        assert {row.id for row in initial} == {UUID(c["id"]) for c in old}
+        assert all(row.settings_json == ClipVisual().model_dump(mode="json") for row in initial)
         assert len(rows) == 5
         assert {row.id for row in rows} == {UUID(c["id"]) for c in clips}
         assert all(row.timeline_id == UUID(value["id"]) for row in rows)
@@ -157,7 +172,7 @@ def test_visual_only_edit_keeps_previous_versions_and_stale_cas_has_no_effects(c
     assert client.get(save_url(original)).json() == original
     assert saved_timeline(client, original, body) == second
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(func.count(TimelineClipVisual.id))) == 10
+        assert db.scalar(select(func.count(TimelineClipVisual.id))) == 15
 
 
 def test_invalid_visual_parameters_and_changed_source_fail_atomically(client, visual_case):
@@ -305,8 +320,24 @@ def test_legacy_version_without_schema_marker_reads_and_upgrades_without_hash_dr
         kwargs["metadata_json"].pop("timeline_schema_version", None)
         return version_model(**kwargs)
 
+    def legacy_snapshot(**values):
+        tracks = values.pop("tracks")
+        return TimelineSnapshot(
+            schema_version=1,
+            tracks=[
+                track.model_copy(
+                    update={
+                        "clips": [clip.model_copy(update={"visual": None}) for clip in track.clips]
+                    }
+                )
+                for track in tracks
+            ],
+            **values,
+        )
+
     with monkeypatch.context() as patch:
         patch.setattr(timeline_store, "AssetVersion", legacy_version)
+        patch.setattr(timelines, "CurrentTimelineSnapshot", legacy_snapshot)
         original = created_timeline(client, episode, create)
     assert original["snapshot"]["schema_version"] == 1
     with client.app.state.session_factory() as db:
@@ -314,14 +345,13 @@ def test_legacy_version_without_schema_marker_reads_and_upgrades_without_hash_dr
             "timeline_schema_version"
             not in db.get(AssetVersion, UUID(original["id"])).metadata_json
         )
-    body = configured_body(
-        {
-            "creation_key": str(uuid4()),
-            "expected_version_no": 1,
-            "snapshot": deepcopy(original["snapshot"]),
-        }
-    )
-    value = saved_timeline(client, original, body)
+    legacy_body = {
+        "creation_key": str(uuid4()),
+        "expected_version_no": 1,
+        "snapshot": deepcopy(original["snapshot"]),
+    }
+    assert client.patch(save_url(original), json=legacy_body).status_code == 422
+    value = saved_timeline(client, original, configured_body(legacy_body))
     with client.app.state.session_factory() as db:
         assert db.get(AssetVersion, UUID(value["id"])).metadata_json["timeline_schema_version"] == 2
     assert client.get(save_url(original)).json() == original

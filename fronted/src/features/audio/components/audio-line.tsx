@@ -124,16 +124,17 @@ export default function AudioLinePanel({
   const rerunSource = reusing || replacingLocked ? undefined : selected;
   const lockedSource = locked && !!rerunSource;
   const supported = ready?.supported_parameters ?? [];
-  const speedMin = voice?.provider === "qwen_audio_tts" ? 0.5 : 0.25;
-  const speedMax = voice?.provider === "qwen_audio_tts" ? 2 : 4;
+  const speedRange = ready?.parameter_ranges.speed;
   const speed = speedDraft === "" ? undefined : Number(speedDraft);
   const invalidSpeed =
-    supported.includes("speed") &&
+    speedRange !== undefined &&
     speed !== undefined &&
-    (!Number.isFinite(speed) || speed < speedMin || speed > speedMax);
+    (!Number.isFinite(speed) ||
+      speed < speedRange.minimum ||
+      speed > speedRange.maximum);
   const instructions = instructionsDraft.trim();
   const performanceParameters = {
-    ...(supported.includes("speed") && speed !== undefined ? { speed } : {}),
+    ...(speedRange && speed !== undefined ? { speed } : {}),
     ...(supported.includes("instructions") && instructions
       ? { instructions }
       : {}),
@@ -294,14 +295,14 @@ export default function AudioLinePanel({
           <p className="text-sm text-muted-foreground">
             生成只作用于本句，可能产生供应商费用，沿用项目现有报价与预算。重生成另存候选，旧配音、字幕来源和已冻结成片保留。
           </p>
-          {ready?.selection && supported.includes("speed") && (
+          {ready?.selection && speedRange && (
             <Field>
               <FieldLabel htmlFor="audio-line-speed">本句语速</FieldLabel>
               <Input
                 id="audio-line-speed"
                 type="number"
-                min={speedMin}
-                max={speedMax}
+                min={speedRange.minimum}
+                max={speedRange.maximum}
                 step="any"
                 value={speedDraft}
                 placeholder={`沿用音色语速 ${voice?.parameters.speed ?? 1}`}
@@ -310,7 +311,7 @@ export default function AudioLinePanel({
               />
               {invalidSpeed && (
                 <Notice>
-                  语速须在 {speedMin} 到 {speedMax} 之间。
+                  语速须在 {speedRange.minimum} 到 {speedRange.maximum} 之间。
                 </Notice>
               )}
             </Field>

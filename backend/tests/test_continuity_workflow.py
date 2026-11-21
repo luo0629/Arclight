@@ -77,7 +77,15 @@ def test_normal_worker_reviews_each_checked_batch_candidate(
     client, episode, settings, reviewer_case, model_service, monkeypatch, legacy
 ):
     sent, errors, deliveries = install_reviewer_model(model_service, dynamic=False)
-    job, _ = make_job(client, episode, reviewer_case, count=2, legacy=legacy, import_images=False)
+    with monkeypatch.context() as historical:
+        if legacy:
+            # Seed an old frozen manifest without reopening the old request contract.
+            historical.setattr(
+                "arclight.application.continuity_workflow.freeze_review_binding", lambda *_: None
+            )
+        job, _ = make_job(
+            client, episode, reviewer_case, count=2, legacy=legacy, import_images=False
+        )
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     monkeypatch.setattr(
         tasks, "get_media_output_provider", lambda *a, **kw: BatchImages("match.png")
@@ -174,7 +182,9 @@ def test_explicit_history_start_is_idempotent_and_reuses_shared_owner_gate(
     assert selected.status_code == 200, selected.text
 
 
-@pytest.mark.parametrize("change", ["missing_dependency", "wrong_shot", "partial", "conflicting"])
+@pytest.mark.parametrize(
+    "change", ["missing_dependency", "wrong_shot", "partial", "conflicting", "context_alias"]
+)
 def test_generation_rejects_inexact_review_binding(client, episode, reviewer_case, change):
     body = bound_body(episode, reviewer_case)
     if change == "missing_dependency":
@@ -183,14 +193,39 @@ def test_generation_rejects_inexact_review_binding(client, episode, reviewer_cas
         body["review_target"]["shot_id"] = str(uuid4())
     elif change == "partial":
         body["review_target"].pop("shot_id")
-    else:
+    elif change == "conflicting":
         body["spec"]["context"].update(body["review_target"] | {"shot_id": str(uuid4())})
+    else:
+        body["spec"]["context"].update(body.pop("review_target"))
     response = client.post(
         f"/api/v1/projects/{episode['project_id']}/generation-jobs",
         headers={"Idempotency-Key": str(uuid4())},
         json=body,
     )
     assert response.status_code in {409, 422}, response.text
+
+
+def test_archived_context_binding_projects_onto_one_current_request_without_mutation(
+    episode, reviewer_case
+):
+    from copy import deepcopy
+
+    from arclight.application.continuity_workflow import (
+        frozen_review_binding,
+        generation_spec_for_new_job,
+    )
+    from arclight.domain.generation_requests import GenerationCreate
+
+    body = bound_body(episode, reviewer_case, legacy=True)
+    context = {"generation": body["spec"]}
+    archived = deepcopy(context)
+    binding = frozen_review_binding(context)
+    request = GenerationCreate.model_validate(
+        body | {"spec": generation_spec_for_new_job(context), "review_target": binding}
+    )
+    assert request.review_target.model_dump(mode="json") == binding
+    assert not {"storyboard_id", "shot_id"} & request.spec.context.keys()
+    assert context == archived
 
 
 def test_frozen_generation_target_cannot_be_changed_before_first_review(

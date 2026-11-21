@@ -19,7 +19,7 @@ from arclight.domain.model_gateway import (
 from arclight.domain.versions import digest
 from arclight.persistence.generation import GenerationJob
 from arclight.persistence.generation_budget import GenerationBudgetQuote
-from arclight.providers.media_capabilities import resolve_parameters
+from arclight.providers.media_capabilities import credential_source, resolve_parameters
 from arclight.providers.media_submission import (
     MediaSubmission,
     MediaSubmissionProvider,
@@ -47,16 +47,15 @@ def submit(
         spec = request.snapshot["context"]["generation"]
         from arclight.application.media_services import selection_for_job
 
-        account_service = selection_for_job(db, job)
+        source = credential_source(job.provider)
+        if source is None:
+            raise DomainError("PROVIDER_NOT_INSTALLED", "Media provider is not installed", 422)
+        selection_for_job(db, job)  # Never admit an account call without its original binding.
         route = GatewayRoute(
             provider=job.provider,
             model=job.model,
             config_version=spec["model_config_version"],
-            credential_source="NONE"
-            if job.provider == "mock"
-            else "ACCOUNT_SNAPSHOT"
-            if account_service
-            else "SERVER",
+            credential_source=source,
             capabilities=GatewayCapabilities(
                 version=provider.capabilities.version,
                 tasks=frozenset(provider.capabilities.task_types),
@@ -66,7 +65,7 @@ def submit(
             maximum_cost=quote.maximum_cost
             if quote
             else Decimal("0")
-            if job.provider == "mock"
+            if source == "NONE"
             else None,
             pricing_version=quote.pricing_version if quote else "mock-free:1",
         )

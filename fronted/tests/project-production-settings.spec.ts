@@ -105,11 +105,10 @@ test("TXT-03：Owner 键盘选择画幅、保存风格与帧率、保留扩展�
   const response = await responsePromise;
   expect(response.status()).toBe(200);
   expect(response.request().postDataJSON()).toEqual({
-    expected_visual_version_no: 0,
-    style_guide: {
-      description: "水彩绘本，柔和线条，避免写实血腥。",
-      palette: ["暖黄", "森林绿"],
-      rules: { locked: true },
+    visual_bible: {
+      expected_version_no: 0,
+      creation_key: expect.any(String),
+      fields: { art_style: "水彩绘本，柔和线条，避免写实血腥。" },
     },
     output_profile: {
       width: 1920,
@@ -149,8 +148,13 @@ test("TXT-03：Owner 键盘选择画幅、保存风格与帧率、保留扩展�
     page.getByText("风格与画幅已保存", { exact: true }),
   ).toBeVisible();
   const persisted = await (await page.request.get(path, { headers })).json();
+  const visual = await (
+    await page.request.get(`${path}/visual-bible`, { headers })
+  ).json();
+  expect(visual.fields.art_style).toBe("");
+  expect(visual.version_no).toBe(2);
   expect(persisted.style_guide).toEqual({
-    description: "",
+    description: "原始水彩",
     palette: ["暖黄", "森林绿"],
     rules: { locked: true },
   });
@@ -386,7 +390,10 @@ test("TXT-03：网络失败和真实活动任务 409 保留草稿，取消后重
     page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
   ).toHaveCount(0);
   const persisted = await (await page.request.get(path, { headers })).json();
-  expect(persisted.style_guide.description).toBe("重试后保存的水彩风格");
+  const visual = await (
+    await page.request.get(`${path}/visual-bible`, { headers })
+  ).json();
+  expect(visual.fields.art_style).toBe("重试后保存的水彩风格");
   expect(persisted.output_profile.width).toBe(1920);
 });
 
@@ -446,7 +453,11 @@ test("TXT-03：仅 Owner 可修改配置，归档只读与恢复后继续编辑"
           await context.request.patch(path, {
             headers: memberHeaders,
             data: {
-              style_guide: { description: "不应保存" },
+              visual_bible: {
+                expected_version_no: 0,
+                creation_key: crypto.randomUUID(),
+                fields: { art_style: "不应保存" },
+              },
               output_profile: { width: 1, height: 1, fps: 1 },
             },
           })
@@ -473,7 +484,13 @@ test("TXT-03：仅 Owner 可修改配置，归档只读与恢复后继续编辑"
       (
         await page.request.patch(path, {
           headers,
-          data: { style_guide: { description: "归档不应保存" } },
+          data: {
+            visual_bible: {
+              expected_version_no: 0,
+              creation_key: crypto.randomUUID(),
+              fields: { art_style: "归档不应保存" },
+            },
+          },
         })
       ).status(),
     ).toBe(409);

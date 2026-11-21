@@ -125,17 +125,12 @@ def _invoke(factory: sessionmaker[Session], settings: Settings, command_id: UUID
 def execute_producer(
     factory: sessionmaker[Session], settings: Settings, run_id: UUID, revision: int
 ) -> bool:
-    # Legacy workflows can use schemas that predate the Producer gateway tables.
-    with factory() as db:
-        run = db.get(WorkflowRun, run_id)
-        if run is None or run.workflow_type != "producer":
-            return False
     with factory.begin() as db:
         lock_gate(db)
         run = db.get(WorkflowRun, run_id)
         if run is None or run.workflow_type != "producer":
             return False
-        # A stale/cancelled Producer delivery is handled and never enters the legacy graph.
+        # A stale/cancelled Producer delivery cannot run a command.
         if run.status != "RUNNING" or run.revision != revision:
             return True
         episode = db.get(Episode, run.episode_id)

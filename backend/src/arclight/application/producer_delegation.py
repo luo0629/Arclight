@@ -25,6 +25,7 @@ from arclight.application.producer_plan_history import (
 from arclight.application.producer_series import (
     contains_episode,
     delegated_context,
+    has_series_scope,
     require_episode_prerequisites,
     require_known_costs,
     task_context,
@@ -48,7 +49,6 @@ from arclight.domain.producer_planning import (
 )
 from arclight.domain.producer_series import (
     PRODUCER_VERSIONS,
-    SERIES_PRODUCER_VERSION,
     SeriesTaskContext,
 )
 from arclight.domain.versions import digest
@@ -188,7 +188,7 @@ def validate_plan_tasks(
                 VersionBinding.snapshot_json["run_id"].as_string() == str(root.id),
             )
         )
-        if root.workflow_version == SERIES_PRODUCER_VERSION
+        if has_series_scope(root)
         else None
     )
     current = read_current_plan(db, root, actor) if existing else None
@@ -342,7 +342,7 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
     if delegation_count(db, control.root_run_id) >= limits.max_delegations:
         raise DomainError("AGENT_DELEGATION_LIMIT", "Agent 委派次数已达上限", 409)
     usage = action_usage(db, control.root_run_id)
-    if (root.workflow_version == SERIES_PRODUCER_VERSION and usage["unknown_cost"]) or (
+    if (has_series_scope(root) and usage["unknown_cost"]) or (
         limits.maximum_cost is not None
         and (
             usage["unknown_cost"]
@@ -387,7 +387,7 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
             settings=settings,
             agent_limits=limits,
             producer_parent_run_id=root.id,
-            performance=root.workflow_version == SERIES_PRODUCER_VERSION,
+            performance=has_series_scope(root),
             producer_context=shared_context,
         )
     elif task.kind == "art_director":

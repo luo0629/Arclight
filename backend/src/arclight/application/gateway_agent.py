@@ -34,7 +34,7 @@ from arclight.domain.model_gateway import (
 from arclight.domain.versions import digest
 from arclight.domain.video_temporal_reviewer import TEMPORAL_AGENT
 from arclight.persistence.models import Episode, WorkflowRun
-from arclight.providers.agent_model import OpenAICompatibleAgentProvider, check_capabilities
+from arclight.providers.agent_model import agent_transport, check_capabilities
 from arclight.providers.llm import dispatch_inference
 
 
@@ -86,7 +86,8 @@ def invoke_agent[T: BaseModel](
         )
         snapshot = run.input_json.get("_text_service")
         settings = run_settings(text_settings(db, episode.project_id, run, settings), snapshot, db)
-        if settings.provider != "openai_compatible":
+        transport = agent_transport(settings)
+        if transport is None:
             raise DomainError("GATEWAY_CAPABILITY_REJECTED", "此 Provider 尚未实现 Agent 协议", 422)
         capabilities = check_capabilities(settings, request, tools)
         if request.agent_version == TEMPORAL_AGENT:
@@ -166,7 +167,7 @@ def invoke_agent[T: BaseModel](
             execution=execution,
         )
     # The preparation transaction and business row locks are released before external I/O.
-    provider = OpenAICompatibleAgentProvider(settings)
+    provider = transport(settings)
     identity = text_credential_identity(actor, snapshot)
 
     def check_binding(db: Session, call_id: UUID) -> None:

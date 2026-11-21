@@ -1,11 +1,16 @@
 """Versioned media capabilities are executable adapter contracts."""
 
-from typing import Literal
+from typing import Literal, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationSpec, TaskType
+
+
+class NumericParameterRange(TypedDict):
+    minimum: float
+    maximum: float
 
 
 class Dimensions(BaseModel):

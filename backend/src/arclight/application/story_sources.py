@@ -50,25 +50,25 @@ def provenance(db: Session, source: StorySource) -> dict:
 
 
 def revision_snapshot(source: StorySource, revision: StorySourceRevision | None) -> dict:
-    # A compatibility fallback supports imported fixtures; persisted legacy sources
-    # receive matching metadata in 0011 without changing their bytes, IDs or run JSON.
+    # Migration 0011 recorded provenance for existing sources. Missing provenance
+    # must not silently grant rights to content from an incomplete record.
+    if revision is None:
+        raise DomainError("SOURCE_PROVENANCE_MISSING", "故事来源缺少版本和权利记录", 409)
     return {
         "source_id": str(source.id),
-        "root_source_id": str(revision.root_source_id if revision else source.id),
-        "parent_source_id": str(revision.parent_source_id)
-        if revision and revision.parent_source_id
-        else None,
-        "version_no": revision.version_no if revision else 1,
-        "change_note": revision.change_note if revision else "既有文件导入",
-        "origin_kind": revision.origin_kind if revision else "FILE",
-        "rights_status": revision.rights_status if revision else "CONFIRMED",
+        "root_source_id": str(revision.root_source_id),
+        "parent_source_id": str(revision.parent_source_id) if revision.parent_source_id else None,
+        "version_no": revision.version_no,
+        "change_note": revision.change_note,
+        "origin_kind": revision.origin_kind,
+        "rights_status": revision.rights_status,
         "source_note": source.source_note,
         "rights_note": source.rights_note,
         "encoding": source.encoding,
         "sha256": source.sha256,
         "object_ref": {
             "backend": source.storage_backend.lower(),
-            "key": revision.object_key if revision else f"story-sources/{source.id}/original",
+            "key": revision.object_key,
             "sha256": source.sha256,
             "byte_size": source.byte_size,
         },

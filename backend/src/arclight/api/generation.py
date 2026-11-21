@@ -190,20 +190,20 @@ def get_capabilities(
     return resolve_capabilities(provider, model)
 
 
-@router.get("/providers/openai/configuration")
-def get_image_configuration(project_id: UUID, db: Database, actor: Actor, request: Request) -> dict:
-    require_project(db, project_id, actor)
-    service = request.app.state.settings.image_service
-    return {"enabled": service.enabled, **service.public_configuration()}
-
-
 @router.get("/services/{kind}/configuration")
 def get_service_configuration(
-    project_id: UUID, kind: Literal["image", "video", "speech"], db: Database, actor: Actor
+    project_id: UUID,
+    kind: Literal["image", "video", "speech"],
+    db: Database,
+    actor: Actor,
+    source: Literal["effective", "server"] = "effective",
 ) -> dict:
     require_project(db, project_id, actor)
     return public_configuration(
-        db, actor, {"image": "IMAGE", "video": "VIDEO", "speech": "AUDIO"}[kind]
+        db,
+        actor,
+        {"image": "IMAGE", "video": "VIDEO", "speech": "AUDIO"}[kind],
+        server_only=source == "server",
     )
 
 

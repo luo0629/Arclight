@@ -62,8 +62,17 @@ def execute_continuity(
         from arclight.domain.narrative_review import NARRATIVE_REVIEW_VERSION
         from arclight.domain.video_temporal_reviewer import TEMPORAL_WORKFLOW_VERSION
 
-        temporal = run.workflow_version == TEMPORAL_WORKFLOW_VERSION
-        narrative = run.workflow_version == NARRATIVE_REVIEW_VERSION
+        temporal = "video_temporal_review" in run.input_json
+        narrative = "narrative_review" in run.input_json
+        expected_version = (
+            NARRATIVE_REVIEW_VERSION
+            if narrative
+            else TEMPORAL_WORKFLOW_VERSION
+            if temporal
+            else REVIEW_WORKFLOW_VERSION
+        )
+        if run.workflow_version != expected_version or (narrative and temporal):
+            return False
     if narrative:
         from arclight.application.narrative_review_execution import execute_narrative_review
 
@@ -81,8 +90,6 @@ def execute_continuity(
             assert run is not None
             if run.revision != revision or run.status not in {"QUEUED", "RUNNING"}:
                 return True
-            if run.workflow_version != REVIEW_WORKFLOW_VERSION:
-                raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "审查工作流版本不兼容", 409)
             validate_publication(db, run.id)
             episode = db.get(Episode, run.episode_id)
             assert episode is not None

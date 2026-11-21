@@ -8,6 +8,7 @@ from uuid import UUID
 from pydantic import Field, model_validator
 
 from arclight.domain.audio_voices import AudioVoiceRead
+from arclight.domain.media_capabilities import NumericParameterRange
 from arclight.domain.story_ledger import LedgerText, LedgerValue, StoryTime, intervals_overlap
 
 
@@ -108,4 +109,5 @@ class LineVoiceProfileRead(LedgerValue):
     voice: AudioVoiceRead | None = None
     selection: VoiceSelection | None = None
     supported_parameters: list[str] = Field(default_factory=list)
+    parameter_ranges: dict[str, NumericParameterRange] = Field(default_factory=dict)
     unavailable_reason: str | None = None

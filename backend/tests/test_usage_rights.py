@@ -252,6 +252,9 @@ def test_legacy_missing_confirmation_is_not_inferred_from_notes(client, episode)
     records = client.get(root + "?rights_status=UNDECLARED").json()
     assert len(records) == 2 and all(r["recorded_by"] == "old-importer" for r in records)
     assert client.get(root + "?rights_status=CONFIRMED").json() == []
+    sources = client.get(f"/api/v1/episodes/{episode['id']}/story-sources")
+    assert sources.status_code == 409
+    assert sources.json()["error"]["code"] == "SOURCE_PROVENANCE_MISSING"
 
 
 @pytest.mark.parametrize("confirmation", [True, False, None])

@@ -17,6 +17,7 @@ from arclight.domain.director_revision import DirectorRevisionOptions
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.domain.screenwriter_revision import ScreenwriterRevisionOptions
 from arclight.domain.script_narrative import NarrativeRequest
+from arclight.domain.visual_bible import VisualPatch
 from arclight.domain.workflow_contracts import WorkflowRunContract
 
 
@@ -37,6 +38,12 @@ class ProjectCreate(Input):
     style_guide: dict = Field(default_factory=dict)
     output_profile: dict = Field(default_factory=lambda: {"width": 1080, "height": 1920, "fps": 30})
     budget_limit: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
+
+
+class VisualBibleEdit(Input):
+    expected_version_no: int = Field(strict=True, ge=0)
+    creation_key: UUID
+    fields: VisualPatch
 
 
 class ProjectRead(Resource, ProjectCreate):

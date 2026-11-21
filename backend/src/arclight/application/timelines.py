@@ -22,10 +22,12 @@ from arclight.application.video_candidates import require_video_version
 from arclight.application.video_review import video_review_facts
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.timelines import (
     TRACK_KINDS,
     ClipSnapshot,
     ClipVideo,
+    CurrentTimelineSnapshot,
     TimelineCreate,
     TimelineRead,
     TimelineSave,
@@ -348,12 +350,12 @@ def create_timeline(
             trim=selection.video,
         )
         verify_visual_object(db, settings, episode, clip, actor)
-        clips.append(clip.model_copy(update={"start_ms": cursor}))
+        clips.append(clip.model_copy(update={"start_ms": cursor, "visual": ClipVisual()}))
         cursor += clip.duration_ms
     project = db.get(Project, episode.project_id)
     assert project is not None
     sources = {"VIDEO": clips, "VOICE": lip_sync_voices(db, clips)}
-    snapshot = TimelineSnapshot(
+    snapshot = CurrentTimelineSnapshot(
         episode_id=episode.id,
         storyboard_id=board.id,
         default_duration_ms=payload.default_duration_ms,

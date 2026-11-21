@@ -32,6 +32,8 @@ export type AudioVoice = {
   provider_configuration: Record<string, unknown>;
   created_at: string;
 };
+type ParameterRanges = Record<string, { minimum: number; maximum: number }>;
+
 export type SpeechConfiguration = {
   configured: boolean;
   enabled: boolean;
@@ -39,6 +41,7 @@ export type SpeechConfiguration = {
   provider?: string;
   model?: string;
   supported_parameters?: string[];
+  parameter_ranges?: ParameterRanges;
 };
 export type AudioBinding = {
   id: string;
@@ -169,5 +172,6 @@ export type LineVoiceProfile = {
     };
   } | null;
   supported_parameters: string[];
+  parameter_ranges: ParameterRanges;
   unavailable_reason: string | null;
 };

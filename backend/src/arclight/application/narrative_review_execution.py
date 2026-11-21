@@ -44,6 +44,7 @@ from arclight.domain.narrative_review import (
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision, AgentLoopQuestion
 from arclight.persistence.models import Episode, WorkflowRun
+from arclight.providers.agent_model import agent_transport
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ logger = logging.getLogger(__name__)
 def assess(
     factory: sessionmaker[Session], settings: Settings, work: NarrativeReviewWork, revision: int
 ) -> tuple[NarrativeAssessment | None, str | None, bool]:
-    if settings.provider != "openai_compatible":
+    if agent_transport(settings) is None:
         return None, "当前模型未配置 Reviewer Agent 协议，须人工完成六类叙事检查。", False
     request = AgentModelRequest(
         run_id=work.run_id,

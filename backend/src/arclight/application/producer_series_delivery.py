@@ -11,13 +11,13 @@ from arclight.application.commands import emit
 from arclight.application.human_reviews import require_review_actor
 from arclight.application.model_gateway import lock_gate
 from arclight.application.producer_interaction import pending_commands, require_producer
-from arclight.application.producer_series import read_scope, require_known_costs
+from arclight.application.producer_series import has_series_scope, read_scope, require_known_costs
 from arclight.application.production_versions import bind, find_binding
 from arclight.core.errors import DomainError
 from arclight.domain.agent_state import transition_agent_step
 from arclight.domain.human_reviews import HumanDecision
 from arclight.domain.narrative_review import NARRATIVE_HUMAN_HANDLER
-from arclight.domain.producer_series import SERIES_PRODUCER_VERSION, SeriesCompletion, SeriesControl
+from arclight.domain.producer_series import SeriesCompletion, SeriesControl
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop
@@ -35,7 +35,7 @@ COMPLETION_KIND = "PRODUCER_SERIES_COMPLETION"
 
 
 def paused(db: Session, run: WorkflowRun) -> bool:
-    if run.workflow_version != SERIES_PRODUCER_VERSION:
+    if not has_series_scope(run):
         return False
     # Revision, rather than timestamps, orders commands even with an injected clock.
     rows = db.scalars(
@@ -320,7 +320,7 @@ def complete_series(
 
 
 def public_series_progress(db: Session, run: WorkflowRun, actor: str) -> dict | None:
-    if run.workflow_version != SERIES_PRODUCER_VERSION:
+    if not has_series_scope(run):
         return None
     scope = read_scope(db, run)
     row = find_binding(db, UUID(scope["project_id"]), COMPLETION_KIND, run.id)

@@ -612,7 +612,18 @@ test("ASSET-10：视觉规范字段、历史锁定、并发草稿和旧入口保
       expected_visual_version_no: 2,
     },
   });
-  expect(legacy.status()).toBe(409);
+  expect(legacy.status()).toBe(422);
+  const locked = await page.request.patch(`/api/v1/projects/${project.id}`, {
+    headers,
+    data: {
+      visual_bible: {
+        expected_version_no: 2,
+        creation_key: crypto.randomUUID(),
+        fields: { art_style: "绕过" },
+      },
+    },
+  });
+  expect(locked.status()).toBe(409);
   await bible.getByLabel("光照原则", { exact: true }).fill("柔光");
   await bible
     .getByRole("button", { name: "另存视觉规范新版本", exact: true })

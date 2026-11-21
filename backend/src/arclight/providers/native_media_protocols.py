@@ -11,7 +11,11 @@ from PIL import Image
 
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationSpec
-from arclight.domain.media_capabilities import MediaCapabilities, validate_capabilities
+from arclight.domain.media_capabilities import (
+    MediaCapabilities,
+    NumericParameterRange,
+    validate_capabilities,
+)
 from arclight.media.probe import inspect_image
 from arclight.providers.media_submission import MediaImageInput
 
@@ -49,6 +53,13 @@ PARAMETERS = {
     "qwen_audio_tts": frozenset({"voice", "speed", "instructions"}),
     "siliconflow_tts": frozenset({"voice", "speed"}),
     "openai_tts": frozenset({"voice", "speed", "instructions"}),
+}
+
+
+NUMERIC_PARAMETER_RANGES: dict[str, dict[str, NumericParameterRange]] = {
+    "qwen_audio_tts": {"speed": {"minimum": 0.5, "maximum": 2}},
+    "openai_tts": {"speed": {"minimum": 0.25, "maximum": 4}},
+    "siliconflow_tts": {"speed": {"minimum": 0.25, "maximum": 4}},
 }
 
 
@@ -114,11 +125,11 @@ def validate_spec(spec: GenerationSpec, reference_count: int = 0) -> None:
                 2000 if key == "instructions" else 160
             )
         elif key == "speed":
-            minimum, maximum = (0.5, 2) if spec.provider == "qwen_audio_tts" else (0.25, 4)
+            limits = NUMERIC_PARAMETER_RANGES[spec.provider][key]
             valid = (
                 isinstance(value, (int, float))
                 and not isinstance(value, bool)
-                and minimum <= value <= maximum
+                and limits["minimum"] <= value <= limits["maximum"]
             )
         elif key == "num_inference_steps":
             valid = type(value) is int and 1 <= value <= 100

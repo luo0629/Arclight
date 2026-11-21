@@ -410,6 +410,38 @@ def test_invalid_legacy_contract_returns_a_sanitized_error(client, episode):
     assert "private input" not in response.text
 
 
+def test_professional_delivery_rejects_wrong_contract_without_running_standard_graph(
+    client, episode, settings, monkeypatch
+):
+    from arclight.application import runtime
+    from arclight.workflows.production import WORKFLOW_VERSION
+
+    run_id = uuid4()
+    with client.app.state.session_factory.begin() as db:
+        # Import an inconsistent frozen fixture; never edit an existing snapshot.
+        db.add(
+            WorkflowRun(
+                id=run_id,
+                episode_id=UUID(episode["id"]),
+                trace_id="invalid-frozen-contract",
+                idempotency_key="professional-contract",
+                request_fingerprint="0" * 64,
+                workflow_type="script_storyboard",
+                workflow_version=WORKFLOW_VERSION,
+                input_json={"screenwriter": {"agent_limits": {}}},
+            )
+        )
+    monkeypatch.setattr(
+        runtime, "_execute_run", lambda *_: pytest.fail("Professional delivery used standard graph")
+    )
+    execute_run(client.app.state.session_factory, settings, run_id, 0)
+    with client.app.state.session_factory() as db:
+        run = db.get(WorkflowRun, run_id)
+        assert run.status == "FAILED"
+        assert run.error_code == "PRODUCTION_VERSION_INCOMPATIBLE"
+        assert run.revision == 1
+
+
 def test_persistent_workflow_and_version_bound_reviews(client, episode, settings):
     created = start(client, episode)
     run_id = created.json()["run_id"]

@@ -29,6 +29,14 @@ from arclight.persistence.models import Episode, Script, StoryOutline, WorkflowR
 SCOPE_KIND = "PRODUCER_SERIES_SCOPE"
 
 
+def has_series_scope(run: WorkflowRun) -> bool:
+    """The admitted project scope determines the operation; the version verifies it."""
+    series = "series_scope" in run.input_json
+    if series != (run.workflow_version == SERIES_PRODUCER_VERSION):
+        raise DomainError("PRODUCER_SERIES_SCOPE", "多集运行与冻结范围不符", 409)
+    return series
+
+
 def require_available_episode(db: Session, episode: Episode, parent_id: UUID | None = None) -> None:
     roots = db.scalars(
         select(WorkflowRun)
@@ -45,7 +53,7 @@ def require_available_episode(db: Session, episode: Episode, parent_id: UUID | N
 
 
 def require_known_costs(db: Session, run: WorkflowRun, actor: str) -> None:
-    if run.workflow_version != SERIES_PRODUCER_VERSION:
+    if not has_series_scope(run):
         return
     from arclight.application.costs import cost_facts, read_costs
 
@@ -105,7 +113,7 @@ def capture_scope(db: Session, anchor: Episode, actor: str, request: SeriesProdu
     )
     for run in active:
         occupied = {str(run.episode_id)}
-        if run.workflow_version == SERIES_PRODUCER_VERSION:
+        if has_series_scope(run):
             occupied = {row["episode_id"] for row in read_scope(db, run)["episodes"]}
         if occupied & selected_ids:
             raise DomainError("EPISODE_BUSY", "制作范围与已有活动运行重叠", 409)
@@ -125,7 +133,7 @@ def capture_scope(db: Session, anchor: Episode, actor: str, request: SeriesProdu
 
 
 def save_scope(db: Session, project_id: UUID, run: WorkflowRun) -> None:
-    if run.workflow_version == SERIES_PRODUCER_VERSION:
+    if has_series_scope(run):
         bind(db, project_id, SCOPE_KIND, run.id, run.input_json["series_scope"])
 
 
@@ -146,13 +154,13 @@ def read_scope(db: Session, run: WorkflowRun) -> dict:
 def contains_episode(db: Session, run: WorkflowRun, episode_id: UUID | None) -> bool:
     if episode_id is None:
         return False
-    if run.workflow_version != SERIES_PRODUCER_VERSION:
+    if not has_series_scope(run):
         return run.episode_id == episode_id
     return str(episode_id) in {item["episode_id"] for item in read_scope(db, run)["episodes"]}
 
 
 def task_context(root: WorkflowRun, plan: ProducerPlan, task_key: str) -> SeriesTaskContext | None:
-    if root.workflow_version != SERIES_PRODUCER_VERSION:
+    if not has_series_scope(root):
         if isinstance(plan, SeriesProducerPlan):
             raise DomainError("PRODUCER_SERIES_SCOPE", "单集运行不能接受多集计划", 409)
         return None
@@ -186,7 +194,7 @@ def validate_task_context(
     context: SeriesTaskContext | None,
     child: WorkflowRun | None = None,
 ) -> Episode:
-    if root.workflow_version != SERIES_PRODUCER_VERSION:
+    if not has_series_scope(root):
         return require_episode(db, root.episode_id, actor, write=True)
     scope = read_scope(db, root)
     if context is None or context.task_key != planned.task_key:
@@ -252,7 +260,7 @@ def validate_task_context(
 
 
 def validate_series_plan(db: Session, root: WorkflowRun, plan: ProducerPlan) -> None:
-    if root.workflow_version != SERIES_PRODUCER_VERSION:
+    if not has_series_scope(root):
         return
     scope = read_scope(db, root)
     if not isinstance(plan, SeriesProducerPlan) or plan.series_scope_sha256 != digest(scope):

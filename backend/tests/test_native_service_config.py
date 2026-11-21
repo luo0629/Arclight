@@ -20,7 +20,7 @@ from arclight.persistence.models import GatewayCall, GenerationJob, ModelService
 def test_named_provider_key_model_and_official_endpoint(client, settings, preset):
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     account(client)
-    catalog = client.get("/api/v1/me/model-services?catalog_version=2").json()
+    catalog = client.get("/api/v1/me/model-services").json()
     assert Counter(p["kind"] for p in catalog["suppliers"]) == {
         "text": 6,
         "image": 5,
@@ -30,7 +30,6 @@ def test_named_provider_key_model_and_official_endpoint(client, settings, preset
     assert preset.model_dump() in catalog["suppliers"]
     assert all("model" not in p for p in catalog["suppliers"])
     body = {
-        "contract_version": 2,
         "mode": "custom",
         "supplier": preset.id,
         "api_key": "private-provider-canary",
@@ -54,7 +53,6 @@ def test_named_provider_key_model_and_official_endpoint(client, settings, preset
         client.put(
             path,
             json={
-                "contract_version": 2,
                 "mode": "server",
                 "supplier": preset.id,
                 "expected_revision": 1,
@@ -70,7 +68,6 @@ def test_custom_requires_destination_key_and_model(client, settings, kind):
     account(client)
     path = f"/api/v1/me/model-services/{kind}"
     body = {
-        "contract_version": 2,
         "mode": "custom",
         "supplier": "custom",
         "model": "api-id",
@@ -103,7 +100,6 @@ def test_personal_native_protocol_is_frozen(client, settings, supplier, protocol
     saved = client.put(
         "/api/v1/me/model-services/text",
         json={
-            "contract_version": 2,
             "mode": "custom",
             "supplier": supplier,
             "model": "exact-native-model",
@@ -124,15 +120,12 @@ def test_personal_native_protocol_is_frozen(client, settings, supplier, protocol
         )
 
 
-def test_speech_model_suggestions_are_v2_only_without_automatic_configuration(client):
+def test_current_catalog_lists_speech_models_without_automatic_configuration(client):
     account(client)
-    legacy = client.get("/api/v1/me/model-services")
-    response = client.get("/api/v1/me/model-services?catalog_version=2")
-    assert legacy.status_code == response.status_code == 200
+    response = client.get("/api/v1/me/model-services")
+    assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-    assert legacy.json()["catalog_version"] == 1
-    assert "speech_models" not in legacy.json()
-    assert all("model" in row for row in legacy.json()["suppliers"])
+    assert client.get("/api/v1/me/model-services?catalog_version=1").json() == response.json()
     catalog = response.json()
     assert catalog["services"] == []
     assert all("model" not in row for row in catalog["suppliers"])
@@ -190,7 +183,7 @@ def test_speech_model_suggestions_save_exact_ids_and_preserve_unlisted_models_wi
     )
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     uid = account(client)
-    response = client.get("/api/v1/me/model-services?catalog_version=2")
+    response = client.get("/api/v1/me/model-services")
     assert response.status_code == 200
     catalog = response.json()
     suggestion = next(
@@ -208,7 +201,6 @@ def test_speech_model_suggestions_save_exact_ids_and_preserve_unlisted_models_wi
     )
     path = "/api/v1/me/model-services/speech"
     payload = {
-        "contract_version": 2,
         "mode": "custom",
         "supplier": supplier,
         "model": selected_model,
@@ -218,7 +210,7 @@ def test_speech_model_suggestions_save_exact_ids_and_preserve_unlisted_models_wi
     saved = client.put(path, json=payload)
     assert saved.status_code == 200, saved.text
     assert saved.json()["model"] == selected_model
-    initial_refresh = client.get("/api/v1/me/model-services?catalog_version=2")
+    initial_refresh = client.get("/api/v1/me/model-services")
     assert initial_refresh.status_code == 200
     assert initial_refresh.json()["services"][0]["model"] == selected_model
     assert saved.json()["protocol"] == provider["protocol"]
@@ -241,7 +233,7 @@ def test_speech_model_suggestions_save_exact_ids_and_preserve_unlisted_models_wi
     assert changed.status_code == 200, changed.text
     assert changed.json()["model"] == unlisted_model
     assert changed.json()["revision"] == 2 and changed.json()["has_key"] is True
-    fetched = client.get("/api/v1/me/model-services?catalog_version=2")
+    fetched = client.get("/api/v1/me/model-services")
     assert fetched.status_code == 200
     assert "private-speech-suggestion-canary" not in fetched.text + saved.text + changed.text
     assert fetched.json()["speech_models"] == catalog["speech_models"]

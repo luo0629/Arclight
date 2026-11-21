@@ -84,9 +84,10 @@ test("AUDIO-07：音色仅提交模型支持项与最新版本CAS，旧版保留
   const original = structuredClone(env.voices[0]);
   const panel = await env.open();
   await panel.getByText("为林舟保存新音色", { exact: true }).click();
-  await expect(
-    panel.getByLabel("默认语速（可选）", { exact: true }),
-  ).toBeVisible();
+  const defaultSpeed = panel.getByLabel("默认语速（可选）", { exact: true });
+  await expect(defaultSpeed).toBeVisible();
+  await expect(defaultSpeed).toHaveAttribute("min", "0.5");
+  await expect(defaultSpeed).toHaveAttribute("max", "2");
   await expect(
     panel.getByLabel("语气与情绪说明（可选）", { exact: true }),
   ).toHaveCount(0);
@@ -705,7 +706,15 @@ test("AUDIO-09：剧情变声、跨集恢复和本句表演参数", async ({ pag
   await expect(resolved).toContainText("故事时点 10");
   await expect(resolved).toContainText("回忆中嗓子受伤");
   await expect(resolved).toContainText("等同伴停步后开口");
-  await panel.getByLabel("本句语速", { exact: true }).fill("0.8");
+  const lineSpeed = panel.getByLabel("本句语速", { exact: true });
+  await expect(lineSpeed).toHaveAttribute("min", "0.5");
+  await expect(lineSpeed).toHaveAttribute("max", "2");
+  await lineSpeed.fill("2.5");
+  await expect(panel.getByText("语速须在 0.5 到 2 之间。")).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "生成本句配音", exact: true }),
+  ).toBeDisabled();
+  await lineSpeed.fill("0.8");
   await panel.getByLabel("补充本句表演说明").fill("第二句前稍停");
   await panel
     .getByRole("button", { name: "生成本句配音", exact: true })

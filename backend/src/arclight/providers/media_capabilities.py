@@ -1,9 +1,12 @@
 """Only installed adapters may advertise a media capability profile."""
 
+from dataclasses import dataclass
+from typing import Literal
+
 from arclight.core.errors import DomainError
 from arclight.core.image_service import OPENAI_IMAGE_MODELS
 from arclight.domain.dependencies import IMAGE_KINDS
-from arclight.domain.media_capabilities import Dimensions, MediaCapabilities
+from arclight.domain.media_capabilities import Dimensions, MediaCapabilities, NumericParameterRange
 
 MOCK_CAPABILITIES = MediaCapabilities(
     provider="mock",
@@ -72,6 +75,42 @@ def resolve_parameters(provider: str, model: str) -> frozenset[str]:
     if provider == "openai":
         return frozenset({"quality"})
     return frozenset({"steps"})
+
+
+CredentialSource = Literal["NONE", "SERVER", "ACCOUNT_SNAPSHOT"]
+
+
+@dataclass(frozen=True)
+class MediaAdapter:
+    credential_source: CredentialSource
+    simulation: bool = False
+
+
+BUILTIN_ADAPTERS = {"mock": MediaAdapter("NONE", simulation=True), "openai": MediaAdapter("SERVER")}
+ACCOUNT_ADAPTER = MediaAdapter("ACCOUNT_SNAPSHOT")
+
+
+def adapter_contract(provider: str) -> MediaAdapter | None:
+    from arclight.providers.native_media_protocols import KINDS
+
+    return ACCOUNT_ADAPTER if provider in KINDS else BUILTIN_ADAPTERS.get(provider)
+
+
+def credential_source(provider: str) -> CredentialSource | None:
+    """Connection ownership is part of the registered adapter contract."""
+    adapter = adapter_contract(provider)
+    return adapter.credential_source if adapter else None
+
+
+def parameter_ranges(provider: str, model: str) -> dict[str, NumericParameterRange]:
+    from arclight.providers.native_media_protocols import NUMERIC_PARAMETER_RANGES
+
+    supported = resolve_parameters(provider, model)
+    return {
+        name: limits.copy()
+        for name, limits in NUMERIC_PARAMETER_RANGES.get(provider, {}).items()
+        if name in supported
+    }
 
 
 def reference_count(inputs: list[dict]) -> int:

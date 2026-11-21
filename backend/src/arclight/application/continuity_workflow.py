@@ -31,7 +31,7 @@ from arclight.domain.continuity_workflow import (
     CandidateReviewCreate,
     CandidateReviewWork,
 )
-from arclight.domain.generation_requests import GenerationCreate, ShotReviewBinding
+from arclight.domain.generation_requests import GenerationCreate, GenerationSpec, ShotReviewBinding
 from arclight.domain.versions import digest
 from arclight.persistence.generation_candidates import GenerationCandidate
 from arclight.persistence.models import (
@@ -70,22 +70,14 @@ def require_shot_binding(
 
 
 def freeze_review_binding(db: Session, project_id: UUID, payload: GenerationCreate) -> dict | None:
-    legacy = {
-        name: payload.spec.context[name]
-        for name in ("storyboard_id", "shot_id")
-        if name in payload.spec.context
-    }
-    if payload.review_target is None and len(legacy) < 2:
-        # Partial legacy context is generic metadata, never an exact shot binding.
+    binding = payload.review_target
+    old_keys = {"storyboard_id", "shot_id"} & payload.spec.context.keys()
+    if old_keys and (binding is not None or len(old_keys) == 2):
+        raise DomainError("REVIEW_TARGET_INVALID", "镜头绑定只能通过 review_target 声明", 422)
+    if binding is None:
         return None
     if payload.target_type not in {"SHOT_IMAGE", "VIDEO"}:
         raise DomainError("REVIEW_TARGET_INVALID", "精确镜头送审只适用于镜头图片或视频", 422)
-    try:
-        binding = payload.review_target or ShotReviewBinding.model_validate(legacy)
-        if legacy and ShotReviewBinding.model_validate(legacy) != binding:
-            raise ValueError("Conflicting exact targets")
-    except (ValidationError, ValueError) as error:
-        raise DomainError("REVIEW_TARGET_INVALID", "分镜和镜头绑定必须完整且一致", 422) from error
     require_shot_binding(db, project_id, binding, payload.episode_id)
     if not any(
         item.source_asset_version_id == binding.storyboard_id
@@ -95,6 +87,28 @@ def freeze_review_binding(db: Session, project_id: UUID, payload: GenerationCrea
     ):
         raise DomainError("REVIEW_DEPENDENCY_REQUIRED", "送审镜头须作为精确分镜内容依赖冻结", 422)
     return binding.model_dump(mode="json")
+
+
+def frozen_review_binding(context: dict) -> dict | None:
+    """Read exact bindings from immutable generation manifests, including archived formats."""
+    if "continuity_review" in context:
+        return context["continuity_review"]
+    recorded = context["generation"]["context"]
+    keys = ("storyboard_id", "shot_id")
+    return (
+        {name: recorded[name] for name in keys} if all(name in recorded for name in keys) else None
+    )
+
+
+def generation_spec_for_new_job(context: dict) -> GenerationSpec:
+    """Copy the current request form from frozen evidence; never rewrite the source manifest."""
+    spec = GenerationSpec.model_validate(context["generation"])
+    if frozen_review_binding(context) is None:
+        return spec
+    metadata = {
+        key: value for key, value in spec.context.items() if key not in {"storyboard_id", "shot_id"}
+    }
+    return spec.model_copy(update={"context": metadata})
 
 
 def read_work(db: Session, project_id: UUID, candidate_id: UUID) -> CandidateReviewWork | None:
@@ -140,10 +154,7 @@ def start_candidate_review(
     manifest = db.get(DependencyManifest, candidate.input_manifest_id)
     assert manifest is not None
     context = manifest.snapshot_json["context"]
-    frozen = context.get("continuity_review")
-    legacy = context["generation"]["context"]
-    if frozen is None and all(name in legacy for name in ("storyboard_id", "shot_id")):
-        frozen = {name: legacy.get(name) for name in ("storyboard_id", "shot_id")}
+    frozen = frozen_review_binding(context)
     inherited = (
         read_work(db, project_id, candidate.replaces_candidate_id)
         if candidate.replaces_candidate_id
@@ -420,7 +431,7 @@ def queue_pending_reviews(
                     if revision
                     else source.target.model_dump(mode="json")
                     if source
-                    else context.get("continuity_review") or context["generation"]["context"]
+                    else frozen_review_binding(context) or {}
                 )
                 payload = CandidateReviewCreate.model_validate(
                     {"storyboard_id": target["storyboard_id"], "shot_id": target["shot_id"]}

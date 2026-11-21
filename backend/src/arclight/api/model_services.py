@@ -20,7 +20,6 @@ from arclight.application.service_credentials import (
 from arclight.core.errors import DomainError
 from arclight.core.service_keys import keyring
 from arclight.domain.model_suppliers import (
-    LEGACY_MODELS,
     PROTOCOLS,
     SPEECH_MODEL_PRESETS,
     SUPPLIERS,
@@ -33,7 +32,6 @@ router = APIRouter(prefix="/api/v1/me/model-services", tags=["model-services"])
 
 
 class ServiceInput(Input):
-    contract_version: Literal[1, 2] = 1
     mode: Literal["server", "custom"] = "server"
     base_url: str = Field(default="", max_length=500)
     model: str = Field(default="", max_length=160)
@@ -73,7 +71,6 @@ def list_services(
     actor: Actor,
     request: Request,
     response: Response,
-    catalog_version: Annotated[int, Query(ge=1, le=2)] = 1,
 ) -> dict:
     rows = list(db.scalars(select(ModelService).where(ModelService.user_id == user_id(actor))))
     settings = request.app.state.settings
@@ -95,23 +92,10 @@ def list_services(
         "can_store_keys": status["code"] == "READY",
         "key_storage": status,
         "text_runtime": "mock" if settings.provider == "mock" else "服务器文字服务",
-        "catalog_version": catalog_version,
+        "catalog_version": 2,
         "protocols": PROTOCOLS,
-        **(
-            {"speech_models": [preset.model_dump() for preset in SPEECH_MODEL_PRESETS]}
-            if catalog_version == 2
-            else {}
-        ),
-        "suppliers": [
-            row.model_dump()
-            if catalog_version == 2
-            else {
-                **row.model_dump(exclude={"kind", "group", "description", "protocol"}),
-                "model": LEGACY_MODELS[row.id],
-            }
-            for row in SUPPLIERS
-            if catalog_version == 2 or (row.kind == "text" and row.id in LEGACY_MODELS)
-        ],
+        "speech_models": [preset.model_dump() for preset in SPEECH_MODEL_PRESETS],
+        "suppliers": [preset.model_dump() for preset in SUPPLIERS],
     }
 
 
@@ -170,13 +154,8 @@ def save_service(
     if payload.expected_revision != (row.revision if row else 0):
         raise DomainError("SERVICE_CONFLICT", "配置已在其他页面更新，请重新打开后再保存", 409)
     settings = request.app.state.settings
-    if payload.contract_version == 1 and kind != "text" and payload.mode == "custom":
-        raise DomainError("SERVICE_NOT_READY", "此服务生成链路尚未开放，只能保存预设", 422)
     preset = supplier_by_id(payload.supplier, kind)
-    if payload.supplier != "custom" and (
-        preset is None
-        or (payload.contract_version == 1 and (kind != "text" or preset.id not in LEGACY_MODELS))
-    ):
+    if payload.supplier != "custom" and preset is None:
         raise DomainError("INVALID_SUPPLIER", "请选择当前类型的服务商或自定义", 422)
     protocol = preset.protocol if preset else (payload.protocol or PROTOCOLS[kind][0])
     if protocol not in PROTOCOLS[kind] or (
@@ -195,9 +174,7 @@ def save_service(
         raise DomainError("SUPPLIER_MISMATCH", "预设地址或输出格式已变化，请切换自定义供应商", 422)
     name = preset.name if preset else payload.supplier_name.strip()
     model = payload.model.strip()
-    if not model and preset and payload.contract_version == 1:
-        model = LEGACY_MODELS[preset.id]
-    if payload.contract_version == 2 and payload.mode == "custom" and not model:
+    if payload.mode == "custom" and not model:
         raise DomainError("SERVICE_MODEL_REQUIRED", "请填写服务商文档中的模型 ID", 422)
     has_new_key = bool(payload.api_key and payload.api_key.get_secret_value())
     if payload.clear_key and has_new_key:

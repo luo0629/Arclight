@@ -15,7 +15,7 @@ from test_story_analysis import content, execute, path, start
 
 from arclight.application import story_analysis
 from arclight.application.service_credentials import rotate_credentials
-from arclight.domain.model_suppliers import LEGACY_MODELS, SUPPLIERS
+from arclight.domain.model_suppliers import SUPPLIERS
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import WorkflowRun
 
@@ -90,7 +90,7 @@ def test_account_cards_dispatch_exact_old_and_new_snapshots(
     second = create_episode(client, create_project(client))
     model = "models/exact-text-v1" if protocol == "gemini" else "exact-text-v1"
     key = "synthetic-personal-key-v1"
-    profile = {"contract_version": 2, "mode": "custom", "supplier": supplier}
+    profile = {"mode": "custom", "supplier": supplier}
     if supplier == "custom":
         profile.update(base_url=endpoint, protocol=protocol, response_format=output_format)
     sent = []
@@ -151,7 +151,7 @@ def test_account_cards_dispatch_exact_old_and_new_snapshots(
     assert_result(client, second, new_run, new_model, "ACCOUNT_SNAPSHOT")
 
 
-def test_v1_card_dispatches_frozen_legacy_default_after_switch_to_mock(client, settings, stub_llm):
+def test_account_configuration_remains_frozen_after_switch_to_mock(client, settings, stub_llm):
     account(client)
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     first = create_episode(client, create_project(client))
@@ -163,14 +163,20 @@ def test_v1_card_dispatches_frozen_legacy_default_after_switch_to_mock(client, s
         return httpx.Response(200, json=response("openai_chat", json.dumps(content())))
 
     stub_llm(respond)
-    key = "synthetic-v1-model-key"
+    key = "synthetic-account-model-key"
+    model = "explicit-model-id"
     service_path = "/api/v1/me/model-services/text"
     saved = client.put(
         service_path,
-        json={"mode": "custom", "supplier": "openai", "api_key": key, "expected_revision": 0},
+        json={
+            "mode": "custom",
+            "supplier": "openai",
+            "api_key": key,
+            "model": model,
+            "expected_revision": 0,
+        },
     )
     assert saved.status_code == 200, saved.text
-    model = LEGACY_MODELS["openai"]
     assert saved.json()["model"] == model
     planned = start(client, first)
     assert planned.status_code == 202, planned.text

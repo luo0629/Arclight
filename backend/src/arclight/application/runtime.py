@@ -43,10 +43,10 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
 
     with factory.begin() as db:
         run = db.get(WorkflowRun, run_id)
-        if run is not None and (
-            run.workflow_version == "producer-series/1"
-            or "producer_series_context" in run.input_json
-        ):
+        if run is None:
+            return
+        kind, inputs = run.workflow_type, run.input_json
+        if "series_scope" in inputs or "producer_series_context" in inputs:
             from arclight.application.agent_workflows import WorkflowExecutionDeferred
             from arclight.application.model_gateway import lock_gate
             from arclight.application.producer_series_delivery import paused
@@ -58,20 +58,27 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
             if root is not None and root.status == "RUNNING" and paused(db, root):
                 raise WorkflowExecutionDeferred("Series Producer is paused; retain delivery")
     with runtime_scope(factory, settings, run_id, revision):
-        from arclight.application.art_execution import execute_art
-        from arclight.application.continuity_execution import execute_continuity
-        from arclight.application.director_execution import execute_director
-        from arclight.application.producer_execution import execute_producer
-        from arclight.application.screenwriter_execution import execute_screenwriter
-
-        if (
-            not execute_producer(factory, settings, run_id, revision)
-            and not execute_continuity(factory, settings, run_id, revision)
-            and not execute_art(factory, settings, run_id, revision)
-            and not execute_director(factory, settings, run_id, revision)
-            and not execute_screenwriter(factory, settings, run_id, revision)
+        # A delivery executes only its admitted business operation. A rejected
+        # frozen contract must never send it through a different graph.
+        if kind == "producer":
+            from arclight.application.producer_execution import execute_producer as execute
+        elif kind == "continuity_review":
+            from arclight.application.continuity_execution import execute_continuity as execute
+        elif kind == "art_proposal":
+            from arclight.application.art_execution import execute_art as execute
+        elif kind == "storyboard" and "director" in inputs:
+            from arclight.application.director_execution import execute_director as execute
+        elif kind in {"script_storyboard", "story_outline", "script_rewrite"} and (
+            "screenwriter" in inputs
         ):
+            from arclight.application.screenwriter_execution import execute_screenwriter as execute
+        else:
             _execute_run(factory, settings, run_id, revision)
+            return
+        if not execute(factory, settings, run_id, revision):
+            from arclight.application.agent_workflows import fail_workflow
+
+            fail_workflow(factory, run_id, revision, "PRODUCTION_VERSION_INCOMPATIBLE")
 
 
 def _store_agent_state(run: WorkflowRun, state: AgentRunState) -> None:
@@ -168,14 +175,15 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     },
                 )
                 return
-            if run.workflow_version not in {
-                WORKFLOW_VERSION,
-                DIRECTOR_WORKFLOW_VERSION,
-                REWRITE_VERSION,
-            } or (
-                run.workflow_version == REWRITE_VERSION and run.workflow_type != "script_rewrite"
-            ):
-                raise ValueError("不兼容的工作流版本")
+            standard_version = {
+                "script_storyboard": WORKFLOW_VERSION,
+                "storyboard": DIRECTOR_WORKFLOW_VERSION,
+                "script_rewrite": REWRITE_VERSION,
+            }.get(run.workflow_type)
+            if standard_version is None or run.workflow_version != standard_version:
+                raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "工作流版本不兼容", 409)
+            rewrite = run.workflow_type == "script_rewrite"
+            director_only = run.workflow_type == "storyboard"
             run.status = RunStatus.RUNNING
             # 不提前 flush：SQLite 的测试模式不允许跨连接同时写业务数据库。
             emit(db, run, "workflow.started", {"revision": revision})
@@ -194,7 +202,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     agent_state = state
                     _store_agent_state(run, state)
 
-                if run.workflow_version == REWRITE_VERSION:
+                if rewrite:
                     graph = build_rewrite_graph(
                         artifacts,
                         saver,
@@ -218,7 +226,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                         ),
                         artifacts,
                         saver,
-                        director_only=run.workflow_version == DIRECTOR_WORKFLOW_VERSION,
+                        director_only=director_only,
                         contexts=contexts,
                         agent_scope=agent_scope,
                         agent_state_seed=agent_state,
@@ -235,20 +243,12 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 run.agent_state_json = agent_state.model_dump(mode="json")
                 stage = None
                 if not snapshot.values:
-                    stage = (
-                        "rewrite"
-                        if run.workflow_version == REWRITE_VERSION
-                        else (
-                            "storyboard"
-                            if run.workflow_version == DIRECTOR_WORKFLOW_VERSION
-                            else "script"
-                        )
-                    )
+                    stage = "rewrite" if rewrite else "storyboard" if director_only else "script"
                 elif "director" in snapshot.next or (
                     run.resume_json
                     and run.resume_json.get("resource_type") == "script"
                     and run.resume_json.get("decision") == "APPROVE"
-                    and run.workflow_version != REWRITE_VERSION
+                    and not rewrite
                 ):
                     stage = "storyboard"
                 elif "screenwriter" in snapshot.next:
@@ -305,9 +305,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     emit(db, run, "workflow.waiting_review", run.pending_review)
                 else:
                     approved = snapshot.values.get(
-                        "script_approved"
-                        if run.workflow_version == REWRITE_VERSION
-                        else "storyboard_approved",
+                        "script_approved" if rewrite else "storyboard_approved",
                         False,
                     )
                     run.status = RunStatus.SUCCEEDED if approved else RunStatus.REJECTED

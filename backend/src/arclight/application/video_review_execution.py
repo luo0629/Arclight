@@ -45,7 +45,7 @@ from arclight.domain.video_temporal_reviewer import (
     TemporalWork,
 )
 from arclight.persistence.models import Episode, VersionBinding, WorkflowRun
-from arclight.providers.agent_model import check_capabilities
+from arclight.providers.agent_model import agent_transport, check_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +89,7 @@ def assess_video(
         system_instruction=TEMPORAL_PROMPT,
         messages=[AgentUserMessage(data=seed, image_file_ids=list(images))],
     )
-    if settings.provider != "openai_compatible":
+    if agent_transport(settings) is None:
         return None, "当前审查模型没有已配置的时序样本视觉协议，请人工观看。"
     try:
         check_capabilities(settings, request, ())

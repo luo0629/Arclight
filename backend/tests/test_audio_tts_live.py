@@ -324,7 +324,6 @@ def test_three_authorized_original_tts_lines(settings, client):
             response = client.put(
                 "/api/v1/me/model-services/speech",
                 json={
-                    "contract_version": 2,
                     "mode": "custom",
                     "supplier": "custom",
                     "model": inputs.model,

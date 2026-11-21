@@ -16,7 +16,7 @@ from arclight.application.dependencies import exact_version
 from arclight.application.generation_accounting import costs
 from arclight.application.generation_budget import quote_job
 from arclight.application.generation_jobs import create_job
-from arclight.application.media_services import select_for_spec
+from arclight.application.media_services import frozen_provider_configuration, select_for_spec
 from arclight.application.visual_bible import snapshot as visual_snapshot
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -86,7 +86,6 @@ def freeze_concept_plan(
     quote = quote_job(db, project_id, payload, actor=actor, frozen_service=frozen_service)
     if quote.maximum_cost > plan.maximum_cost:
         raise DomainError("ART_CONCEPT_BUDGET", "单轮可信报价已超过概念图总预算", 409)
-    settings = db.info["settings"]
     project = db.get(Project, project_id)
     assert project is not None
     return {
@@ -95,11 +94,7 @@ def freeze_concept_plan(
         "capabilities": capabilities.model_dump(mode="json")
         | {"task_types": sorted(capabilities.task_types)},
         "visual_bible": visual_snapshot(db, project),
-        "provider_configuration": service.configuration
-        if service
-        else settings.image_service.public_configuration()
-        if service or plan.spec.provider == "openai"
-        else None,
+        "provider_configuration": frozen_provider_configuration(db, plan.spec, "IMAGE", service),
         "initial_quote": quote.model_dump(mode="json"),
     }
 

@@ -246,6 +246,41 @@ def test_other_database_pass_does_not_hide_an_invalid_skip(repo, reason):
     assert evidence.skipped == {"tests.test_existing::test_existing": reason}
 
 
+@pytest.mark.parametrize("outcome", ["authorization", "unrelated", "regression", "failure"])
+def test_only_exact_live_provider_authorization_skip_is_operator_only(repo, outcome):
+    module = "tests.test_audio_tts_live"
+    live_case = "test_three_authorized_original_tts_lines"
+    name = live_case if outcome != "unrelated" else "test_ordinary_speech_contract"
+    reason = (
+        "Provider regression"
+        if outcome == "regression"
+        else "Paid TTS requires explicit authorization, dedicated credentials and a USD cap"
+    )
+    result = preflight.junit_evidence(
+        [
+            junit(
+                repo,
+                "pytest-sqlite.xml",
+                f'<testcase classname="{module}" name="{name}">'
+                + ("<failure/>" if outcome == "failure" else f'<skipped message="{reason}"/>')
+                + "</testcase>",
+            )
+        ],
+        ("backend/tests/test_audio_tts_live.py",),
+    )
+    case = f"{module}::{name}"
+    assert not result.passed and not result.missing
+    if outcome == "authorization":
+        assert result.operator_only == {case: reason}
+        assert not result.skipped and not result.errors
+    else:
+        assert not result.operator_only
+        if outcome == "failure":
+            assert result.errors == [case]
+        else:
+            assert result.skipped == {case: reason}
+
+
 def test_unresolved_skip_retains_reason(repo):
     path = junit(
         repo,

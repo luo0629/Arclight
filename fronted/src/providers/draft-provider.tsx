@@ -20,8 +20,7 @@ const DraftContext = createContext<Store | null>(null);
 
 function read(key: string): Drafts {
   const saved = localStorage.getItem(key);
-  const legacy = saved === null ? sessionStorage.getItem(key) : null;
-  const value: unknown = JSON.parse(saved ?? legacy ?? "{}");
+  const value: unknown = JSON.parse(saved ?? "{}");
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Invalid draft store");
   const result: Drafts = {};
@@ -35,10 +34,6 @@ function read(key: string): Drafts {
     )
       throw new Error("Invalid draft entry");
     result[id] = row as Draft;
-  }
-  if (legacy !== null) {
-    localStorage.setItem(key, JSON.stringify(result));
-    sessionStorage.removeItem(key);
   }
   return result;
 }

@@ -89,7 +89,7 @@ def test_audio_tracks_save_replay_and_capture_exact_dependencies_without_changin
         for clip in track["clips"]
         if "audio" in clip
     } == expected
-    assert value["snapshot"]["schema_version"] == original["snapshot"]["schema_version"] == 1
+    assert value["snapshot"]["schema_version"] == original["snapshot"]["schema_version"] == 2
     before = audio_counts(client)
     replay = deepcopy(body)
     replay["snapshot"]["tracks"].reverse()

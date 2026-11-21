@@ -37,9 +37,7 @@ from arclight.persistence.models import (
 from arclight.providers.native_media import NativeMediaProvider
 
 
-def configure(
-    client, settings, kind="image", protocol="cogview", revision=0, key="first-key", *, sdk=False
-):
+def configure(client, settings, kind="image", protocol="cogview", revision=0, key="first-key"):
     if not settings.service_encryption_key.get_secret_value():
         settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     model = "wan2.7-t2v" if protocol == "wan" else "native-model"
@@ -52,13 +50,11 @@ def configure(
             base_url="https://native.example/v1",
             maximum_cost_per_output=Decimal("1"),
             pricing_version="test-native:1",
-            use_openai_image_sdk=sdk,
         )
     ]
     response = client.put(
         f"/api/v1/me/model-services/{kind}",
         json={
-            "contract_version": 2,
             "mode": "custom",
             "supplier": "custom",
             "model": model,
@@ -336,12 +332,10 @@ def test_two_accounts_and_owner_replay_keep_the_original_credential_owner(client
         provider_for(client, settings, replay, lambda req: httpx.Response(200))
 
 
-@pytest.mark.parametrize("protocol,sdk", [("cogview", False), ("openai_image", True)])
-def test_completed_download_failure_keeps_unknown_cost_in_both_ledgers(
-    client, settings, protocol, sdk
-):
+@pytest.mark.parametrize("protocol", ["cogview", "openai_image"])
+def test_completed_download_failure_keeps_unknown_cost_in_both_ledgers(client, settings, protocol):
     account(client)
-    configure(client, settings, protocol=protocol, sdk=sdk)
+    configure(client, settings, protocol=protocol)
     pid = project(client)
     set_policy(client, pid)
     job = capture_ok(client, pid, body_for(client, pid))
@@ -362,9 +356,9 @@ def test_completed_download_failure_keeps_unknown_cost_in_both_ledgers(
         assert receipt.usage_json["images"] == 1
 
 
-def test_sdk_timeout_rollback_keeps_original_attempt_without_resubmission(client, settings):
+def test_sdk_timeout_keeps_original_attempt_without_resubmission(client, settings):
     account(client)
-    configure(client, settings, protocol="openai_image", sdk=True)
+    configure(client, settings, protocol="openai_image")
     pid = project(client)
     set_policy(client, pid)
     job = capture_ok(client, pid, body_for(client, pid))
@@ -376,9 +370,6 @@ def test_sdk_timeout_rollback_keeps_original_attempt_without_resubmission(client
 
     assert deliver(client, job, provider_for(client, settings, job, timeout)) == "RESULT_UNKNOWN"
     original_attempt = attempt_for(client, job)
-    settings.service_model_policies = [
-        settings.service_model_policies[0].model_copy(update={"use_openai_image_sdk": False})
-    ]
     assert deliver(client, job, provider_for(client, settings, job, timeout)) == "RESULT_UNKNOWN"
     assert len(requests) == 1
     assert attempt_for(client, job) == original_attempt

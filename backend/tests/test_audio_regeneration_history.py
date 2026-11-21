@@ -61,29 +61,29 @@ def test_line_history_combines_import_and_generated_versions_with_exact_lineage_
     assert response.status_code == 200, response.text
     history = response.json()
     versions = [
-        first["binding"]["asset_version_id"],
-        imported["asset_version_id"],
         third["binding"]["asset_version_id"],
+        imported["asset_version_id"],
+        first["binding"]["asset_version_id"],
     ]
     assert [item["version"]["id"] for item in history] == versions
-    assert [item["version"]["version_no"] for item in history] == [1, 2, 3]
+    assert [item["version"]["version_no"] for item in history] == [3, 2, 1]
     assert [item["tts_job_id"] for item in history] == [
-        first_row["job_id"],
-        None,
         third_row["job_id"],
+        None,
+        first_row["job_id"],
     ]
     assert [item["source_audio_version_id"] for item in history] == [
-        None,
-        None,
         imported["asset_version_id"],
+        None,
+        None,
     ]
-    assert [item["binding"] for item in history] == client.get(root + "/bindings").json()
+    assert [item["binding"] for item in reversed(history)] == client.get(root + "/bindings").json()
     version_root = (
         f"/api/v1/projects/{tts_case['pid']}/assets/{first_row['target_asset_id']}/versions"
     )
     listed = client.get(version_root)
     assert listed.status_code == 200, listed.text
-    assert [item["version"] for item in history] == listed.json()
+    assert [item["version"] for item in reversed(history)] == listed.json()
     assert all(item["version"]["media"]["rights_confirmed"] for item in history)
     assert all(item["version"]["status"] == "DRAFT" for item in history)
     assert "api_key" not in response.text and "first-key" not in response.text

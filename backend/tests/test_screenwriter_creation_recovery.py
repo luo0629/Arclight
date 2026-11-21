@@ -16,8 +16,8 @@ from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
 from test_screenwriter_creation import approve, install, progress, run_once, start
 
+from arclight.application.agent_workflows import WorkflowExecutionDeferred
 from arclight.application.runtime import execute_run
-from arclight.application.screenwriter_execution import ScreenwriterExecutionDeferred
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.main import create_app
 from arclight.persistence.agent_limits import AgentRunLimit
@@ -343,7 +343,7 @@ def test_postgres_duplicate_workers_do_not_hold_run_lock_during_http(
                     == "RUNNING"
                 )
             duplicate = pool.submit(execute_run, factory, settings, run_id, 0)
-            with pytest.raises(ScreenwriterExecutionDeferred):
+            with pytest.raises(WorkflowExecutionDeferred):
                 duplicate.result(timeout=10)
         finally:
             release.set()
@@ -399,7 +399,7 @@ def test_worker_redelivery_retries_live_lease_and_recovers_after_expiry(
         tasks.execute_workflow.run(str(run_id), 0)
     assert len(retries) == 1 and retries[0]["countdown"] == 10
     assert tasks.execute_workflow.max_retries is None
-    assert isinstance(retries[0]["exc"], ScreenwriterExecutionDeferred)
+    assert isinstance(retries[0]["exc"], WorkflowExecutionDeferred)
     assert len(sent) == 4
     with factory.begin() as db:
         assert db.get(WorkflowRun, run_id).status == "RUNNING"

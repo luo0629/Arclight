@@ -208,3 +208,12 @@ class OpenAICompatibleAgentProvider:
             return AgentModelResponse[T](status="FINAL", final=final)
         except (KeyError, TypeError, ValueError):
             raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=result.usage) from None
+
+
+# Runtime mode selects a transport, not a model's abilities. The remote
+# transport handles each supported wire protocol through the LLM service.
+AGENT_TRANSPORTS = {"openai_compatible": OpenAICompatibleAgentProvider}
+
+
+def agent_transport(settings: Settings) -> type[OpenAICompatibleAgentProvider] | None:
+    return AGENT_TRANSPORTS.get(settings.provider)

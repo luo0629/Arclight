@@ -50,8 +50,11 @@ def test_postgres_competing_visual_saves_publish_one_complete_frozen_configurati
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count(Timeline.id))) == 2
         assert db.scalar(select(func.count(TimelineRevision.id))) == 1
-        assert db.scalar(select(func.count(TimelineClipVisual.id))) == 5
-        assert set(db.scalars(select(TimelineClipVisual.timeline_id))) == {UUID(winner["id"])}
+        assert db.scalar(select(func.count(TimelineClipVisual.id))) == 10
+        assert set(db.scalars(select(TimelineClipVisual.timeline_id))) == {
+            UUID(original["id"]),
+            UUID(winner["id"]),
+        }
         assert (
             db.scalar(
                 select(func.count(AuditEvent.id)).where(AuditEvent.action == "timeline.saved")

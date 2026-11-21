@@ -18,8 +18,8 @@ from test_script_rewrite import body as rewrite_body
 from test_script_rewrite import source as rewrite_source
 from test_script_rewrite import start as start_rewrite
 
+from arclight.application.agent_workflows import WorkflowExecutionDeferred
 from arclight.application.runtime import execute_run
-from arclight.application.screenwriter_execution import ScreenwriterExecutionDeferred
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision
 from arclight.persistence.models import OutboxEvent, Project, Script, User, WorkflowRun
@@ -184,7 +184,7 @@ def test_postgres_duplicate_workers_are_fenced_without_holding_run_lock_during_c
                     == "RUNNING"
                 )
             duplicate = pool.submit(execute_run, factory, settings, run_id, 0)
-            with pytest.raises(ScreenwriterExecutionDeferred):
+            with pytest.raises(WorkflowExecutionDeferred):
                 duplicate.result(timeout=10)
         finally:
             release.set()

@@ -88,6 +88,12 @@ def replay_job(
     snapshot = manifest.snapshot_json
     if snapshot["context"].get("audio_line") is not None:
         raise DomainError("AUDIO_REPLAY_REQUIRES_LINE", "台词配音须通过专用逐句入口重新生成", 409)
+    from arclight.application.continuity_workflow import (
+        frozen_review_binding,
+        generation_spec_for_new_job,
+    )
+
+    context = snapshot["context"]
     lane = db.scalar(select(GenerationLane.lane).where(GenerationLane.job_id == source.id))
     request = GenerationCreate.model_validate(
         {
@@ -98,8 +104,8 @@ def replay_job(
             "episode_id": source.episode_id,
             "expected_asset": snapshot["target"]["expected_asset"],
             "task_type": source.task_type,
-            "spec": snapshot["context"]["generation"],
-            "review_target": snapshot["context"].get("continuity_review"),
+            "spec": generation_spec_for_new_job(context),
+            "review_target": frozen_review_binding(context),
             "inputs": [
                 {
                     "source_asset_version_id": item["source_asset_version_id"],

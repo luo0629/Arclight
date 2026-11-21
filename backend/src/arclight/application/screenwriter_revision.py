@@ -135,7 +135,7 @@ def _round(
     with factory.begin() as db:
         run = db.get(WorkflowRun, run_id)
         assert run is not None
-        series = run.workflow_version in SERIES_WORKFLOWS
+        series = "narrative_context" in run.input_json
         version = SERIES_REVISION_VERSION if series else REVISION_VERSION
         prefix = f"{version}:round:{round_no}:" + ("human:" if human else "critique:")
         key = prefix + f"attempt:{creation_attempt(run)}"

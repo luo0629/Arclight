@@ -51,19 +51,19 @@ def provider_quote(
         select_for_spec,
         selection_for_job,
     )
-    from arclight.providers.native_media_protocols import KINDS
+    from arclight.providers.media_capabilities import credential_source
 
-    if spec.provider in KINDS:
+    source = credential_source(spec.provider)
+    if source == "ACCOUNT_SNAPSHOT":
         selection = (
             selection_for_job(db, job)
             if job
             else select_for_spec(db, actor or "service-owner", spec, task_type, frozen_service)
         )
         return quote_selection(db, selection, spec) if selection else None
-    if spec.provider == "mock":
-        return media_pricing.quote(spec, task_type)
-    settings = db.info.get("settings")
-    return media_pricing.quote(spec, task_type, settings.image_service if settings else None)
+    if source == "SERVER" and (settings := db.info.get("settings")) is not None:
+        return media_pricing.quote(spec, task_type, settings.image_service)
+    return media_pricing.quote(spec, task_type)
 
 
 def quote_job(

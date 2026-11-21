@@ -52,7 +52,6 @@ from arclight.domain.screenwriter_revision import (
     PATCH_TOOL,
     REVISION_WORKFLOWS,
     SERIES_PATCH_TOOL,
-    SERIES_WORKFLOWS,
 )
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import Episode, WorkflowRun
@@ -64,21 +63,15 @@ PROFESSIONAL_VERSIONS = (
 
 def authorize_screenwriter(db: Session, run: WorkflowRun, actor: str, settings: Settings) -> None:
     # Choosing professional creation explicitly authorizes this read-only investigation.
+    series = "narrative_context" in run.input_json
+    revision = run.input_json["screenwriter"].get("revision_rounds") is not None
     grant_agent_tools(
         db,
         AgentToolGrantRequest(
             run_id=run.id,
             agent_name="screenwriter",
-            allowed_tools=[
-                SERIES_RESEARCH_TOOL
-                if run.workflow_version in SERIES_WORKFLOWS
-                else "investigate_story"
-            ]
-            + (
-                [SERIES_PATCH_TOOL if run.workflow_version in SERIES_WORKFLOWS else PATCH_TOOL]
-                if run.workflow_version in REVISION_WORKFLOWS
-                else []
-            ),
+            allowed_tools=[SERIES_RESEARCH_TOOL if series else "investigate_story"]
+            + ([SERIES_PATCH_TOOL if series else PATCH_TOOL] if revision else []),
         ),
         actor,
         build_agent_tool_registry(settings=settings),

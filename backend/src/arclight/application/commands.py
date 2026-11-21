@@ -33,7 +33,6 @@ from arclight.domain.director_creation import (
     COLLABORATIVE_DIRECTOR_VERSION,
     COLLABORATIVE_PRODUCTION_VERSION,
     DIRECTOR_VERSION,
-    DIRECTOR_VERSIONS,
     ITERATIVE_DIRECTOR_VERSION,
     ITERATIVE_PRODUCTION_VERSION,
     PRODUCTION_VERSION,
@@ -296,12 +295,15 @@ def start_run(
             raise DomainError(
                 "INVALID_REBUILD_INPUT", "只允许按需重生成失效分镜并指定批准剧本", 409
             )
+    from arclight.application.visual_bible import prompt_style
     from arclight.application.visual_bible import snapshot as visual_snapshot
+
+    visual = visual_snapshot(db, project)
 
     inputs: dict = {
         "story": story,
-        "style_guide": project.style_guide,
-        "visual_bible": visual_snapshot(db, project),
+        "style_guide": prompt_style(db, project, visual),
+        "visual_bible": visual,
         "story_settings": ProjectStorySettings.model_validate(project.story_settings).model_dump(),
         "target_duration_ms": episode.target_duration_ms,
     }
@@ -675,9 +677,7 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
         raise DomainError("PRODUCER_CONTROL_REQUIRED", "请通过生产协作入口恢复原命令", 409)
     if run.status != RunStatus.FAILED:
         raise DomainError("NOT_RETRYABLE", "只有失败的工作流可以显式重试")
-    from arclight.domain.art_workflow import ART_WORKFLOW_VERSIONS
-
-    if run.workflow_version in ART_WORKFLOW_VERSIONS:
+    if run.workflow_type == "art_proposal":
         from arclight.application.agent_workflows import creation_loops
 
         if any(loop.status == "STOPPED" for loop in creation_loops(db, run.id, "art_director")):
@@ -727,9 +727,9 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
                 "AGENT_STATE_INVALID", "运行状态不可安全重试，请联系管理员", 409
             ) from exc
         run.agent_state_json = state.model_dump(mode="json")
-    from arclight.application.screenwriter_creation import PROFESSIONAL_VERSIONS, creation_attempt
+    from arclight.application.screenwriter_creation import creation_attempt
 
-    if run.workflow_version in PROFESSIONAL_VERSIONS:
+    if "screenwriter" in run.input_json:
         from arclight.domain.agent_state import AgentRunState
 
         state = AgentRunState.model_validate(run.agent_state_json)
@@ -740,7 +740,7 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
                 | {"screenwriter.creation": {"attempt": creation_attempt(run) + 1}},
             }
         ).model_dump(mode="json")
-    if run.workflow_version in DIRECTOR_VERSIONS:
+    if "director" in run.input_json:
         from arclight.application.director_creation import creation_attempt as director_attempt
         from arclight.domain.agent_state import AgentRunState
 

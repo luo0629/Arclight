@@ -42,7 +42,7 @@ export const audioApi = {
     signal: AbortSignal,
   ) =>
     read<AudioSnapshot[]>(
-      `/episodes/${id(episodeId)}/audio-snapshots${page(offset)}&newest_first=true`,
+      `/episodes/${id(episodeId)}/audio-snapshots${page(offset)}`,
       signal,
     ),
   createSnapshot: (
@@ -113,7 +113,7 @@ export const audioApi = {
     signal: AbortSignal,
   ) =>
     read<AudioHistory[]>(
-      `${line(snapshot, lineId)}/history${page(offset)}&newest_first=true&include_reusable=true`,
+      `${line(snapshot, lineId)}/history${page(offset)}&include_reusable=true`,
       signal,
     ),
   tasks: (

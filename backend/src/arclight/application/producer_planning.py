@@ -18,6 +18,7 @@ from arclight.application.commands import emit, require_episode, require_run
 from arclight.application.gateway_text import execution_actor, validate_publication
 from arclight.application.model_gateway import lock_gate
 from arclight.application.model_services import text_snapshot
+from arclight.application.producer_series import has_series_scope
 from arclight.application.production_versions import bind, capture_text, find_binding, text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -232,7 +233,7 @@ def _validate(db: Session, run_id: UUID, plan: ProducerPlan, settings: Settings)
     if not {(row.tool_call_key, row.evidence_sha256) for row in plan.evidence} <= evidence:
         raise DomainError("PRODUCER_PLAN_EVIDENCE", "计划依据须来自本循环真实成功调查", 422)
     if (
-        run.workflow_version == SERIES_PRODUCER_VERSION
+        has_series_scope(run)
         and not {row["episode_id"] for row in run.input_json["series_scope"]["episodes"]}
         <= investigated
     ):
@@ -355,11 +356,9 @@ def plan_producer(
                 stage="producer",
                 operation_key=PLAN_VERSION,
                 agent_version=run.workflow_version,
-                prompt_version=SERIES_PLAN_VERSION
-                if run.workflow_version == SERIES_PRODUCER_VERSION
-                else PLAN_VERSION,
+                prompt_version=SERIES_PLAN_VERSION if has_series_scope(run) else PLAN_VERSION,
                 result_schema_version=SERIES_PLAN_VERSION
-                if run.workflow_version == SERIES_PRODUCER_VERSION
+                if has_series_scope(run)
                 else PLAN_VERSION,
                 system_instruction=planning_instruction(run.workflow_version),
                 messages=[

@@ -171,7 +171,7 @@ def create_render_manifest(
     )
     now = utcnow()
     snapshot = RenderManifestSnapshot(
-        schema_version=2 if payload.line_audio_decisions else 1,
+        schema_version=2,
         timeline_id=timeline.id,
         timeline_sha256=timeline.content_sha256,
         dependency_manifest_id=dependency.id,

@@ -132,7 +132,11 @@ def create_job(
         require_available_shot(
             db, project_id, review_binding, payload.episode_id, task_type=payload.task_type
         )
-    from arclight.application.media_services import bind_selection, select_for_spec
+    from arclight.application.media_services import (
+        bind_selection,
+        frozen_provider_configuration,
+        select_for_spec,
+    )
 
     service = select_for_spec(db, actor, payload.spec, payload.task_type, frozen_service)
     if service is not None:
@@ -247,6 +251,7 @@ def create_job(
         if "video_images" in payload.spec.context:
             raise DomainError("VIDEO_INPUT_INVALID", "视频首帧须使用精确参考依赖", 422)
         video_images = freeze_video_images(db, project_id, actor, payload.episode_id, inputs)
+    configuration = frozen_provider_configuration(db, effective_spec, payload.task_type, service)
     manifest = DependencyManifest(
         project_id=project_id,
         target_asset_id=asset.id if asset else None,
@@ -273,16 +278,7 @@ def create_job(
             "context": {
                 "generation": effective_spec.model_dump(mode="json"),
                 **({"video_images": video_images} if video_images else {}),
-                **(
-                    {
-                        "provider_configuration": db.info[
-                            "settings"
-                        ].image_service.public_configuration()
-                    }
-                    if effective_spec.provider == "openai" and service is None
-                    else {}
-                ),
-                **({"provider_configuration": service.configuration} if service else {}),
+                **({"provider_configuration": configuration} if configuration else {}),
                 "origin": "generation_request",
                 **({"continuity_review": review_binding} if review_binding else {}),
                 **({"art_concept": deepcopy(art_concept_origin)} if art_concept_origin else {}),

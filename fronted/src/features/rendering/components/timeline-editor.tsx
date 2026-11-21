@@ -8,6 +8,7 @@ import { useSessionDraft } from "@/providers/draft-provider";
 import { renderingApi } from "../api";
 import type { Timeline, TimelineClip } from "../types";
 import {
+  arrangeVideo,
   changeClip,
   clipLanes,
   moveShot,
@@ -97,7 +98,7 @@ export default function TimelineEditor({
             {
               creation_key: pending.key,
               expected_version_no: timeline.version_no,
-              snapshot,
+              snapshot: arrangeVideo(snapshot),
             },
             signal,
           );

@@ -40,9 +40,8 @@ from arclight.domain.agent_state import (
     restore_agent_state,
     transition_agent_step,
 )
-from arclight.domain.screenwriter_creation import SCREENWRITER_OUTLINE_VERSION, ScriptFragment
+from arclight.domain.screenwriter_creation import ScriptFragment
 from arclight.domain.screenwriter_planning import EpisodePlan, SeasonPlan
-from arclight.domain.screenwriter_revision import REVISION_WORKFLOWS
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import Episode, Script, WorkflowRun
 from arclight.providers.context import bind_contexts
@@ -51,9 +50,6 @@ from arclight.workflows.checkpoints import open_checkpointer
 from arclight.workflows.production import build_graph
 
 logger = logging.getLogger(__name__)
-
-# Preserve the existing import while all workflows share the same exception type.
-ScreenwriterExecutionDeferred = WorkflowExecutionDeferred
 
 
 def _finish_outline(factory: sessionmaker[Session], run_id: UUID, revision: int, outcome) -> None:
@@ -152,7 +148,6 @@ def _review_graph(
             )
         else:
             from arclight.application.director_execution import generate_storyboard
-            from arclight.domain.director_creation import DIRECTOR_VERSIONS
 
             graph = build_graph(
                 bind_contexts(build_provider(provider_settings), contexts),
@@ -165,7 +160,7 @@ def _review_graph(
                 agent_state_current=current_state,
                 director_only=run.workflow_type == "storyboard",
                 director_generate=(lambda: generate_storyboard(factory, settings, run_id, revision))
-                if run.workflow_version in DIRECTOR_VERSIONS
+                if "director" in run.input_json
                 else None,
             )
         config = {"configurable": {"thread_id": str(run_id)}}
@@ -251,7 +246,7 @@ def execute_screenwriter(
             state = restore_agent_state(run.agent_state_json, None, scope)
             stage: AgentStepId = (
                 "outline"
-                if run.workflow_version == SCREENWRITER_OUTLINE_VERSION
+                if run.workflow_type == "story_outline"
                 else "rewrite"
                 if run.workflow_type == "script_rewrite"
                 else "script"
@@ -306,7 +301,7 @@ def execute_screenwriter(
                     assert fragment.result is not None
                     fragments.append(fragment.result)
                 content = assemble_script(outcome.loop_id, outcome.result, fragments)
-            if run.workflow_version in REVISION_WORKFLOWS:
+            if run.input_json["screenwriter"].get("revision_rounds") is not None:
                 from arclight.application.screenwriter_revision import revise_script
 
                 evaluated, final_content = revise_script(

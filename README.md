@@ -43,7 +43,7 @@ ARCLIGHT_IMAGE_SERVICE={"enabled":true,"base_url":"https://image-provider.exampl
 （1024×1024、1536×1024、1024×1536），项目预算还须容纳整个批次（最多四张）。
 报价用于应用预算预留，不是供应商强制扣费上限。缺少报价／密钥、配置版本变化或不支持的能力
 会在发送前拒绝。创建任务前通过项目的
-`GET /api/v1/projects/{project_id}/generation-jobs/providers/openai/configuration`
+`GET /api/v1/projects/{project_id}/generation-jobs/services/image/configuration?source=server`
 获取脱敏的 `configuration_version`，作为 `spec.model_config_version`；能力接口使用同一路径下的
 `providers/openai/capabilities?model=gpt-image-2.5-sunburst`（使用配置的模型名）。
 

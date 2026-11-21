@@ -237,12 +237,6 @@ def supplier_by_id(identifier: str, kind: str = "text") -> Supplier | None:
     return next((row for row in SUPPLIERS if row.id == identifier and row.kind == kind), None)
 
 
-# A projection of the original contract, never used to default new configurations.
-LEGACY_MODELS = {
-    "openai": "gpt-5.4-mini",
-    "deepseek": "deepseek-flash",
-    "zhipu": "glm-5.3-flash",
-}
 PROTOCOLS = {
     "text": ("openai_chat", "gemini", "qwen_chat"),
     "image": ("openai_image", "cogview", "seedream", "siliconflow_image", "gemini_image"),

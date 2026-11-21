@@ -1,4 +1,4 @@
-"""Compare account Images SDK requests and results against the native adapter."""
+"""Verify the single Images SDK path for the account Images protocol."""
 
 import base64
 import json
@@ -46,7 +46,7 @@ def sdk_calls(monkeypatch):
     return calls
 
 
-def route(settings, tmp_path, *, supplier="custom", enabled=True):
+def route(settings, tmp_path, *, supplier="custom"):
     connection, request = native_request(settings, tmp_path, "openai_image")
     base = "https://api.openai.com/v1" if supplier == "openai" else "https://native.example/api/v1"
     connection.configuration.update(kind="image", supplier=supplier, base_url=base)
@@ -57,14 +57,13 @@ def route(settings, tmp_path, *, supplier="custom", enabled=True):
             base_url=base,
             model=connection.configuration["model"],
             protocol="openai_image",
-            use_openai_image_sdk=enabled,
         )
     ]
     return connection, request
 
 
 @pytest.mark.parametrize("supplier,encoding", [("openai", "base64"), ("custom", "url")])
-def test_sdk_and_native_keep_exact_account_request_and_private_result(
+def test_sdk_keeps_exact_account_request_and_private_result(
     settings, tmp_path, monkeypatch, sdk_calls, supplier, encoding
 ):
     connection, request = route(settings, tmp_path, supplier=supplier)
@@ -105,48 +104,37 @@ def test_sdk_and_native_keep_exact_account_request_and_private_result(
         streams.append(stream)
         return httpx.Response(200, stream=stream, headers={"content-type": "application/json"})
 
-    receipts = []
-    for enabled in (True, False):
-        settings.service_model_policies = [
-            settings.service_model_policies[0].model_copy(update={"use_openai_image_sdk": enabled})
-        ]
-        provider = NativeMediaProvider(settings, connection, transport=httpx.MockTransport(handler))
-        receipt = provider.submit(request)
-        assert receipt.status == "SUCCEEDED" and receipt.result is not None
-        assert receipt.result.usage == {"images": 1, "input_tokens": 19, "output_tokens": 7}
-        assert provider.download(request, receipt.result.output_handles[0], len(data)).data == data
-        assert (
-            CANARY not in receipt.model_dump_json() and signed_url not in receipt.model_dump_json()
-        )
-        receipts.append(receipt)
+    provider = NativeMediaProvider(settings, connection, transport=httpx.MockTransport(handler))
+    receipt = provider.submit(request)
+    assert receipt.status == "SUCCEEDED" and receipt.result is not None
+    assert receipt.result.usage == {"images": 1, "input_tokens": 19, "output_tokens": 7}
+    assert provider.download(request, receipt.result.output_handles[0], len(data)).data == data
+    assert CANARY not in receipt.model_dump_json() and signed_url not in receipt.model_dump_json()
     assert sdk_calls == [0]
-    assert receipts[0] == receipts[1]
-    assert len(streams) == 2 and all(s.closed and s.read_bytes == len(raw) for s in streams)
-    assert [req.method for req in requests] == (
-        ["POST", "GET", "POST", "GET"] if encoding == "url" else ["POST", "POST"]
+    assert len(streams) == 1 and streams[0].closed and streams[0].read_bytes == len(raw)
+    assert [req.method for req in requests] == (["POST", "GET"] if encoding == "url" else ["POST"])
+    req = requests[0]
+    assert str(req.url) == base + "/images/generations"
+    assert req.headers["host"] == httpx.URL(base).host
+    assert req.headers["authorization"] == "Bearer " + CANARY
+    assert req.headers["accept-encoding"] == "identity"
+    assert not {"openai-organization", "openai-project", "cookie", "x-api-key"}.intersection(
+        req.headers
     )
-    for req in (item for item in requests if item.method == "POST"):
-        assert str(req.url) == base + "/images/generations"
-        assert req.headers["host"] == httpx.URL(base).host
-        assert req.headers["authorization"] == "Bearer " + CANARY
-        assert req.headers["accept-encoding"] == "identity"
-        assert not {"openai-organization", "openai-project", "cookie", "x-api-key"}.intersection(
-            req.headers
-        )
-        assert json.loads(req.content) == {
-            "model": "native-model",
-            "prompt": "synthetic prompt",
-            "size": "1024x1024",
-            "quality": "high",
-            "n": 1,
-            "output_format": format,
-        }
+    assert json.loads(req.content) == {
+        "model": "native-model",
+        "prompt": "synthetic prompt",
+        "size": "1024x1024",
+        "quality": "high",
+        "n": 1,
+        "output_format": format,
+    }
 
 
 @pytest.mark.parametrize(
     "mismatch",
     [
-        {"use_openai_image_sdk": False},
+        None,
         {"kind": "speech"},
         {"supplier": "openai"},
         {"model": "unverified-model"},
@@ -154,11 +142,13 @@ def test_sdk_and_native_keep_exact_account_request_and_private_result(
         {"protocol": "cogview"},
     ],
 )
-def test_sdk_requires_exact_enabled_frozen_route(settings, tmp_path, sdk_calls, mismatch):
+def test_sdk_transport_is_defined_by_protocol_not_quote_policy(
+    settings, tmp_path, sdk_calls, mismatch
+):
     connection, request = route(settings, tmp_path)
-    settings.service_model_policies = [
-        settings.service_model_policies[0].model_copy(update=mismatch)
-    ]
+    settings.service_model_policies = (
+        [settings.service_model_policies[0].model_copy(update=mismatch)] if mismatch else []
+    )
     calls = []
 
     def handler(req):
@@ -169,7 +159,7 @@ def test_sdk_requires_exact_enabled_frozen_route(settings, tmp_path, sdk_calls, 
     with pytest.raises(GatewayFailure) as caught:
         provider.submit(request)
     assert caught.value.code == "PROVIDER_QUOTA_EXHAUSTED" and caught.value.not_accepted
-    assert len(calls) == 1 and sdk_calls == []
+    assert len(calls) == 1 and sdk_calls == [0]
 
 
 @pytest.mark.parametrize(
@@ -199,24 +189,13 @@ def test_sdk_retains_native_error_and_usage_receipts(
         sent.append(req)
         return httpx.Response(status, json=payload, headers={"Retry-After": "0"})
 
-    failures = []
-    for enabled in (True, False):
-        settings.service_model_policies = [
-            settings.service_model_policies[0].model_copy(update={"use_openai_image_sdk": enabled})
-        ]
-        provider = NativeMediaProvider(settings, connection, transport=httpx.MockTransport(handler))
-        with pytest.raises(GatewayFailure) as caught:
-            provider.submit(request)
-        failure = caught.value
-        assert (failure.code, failure.not_accepted, failure.completed) == (
-            code,
-            rejected,
-            completed,
-        )
-        failures.append(failure.usage)
-    assert failures[0] == failures[1]
-    assert failures[0].input_tokens == (19 if completed else None)
-    assert len(sent) == 2 and sdk_calls == [0]
+    provider = NativeMediaProvider(settings, connection, transport=httpx.MockTransport(handler))
+    with pytest.raises(GatewayFailure) as caught:
+        provider.submit(request)
+    failure = caught.value
+    assert (failure.code, failure.not_accepted, failure.completed) == (code, rejected, completed)
+    assert failure.usage.input_tokens == (19 if completed else None)
+    assert len(sent) == 1 and sdk_calls == [0]
 
 
 def test_sdk_closes_and_limits_non_success_response_body(settings, tmp_path, sdk_calls):

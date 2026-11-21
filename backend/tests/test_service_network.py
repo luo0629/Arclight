@@ -16,7 +16,7 @@ from cryptography.x509.oid import NameOID
 from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayFailure
-from arclight.domain.model_suppliers import LEGACY_MODELS, SUPPLIERS
+from arclight.domain.model_suppliers import SUPPLIERS
 from arclight.providers import network
 from arclight.providers.llm import dispatch_inference
 from arclight.providers.text import OpenAICompatibleTextProvider
@@ -318,7 +318,7 @@ def test_official_request_contract_and_invalid_json_rejection(stub_llm, settings
         update={
             "llm_supplier": supplier.id,
             "llm_response_format": supplier.response_format,
-            "llm_model": LEGACY_MODELS.get(supplier.id, "selected-model-id"),
+            "llm_model": "selected-model-id",
             "llm_base_url": supplier.base_url,
         }
     )

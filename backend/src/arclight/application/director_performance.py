@@ -60,7 +60,7 @@ from arclight.domain.lip_sync import MAX_SYNC_LINES, MAX_SYNC_MS
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoopAction
 from arclight.persistence.models import Episode, WorkflowRun
-from arclight.providers.media_capabilities import resolve_capabilities
+from arclight.providers.media_capabilities import adapter_contract, resolve_capabilities
 
 
 @dataclass(frozen=True)
@@ -305,7 +305,8 @@ def check_performance_storyboard(
                 )
             )
             continue
-        if route.provider == "mock":
+        adapter = adapter_contract(route.provider)
+        if adapter is not None and adapter.simulation:
             issues.append(
                 DirectorIssue(
                     code="PERFORMANCE_MOCK_NOT_PRODUCTION",

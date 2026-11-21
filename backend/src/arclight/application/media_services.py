@@ -14,6 +14,12 @@ from arclight.domain.generation_requests import GenerationSpec
 from arclight.domain.service_models import matching_policy
 from arclight.domain.versions import digest
 from arclight.persistence.models import GenerationJob, GenerationServiceBinding, ModelService
+from arclight.providers.media_capabilities import (
+    credential_source,
+    parameter_ranges,
+    resolve_capabilities,
+    resolve_parameters,
+)
 from arclight.providers.native_media import MediaConnection
 from arclight.providers.native_media_protocols import KINDS, validate_spec
 from arclight.providers.network import validate_endpoint
@@ -87,15 +93,13 @@ def restore_selection(snapshot: dict) -> MediaSelection:
 
 
 def selection_for_job(db: Session, job: GenerationJob) -> MediaSelection | None:
-    if job.provider not in KINDS:
+    if credential_source(job.provider) != "ACCOUNT_SNAPSHOT":
         return None
     binding = db.scalar(
         select(GenerationServiceBinding).where(GenerationServiceBinding.job_id == job.id)
     )
     if binding is None:
-        if job.provider in KINDS:
-            raise DomainError("MEDIA_SERVICE_BINDING_MISSING", "媒体任务缺少原始账号凭证绑定", 409)
-        return None
+        raise DomainError("MEDIA_SERVICE_BINDING_MISSING", "媒体任务缺少原始账号凭证绑定", 409)
     if binding.configuration_digest != digest(binding.configuration_json):
         raise DomainError("MEDIA_SERVICE_CONFIG_CHANGED", "原始媒体凭证绑定不一致", 409)
     return MediaSelection(
@@ -109,7 +113,7 @@ def selection_for_job(db: Session, job: GenerationJob) -> MediaSelection | None:
 def select_for_spec(
     db: Session, actor: str, spec: GenerationSpec, task_type: str, frozen: dict | None = None
 ) -> MediaSelection | None:
-    if spec.provider not in KINDS:
+    if credential_source(spec.provider) != "ACCOUNT_SNAPSHOT":
         return None
     selection = restore_selection(frozen) if frozen else account_selection(db, actor, task_type)
     if selection is None:
@@ -187,12 +191,39 @@ def connection_for_job(
     )
 
 
-def public_configuration(db: Session, actor: str, task_type: str) -> dict:
-    selection = account_selection(db, actor, task_type)
-    if selection is not None:
-        from arclight.providers.media_capabilities import resolve_parameters
-        from arclight.providers.native_media_protocols import capabilities
+def server_configuration(db: Session, task_type: str) -> tuple[bool, dict] | None:
+    settings = db.info.get("settings")
+    if task_type == "IMAGE" and settings is not None:
+        return settings.image_service.enabled, settings.image_service.public_configuration()
+    return None
 
+
+def frozen_provider_configuration(
+    db: Session, spec: GenerationSpec, task_type: str, selection: MediaSelection | None
+) -> dict | None:
+    if selection is not None:
+        return selection.configuration
+    if credential_source(spec.provider) == "SERVER":
+        server = server_configuration(db, task_type)
+        if server is not None:
+            return server[1]
+    return None
+
+
+def capability_details(configuration: dict) -> dict:
+    provider, model = configuration["provider"], configuration["model"]
+    return {
+        "supported_parameters": sorted(resolve_parameters(provider, model)),
+        "parameter_ranges": parameter_ranges(provider, model),
+        "capabilities": resolve_capabilities(provider, model).model_dump(mode="json"),
+    }
+
+
+def public_configuration(
+    db: Session, actor: str, task_type: str, *, server_only: bool = False
+) -> dict:
+    selection = None if server_only else account_selection(db, actor, task_type)
+    if selection is not None:
         configuration = selection.configuration
         priced = configuration["maximum_cost_per_output"] is not None and bool(
             configuration["pricing_version"]
@@ -201,23 +232,20 @@ def public_configuration(db: Session, actor: str, task_type: str) -> dict:
             **configuration,
             "configured": True,
             "enabled": priced,
-            "supported_parameters": sorted(
-                resolve_parameters(configuration["provider"], configuration["model"])
-            ),
             "credential_source": "ACCOUNT_SNAPSHOT",
-            "capabilities": capabilities(
-                configuration["provider"], configuration["model"]
-            ).model_dump(mode="json"),
+            **capability_details(configuration),
             "message": "已配置"
             if priced
             else "账号配置已保存；生成前需要部署侧登记该精确模型的可信报价",
         }
-    settings = db.info.get("settings")
-    if task_type == "IMAGE" and settings is not None:
+    server = server_configuration(db, task_type)
+    if server is not None:
+        enabled, configuration = server
         return {
-            "provider": "openai",
-            "enabled": settings.image_service.enabled,
+            **configuration,
+            "configured": enabled,
+            "enabled": enabled,
             "credential_source": "SERVER",
-            **settings.image_service.public_configuration(),
+            **capability_details(configuration),
         }
     return {"configured": False, "enabled": False, "message": "请先配置该类型的账号服务"}

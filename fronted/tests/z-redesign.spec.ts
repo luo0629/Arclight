@@ -388,19 +388,17 @@ test("新版：配置保存失败保留输入，读取失败可重试，手机39
     page.getByRole("button", { name: "展开目录", exact: true }),
   ).toBeVisible();
   await noOverflow(page);
-  await page.route(
-    "**/api/v1/me/model-services?catalog_version=2",
-    async (route) =>
-      route.fulfill({
-        status: 503,
-        contentType: "application/json",
-        body: JSON.stringify({ error: { message: "配置读取暂时失败" } }),
-      }),
+  await page.route("**/api/v1/me/model-services", async (route) =>
+    route.fulfill({
+      status: 503,
+      contentType: "application/json",
+      body: JSON.stringify({ error: { message: "配置读取暂时失败" } }),
+    }),
   );
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("alert")).toContainText("配置读取暂时失败");
-  await page.unroute("**/api/v1/me/model-services?catalog_version=2");
+  await page.unroute("**/api/v1/me/model-services");
   await dialog.getByRole("button", { name: "重试读取配置" }).click();
   await dialog.getByRole("radio", { name: "视频模型" }).click();
   await dialog

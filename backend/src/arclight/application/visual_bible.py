@@ -8,9 +8,16 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from arclight.application.audit import audit
 from arclight.core.errors import DomainError
-from arclight.domain.visual_bible import FIELD_NAMES, VisualFields
-from arclight.persistence.models import Project, VisualBibleVersion
+from arclight.domain.visual_bible import FIELD_NAMES, VisualFields, VisualPatch
+from arclight.persistence.models import AuditEvent, Project, VisualBibleVersion
+
+_ORIGINAL_FIELDS_CLEARED = "visual_bible.original_fields_cleared"
+
+
+def _prompt_key(field: str) -> str:
+    return "description" if field == "art_style" else field
 
 
 def latest(db: Session, project_id: UUID) -> VisualBibleVersion | None:
@@ -86,11 +93,25 @@ def append_version(
         raise DomainError("VERSION_CONFLICT", "视觉规范已变化，请保留草稿并重新载入", 409)
     fields = current["fields"]
     locked = current["locked_fields"]
+    original_clears: set[str] = set()
     if patch is not None:
+        # A default blank and an explicit clear can have the same typed value.
+        blank_fields = {
+            name
+            for name, value in patch.items()
+            if value == ""
+            and fields.get(name) == ""
+            and project.style_guide.get(_prompt_key(name), "") != ""
+        }
+        if blank_fields:
+            style = prompt_style(db, project, current)
+            original_clears = {name for name in blank_fields if style[_prompt_key(name)] != ""}
         # Only the transactional art approval handler supplies the exact fields
         # acknowledged by the current Owner. Ordinary edit APIs never set this.
         if any(
-            name in locked and name not in confirmed_locked_fields and fields[name] != value
+            name in locked
+            and name not in confirmed_locked_fields
+            and (fields[name] != value or name in original_clears)
             for name, value in patch.items()
         ):
             raise DomainError("VISUAL_FIELD_LOCKED", "请由Owner先解锁对应视觉规范字段", 409)
@@ -102,7 +123,7 @@ def append_version(
             ) from error
     else:
         locked = sorted(locks or [])
-    if fields == current["fields"] and locked == current["locked_fields"]:
+    if fields == current["fields"] and locked == current["locked_fields"] and not original_clears:
         raise DomainError("NO_VISUAL_CHANGE", "视觉规范没有变化", 422)
     row = VisualBibleVersion(
         project_id=project.id,
@@ -116,13 +137,80 @@ def append_version(
         request_fingerprint=fingerprint,
     )
     db.add(row)
-    # Compatibility view for text providers. Unknown legacy keys survive unchanged.
-    style = dict(project.style_guide)
-    for name, value in (patch or {}).items():
-        style["description" if name == "art_style" else name] = value
-    project.style_guide = style
     db.flush()
+    if original_clears:
+        # Keep the otherwise indistinguishable clear tied to this exact revision.
+        audit(
+            db,
+            project.id,
+            actor,
+            _ORIGINAL_FIELDS_CLEARED,
+            row.id,
+            {"fields": sorted(original_clears)},
+        )
     return row, True
+
+
+def save_fields(
+    db: Session,
+    project: Project,
+    actor: str,
+    expected: int,
+    key: UUID,
+    fields: VisualPatch,
+) -> VisualBibleVersion:
+    row, created = append_version(
+        db, project, actor, expected, key, patch=fields.model_dump(exclude_unset=True)
+    )
+    if created:
+        audit(db, project.id, actor, "visual_bible.saved", row.id, {"version_no": row.version_no})
+    return row
+
+
+def prompt_style(db: Session, project: Project, visual: dict) -> dict:
+    """Project typed visual edits into prompt data without rewriting the original settings."""
+    style = dict(project.style_guide)
+    potentially_cleared = []
+    for field, value in visual["fields"].items():
+        key = _prompt_key(field)
+        original = style.get(key)
+        # The original text description is the only field represented in the initial typed view.
+        if value or (field == "art_style" and isinstance(original, str) and len(original) <= 10000):
+            style[key] = value
+        elif key in style and original != "":
+            potentially_cleared.append((field, key))
+    if potentially_cleared and visual["version_no"] > 0:
+        # A default blank must not shadow an unedited original value; a real clear must.
+        history = (
+            VisualBibleVersion.project_id == project.id,
+            VisualBibleVersion.version_no <= visual["version_no"],
+        )
+        previously_set = db.execute(
+            select(
+                *(
+                    select(VisualBibleVersion.id)
+                    .where(*history, getattr(VisualBibleVersion, field) != "")
+                    .exists()
+                    for field, _ in potentially_cleared
+                )
+            )
+        ).one()
+        first_clears: set[str] = set()
+        if not all(previously_set):
+            events = db.scalars(
+                select(AuditEvent.details_json)
+                .join(VisualBibleVersion, VisualBibleVersion.id == AuditEvent.resource_id)
+                .where(
+                    *history,
+                    AuditEvent.project_id == project.id,
+                    AuditEvent.action == _ORIGINAL_FIELDS_CLEARED,
+                )
+            )
+            first_clears = {field for event in events for field in event["fields"]}
+        for (field, key), was_set in zip(potentially_cleared, previously_set, strict=True):
+            if was_set or field in first_clears:
+                style[key] = ""
+    return style
 
 
 def snapshot(db: Session, project: Project) -> dict:

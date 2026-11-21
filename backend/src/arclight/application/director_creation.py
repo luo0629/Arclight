@@ -25,11 +25,9 @@ from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.agent_tools import AgentToolGrantRequest
 from arclight.domain.director_collaboration import OBSERVE_OPINION, REQUEST_OPINION
 from arclight.domain.director_creation import (
-    COLLABORATIVE_DIRECTOR_VERSIONS,
     DIRECTOR_VERSION,
     FRAGMENT_PROMPT,
     FRAGMENT_VERSION,
-    ITERATIVE_DIRECTOR_VERSIONS,
     DirectorFragment,
     DirectorFragmentSeed,
 )
@@ -41,11 +39,13 @@ from arclight.persistence.models import Episode, WorkflowRun
 
 def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Settings) -> None:
     from arclight.application.director_revision import _registry
-    from arclight.domain.director_performance import is_performance_director
+
+    options = run.input_json["director"]
+    collaboration = options.get("art_collaboration") is True
 
     catalog = (
         _registry(settings, workflow_version=run.workflow_version)
-        if is_performance_director(run.workflow_version)
+        if options.get("performance") is True
         else build_agent_tool_registry(settings=settings)
     )
     grant_agent_tools(
@@ -54,17 +54,13 @@ def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Sett
             run_id=run.id,
             agent_name="director",
             allowed_tools=[RESEARCH_TOOL]
-            + ([CHECK_TOOL] if run.workflow_version in ITERATIVE_DIRECTOR_VERSIONS else [])
-            + (
-                [REQUEST_OPINION, OBSERVE_OPINION]
-                if run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS
-                else []
-            ),
+            + ([CHECK_TOOL] if options.get("revision_rounds") is not None else [])
+            + ([REQUEST_OPINION, OBSERVE_OPINION] if collaboration else []),
         ),
         actor,
         catalog,
     )
-    if run.workflow_version in COLLABORATIVE_DIRECTOR_VERSIONS:
+    if collaboration:
         grant_agent_tools(
             db,
             AgentToolGrantRequest(

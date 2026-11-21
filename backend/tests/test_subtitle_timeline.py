@@ -203,7 +203,7 @@ def test_preproduction_schema1_subtitle_clips_remain_consumable_in_the_existing_
     client, audio_case
 ):
     timeline, _, _ = audio_case
-    assert timeline["snapshot"]["schema_version"] == 1
+    assert timeline["snapshot"]["schema_version"] == 2
     result = save_timeline(client, timeline, deepcopy(timeline["snapshot"]))
     assert next(
         track["clips"] for track in result["snapshot"]["tracks"] if track["kind"] == "SUBTITLE"
