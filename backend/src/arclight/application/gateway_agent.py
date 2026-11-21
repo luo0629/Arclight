@@ -1,6 +1,8 @@
 """Prepare one authorized Agent turn and account for it through the shared gateway."""
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from typing import cast
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -27,6 +29,7 @@ from arclight.domain.agent_model import (
 )
 from arclight.domain.model_gateway import (
     GatewayCapabilities,
+    GatewayFailure,
     GatewayRequest,
     GatewayRoute,
     GatewayUsage,
@@ -38,6 +41,15 @@ from arclight.providers.agent_model import agent_transport, check_capabilities
 from arclight.providers.llm import dispatch_inference
 
 
+@dataclass(frozen=True, slots=True)
+class AgentOutputProjection[T: BaseModel]:
+    """Map a typed provider decision onto the unchanged durable result contract."""
+
+    schema_version: str
+    wire_model: type[BaseModel]
+    materialize: Callable[[AgentModelRequest, BaseModel], T]
+
+
 def invoke_agent[T: BaseModel](
     factory: sessionmaker[Session],
     settings: Settings,
@@ -46,11 +58,24 @@ def invoke_agent[T: BaseModel](
     result_model: type[T],
     *,
     execution: AgentExecutionContext | None = None,
+    output_projection: AgentOutputProjection[T] | None = None,
     on_admit: Callable[[Session, UUID], None] | None = None,
     on_result: Callable[[Session, UUID, AgentModelResponse[T]], None] | None = None,
 ) -> AgentModelResponse[T]:
     """Return tool selections or a validated final result without executing either."""
     request = AgentModelRequest.model_validate(request.model_dump(mode="json"))
+    wire_model = result_model if output_projection is None else output_projection.wire_model
+    if (
+        output_projection is not None
+        and request.result_schema_version != output_projection.schema_version
+    ):
+        # An already frozen request may not dispatch under a different wire contract.
+        # Committed model actions still replay their unchanged canonical result.
+        raise DomainError("AGENT_LOOP_CONFLICT", "恢复不能更换冻结的模型输出合同", 409)
+    wire_schema = wire_model.model_json_schema()
+    response_model = cast(
+        type[AgentModelResponse[T]], AgentModelResponse.__class_getitem__(result_model)
+    )
     if execution is not None and (
         execution.run_id != request.run_id
         or execution.agent_name != request.agent_name
@@ -151,7 +176,7 @@ def invoke_agent[T: BaseModel](
                 {
                     "request": request.model_dump(mode="json"),
                     "tools": [tool.model_dump(mode="json") for tool in tools],
-                    "result_schema": result_model.model_json_schema(),
+                    "result_schema": wire_schema,
                     "trace": trace,
                 }
             ),
@@ -161,7 +186,7 @@ def invoke_agent[T: BaseModel](
                 "agent_version": request.agent_version,
                 "prompt_version": request.prompt_version,
                 "result_schema_version": request.result_schema_version,
-                "result_schema_sha256": digest(result_model.model_json_schema()),
+                "result_schema_sha256": digest(wire_schema),
             },
             authorized_routes=frozenset({route_id(route)}),
             execution=execution,
@@ -183,13 +208,33 @@ def invoke_agent[T: BaseModel](
         if on_result is not None:
             on_result(db, call_id, result[0])
 
+    def complete() -> tuple[AgentModelResponse[T], GatewayUsage]:
+        if output_projection is None:
+            return dispatch_inference(
+                settings, identity, lambda: provider.complete(request, tools, result_model, images)
+            )
+        response, usage = dispatch_inference(
+            settings, identity, lambda: provider.complete(request, tools, wire_model, images)
+        )
+        try:
+            final = (
+                output_projection.materialize(request, response.final)
+                if response.final is not None
+                else None
+            )
+            return response_model.model_validate(
+                response.model_dump(mode="json", exclude={"final"})
+                | {"final": final.model_dump(mode="json") if final is not None else None}
+            ), usage
+        except (ValueError, KeyError, TypeError) as exc:
+            # It is a completed, potentially billable response, not safe to resend.
+            raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=usage) from exc
+
     result, _usage = invoke(
         factory,
         call,
         route,
-        lambda: dispatch_inference(
-            settings, identity, lambda: provider.complete(request, tools, result_model, images)
-        ),
+        complete,
         policy=policy.model_copy(
             update={"timeout_seconds": min(policy.timeout_seconds, settings.llm_timeout_seconds)}
         ),

@@ -25,7 +25,7 @@ from arclight.application.agent_tools import (
     available_agent_tools,
     execute_agent_tool,
 )
-from arclight.application.gateway_agent import invoke_agent
+from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.generation_leases import DEFAULT_POLICY, LeasePolicy
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -154,6 +154,7 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
             self.registry,
             self.decision_model,
             execution=self._execution(turn),
+            output_projection=self.output_projection,
             on_admit=lambda db, call_id: self.store.bind_model(db, action_id, call_id),
             on_result=lambda db, call_id, result: self.store.save_model(
                 db, action_id, call_id, result.model_dump(mode="json")
@@ -295,6 +296,7 @@ def _execute[T: BaseModel](
         runtime.registry,
         runtime.result_model,
         runtime.validate_result,
+        runtime.output_projection,
     )
     persistent.store = store = AgentLoopStore(runtime.factory, loop_id, token)
     persistent.input_sha256 = input_sha256
@@ -383,13 +385,16 @@ def run_persistent_agent_loop[T: BaseModel](
     limits: AgentRunLimits | None = None,
     parent_run_id: UUID | None = None,
     validate_result: Callable[[Session, T], None] | None = None,
+    output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
     lease_policy: LeasePolicy = DEFAULT_POLICY,
 ) -> AgentLoopResult[T]:
     """Start/reenter one stable server operation. No asset is published or approved."""
     request = AgentModelRequest.model_validate(request.model_dump(mode="json"))
     if any(not isinstance(item, AgentUserMessage) for item in request.messages):
         raise DomainError("AGENT_HISTORY_INVALID", "新循环不能注入模型或工具历史", 422)
-    runtime = _AgentRuntime(factory, settings, request, registry, result_model, validate_result)
+    runtime = _AgentRuntime(
+        factory, settings, request, registry, result_model, validate_result, output_projection
+    )
     runtime.prepare(limits, parent_run_id)
     with factory.begin() as db:
         run, project_id, actor = runtime._context(db)
@@ -435,6 +440,7 @@ def resume_agent_loop[T: BaseModel](
     *,
     decision: AgentHumanDecision | None = None,
     validate_result: Callable[[Session, T], None] | None = None,
+    output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
     lease_policy: LeasePolicy = DEFAULT_POLICY,
 ) -> AgentLoopResult[T]:
     """Resume stored state only, after reauthorizing both initiator and current actor."""
@@ -445,6 +451,8 @@ def resume_agent_loop[T: BaseModel](
         seed = AgentModelRequest.model_validate(loop.seed_json)
         if decision is not None:
             submit_agent_decision(db, loop.id, actor, decision)
-    runtime = _AgentRuntime(factory, settings, seed, registry, result_model, validate_result)
+    runtime = _AgentRuntime(
+        factory, settings, seed, registry, result_model, validate_result, output_projection
+    )
     runtime.prepare(None, None)
     return _execute(runtime, loop_id, actor=actor, lease_policy=lease_policy)

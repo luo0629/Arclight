@@ -5,7 +5,7 @@ from copy import deepcopy
 from uuid import UUID, uuid4
 
 import pytest
-from continuity_reviewer_support import install_reviewer_model
+from continuity_reviewer_support import install_reviewer_model, saved_review
 from sqlalchemy import select, text
 from test_agent_model import model_service as model_service
 from test_asset_selection import choose, current
@@ -61,13 +61,16 @@ def test_postgres_selection_locks_run_before_project_and_finishes_once(
 
 
 def ready_candidate(client, episode, settings, case, model_service):
-    _, errors, deliveries = install_reviewer_model(model_service, dynamic=False)
+    _, errors, completions = install_reviewer_model(model_service, dynamic=False)
     job, _ = make_job(client, episode, case)
     candidate = candidates(client, episode["project_id"], job)[0]
     assert queue_pending_reviews(client.app.state.session_factory, settings) == 1
     work = work_for(client, episode["project_id"], candidate)
     identity = run_work(client, settings, work)
-    assert not errors and deliveries[0]["conclusion"] == "PASS"
+    assert not errors and len(completions) == 1, errors
+    pending = work_for(client, episode["project_id"], candidate)["pending_review"]
+    review = saved_review(client, episode["project_id"], pending["review_id"], actor=case["actor"])
+    assert review.conclusion == "PASS" and str(review.target.candidate_id) == candidate["id"]
     return (
         candidate,
         identity,

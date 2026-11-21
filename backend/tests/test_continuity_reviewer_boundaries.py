@@ -12,8 +12,9 @@ from test_continuity_reviewer import reviewer_case as reviewer_case
 from test_continuity_reviewer import run_review
 from test_continuity_rules import rules_storage as rules_storage
 
-from arclight.application.continuity_reviewer import resume_reviewer
+from arclight.application.continuity_reviewer import resume_reviewer, validate_reviewer_result
 from arclight.core.errors import DomainError
+from arclight.domain.continuity_reviews import ContinuityReview
 from arclight.persistence.models import AgentToolGrant, AssetVersion, WorkflowRun
 
 
@@ -38,12 +39,18 @@ def test_valid_but_unobserved_reference_cannot_be_used_in_the_final_review(
                 }
             )
 
-    _, errors, _ = install_reviewer_model(model_service, dynamic=False, mutate_final=add_unobserved)
+    _, errors, _ = install_reviewer_model(model_service, dynamic=False)
     result = run_review(client, settings, reviewer_case)
     assert not errors, errors
-    assert result.status == "STOPPED" and result.stop_code == "REVIEW_REFERENCE_UNOBSERVED", (
-        result.model_dump_json()
-    )
+    assert result.status == "COMPLETED", result.model_dump_json()
+    value = result.result.model_dump(mode="json")
+    add_unobserved(value)
+    with client.app.state.session_factory() as db:
+        with pytest.raises(DomainError) as rejected:
+            validate_reviewer_result(
+                db, settings, result.run_id, ContinuityReview.model_validate(value)
+            )
+        assert rejected.value.code == "REVIEW_REFERENCE_UNOBSERVED"
 
 
 def test_other_invocation_evidence_cannot_replace_this_loops_investigation(
@@ -52,14 +59,16 @@ def test_other_invocation_evidence_cannot_replace_this_loops_investigation(
     model_service,
     reviewer_case,
 ):
-    _, errors, _ = install_reviewer_model(
+    sent, errors, completions = install_reviewer_model(
         model_service, dynamic=False, steal_manifest=reviewer_case["evidence"]["manifest_id"]
     )
     result = run_review(client, settings, reviewer_case)
     assert not errors, errors
-    assert result.status == "STOPPED" and result.stop_code == "REVIEW_EVIDENCE_REQUIRED", (
+    assert result.status == "STOPPED" and result.stop_code == "GATEWAY_INVALID_RESPONSE", (
         result.model_dump_json()
     )
+    assert result.result is None and len(sent) == 5
+    assert completions == [{"evidence_manifest_id": reviewer_case["evidence"]["manifest_id"]}]
 
 
 def test_revoked_tool_grant_blocks_resume_before_more_model_calls(

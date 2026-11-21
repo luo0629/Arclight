@@ -51,6 +51,7 @@ from arclight.application.production_events import enqueue_source
 from arclight.core.errors import DomainError
 from arclight.domain.agent_tools import AgentToolCall, AgentToolGrantRequest
 from arclight.domain.producer_observation import ProducerObservationRequest
+from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision
 from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
 from arclight.persistence.models import (
@@ -937,11 +938,12 @@ def test_reviewer_observation_reads_exact_saved_result_and_preserves_approval_ga
         tasks=tasks,
     )
     delegated = dispatched(client, settings, delegation_call(root, reference, task_key="check"))
-    _, errors, deliveries = install_reviewer_model(model_service, dynamic=False)
+    _, errors, completions = install_reviewer_model(model_service, dynamic=False)
     child = run_once(client, settings, UUID(delegated["child_run_id"]))
     assert child["status"] == "WAITING_REVIEW", (child, errors)
     observed = observe(client, settings, root, actor, reference)
-    assert deliveries and observed.tasks[0].output_version_ids
+    assert not errors and len(completions) == 1, errors
+    assert observed.tasks[0].output_version_ids == [UUID(child["pending_review"]["review_id"])]
     assert not observed.tasks[0].replaceable
     assert observed.tasks[0].input_error_code is None
 
@@ -993,15 +995,16 @@ def test_reviewer_observation_after_real_revision_feedback_uses_latest_delivery(
     assert response.status_code == 201, response.text
     revision = response.json()
     candidate = finish_revision(client, episode, case, revision)
-    sent, _, reviewed_calls, errors, deliveries = install_feedback_model(
+    sent, _, reviewed_calls, errors, completions = install_feedback_model(
         model_service, ["INVESTIGATE", "READY_FOR_REVIEW"]
     )
     assert queue_pending_reviews(client.app.state.session_factory, settings) == 1
     child = run_once(client, settings, child_id)
     assert child["status"] == "WAITING_REVIEW", (child, errors)
     assert child["pending_review"]["destination"] == "READY_FOR_REVIEW", child
-    assert not errors and len(sent) == len(deliveries) == 2 and reviewed_calls
-    final_review_id = UUID(deliveries[-1]["result_id"])
+    assert not errors and len(sent) == len(completions) == 2 and reviewed_calls
+    feedback = child["pending_review"]["record"]
+    final_review_id = UUID(feedback["review_id"])
     before = len(reviewed_calls)
     observed = observe(client, settings, root, actor, reference)
     assert observed.tasks[0].output_version_ids == [final_review_id]
@@ -1011,6 +1014,9 @@ def test_reviewer_observation_after_real_revision_feedback_uses_latest_delivery(
     assert len(reviewed_calls) == before
     with client.app.state.session_factory() as db:
         validate_observation_current(db, settings, db.get(WorkflowRun, root), observed, actor)
+        record = require_review_record(db, UUID(episode["project_id"]), final_review_id, actor)
+        assert digest(record.model_dump(mode="json")) == feedback["review_sha256"]
+        assert record.review.target.candidate_id == UUID(candidate["id"])
         assert db.get(AssetVersion, UUID(candidate["asset_version_id"])).status == "DRAFT"
         loops = list(db.scalars(select(AgentLoop).where(AgentLoop.run_id == child_id)))
         assert (

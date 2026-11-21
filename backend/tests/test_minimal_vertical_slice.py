@@ -14,7 +14,7 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 import av
-from continuity_reviewer_support import install_reviewer_model
+from continuity_reviewer_support import install_reviewer_model, saved_review
 from fastapi.testclient import TestClient
 from render_job_helpers import read as read_render
 from render_report_helpers import accept_warnings, completed_report, report_bytes, report_read
@@ -180,18 +180,19 @@ def test_short_story_review_revision_human_selection_default_timeline_and_real_m
                     "detail": "Offline low-confidence costume comparison.",
                 }
             }
-        _, errors, deliveries = install_reviewer_model(model_service, dynamic=False, **options)
+        _, errors, completions = install_reviewer_model(model_service, dynamic=False, **options)
         run_id = run_work(client, settings, work)
         assert not errors, errors
         with factory() as db:
             diagnostic = db.get(WorkflowRun, run_id)
-            assert len(deliveries) == 1, (
+            assert len(completions) == 1, (
                 diagnostic.status,
                 diagnostic.error_code,
                 diagnostic.pending_review,
             )
         progress = work_for(client, project_id, candidate)
-        records.append(deepcopy(deliveries[0]))
+        report = saved_review(client, project_id, progress["pending_review"]["review_id"])
+        records.append(report.model_dump(mode="json"))
         if index == 4:
             original_checksum = version["checksum"]
             assert progress["pending_review"]["destination"] == "REVISION_REQUIRED", progress
@@ -200,7 +201,7 @@ def test_short_story_review_revision_human_selection_default_timeline_and_real_m
                 limits = (deepcopy(control.limits_json), control.deadline_at, control.root_run_id)
             command = {
                 "review_id": progress["pending_review"]["review_id"],
-                "issue_ids": [deliveries[0]["issues"][0]["issue_id"]],
+                "issue_ids": [str(report.issues[0].issue_id)],
                 "action": "REGENERATE",
                 "amendments": [],
             }
@@ -236,14 +237,17 @@ def test_short_story_review_revision_human_selection_default_timeline_and_real_m
             assert queue_pending_reviews(factory, settings) == 1
             work = work_for(client, project_id, candidate)
             assert work["work"]["run_id"] == str(run_id)
-            _, _, _, errors, deliveries = install_feedback_model(
+            _, _, _, errors, completions = install_feedback_model(
                 model_service, ["READY_FOR_REVIEW"]
             )
             run_work(client, settings, work)
-            assert not errors, errors
-            assert deliveries[0]["conclusion"] == "PASS"
-            records.extend(deepcopy(deliveries))
+            assert not errors and len(completions) == 1, errors
             progress = work_for(client, project_id, candidate)
+            feedback = progress["pending_review"]["record"]
+            report = saved_review(client, project_id, feedback["review_id"])
+            assert report.conclusion == "PASS"
+            assert report.target.candidate_id == UUID(candidate["id"])
+            records.append(report.model_dump(mode="json"))
             with factory() as db:
                 control = db.get(AgentRunLimit, run_id)
                 assert (control.limits_json, control.deadline_at, control.root_run_id) == limits

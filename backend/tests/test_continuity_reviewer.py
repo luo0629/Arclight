@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+from dataclasses import replace
 from types import SimpleNamespace
 from uuid import UUID, uuid4
 
@@ -18,12 +19,18 @@ from test_continuity_rules import rules_storage as rules_storage
 from arclight.application import agent_loop_recovery as recovery
 from arclight.application import continuity_reviewer
 from arclight.application.agent_limits import configure_agent_run
-from arclight.application.continuity_reviewer import resume_reviewer, review_candidate
+from arclight.application.continuity_reviewer import (
+    resume_reviewer,
+    review_candidate,
+    validate_reviewer_result,
+)
+from arclight.application.gateway_accounting import latest_receipt
+from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
-from arclight.domain.continuity_reviews import ReviewTarget
+from arclight.domain.continuity_reviews import ContinuityReview, ReviewTarget
 from arclight.domain.continuity_selection import ADMISSION_RESOURCE
 from arclight.persistence.agent_limits import AgentRunLimit
-from arclight.persistence.agent_loops import AgentLoop
+from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import AgentToolGrant, AssetVersion, VersionBinding
 
 
@@ -142,7 +149,17 @@ def test_actual_differences_keep_risk_exact_evidence_and_bounded_suggestions(
     assert not errors, errors
     assert outcome.status == "COMPLETED", outcome.model_dump_json()
     assert outcome.result.conclusion == expected and outcome.result.risk == risk
-    assert outcome.result.issues[0].evidence_ids
+    issue = outcome.result.issues[0]
+    assert issue.suggested_action == ("REVISE_PROMPT" if risk == "MEDIUM" else "HUMAN_REVIEW")
+    assert issue.risk == risk
+    references = {ref.reference_id: ref for ref in outcome.result.references}
+    located = [item for item in outcome.result.evidence if item.evidence_id in issue.evidence_ids]
+    assert any(references[item.reference_id].asset_type == "SCRIPT" for item in located)
+    for item in located:
+        assert item.basis == "Fixed image and exact frozen context comparison."
+        ref = references[item.reference_id]
+        if ref.role == "CANDIDATE":
+            assert item.region.model_dump() == {"x": 0.25, "y": 0.25, "width": 0.5, "height": 0.5}
     assert len(sent) == 5
 
 
@@ -204,10 +221,57 @@ def test_occluded_prop_comparisons_preserve_unknowns_without_missing_item_issues
 
 
 @pytest.mark.parametrize(
+    "mode", ["bypass", "malformed", "foreign", "stale", "full_report", "unread"]
+)
+def test_review_completion_cannot_bypass_exact_same_loop_image_comparison(
+    client, settings, model_service, reviewer_case, mode
+):
+    def tamper(completion, research):
+        if mode == "malformed":
+            completion["evidence_manifest_id"] = "ev-candidate"
+        elif mode == "foreign":
+            completion["evidence_manifest_id"] = reviewer_case["evidence"]["manifest_id"]
+        elif mode == "stale":
+            assert research[0]["manifest_id"] != completion["evidence_manifest_id"]
+            completion["evidence_manifest_id"] = research[0]["manifest_id"]
+        elif mode == "full_report":
+            completion["risk"] = "HIGH"  # A model cannot supply any report fields.
+
+    sent, errors, _ = install_reviewer_model(
+        model_service,
+        dynamic=False,
+        no_images=mode == "unread",
+        bypass=mode == "bypass",
+        mutate_completion=tamper,
+    )
+    outcome = run_review(client, settings, reviewer_case)
+    assert not errors, errors
+    code = "REVIEW_IMAGE_NOT_OBSERVED" if mode == "unread" else "GATEWAY_INVALID_RESPONSE"
+    assert outcome.status == "STOPPED" and outcome.stop_code == code, outcome.model_dump_json()
+    assert outcome.result is None and len(sent) == (4 if mode == "bypass" else 5)
+    assert run_review(client, settings, reviewer_case) == outcome
+    assert len(sent) == (4 if mode == "bypass" else 5)
+    with client.app.state.session_factory() as db:
+        action = db.scalar(
+            select(AgentLoopAction)
+            .where(AgentLoopAction.loop_id == outcome.loop_id, AgentLoopAction.kind == "MODEL")
+            .order_by(AgentLoopAction.created_at.desc(), AgentLoopAction.id.desc())
+        )
+        receipt = latest_receipt(db, action.gateway_call_id)
+        assert receipt and receipt.usage_json["input_tokens"] == 11
+        if mode != "unread":
+            assert action.result_json is None and receipt.error_code == "INVALID_RESPONSE"
+        assert (
+            db.scalar(
+                select(VersionBinding).where(VersionBinding.resource_type == ADMISSION_RESOURCE)
+            )
+            is None
+        )
+
+
+@pytest.mark.parametrize(
     "mode,code",
     [
-        ("unread", "REVIEW_IMAGE_NOT_OBSERVED"),
-        ("bypass", "REVIEW_COMPARISON_REQUIRED"),
         ("invented", "INVALID_ASSET_REFERENCE"),
         ("wrong_version", "REVIEW_SCOPE_INVALID"),
         ("omit_difference", "REVIEW_CONCLUSION_INVALID"),
@@ -218,7 +282,7 @@ def test_occluded_prop_comparisons_preserve_unknowns_without_missing_item_issues
         ("adjacent_envelope_hash", "REVIEW_REFERENCE_CHANGED"),
     ],
 )
-def test_unobserved_forged_or_suppressed_deliveries_stop_without_admission(
+def test_delivery_validator_rejects_forged_or_suppressed_canonical_reports(
     client,
     settings,
     model_service,
@@ -280,16 +344,19 @@ def test_unobserved_forged_or_suppressed_deliveries_stop_without_admission(
     _, errors, _ = install_reviewer_model(
         model_service,
         dynamic=False,
-        no_images=mode == "unread",
-        bypass=mode == "bypass",
-        mutate_final=tamper,
         difference=difference,
         uncertainty=uncertainty,
     )
     outcome = run_review(client, settings, reviewer_case)
     assert not errors, errors
-    assert outcome.status == "STOPPED" and outcome.stop_code == code, outcome.model_dump_json()
+    assert outcome.status == "COMPLETED", outcome.model_dump_json()
+    value = outcome.result.model_dump(mode="json")
+    tamper(value)
+    changed = ContinuityReview.model_validate(value)
     with client.app.state.session_factory() as db:
+        with pytest.raises(DomainError) as rejected:
+            validate_reviewer_result(db, settings, outcome.run_id, changed)
+        assert rejected.value.code == code
         assert (
             db.scalar(
                 select(func.count())
@@ -298,6 +365,49 @@ def test_unobserved_forged_or_suppressed_deliveries_stop_without_admission(
             )
             == 0
         )
+
+
+@pytest.mark.parametrize("paused", [True, False])
+def test_frozen_wire_change_never_dispatches_again_or_rewrites_committed_evidence(
+    client, settings, model_service, reviewer_case, monkeypatch, paused
+):
+    sent, errors, _ = install_reviewer_model(model_service, dynamic=False, human=paused)
+    original = run_review(client, settings, reviewer_case)
+    assert not errors, errors
+    assert original.status == ("HUMAN_REVIEW" if paused else "COMPLETED")
+    factory = client.app.state.session_factory
+
+    def frozen():
+        with factory() as db:
+            loop = db.get(AgentLoop, original.loop_id)
+            receipts = {
+                a.id: (a.request_json, a.result_json, a.gateway_call_id)
+                for a in db.scalars(
+                    select(AgentLoopAction).where(AgentLoopAction.loop_id == loop.id)
+                )
+                if a.result_json is not None
+            }
+            return loop.seed_json, receipts
+
+    count = len(sent)
+    before = frozen()
+    monkeypatch.setattr(
+        continuity_reviewer,
+        "REVIEW_OUTPUT",
+        replace(continuity_reviewer.REVIEW_OUTPUT, schema_version="different-wire"),
+    )
+    resumed = resume_reviewer(
+        factory,
+        settings,
+        original.loop_id,
+        reviewer_case["actor"],
+        decision=answer(original) if paused else None,
+    )
+    if paused:
+        assert resumed.status == "STOPPED" and resumed.stop_code == "AGENT_LOOP_CONFLICT"
+    else:
+        assert resumed == original
+    assert len(sent) == count and not errors and frozen() == before
 
 
 def test_human_pause_and_duplicate_resume_keep_original_limits_and_thread(

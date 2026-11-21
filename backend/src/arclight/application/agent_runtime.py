@@ -14,7 +14,7 @@ from arclight.application.agent_memory import project_agent_memory
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolRegistry, execute_agent_tool
 from arclight.application.context_evidence import read_trace
-from arclight.application.gateway_agent import invoke_agent
+from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.gateway_text import execution_actor
 from arclight.application.model_gateway import lock_gate
 from arclight.core.config import Settings
@@ -61,6 +61,7 @@ class _AgentRuntime[T: BaseModel]:
         registry: AgentToolRegistry,
         result_model: type[T],
         validate_result: Callable[[Session, T], None] | None,
+        output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
     ):
         self.factory, self.settings, self.seed = factory, settings, seed
         self.registry, self.result_model = registry, result_model
@@ -75,6 +76,7 @@ class _AgentRuntime[T: BaseModel]:
             type[AgentLoopResult[T]], AgentLoopResult.__class_getitem__(result_model)
         )
         self.validate_result = validate_result
+        self.output_projection = output_projection
         self.identity = digest(
             {"run": str(seed.run_id), "stage": seed.stage, "operation": seed.operation_key}
         )
@@ -220,6 +222,7 @@ class _AgentRuntime[T: BaseModel]:
             self.registry,
             self.decision_model,
             execution=self._execution(turn),
+            output_projection=self.output_projection,
         )
 
     def execute_tool(self, request: AgentToolCall, step_key: str) -> AgentToolFeedback:

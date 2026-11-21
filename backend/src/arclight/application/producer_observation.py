@@ -367,7 +367,7 @@ def _specialist_outputs(
         from arclight.application.continuity_routing import completed_review, require_latest_review
         from arclight.application.production_versions import checked_snapshot
         from arclight.domain.continuity_reviewer import REVIEWER_VERSION
-        from arclight.domain.continuity_reviews import REVIEW_SCHEMA_VERSION, REVIEW_VERSION
+        from arclight.domain.continuity_reviews import ContinuityReview
         from arclight.domain.continuity_workflow import REVIEW_WORK_RESOURCE, CandidateReviewWork
 
         # The production review's current candidate follows the same durable work
@@ -389,12 +389,13 @@ def _specialist_outputs(
         )
         superseded_targets: set[UUID] = set()
         current_targets: set[UUID] = set()
+        delivery_schema = digest(ContinuityReview.model_json_schema())
         for loop in outcomes:
             seed = AgentModelRequest.model_validate(loop.seed_json)
             if (
                 seed.agent_name != "continuity_reviewer"
                 or not seed.operation_key.startswith(REVIEWER_VERSION + ":")
-                or seed.result_schema_version not in {REVIEW_VERSION, REVIEW_SCHEMA_VERSION}
+                or loop.result_schema_sha256 != delivery_schema
                 or loop.status != "COMPLETED"
             ):
                 continue

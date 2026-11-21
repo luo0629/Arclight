@@ -5,6 +5,7 @@ from copy import deepcopy
 from uuid import UUID, uuid4
 
 import pytest
+from continuity_reviewer_support import saved_review
 from sqlalchemy import select
 from test_agent_model import model_service as model_service
 from test_asset_selection import choose
@@ -42,7 +43,7 @@ def test_new_review_uncertainty_reuses_qa06_without_calling_feedback_model(
     client, settings, model_service, feedback_case
 ):
     case = feedback_case
-    sent, _, _, errors, deliveries = install_feedback_model(
+    sent, _, _, errors, completions = install_feedback_model(
         model_service,
         ["READY_FOR_REVIEW"],
         uncertainty={"reason": "OCCLUDED", "detail": "The new garment is not visible."},
@@ -50,7 +51,10 @@ def test_new_review_uncertainty_reuses_qa06_without_calling_feedback_model(
     result = run_feedback(client, settings, case)
     assert result.status == "HUMAN_REVIEW", result.model_dump_json()
     assert result.record.source == "REVIEWER" and not sent and not errors
-    assert deliveries[0]["conclusion"] == "HUMAN_REVIEW"
+    assert len(completions) == 1
+    review = saved_review(client, case["project_id"], result.record.review_id, actor=case["actor"])
+    assert review.conclusion == "HUMAN_REVIEW"
+    assert any(u.reason == "OCCLUDED" for u in review.confidence.uncertainty)
     row = human_request(client, result)
     from arclight.persistence.human_reviews import HumanReviewRequest
 

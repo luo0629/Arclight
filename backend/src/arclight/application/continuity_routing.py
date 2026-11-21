@@ -35,7 +35,7 @@ from arclight.persistence.models import Project, VersionBinding, WorkflowRun
 
 
 def completed_review(db: Session, loop: AgentLoop) -> ContinuityReview:
-    """A checkpoint or caller-supplied conclusion cannot replace the committed model delivery."""
+    """Read the canonical delivery committed with the model action, not a caller projection."""
     if loop.status != "COMPLETED":
         raise DomainError("REVIEW_NOT_COMPLETED", "原持久审查尚未完成，不能登记权威结论", 409)
     try:
@@ -69,7 +69,7 @@ def completed_review(db: Session, loop: AgentLoop) -> ContinuityReview:
             or response.final.result != outcome.result
             or action.request_sha256 != digest(action.request_json)
         ):
-            raise ValueError("Outcome must equal the original final model receipt")
+            raise ValueError("Outcome must equal the canonical final action receipt")
         return outcome.result
     except (ValidationError, ValueError, TypeError) as exc:
         raise DomainError(

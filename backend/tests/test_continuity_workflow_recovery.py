@@ -397,7 +397,7 @@ def test_initial_high_risk_review_uses_owner_exception_without_automatic_selecti
     progress = work_for(client, episode["project_id"], candidate)
     assert progress["status"] == "WAITING_REVIEW", progress
     assert progress["pending_review"]["destination"] == "HUMAN_REVIEW", progress
-    assert len(deliveries) == 1 and deliveries[0]["conclusion"] == "HUMAN_REVIEW"
+    assert len(deliveries) == 1 and set(deliveries[0]) == {"evidence_manifest_id"}
     assert not errors, errors
     case = {
         "project_id": episode["project_id"],

@@ -14,6 +14,7 @@ from arclight.application.agent_tools import (
 )
 from arclight.application.commands import require_run
 from arclight.application.context_evidence import read_trace
+from arclight.application.continuity_report import REVIEW_OUTPUT
 from arclight.application.continuity_reviewer_evidence import validate_reviewer_delivery
 from arclight.application.continuity_reviews import require_review_target, shot_sha256
 from arclight.application.dependencies import exact_version, require_manifest
@@ -29,7 +30,9 @@ from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.continuity_escalations import LIMIT_STOP_CODES
 from arclight.domain.continuity_research import RESEARCH_TOOL
 from arclight.domain.continuity_reviewer import (
+    REVIEW_COMPLETION_SCHEMA,
     REVIEWER_PROMPT,
+    REVIEWER_PROMPT_VERSION,
     REVIEWER_VERSION,
     ReviewLoopSeed,
     review_operation,
@@ -127,7 +130,7 @@ def reviewer_seed(
         raise DomainError("GATEWAY_CAPABILITY_REJECTED", "审查需要已声明的多图及工具能力", 422)
     definitions: list[tuple[str, str, dict]] = [
         ("AGENT", REVIEWER_VERSION, {"tools": [RESEARCH_TOOL, RULES_TOOL], "rules": RULES_VERSION}),
-        ("PROMPT", REVIEWER_VERSION, {"instruction": REVIEWER_PROMPT}),
+        ("PROMPT", REVIEWER_PROMPT_VERSION, {"instruction": REVIEWER_PROMPT}),
         ("SCHEMA", REVIEW_SCHEMA_VERSION, review_schema_registration(costume=True).definition),
         (
             "MODEL",
@@ -252,8 +255,8 @@ def review_candidate(
                 stage="storyboard",
                 operation_key=operation,
                 agent_version=REVIEWER_VERSION,
-                prompt_version=REVIEWER_VERSION,
-                result_schema_version=REVIEW_SCHEMA_VERSION,
+                prompt_version=REVIEWER_PROMPT_VERSION,
+                result_schema_version=REVIEW_COMPLETION_SCHEMA,
                 system_instruction=REVIEWER_PROMPT,
                 max_tokens=16000,
                 messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
@@ -266,6 +269,7 @@ def review_candidate(
         ContinuityReview,
         limits=limits,
         validate_result=lambda db, result: validate_reviewer_result(db, settings, run_id, result),
+        output_projection=REVIEW_OUTPUT,
     )
     if outcome.status == "STOPPED" and outcome.stop_code in LIMIT_STOP_CODES:
         from arclight.application.continuity_escalations import request_escalation
@@ -320,6 +324,7 @@ def resume_reviewer(
         ContinuityReview,
         decision=decision,
         validate_result=lambda db, result: validate_reviewer_result(db, settings, run_id, result),
+        output_projection=REVIEW_OUTPUT,
     )
     if outcome.status == "STOPPED" and outcome.stop_code in LIMIT_STOP_CODES:
         from arclight.application.continuity_escalations import request_escalation
