@@ -17,6 +17,7 @@ from arclight.agents.story_analysis import KeyEvent, StoryAnalysisContent
 from arclight.agents.story_outline import OutlineEpisode, StoryOutlineContent
 from arclight.application.content_duration import duration_bounds
 from arclight.core.config import Settings
+from arclight.core.errors import DomainError
 from arclight.domain.context import check_call
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.project_settings import ProjectStorySettings
@@ -267,4 +268,6 @@ class OpenAICompatibleTextProvider:
 def build_provider(settings: Settings) -> TextProvider:
     if settings.provider == "mock":
         return MockTextProvider()
+    if settings.provider != "openai_compatible":
+        raise DomainError("SERVICE_INCOMPLETE", "请先配置账号文字服务", 422)
     return OpenAICompatibleTextProvider(settings)

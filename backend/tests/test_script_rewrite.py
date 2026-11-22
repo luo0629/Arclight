@@ -6,6 +6,7 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 from test_director_workflow import advance
+from text_service_support import use_test_text_service
 
 from arclight.agents.script_rewrite import RewriteResult
 from arclight.application.runtime import execute_run
@@ -88,6 +89,7 @@ def test_rewrite_only_merges_selected_scene_and_reviews_exact_version(
     client, episode, settings, monkeypatch, stub_llm, decision, terminal
 ):
     settings.provider = "openai_compatible"
+    use_test_text_service(settings, monkeypatch)
     base = source(client, episode)
     source(client, episode, version=1)  # The requested source intentionally is historical.
     payload = body(base, instructions={"dialogue_max_chars": 5, "narration_max_percent": 0})
@@ -498,7 +500,7 @@ def test_custom_service_snapshot_is_used_and_never_enters_checkpoint(client, set
     assert (
         client.put(
             "/api/v1/me/model-services/text",
-            json=profile(mode="custom", api_key="rewrite-private-key"),
+            json=profile(api_key="rewrite-private-key"),
         ).status_code
         == 200
     )
@@ -511,9 +513,7 @@ def test_custom_service_snapshot_is_used_and_never_enters_checkpoint(client, set
     assert (
         client.put(
             "/api/v1/me/model-services/text",
-            json=profile(
-                expected_revision=1, mode="server", model="changed-model", api_key="changed-key"
-            ),
+            json=profile(expected_revision=1, model="changed-model", api_key="changed-key"),
         ).status_code
         == 200
     )

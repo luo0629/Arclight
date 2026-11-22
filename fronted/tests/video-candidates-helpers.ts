@@ -64,7 +64,6 @@ export async function realVideoFixture(
   const configured = await page.request.put("/api/v1/me/model-services/video", {
     ...call,
     data: {
-      mode: "custom",
       supplier: "custom",
       model: "doubao-seedance-1-0-pro-250528",
       protocol: "seedance",

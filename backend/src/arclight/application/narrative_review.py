@@ -12,7 +12,7 @@ from arclight.application.commands import emit, require_project
 from arclight.application.dependencies import lock_dependency_graph
 from arclight.application.gateway_text import execution_actor, validate_publication
 from arclight.application.model_gateway import lock_gate
-from arclight.application.model_services import text_snapshot
+from arclight.application.model_services import require_text_snapshot
 from arclight.application.narrative_review_evidence import capture_review
 from arclight.application.production_versions import (
     bind,
@@ -174,7 +174,7 @@ def start_review(
             "narrative_input_sha256": digest(work.model_dump(mode="json")),
         },
     )
-    snapshot = text_snapshot(db, actor)
+    snapshot = require_text_snapshot(db, actor, settings)
     if snapshot:
         run.input_json = run.input_json | {"_text_service": snapshot}
     db.add(run)

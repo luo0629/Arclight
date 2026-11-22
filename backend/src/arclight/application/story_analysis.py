@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agents.story_analysis import StoryAnalysisContent
 from arclight.application.commands import emit, require_episode
-from arclight.application.model_services import run_settings, text_snapshot
+from arclight.application.model_services import require_text_snapshot, run_settings
 from arclight.application.source_objects import source_text
 from arclight.application.story_sources import bind_source, capture_inline, provenance
 from arclight.core.config import Settings
@@ -79,6 +79,7 @@ def start_analysis(
             "故事不能为空，且不能超过服务限制（最多20000字）；请缩短后重试",
             422,
         )
+    snapshot = require_text_snapshot(db, actor, settings)
     if source is None:
         source = capture_inline(db, episode, actor, text, settings=settings)
     inputs: dict = {
@@ -90,7 +91,6 @@ def start_analysis(
         "created_by": actor,
         "source_revision": provenance(db, source),
     }
-    snapshot = text_snapshot(db, actor)
     if snapshot:
         inputs["_text_service"] = snapshot
     run = WorkflowRun(

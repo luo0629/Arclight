@@ -7,17 +7,19 @@ import httpx
 import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
-from sqlalchemy import select
+from sqlalchemy import func, select
 from test_collaboration import create_episode, create_project
 from test_llm_service import PROTOCOLS, response
 from test_model_services import account
 from test_story_analysis import content, execute, path, start
 
-from arclight.application import story_analysis
+from arclight.application import model_services
 from arclight.application.service_credentials import rotate_credentials
+from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.model_suppliers import SUPPLIERS
+from arclight.domain.service_models import ServiceModelPolicy
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
-from arclight.persistence.models import WorkflowRun
+from arclight.persistence.models import OutboxEvent, StorySource, WorkflowRun
 
 TEXT_PRESETS = [preset for preset in SUPPLIERS if preset.kind == "text"]
 ROUTES = [
@@ -90,7 +92,7 @@ def test_account_cards_dispatch_exact_old_and_new_snapshots(
     second = create_episode(client, create_project(client))
     model = "models/exact-text-v1" if protocol == "gemini" else "exact-text-v1"
     key = "synthetic-personal-key-v1"
-    profile = {"mode": "custom", "supplier": supplier}
+    profile = {"supplier": supplier}
     if supplier == "custom":
         profile.update(base_url=endpoint, protocol=protocol, response_format=output_format)
     sent = []
@@ -151,7 +153,8 @@ def test_account_cards_dispatch_exact_old_and_new_snapshots(
     assert_result(client, second, new_run, new_model, "ACCOUNT_SNAPSHOT")
 
 
-def test_account_configuration_remains_frozen_after_switch_to_mock(client, settings, stub_llm):
+def test_clearing_account_key_preserves_existing_real_and_mock_runs(client, settings, stub_llm):
+    settings.provider = "account"
     account(client)
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     first = create_episode(client, create_project(client))
@@ -169,7 +172,6 @@ def test_account_configuration_remains_frozen_after_switch_to_mock(client, setti
     saved = client.put(
         service_path,
         json={
-            "mode": "custom",
             "supplier": "openai",
             "api_key": key,
             "model": model,
@@ -182,12 +184,17 @@ def test_account_configuration_remains_frozen_after_switch_to_mock(client, setti
     assert planned.status_code == 202, planned.text
     old_run = planned.json()["run_id"]
     saved = client.put(
-        service_path, json={"mode": "server", "clear_key": True, "expected_revision": 1}
+        service_path,
+        json={"supplier": "openai", "model": model, "clear_key": True, "expected_revision": 1},
     )
-    assert saved.status_code == 200, saved.text
+    assert saved.status_code == 200 and saved.json()["has_key"] is False, saved.text
+    blocked = start(client, second)
+    assert blocked.status_code == 422 and blocked.json()["error"]["code"] == "SERVICE_INCOMPLETE"
+    settings.provider = "mock"
     planned = start(client, second)
     assert planned.status_code == 202 and not sent, planned.text
     mock_run = planned.json()["run_id"]
+    settings.provider = "account"
 
     execute(client, settings, old_run)
     execute(client, settings, mock_run)
@@ -206,38 +213,55 @@ def test_account_configuration_remains_frozen_after_switch_to_mock(client, setti
         assert receipt.status == "SUCCEEDED" and receipt.actual_cost == 0
 
 
-@pytest.mark.parametrize("protocol", PROTOCOLS)
-def test_server_default_dispatches_through_the_same_factory(
-    client, episode, settings, stub_llm, protocol
+@pytest.mark.parametrize("provider", ["account", "openai_compatible"])
+def test_missing_account_service_cannot_queue_or_dispatch_text(
+    client, settings, stub_llm, provider
 ):
-    settings.provider = "openai_compatible"
-    settings.llm_protocol = protocol
-    settings.llm_base_url = "https://server.example/model-proxy/v1"
-    settings.llm_model = "exact-default-model"
-    settings.llm_api_key = SecretStr("synthetic-server-credential")
-    sent = []
+    settings.provider = provider
+    settings.llm_api_key = SecretStr("synthetic-retired-deployment-key")
+    stub_llm(lambda _: pytest.fail("Unconfigured account reached deployment model"))
+    account(client)
+    episode = create_episode(client, create_project(client))
 
-    def respond(request):
-        sent.append(request)
-        return httpx.Response(
-            200, json=response(protocol, json.dumps(content(), ensure_ascii=False))
+    for entry in ("script-runs", "story-analysis-runs", "story-outline-runs"):
+        response = client.post(
+            path(episode) + "/" + entry,
+            json={"story": "虚构的雨夜故事"},
+            headers={"Idempotency-Key": entry},
         )
+        assert response.status_code == 422, response.text
+        assert response.json()["error"]["code"] == "SERVICE_INCOMPLETE"
 
-    stub_llm(respond)
-    planned = start(client, episode)
-    assert planned.status_code == 202 and not sent
-    run_id = planned.json()["run_id"]
-    execute(client, settings, run_id)
-    assert len(sent) == 1
-    assert_request(
-        sent[0],
-        protocol,
-        settings.llm_base_url,
-        settings.llm_model,
-        settings.llm_api_key.get_secret_value(),
-        settings.llm_supplier,
+    with client.app.state.session_factory() as db:
+        for model in (WorkflowRun, OutboxEvent, GatewayCall, StorySource):
+            assert db.scalar(select(func.count()).select_from(model)) == 0
+    assert not any(item.is_file() for item in settings.asset_storage_path.rglob("*"))
+
+
+def test_account_agent_capabilities_require_an_exact_policy(settings):
+    settings.provider = "account"
+    configuration = {
+        "supplier": settings.llm_supplier,
+        "base_url": settings.llm_base_url,
+        "model": settings.llm_model,
+        "protocol": settings.llm_protocol,
+    }
+    capabilities = AgentModelCapabilities(
+        version="fixture:1",
+        supplier=settings.llm_supplier,
+        model=settings.llm_model,
+        tools=True,
+        max_input_images=2,
+        response_formats=frozenset({"json_schema"}),
     )
-    assert_result(client, episode, run_id, settings.llm_model, "SERVER")
+    settings.llm_agent_capabilities = capabilities
+    assert model_services.agent_capabilities(settings, configuration) is None
+
+    settings.service_model_policies = [
+        ServiceModelPolicy(kind="text", **configuration, agent_capabilities=capabilities)
+    ]
+    assert model_services.agent_capabilities(settings, configuration) == capabilities
+    assert model_services.agent_capabilities(settings, configuration | {"model": "other"}) is None
 
 
 def test_legacy_encrypted_snapshot_dispatches_after_original_key_is_retired(
@@ -252,7 +276,7 @@ def test_legacy_encrypted_snapshot_dispatches_after_original_key_is_retired(
         "model": "legacy-exact-model",
         "encrypted_key": encryption.encrypt(key.encode()).decode(),
     }
-    monkeypatch.setattr(story_analysis, "text_snapshot", lambda *_: snapshot)
+    monkeypatch.setattr(model_services, "text_snapshot", lambda *_: snapshot)
     sent = []
 
     def respond(request):

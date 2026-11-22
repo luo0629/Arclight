@@ -425,7 +425,7 @@ function ProductionBody({
                   本地 Mock（合成图片）
                 </NativeSelectOption>
                 <NativeSelectOption value="configured">
-                  我的图像服务（或服务器默认）
+                  我的图像服务
                 </NativeSelectOption>
               </NativeSelect>
             </FormLabel>

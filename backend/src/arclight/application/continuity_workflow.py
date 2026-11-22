@@ -18,7 +18,7 @@ from arclight.application.continuity_revision_store import job_revision
 from arclight.application.continuity_routing import read_routed_review
 from arclight.application.dependencies import lock_dependency_graph
 from arclight.application.model_gateway import lock_gate
-from arclight.application.model_services import text_snapshot
+from arclight.application.model_services import require_text_snapshot
 from arclight.application.production_versions import bind, checked_snapshot, find_binding
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -284,7 +284,7 @@ def start_candidate_review(
                 },
             },
         )
-        snapshot = text_snapshot(db, actor)
+        snapshot = require_text_snapshot(db, actor, settings)
         if producer_context is not None:
             run.input_json = run.input_json | {"producer_series_context": producer_context}
         if snapshot:

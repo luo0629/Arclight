@@ -73,7 +73,6 @@ def configure_video(client, settings, *, model=MODEL, revision=0, key=KEY):
     response = client.put(
         "/api/v1/me/model-services/video",
         json={
-            "mode": "custom",
             "supplier": "custom",
             "model": model,
             "protocol": "seedance",

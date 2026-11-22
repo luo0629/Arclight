@@ -11,6 +11,7 @@ from pydantic import SecretStr
 from sqlalchemy import func, select
 from test_api_workflow import advance, review, start
 from test_model_gateway import api
+from text_service_support import use_test_text_service
 
 from arclight.agents.contracts import ScriptContent
 from arclight.application.runtime import execute_run
@@ -45,6 +46,7 @@ def test_authorized_deepseek_text_workflow(
     settings.llm_supplier = supplier.id
     settings.llm_response_format = supplier.response_format
     settings.llm_api_key = SecretStr(key)
+    use_test_text_service(settings, monkeypatch)
     settings.llm_timeout_seconds = 180
     settings.model_gateway_policy = GatewayPolicy(timeout_seconds=180)
     story = (

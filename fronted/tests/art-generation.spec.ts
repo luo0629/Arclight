@@ -141,9 +141,7 @@ test("账号图片配置用于概念图，原生数量限制与模型保持一�
     },
   );
   await page.getByRole("combobox", { name: "概念图服务", exact: true }).click();
-  await page
-    .getByRole("option", { name: "我的图片服务（或服务器默认）", exact: true })
-    .click();
+  await page.getByRole("option", { name: "我的图片服务", exact: true }).click();
   await expect(page.getByLabel("概念图模型", { exact: true })).toHaveValue(
     "selected-cogview-id",
   );

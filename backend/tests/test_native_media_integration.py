@@ -56,7 +56,6 @@ def configure(client, settings, kind="image", protocol="cogview", revision=0, ke
     response = client.put(
         f"/api/v1/me/model-services/{kind}",
         json={
-            "mode": "custom",
             "supplier": "custom",
             "model": model,
             "protocol": protocol,
@@ -151,6 +150,39 @@ def test_frozen_key_dispatch_and_image_candidates_keep_existing_review_gate(clie
         assert not file.rights_confirmed
     public = client.get(base(pid) + f"/{job['id']}/attempts").text
     assert "first-key" not in public and "credential_id" not in public
+
+
+def test_cleared_account_media_key_blocks_new_jobs_without_changing_frozen_binding(
+    client, settings
+):
+    account(client)
+    saved = configure(client, settings)
+    pid = project(client)
+    set_policy(client, pid, "1.000000")
+    body = body_for(client, pid)
+    job = capture_ok(client, pid, body)
+    cleared = client.put(
+        "/api/v1/me/model-services/image",
+        json={
+            "supplier": saved["supplier"],
+            "model": saved["model"],
+            "protocol": saved["protocol"],
+            "base_url": saved["base_url"],
+            "expected_revision": saved["revision"],
+            "clear_key": True,
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert not cleared.json()["has_key"]
+    config = client.get(base(pid) + "/services/image/configuration")
+    assert config.status_code == 200 and not config.json()["configured"]
+    rejected = capture(client, pid, body)
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "SERVICE_INCOMPLETE"
+    with client.app.state.session_factory() as db:
+        frozen = connection_for_job(db, db.get(GenerationJob, UUID(job["id"])), settings)
+        assert frozen is not None and frozen.api_key == "first-key"
+        assert frozen.configuration["configuration_version"] == body["spec"]["model_config_version"]
 
 
 def wav_bytes():

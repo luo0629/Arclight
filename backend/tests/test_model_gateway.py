@@ -548,9 +548,7 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
     account(client)
     secret = "gateway-frozen-test-key"
     assert (
-        client.put(
-            "/api/v1/me/model-services/text", json=profile(mode="custom", api_key=secret)
-        ).status_code
+        client.put("/api/v1/me/model-services/text", json=profile(api_key=secret)).status_code
         == 200
     )
     project = client.post("/api/v1/projects", json={"name": "gateway snapshot"}).json()
@@ -570,7 +568,6 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
             "/api/v1/me/model-services/text",
             json=profile(
                 expected_revision=1,
-                mode="custom",
                 api_key="changed-test-key",
                 model="changed-model",
             ),

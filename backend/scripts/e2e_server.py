@@ -14,6 +14,7 @@ from pydantic import SecretStr
 from sqlalchemy import select
 
 from arclight.application.runtime import execute_run
+from arclight.application.service_credentials import store_credential
 from arclight.core.config import Settings
 from arclight.domain.service_models import ServiceModelPolicy
 from arclight.main import create_app
@@ -25,14 +26,11 @@ from arclight.storage.objects import ObjectStorage, initialize
 def main():
     from e2e_screenwriter import install
 
-    install()
     folder = Path(tempfile.mkdtemp(prefix="arclight-e2e-"))
     settings = Settings(
         _env_file=None,
         environment="test",
         provider="mock",
-        # The frozen route does not persist the server key; workers use this fixture key.
-        llm_api_key=SecretStr("offline-only"),
         service_encryption_key=Fernet.generate_key().decode(),
         database_url="sqlite:///" + (folder / "business.db").as_posix(),
         checkpoint_url="sqlite:///" + (folder / "checkpoints.db").as_posix(),
@@ -64,6 +62,9 @@ def main():
     config.attributes["database_url"] = settings.database_url
     command.upgrade(config, "head")
     factory = session_factory(build_engine(settings), settings)
+    with factory.begin() as db:
+        credential_id = store_credential(db, settings, "offline-only").id
+    install(credential_id)
     stop = threading.Event()
 
     def worker():

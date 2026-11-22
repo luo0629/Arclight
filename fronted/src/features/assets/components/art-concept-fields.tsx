@@ -184,7 +184,7 @@ export default function ArtConceptFields({
               onValueChange={(provider) => void chooseProvider(provider)}
               options={[
                 { value: "mock", label: "本地 Mock（合成图片）" },
-                { value: "configured", label: "我的图片服务（或服务器默认）" },
+                { value: "configured", label: "我的图片服务" },
               ]}
             />
           </Field>

@@ -10,7 +10,7 @@ from arclight.application.audit import audit
 from arclight.application.commands import emit, require_project
 from arclight.application.continuity_revision_store import job_revision, require_revision_target
 from arclight.application.continuity_workflow import require_shot_binding
-from arclight.application.model_services import text_snapshot
+from arclight.application.model_services import require_text_snapshot
 from arclight.application.production_versions import (
     bind,
     capture_text,
@@ -186,7 +186,7 @@ def start_temporal_review(
                 },
             },
         )
-        snapshot = text_snapshot(db, actor)
+        snapshot = require_text_snapshot(db, actor, settings)
         if producer_context is not None:
             run.input_json = run.input_json | {"producer_series_context": producer_context}
         if snapshot:

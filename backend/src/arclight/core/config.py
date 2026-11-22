@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     checkpoint_url: str = "postgresql://arclight:arclight@localhost:5432/arclight"
     redis_url: str = "redis://localhost:6379/0"
     api_token: SecretStr = SecretStr("local-development-token-change-me")
-    provider: Literal["mock", "openai_compatible"] = "mock"
+    provider: Literal["account", "mock", "openai_compatible"] = "account"
     llm_api_key: SecretStr = SecretStr("")
     llm_base_url: str = "https://api.openai.com/v1"
     llm_model: str = "gpt-4.1-mini"
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
             if self.provider == "mock":
                 raise ValueError("生产环境不允许使用 Mock Provider")
         if self.provider == "openai_compatible" and not self.llm_api_key.get_secret_value():
-            raise ValueError("真实模型模式必须配置 LLM API Key")
+            raise ValueError("恢复使用部署凭证的历史文字任务需要 LLM API Key")
         return self
 
 

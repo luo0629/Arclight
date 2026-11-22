@@ -1,4 +1,4 @@
-import { Check, Ellipsis, Server } from "lucide-react";
+import { Check, Ellipsis } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type ServiceKind = "text" | "image" | "video" | "speech";
@@ -20,7 +20,6 @@ export default function ServiceProviders({
   disabled,
   onSelect,
 }: {
-  kind: ServiceKind;
   presets: ServicePreset[];
   value: string;
   disabled: boolean;
@@ -86,49 +85,25 @@ export default function ServiceProviders({
           </section>
         );
       })}
-      <section aria-label="默认与自定义" className="min-w-0">
-        <h3 className="mb-2 text-xs font-medium text-muted-foreground">
-          默认与自定义
-        </h3>
-        <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-3">
-          {
-            <ToggleGroupItem
-              value="server"
-              aria-label="服务器默认服务"
-              className={itemClass}
-            >
-              <Server className="size-5 shrink-0 text-muted-foreground" />
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold">服务器默认</span>
-                <span className="mt-0.5 block text-xs text-muted-foreground">
-                  使用系统提供的服务
-                </span>
-              </span>
-              <Check
-                aria-hidden="true"
-                className="size-3.5 shrink-0 opacity-0 group-data-[state=on]:opacity-100"
-              />
-            </ToggleGroupItem>
-          }
-          <ToggleGroupItem
-            value="custom"
-            aria-label="自定义服务商"
-            className={itemClass}
-          >
-            <Ellipsis className="size-5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-semibold">自定义服务</span>
-              <span className="mt-0.5 block text-xs text-muted-foreground">
-                自填地址、模型与密钥
-              </span>
+      <div className="grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        <ToggleGroupItem
+          value="custom"
+          aria-label="自定义服务商"
+          className={itemClass}
+        >
+          <Ellipsis className="size-5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">自定义服务</span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              自填地址、模型与密钥
             </span>
-            <Check
-              aria-hidden="true"
-              className="size-3.5 shrink-0 opacity-0 group-data-[state=on]:opacity-100"
-            />
-          </ToggleGroupItem>
-        </div>
-      </section>
+          </span>
+          <Check
+            aria-hidden="true"
+            className="size-3.5 shrink-0 opacity-0 group-data-[state=on]:opacity-100"
+          />
+        </ToggleGroupItem>
+      </div>
     </ToggleGroup>
   );
 }

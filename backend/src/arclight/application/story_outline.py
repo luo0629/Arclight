@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agents.story_outline import StoryOutlineContent
 from arclight.application.commands import emit, require_episode
-from arclight.application.model_services import run_settings, text_snapshot
+from arclight.application.model_services import require_text_snapshot, run_settings
 from arclight.application.production_events import begin_serialized
 from arclight.application.series_planning import planning_source, validate_planning_source
 from arclight.application.source_objects import source_text
@@ -115,6 +115,7 @@ def start_outline(
         )
     if source is None and analysis and analysis.source_id:
         source = db.get(StorySource, analysis.source_id)
+    service = require_text_snapshot(db, actor, settings)
     if source is None:
         source = capture_inline(db, episode, actor, story, settings=settings)
     count = payload.get("target_episode_count") or brief["target_episode_count"]
@@ -144,7 +145,6 @@ def start_outline(
         "created_by": actor,
         "project_id": str(episode.project_id),
     }
-    service = text_snapshot(db, actor)
     if service:
         inputs["_text_service"] = service
     if payload.get("professional"):

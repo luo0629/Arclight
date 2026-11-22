@@ -30,9 +30,9 @@ test("检测连接使用未保存的输入，显示结果且编辑后清除（�
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   const { dialog, headers } = await openSettings(page);
-  await dialog
-    .getByRole("radio", { name: "自定义服务商", exact: true })
-    .click();
+  await expect(
+    dialog.getByRole("radio", { name: "自定义服务商", exact: true }),
+  ).toBeChecked();
   const check = dialog.getByRole("button", { name: "检测连接", exact: true });
   const model = dialog.getByLabel("模型 ID", { exact: true });
   await expect(check).toBeDisabled();
@@ -135,11 +135,13 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
     headers,
   });
   expect(await fetched.text()).not.toContain("my-private-deepseek-key");
-  expect((await fetched.json()).services[0]).toMatchObject({
+  const configuration = await fetched.json();
+  expect(configuration).not.toHaveProperty("text_runtime");
+  expect(configuration.services[0]).not.toHaveProperty("mode");
+  expect(configuration.services[0]).toMatchObject({
     supplier: "deepseek",
     model: "exact-deepseek-id",
     base_url: "https://api.deepseek.com",
-    mode: "custom",
     has_key: true,
   });
   await page.reload();
@@ -161,8 +163,11 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
     const secondPage = await secondContext.newPage();
     const { dialog: secondDialog } = await openSettings(secondPage);
     await expect(
-      secondDialog.getByRole("radio", { name: "服务器默认服务", exact: true }),
+      secondDialog.getByRole("radio", { name: "自定义服务商", exact: true }),
     ).toBeChecked();
+    await expect(
+      secondDialog.getByRole("radio", { name: "服务器默认服务", exact: true }),
+    ).toHaveCount(0);
     await secondDialog
       .getByRole("radio", { name: "DeepSeek", exact: true })
       .click();
@@ -280,7 +285,7 @@ test("媒体配置单独保存，切分类保留草稿，手机无溢出且关�
   });
 });
 
-test("清除密钥先保留草稿可撤销，保存后恢复服务器配置", async ({ page }) => {
+test("清除密钥先保留草稿可撤销，保存后保留服务配置", async ({ page }) => {
   const { dialog, headers } = await openSettings(page);
   await dialog.getByRole("radio", { name: "DeepSeek", exact: true }).click();
   await dialog.getByLabel("模型 ID", { exact: true }).fill("configured-model");
@@ -291,7 +296,9 @@ test("清除密钥先保留草稿可撤销，保存后恢复服务器配置", as
   await expect(dialog.getByRole("status")).toContainText("已保存到当前账号");
   await dialog.getByRole("button", { name: "清除已存密钥" }).click();
   await expect(
-    dialog.getByText("保存后清除个人密钥，新任务使用服务器默认服务。"),
+    dialog.getByText(
+      "保存后清除 API Key，并保留服务配置。新任务需要个人服务。",
+    ),
   ).toBeVisible();
   expect(
     (
@@ -308,13 +315,20 @@ test("清除密钥先保留草稿可撤销，保存后恢复服务器配置", as
   await dialog.getByRole("button", { name: "清除已存密钥" }).click();
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText(
-    "新任务使用服务器默认服务",
+    "重新配置此服务后才能用于新任务",
   );
   await page.reload();
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
   await expect(
-    dialog.getByRole("radio", { name: "服务器默认服务", exact: true }),
+    dialog.getByRole("radio", { name: "DeepSeek", exact: true }),
   ).toBeChecked();
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
+    "configured-model",
+  );
+  await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
+  await expect(
+    dialog.getByRole("button", { name: "检测连接", exact: true }),
+  ).toBeDisabled();
   const saved = await page.request.get("/api/v1/me/model-services", {
     headers,
   });
@@ -322,7 +336,12 @@ test("清除密钥先保留草稿可撤销，保存后恢复服务器配置", as
     (await saved.json()).services.find(
       (row: { kind: string }) => row.kind === "text",
     ),
-  ).toMatchObject({ mode: "server", has_key: false });
+  ).toMatchObject({
+    supplier: "deepseek",
+    model: "configured-model",
+    base_url: "https://api.deepseek.com",
+    has_key: false,
+  });
 });
 
 type SpeechModelPreset = {

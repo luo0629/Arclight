@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from sqlalchemy import func, select
+from text_service_support import use_test_text_service
 
 from arclight.application.runtime import execute_run
 from arclight.domain.enums import RunStatus
@@ -64,6 +65,7 @@ def test_generation_defaults_exact_source_independence_and_replay(
     import httpx
 
     settings.provider = "openai_compatible"
+    use_test_text_service(settings, monkeypatch)
     with client.app.state.session_factory.begin() as db:
         db.get(Project, UUID(episode["project_id"])).story_settings = {
             "target_episode_count": 3,

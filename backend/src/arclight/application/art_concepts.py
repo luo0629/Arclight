@@ -16,7 +16,7 @@ from arclight.application.dependencies import exact_version
 from arclight.application.generation_accounting import costs
 from arclight.application.generation_budget import quote_job
 from arclight.application.generation_jobs import create_job
-from arclight.application.media_services import frozen_provider_configuration, select_for_spec
+from arclight.application.media_services import select_for_spec
 from arclight.application.visual_bible import snapshot as visual_snapshot
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -94,7 +94,7 @@ def freeze_concept_plan(
         "capabilities": capabilities.model_dump(mode="json")
         | {"task_types": sorted(capabilities.task_types)},
         "visual_bible": visual_snapshot(db, project),
-        "provider_configuration": frozen_provider_configuration(db, plan.spec, "IMAGE", service),
+        "provider_configuration": service.configuration if service else None,
         "initial_quote": quote.model_dump(mode="json"),
     }
 

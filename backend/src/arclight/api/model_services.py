@@ -44,7 +44,6 @@ class ServiceConnectionInput(Input):
 
 
 class ServiceInput(ServiceConnectionInput):
-    mode: Literal["server", "custom"] = "server"
     supplier_name: str = Field(default="", max_length=100)
     response_format: Literal["json_schema", "json_object"] = "json_schema"
     clear_key: bool = False
@@ -59,7 +58,6 @@ def user_id(actor: str) -> UUID:
 def public(row: ModelService) -> dict:
     return {
         "kind": row.kind,
-        "mode": row.mode,
         "base_url": row.base_url,
         "model": row.model,
         "supplier": row.supplier,
@@ -97,7 +95,6 @@ def list_services(
         "services": profiles,
         "can_store_keys": status["code"] == "READY",
         "key_storage": status,
-        "text_runtime": "mock" if settings.provider == "mock" else "服务器文字服务",
         "catalog_version": 2,
         "protocols": PROTOCOLS,
         "speech_models": [preset.model_dump() for preset in SPEECH_MODEL_PRESETS],
@@ -228,7 +225,7 @@ def save_service(
         raise DomainError("SUPPLIER_MISMATCH", "预设地址或输出格式已变化，请切换自定义供应商", 422)
     name = preset.name if preset else payload.supplier_name.strip()
     model = payload.model.strip()
-    if payload.mode == "custom" and not model:
+    if not model:
         raise DomainError("SERVICE_MODEL_REQUIRED", "请填写服务商文档中的模型 ID", 422)
     has_new_key = bool(payload.api_key and payload.api_key.get_secret_value())
     if payload.clear_key and has_new_key:
@@ -263,11 +260,11 @@ def save_service(
         assert payload.api_key is not None
         credential_id = store_credential(db, settings, payload.api_key.get_secret_value()).id
         encrypted = None
-    if payload.mode == "custom" and (not base or not model or not (encrypted or credential_id)):
+    if not base or (not (encrypted or credential_id) and not (payload.clear_key and row)):
         raise DomainError(
             "SERVICE_INCOMPLETE", "请填写 API Key 和模型 ID；自定义服务还需 Base URL", 422
         )
-    if payload.mode == "custom":
+    if encrypted or credential_id:
         read_credential(
             db,
             settings,
@@ -276,7 +273,6 @@ def save_service(
             else {"encrypted_key": encrypted},
         )
     values = dict(
-        mode=payload.mode,
         base_url=base,
         model=model,
         supplier=payload.supplier,
@@ -307,7 +303,6 @@ def save_service(
             action="service.saved",
             details_json={
                 "kind": kind,
-                "mode": row.mode,
                 "supplier": row.supplier,
                 "config_revision": row.revision,
                 "key_action": "replaced"

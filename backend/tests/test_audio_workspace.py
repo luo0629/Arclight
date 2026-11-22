@@ -152,7 +152,6 @@ def test_workspace_speech_fields_respect_exact_model_restrictions(
     response = client.put(
         "/api/v1/me/model-services/speech",
         json={
-            "mode": "custom",
             "supplier": "custom",
             "model": model,
             "protocol": "openai_tts",

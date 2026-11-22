@@ -6,7 +6,6 @@ from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
-from arclight.application.model_services import run_settings
 from arclight.application.runtime import execute_run
 from arclight.domain.model_suppliers import SUPPLIERS
 from arclight.persistence.models import ModelService, ServiceCredential, WorkflowRun
@@ -29,7 +28,6 @@ def account(client):
 
 def profile(**patch):
     return {
-        "mode": "server",
         "base_url": "https://api.openai.com/v1",
         "model": "text-model",
         "expected_revision": 0,
@@ -65,25 +63,21 @@ def test_account_isolation_encryption_and_revision(client, settings):
     assert updated.json()["has_key"] is True
     account(client)
     assert client.get("/api/v1/me/model-services").json()["services"] == []
-    assert client.put("/api/v1/me/model-services/text", json=profile()).json()["has_key"] is False
+    missing = client.put("/api/v1/me/model-services/text", json=profile())
+    assert missing.status_code == 422
+    assert missing.json()["error"]["code"] == "SERVICE_INCOMPLETE"
 
 
-def test_key_storage_disabled_and_media_not_activated(client, settings):
+def test_key_storage_disabled_and_keyless_configuration_rejected(client, settings):
     settings.service_encryption_key = SecretStr("")
     account(client)
-    assert client.put("/api/v1/me/model-services/image", json=profile()).status_code == 200
+    missing = client.put("/api/v1/me/model-services/image", json=profile())
+    assert missing.status_code == 422
+    assert missing.json()["error"]["code"] == "SERVICE_INCOMPLETE"
     blocked = client.put("/api/v1/me/model-services/video", json=profile(api_key="private"))
     assert blocked.status_code == 409
     assert "private" not in blocked.text
-    assert (
-        client.put(
-            "/api/v1/me/model-services/image", json=profile(expected_revision=1, mode="custom")
-        ).status_code
-        == 422
-    )
-    assert (
-        client.put("/api/v1/me/model-services/text", json=profile(mode="custom")).status_code == 422
-    )
+    assert client.get("/api/v1/me/model-services").json()["services"] == []
 
 
 def test_endpoints_without_domain_allowlist_or_network(client, settings, monkeypatch):
@@ -118,7 +112,7 @@ def test_endpoints_without_domain_allowlist_or_network(client, settings, monkeyp
         assert "secret" not in response.text
     saved = client.put(
         "/api/v1/me/model-services/text",
-        json=profile(mode="custom", base_url="https://unapproved.example/v1", api_key="secret"),
+        json=profile(base_url="https://unapproved.example/v1", api_key="secret"),
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["base_url"] == "https://unapproved.example/v1"
@@ -127,9 +121,7 @@ def test_endpoints_without_domain_allowlist_or_network(client, settings, monkeyp
 def test_active_text_is_snapshotted_and_used_without_real_calls(client, settings, monkeypatch):
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     account(client)
-    response = client.put(
-        "/api/v1/me/model-services/text", json=profile(mode="custom", api_key="first-secret")
-    )
+    response = client.put("/api/v1/me/model-services/text", json=profile(api_key="first-secret"))
     assert response.status_code == 200, response.text
     project = client.post("/api/v1/projects", json={"name": "模型配置验收"}).json()
     episode = client.post(
@@ -145,9 +137,7 @@ def test_active_text_is_snapshotted_and_used_without_real_calls(client, settings
     assert (
         client.put(
             "/api/v1/me/model-services/text",
-            json=profile(
-                expected_revision=1, mode="server", api_key="second-secret", model="new-model"
-            ),
+            json=profile(expected_revision=1, api_key="second-secret", model="new-model"),
         ).status_code
         == 200
     )
@@ -170,18 +160,70 @@ def test_active_text_is_snapshotted_and_used_without_real_calls(client, settings
     assert "encrypted_key" not in response.text and "first-secret" not in response.text
 
 
-def test_clear_key_and_server_fallback(client, settings):
+def test_clear_key_keeps_profile_but_blocks_new_work(client, settings):
+    settings.provider = "account"
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     account(client)
-    assert (
-        client.put("/api/v1/me/model-services/text", json=profile(api_key="secret")).status_code
-        == 200
-    )
-    response = client.put(
-        "/api/v1/me/model-services/text", json=profile(expected_revision=1, clear_key=True)
-    )
+    path = "/api/v1/me/model-services/text"
+    assert client.put(path, json=profile(api_key="secret")).status_code == 200
+    response = client.put(path, json=profile(expected_revision=1, clear_key=True))
+    assert response.status_code == 200, response.text
     assert response.json()["has_key"] is False
-    assert run_settings(settings, None) is settings
+    assert response.json()["model"] == "text-model"
+    assert "mode" not in response.json()
+    project = client.post("/api/v1/projects", json={"name": "已清除密钥"}).json()
+    episode = client.post(
+        f"/api/v1/projects/{project['id']}/episodes", json={"episode_no": 1, "title": "账号服务"}
+    ).json()
+    refused = client.post(
+        f"/api/v1/episodes/{episode['id']}/script-runs",
+        json={"story": "一颗种子"},
+        headers={"Idempotency-Key": "cleared-account-key"},
+    )
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["error"]["code"] == "SERVICE_INCOMPLETE"
+    assert client.get(f"/api/v1/episodes/{episode['id']}/runs").json() == []
+
+
+def test_account_migration_retires_inactive_profile_and_keeps_credentials(
+    client, settings, migrated
+):
+    from alembic import command
+    from sqlalchemy import MetaData, Table, inspect
+
+    settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
+    account(client)
+    path = "/api/v1/me/model-services"
+    for kind in ("text", "image"):
+        saved = client.put(f"{path}/{kind}", json=profile(api_key=f"offline-{kind}"))
+        assert saved.status_code == 200, saved.text
+    before = {row["kind"]: row for row in client.get(path).json()["services"]}
+    audit = client.get(f"{path}/audit").json()
+    with client.app.state.session_factory() as db:
+        inactive_credential = db.scalar(
+            select(ModelService.credential_id).where(ModelService.kind == "image")
+        )
+        assert inactive_credential is not None
+    engine = client.app.state.engine
+    command.downgrade(migrated, "0070")
+    profiles = Table("model_services", MetaData(), autoload_with=engine)
+    with engine.begin() as db:
+        db.execute(profiles.update().where(profiles.c.kind == "image").values(mode="server"))
+
+    command.upgrade(migrated, "head")
+    assert "mode" not in {
+        column["name"] for column in inspect(engine).get_columns("model_services")
+    }
+    after = {row["kind"]: row for row in client.get(path).json()["services"]}
+    assert after["text"] == before["text"]
+    inactive = after["image"]
+    assert inactive["supplier"] == "custom"
+    assert inactive["model"] == inactive["base_url"] == inactive["protocol"] == ""
+    assert inactive["has_key"] is False and inactive["key_status"] == "MISSING"
+    assert inactive["revision"] == before["image"]["revision"]
+    assert client.get(f"{path}/audit").json() == audit
+    with client.app.state.session_factory() as db:
+        assert db.get(ServiceCredential, inactive_credential) is not None
 
 
 def test_service_config_requires_personal_session(client):
@@ -203,7 +245,6 @@ def test_official_supplier_needs_explicit_model_and_key(client, settings, preset
     assert preset.model_dump() in catalog["suppliers"]
     configuration = {
         "supplier": preset.id,
-        "mode": "custom",
         "api_key": "test-key",
         "expected_revision": 0,
     }
@@ -254,7 +295,6 @@ def test_destination_change_requires_new_key_and_audit_is_private(client, settin
         "/api/v1/me/model-services/text",
         json=profile(
             expected_revision=1,
-            mode="custom",
             supplier_name="自定义服务",
             response_format="json_object",
             base_url="https://new.example/v1",

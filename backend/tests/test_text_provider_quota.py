@@ -14,6 +14,7 @@ from test_api_workflow import advance, review, start
 from test_costs import report
 from test_generation_budget import set_policy
 from test_model_gateway import api, request, route
+from text_service_support import use_test_text_service
 
 from arclight.agents.contracts import ScriptContent
 from arclight.application.gateway_accounting import reconcile
@@ -27,7 +28,7 @@ from arclight.providers.text import MockTextProvider
 
 
 @pytest.fixture
-def text_service(settings, stub_llm):
+def text_service(settings, stub_llm, monkeypatch):
     supplier = supplier_by_id("deepseek")
     settings.provider = "openai_compatible"
     settings.llm_base_url = supplier.base_url
@@ -37,6 +38,7 @@ def text_service(settings, stub_llm):
     settings.llm_api_key = SecretStr("private-text-test-key")
     settings.model_gateway_policy = GatewayPolicy()
 
+    use_test_text_service(settings, monkeypatch)
     return stub_llm
 
 

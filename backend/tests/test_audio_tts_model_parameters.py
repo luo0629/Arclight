@@ -26,7 +26,6 @@ def configure_model(client, settings, model, protocol="openai_tts"):
     response = client.put(
         "/api/v1/me/model-services/speech",
         json={
-            "mode": "custom",
             "supplier": "custom",
             "model": model,
             "protocol": protocol,

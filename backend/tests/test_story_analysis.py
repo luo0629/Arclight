@@ -389,7 +389,7 @@ def test_custom_provider_snapshot_is_used_and_never_exposed(client, settings, mo
     assert (
         client.put(
             "/api/v1/me/model-services/text",
-            json=profile(mode="custom", api_key="analysis-first-secret"),
+            json=profile(api_key="analysis-first-secret"),
         ).status_code
         == 200
     )
@@ -401,9 +401,7 @@ def test_custom_provider_snapshot_is_used_and_never_exposed(client, settings, mo
     assert (
         client.put(
             "/api/v1/me/model-services/text",
-            json=profile(
-                expected_revision=1, mode="server", api_key="changed-secret", model="changed"
-            ),
+            json=profile(expected_revision=1, api_key="changed-secret", model="changed"),
         ).status_code
         == 200
     )

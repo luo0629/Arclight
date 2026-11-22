@@ -30,7 +30,6 @@ def test_named_provider_key_model_and_official_endpoint(client, settings, preset
     assert preset.model_dump() in catalog["suppliers"]
     assert all("model" not in p for p in catalog["suppliers"])
     body = {
-        "mode": "custom",
         "supplier": preset.id,
         "api_key": "private-provider-canary",
         "expected_revision": 0,
@@ -48,7 +47,7 @@ def test_named_provider_key_model_and_official_endpoint(client, settings, preset
     assert saved.json()["protocol"] == preset.protocol
     assert "private-provider-canary" not in saved.text
     assert client.put(path, json=body).status_code == 409
-    # Returning to server mode never requires a personal model ID.
+    # The retired server mode must be rejected without changing the saved service.
     assert (
         client.put(
             path,
@@ -58,8 +57,9 @@ def test_named_provider_key_model_and_official_endpoint(client, settings, preset
                 "expected_revision": 1,
             },
         ).status_code
-        == 200
+        == 422
     )
+    assert client.get("/api/v1/me/model-services").json()["services"][0]["revision"] == 1
 
 
 @pytest.mark.parametrize("kind", ["text", "image", "video", "speech"])
@@ -68,7 +68,6 @@ def test_custom_requires_destination_key_and_model(client, settings, kind):
     account(client)
     path = f"/api/v1/me/model-services/{kind}"
     body = {
-        "mode": "custom",
         "supplier": "custom",
         "model": "api-id",
         "api_key": "private-custom-canary",
@@ -100,7 +99,6 @@ def test_personal_native_protocol_is_frozen(client, settings, supplier, protocol
     saved = client.put(
         "/api/v1/me/model-services/text",
         json={
-            "mode": "custom",
             "supplier": supplier,
             "model": "exact-native-model",
             "api_key": "native-test-key",
@@ -201,7 +199,6 @@ def test_speech_model_suggestions_save_exact_ids_and_preserve_unlisted_models_wi
     )
     path = "/api/v1/me/model-services/speech"
     payload = {
-        "mode": "custom",
         "supplier": supplier,
         "model": selected_model,
         "api_key": "private-speech-suggestion-canary",

@@ -53,17 +53,19 @@ def provider_quote(
     )
     from arclight.providers.media_capabilities import credential_source
 
-    source = credential_source(spec.provider)
-    if source == "ACCOUNT_SNAPSHOT":
-        selection = (
-            selection_for_job(db, job)
-            if job
-            else select_for_spec(db, actor or "service-owner", spec, task_type, frozen_service)
-        )
-        return quote_selection(db, selection, spec) if selection else None
-    if source == "SERVER" and (settings := db.info.get("settings")) is not None:
-        return media_pricing.quote(spec, task_type, settings.image_service)
-    return media_pricing.quote(spec, task_type)
+    if job is None:
+        selection = select_for_spec(db, actor or "service-owner", spec, task_type, frozen_service)
+    else:
+        selection = selection_for_job(db, job)
+        # Existing server-backed jobs retain their exact adapter and frozen quote.
+        if credential_source(job.provider) == "SERVER":
+            settings = db.info.get("settings")
+            if settings is None:
+                return None
+            return media_pricing.quote(spec, task_type, settings.image_service)
+    return (
+        quote_selection(db, selection, spec) if selection else media_pricing.quote(spec, task_type)
+    )
 
 
 def quote_job(

@@ -46,7 +46,7 @@ from arclight.persistence.models import (
     GenerationMediaArtifact,
     StoredFile,
 )
-from arclight.providers.media_capabilities import resolve_capabilities
+from arclight.providers.media_capabilities import credential_source, resolve_capabilities
 from arclight.providers.media_query import (
     MediaQueryProvider,
     MockMediaQueryProvider,
@@ -187,6 +187,8 @@ def get_capabilities(
     model: Annotated[str, Query(min_length=1, max_length=160)] = "mock-image-v1",
 ) -> MediaCapabilities:
     require_project(db, project_id, actor)
+    if credential_source(provider) == "SERVER":
+        raise DomainError("PROVIDER_NOT_INSTALLED", "请通过账号媒体服务读取支持能力", 422)
     return resolve_capabilities(provider, model)
 
 
@@ -196,14 +198,13 @@ def get_service_configuration(
     kind: Literal["image", "video", "speech"],
     db: Database,
     actor: Actor,
-    source: Literal["effective", "server"] = "effective",
+    request: Request,
 ) -> dict:
     require_project(db, project_id, actor)
+    if request.query_params:
+        raise DomainError("INVALID_SERVICE_QUERY", "账号服务配置接口不接受查询参数", 422)
     return public_configuration(
-        db,
-        actor,
-        {"image": "IMAGE", "video": "VIDEO", "speech": "AUDIO"}[kind],
-        server_only=source == "server",
+        db, actor, {"image": "IMAGE", "video": "VIDEO", "speech": "AUDIO"}[kind]
     )
 
 

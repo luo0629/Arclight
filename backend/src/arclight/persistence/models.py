@@ -668,7 +668,6 @@ class ModelService(Entity, Base):
     __tablename__ = "model_services"
     user_id: Mapped[UUID] = mapped_column(ForeignKey("users.id"), index=True)
     kind: Mapped[str] = mapped_column(String(16))
-    mode: Mapped[str] = mapped_column(String(16), default="server")
     base_url: Mapped[str] = mapped_column(String(500), default="")
     model: Mapped[str] = mapped_column(String(160), default="")
     supplier: Mapped[str] = mapped_column(String(40), default="custom")

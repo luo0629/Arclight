@@ -132,11 +132,7 @@ def create_job(
         require_available_shot(
             db, project_id, review_binding, payload.episode_id, task_type=payload.task_type
         )
-    from arclight.application.media_services import (
-        bind_selection,
-        frozen_provider_configuration,
-        select_for_spec,
-    )
+    from arclight.application.media_services import bind_selection, select_for_spec
 
     service = select_for_spec(db, actor, payload.spec, payload.task_type, frozen_service)
     if service is not None:
@@ -251,7 +247,7 @@ def create_job(
         if "video_images" in payload.spec.context:
             raise DomainError("VIDEO_INPUT_INVALID", "视频首帧须使用精确参考依赖", 422)
         video_images = freeze_video_images(db, project_id, actor, payload.episode_id, inputs)
-    configuration = frozen_provider_configuration(db, effective_spec, payload.task_type, service)
+    configuration = service.configuration if service else None
     manifest = DependencyManifest(
         project_id=project_id,
         target_asset_id=asset.id if asset else None,

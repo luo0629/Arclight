@@ -351,10 +351,12 @@ def test_video_snapshot_rejects_forged_or_superseded_review_and_stale_worker(
     choice = choose(client, client.get(case["root"]).json(), version)
     assert choice.status_code == 200, choice.text
     timeline = created_timeline(client, case["episode"], create_body(case))
+    with client.app.state.session_factory() as db:
+        revision_before = db.scalar(text("SELECT version_num FROM alembic_version"))
     with pytest.raises(RuntimeError, match="Cannot downgrade with video timeline history"):
         command.downgrade(migrated, "0069")
     with client.app.state.session_factory() as db:
-        assert db.scalar(text("SELECT version_num FROM alembic_version")) == "0070"
+        assert db.scalar(text("SELECT version_num FROM alembic_version")) == revision_before
     forged = deepcopy(timeline["snapshot"])
     picture(forged)["video"]["review_sha256"] = "c" * 64
     save = client.patch(

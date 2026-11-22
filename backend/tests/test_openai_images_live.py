@@ -8,9 +8,8 @@ from pathlib import Path
 
 import pytest
 from test_generation_budget import set_policy
-from test_generation_jobs import capture_ok
 from test_generation_queues import messages
-from test_openai_images import attempt_for
+from test_openai_images import attempt_for, historical_image_job
 
 from arclight.core.image_service import OPENAI_IMAGE_MODEL, OpenAIImageSettings
 from arclight.workers import tasks
@@ -63,7 +62,7 @@ def test_one_authorized_synthetic_image(settings, client, episode, monkeypatch, 
             "batch_size": 1,
         },
     }
-    job = capture_ok(client, project_id, body)
+    job = historical_image_job(client, project_id, body)
     message = messages(client)[0]
     monkeypatch.setattr(tasks, "get_settings", lambda: settings)
     args = (str(message[0]), str(message[1]), str(message[2]), message[3])

@@ -87,7 +87,7 @@ def test_rotation_preserves_current_and_legacy_task_snapshots(client, settings, 
     uid = account(client)
     assert (
         client.put(
-            "/api/v1/me/model-services/text", json=profile(mode="custom", api_key="current-secret")
+            "/api/v1/me/model-services/text", json=profile(api_key="current-secret")
         ).status_code
         == 200
     )

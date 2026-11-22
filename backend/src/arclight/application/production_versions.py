@@ -601,8 +601,10 @@ def capture_text(
 ) -> None:
     from arclight.application.context_snapshots import capture_contexts
 
-    contexts = capture_contexts(db, project_id, run, settings, actor)
     service = run.input_json.get("_text_service")
+    if not service and settings.provider != "mock":
+        raise DomainError("SERVICE_INCOMPLETE", "请先在模型配置中保存账号文字服务", 422)
+    contexts = capture_contexts(db, project_id, run, settings, actor)
     model: dict = {
         "provider": "openai_compatible" if service else settings.provider,
         "model": service["model"] if service else settings.llm_model,
@@ -684,7 +686,9 @@ def checked_snapshot(db: Session, binding: VersionBinding) -> dict:
 def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Settings) -> Settings:
     binding = find_binding(db, project_id, "WORKFLOW", run.id)
     if binding is None:
-        # Historical records retain their existing workflow-version compatibility policy.
+        # An unbound historical run cannot select a live deployment credential.
+        if settings.provider != "mock" and not run.input_json.get("_text_service"):
+            raise DomainError("SERVICE_INCOMPLETE", "工作流缺少冻结的账号文字服务", 409)
         return settings
     snapshot = checked_snapshot(db, binding)
     expected = {

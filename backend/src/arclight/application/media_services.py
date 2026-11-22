@@ -51,7 +51,7 @@ def account_selection(db: Session, actor: str, task_type: str) -> MediaSelection
             ModelService.user_id == UUID(actor), ModelService.kind == SERVICE_KINDS[task_type]
         )
     )
-    if row is None or row.mode != "custom":
+    if row is None or row.credential_id is None:
         return None
     settings = db.info.get("settings")
     if settings is None:
@@ -75,10 +75,7 @@ def account_selection(db: Session, actor: str, task_type: str) -> MediaSelection
     )
     configuration["pricing_version"] = policy.pricing_version if policy else ""
     configuration["configuration_version"] = digest(configuration)
-    credential_id = row.credential_id
-    if credential_id is None:
-        raise DomainError("SERVICE_INCOMPLETE", "请先保存媒体服务的 API Key 和模型 ID", 422)
-    return MediaSelection(configuration, credential_id, actor, row.revision)
+    return MediaSelection(configuration, row.credential_id, actor, row.revision)
 
 
 def restore_selection(snapshot: dict) -> MediaSelection:
@@ -113,7 +110,10 @@ def selection_for_job(db: Session, job: GenerationJob) -> MediaSelection | None:
 def select_for_spec(
     db: Session, actor: str, spec: GenerationSpec, task_type: str, frozen: dict | None = None
 ) -> MediaSelection | None:
-    if credential_source(spec.provider) != "ACCOUNT_SNAPSHOT":
+    source = credential_source(spec.provider)
+    if source == "SERVER":
+        raise DomainError("SERVICE_INCOMPLETE", "请先在账号设置中配置对应媒体服务", 422)
+    if source != "ACCOUNT_SNAPSHOT":
         return None
     selection = restore_selection(frozen) if frozen else account_selection(db, actor, task_type)
     if selection is None:
@@ -191,25 +191,6 @@ def connection_for_job(
     )
 
 
-def server_configuration(db: Session, task_type: str) -> tuple[bool, dict] | None:
-    settings = db.info.get("settings")
-    if task_type == "IMAGE" and settings is not None:
-        return settings.image_service.enabled, settings.image_service.public_configuration()
-    return None
-
-
-def frozen_provider_configuration(
-    db: Session, spec: GenerationSpec, task_type: str, selection: MediaSelection | None
-) -> dict | None:
-    if selection is not None:
-        return selection.configuration
-    if credential_source(spec.provider) == "SERVER":
-        server = server_configuration(db, task_type)
-        if server is not None:
-            return server[1]
-    return None
-
-
 def capability_details(configuration: dict) -> dict:
     provider, model = configuration["provider"], configuration["model"]
     return {
@@ -219,10 +200,8 @@ def capability_details(configuration: dict) -> dict:
     }
 
 
-def public_configuration(
-    db: Session, actor: str, task_type: str, *, server_only: bool = False
-) -> dict:
-    selection = None if server_only else account_selection(db, actor, task_type)
+def public_configuration(db: Session, actor: str, task_type: str) -> dict:
+    selection = account_selection(db, actor, task_type)
     if selection is not None:
         configuration = selection.configuration
         priced = configuration["maximum_cost_per_output"] is not None and bool(
@@ -237,15 +216,5 @@ def public_configuration(
             "message": "已配置"
             if priced
             else "账号配置已保存；生成前需要部署侧登记该精确模型的可信报价",
-        }
-    server = server_configuration(db, task_type)
-    if server is not None:
-        enabled, configuration = server
-        return {
-            **configuration,
-            "configured": enabled,
-            "enabled": enabled,
-            "credential_source": "SERVER",
-            **capability_details(configuration),
         }
     return {"configured": False, "enabled": False, "message": "请先配置该类型的账号服务"}

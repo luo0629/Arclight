@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from arclight.application.commands import emit, require_episode, require_run
 from arclight.application.gateway_accounting import latest_receipt
 from arclight.application.model_gateway import lock_gate
-from arclight.application.model_services import text_snapshot
+from arclight.application.model_services import require_text_snapshot
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.versions import digest
@@ -63,7 +63,7 @@ def restart_run(
     inputs.pop("_image_service", None)
     inputs["created_by"] = actor
     inputs["_restart_from_run_id"] = str(original.id)
-    service = text_snapshot(db, actor)
+    service = require_text_snapshot(db, actor, settings)
     if service:
         inputs["_text_service"] = service
     _refresh_concepts(db, episode.project_id, episode.id, inputs, actor)
@@ -140,32 +140,23 @@ def _refresh_concepts(
     if not frozen:
         return
     from arclight.application.art_concepts import freeze_concept_plan
-    from arclight.application.media_services import account_selection, server_configuration
+    from arclight.application.media_services import account_selection
     from arclight.domain.art_concepts import ArtConceptPlan
     from arclight.providers.media_capabilities import credential_source
 
     plan = ArtConceptPlan.model_validate(frozen["plan"])
-    selection = account_selection(db, actor, "IMAGE")
-    spec = plan.spec.model_dump(mode="json")
-    if selection:
+    if credential_source(plan.spec.provider) != "NONE":
+        selection = account_selection(db, actor, "IMAGE")
+        if selection is None:
+            raise DomainError("SERVICE_INCOMPLETE", "请先配置当前账号的图片服务", 422)
         config = selection.configuration
-        spec.update(
-            provider=config["provider"],
-            model=config["model"],
-            model_config_version=config["configuration_version"],
-        )
+        spec = plan.spec.model_dump(mode="json") | {
+            "provider": config["provider"],
+            "model": config["model"],
+            "model_config_version": config["configuration_version"],
+        }
+        plan = ArtConceptPlan.model_validate(plan.model_dump(mode="json") | {"spec": spec})
         inputs["_image_service"] = selection.private_snapshot()
-    elif credential_source(spec["provider"]) in {"SERVER", "ACCOUNT_SNAPSHOT"}:
-        server = server_configuration(db, "IMAGE")
-        if server is None or not server[0]:
-            raise DomainError("SERVICE_INCOMPLETE", "请先配置当前账号或服务器图片服务", 422)
-        config = server[1]
-        spec.update(
-            provider=config["provider"],
-            model=config["model"],
-            model_config_version=config["configuration_version"],
-        )
-    plan = ArtConceptPlan.model_validate(plan.model_dump(mode="json") | {"spec": spec})
     inputs["art_direction"]["concept"] = freeze_concept_plan(
         db,
         project_id,

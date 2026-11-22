@@ -13,6 +13,7 @@ from test_asset_versions import image_bytes, save, state
 from test_assets import create as create_asset
 from test_collaboration import create_episode, create_project, register
 from test_context_trace import evidence
+from text_service_support import use_test_text_service
 
 from arclight.application.agent_tools import (
     AgentToolRegistry,
@@ -46,7 +47,7 @@ class FinalResult(BaseModel):
 
 
 @pytest.fixture
-def model_service(settings, stub_llm):
+def model_service(settings, stub_llm, monkeypatch):
     settings.provider = "openai_compatible"
     settings.llm_supplier = "custom"
     settings.llm_model = "test-agent-model"
@@ -61,6 +62,7 @@ def model_service(settings, stub_llm):
         max_input_images=4,
     )
 
+    use_test_text_service(settings, monkeypatch)
     return stub_llm
 
 

@@ -37,7 +37,7 @@ def test_restart_preserves_inputs_freezes_current_key_and_original_retry_stays_o
     ).json()["id"]
     assert (
         client.put(
-            "/api/v1/me/model-services/text", json=profile(mode="custom", api_key="original-key")
+            "/api/v1/me/model-services/text", json=profile(api_key="original-key")
         ).status_code
         == 200
     )
@@ -58,9 +58,7 @@ def test_restart_preserves_inputs_freezes_current_key_and_original_retry_stays_o
     assert (
         client.put(
             "/api/v1/me/model-services/text",
-            json=profile(
-                mode="custom", api_key="current-key", model="new-model", expected_revision=1
-            ),
+            json=profile(api_key="current-key", model="new-model", expected_revision=1),
         ).status_code
         == 200
     )

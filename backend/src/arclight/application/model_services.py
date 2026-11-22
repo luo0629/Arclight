@@ -9,10 +9,11 @@ from sqlalchemy.orm import Session
 from arclight.application.service_credentials import credential_snapshot, read_credential
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.service_models import matching_policy
 from arclight.persistence.models import ModelService, WorkflowRun
 from arclight.providers.network import validate_endpoint
 
-__all__ = ["run_settings", "text_snapshot", "validate_endpoint"]
+__all__ = ["require_text_snapshot", "run_settings", "text_snapshot", "validate_endpoint"]
 
 
 def text_snapshot(db: Session, actor: str) -> dict | None:
@@ -21,7 +22,7 @@ def text_snapshot(db: Session, actor: str) -> dict | None:
     row = db.scalar(
         select(ModelService).where(ModelService.user_id == UUID(actor), ModelService.kind == "text")
     )
-    if not row or row.mode != "custom":
+    if row is None or not (row.base_url and row.model and (row.credential_id or row.encrypted_key)):
         return None
     return {
         "base_url": row.base_url,
@@ -34,8 +35,19 @@ def text_snapshot(db: Session, actor: str) -> dict | None:
     }
 
 
+def require_text_snapshot(db: Session, actor: str, settings: Settings) -> dict | None:
+    snapshot = text_snapshot(db, actor)
+    if snapshot is not None:
+        read_credential(db, settings, snapshot)
+    elif settings.provider != "mock":
+        raise DomainError("SERVICE_INCOMPLETE", "请先在模型配置中保存账号文字服务", 422)
+    return snapshot
+
+
 def run_settings(settings: Settings, snapshot: dict | None, db: Session | None = None) -> Settings:
     if not snapshot:
+        if settings.provider == "account":
+            raise DomainError("SERVICE_INCOMPLETE", "工作流缺少冻结的账号文字服务", 409)
         return settings
     base = validate_endpoint(snapshot["base_url"])
     secret = read_credential(db, settings, snapshot)
@@ -76,22 +88,7 @@ def recheck_text_credential(
 
 
 def agent_capabilities(settings: Settings, service: dict | None):
-    if not service:
-        return settings.llm_agent_capabilities
-    from arclight.domain.service_models import matching_policy
-
+    if service is None:
+        return settings.llm_agent_capabilities if settings.provider == "mock" else None
     policy = matching_policy(settings.service_model_policies, {"kind": "text", **service})
-    if policy is not None:
-        return policy.agent_capabilities
-    # Reuse the existing declaration only for exactly the same destination and model.
-    if all(
-        service.get(field, default) == value
-        for field, default, value in (
-            ("supplier", "custom", settings.llm_supplier),
-            ("model", "", settings.llm_model),
-            ("base_url", "", settings.llm_base_url),
-            ("protocol", "openai_chat", settings.llm_protocol),
-        )
-    ):
-        return settings.llm_agent_capabilities
-    return None
+    return policy.agent_capabilities if policy else None

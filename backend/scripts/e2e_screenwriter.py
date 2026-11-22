@@ -2,9 +2,10 @@
 
 import copy
 import json
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
+from sqlalchemy import event
 
 from arclight.agents.contracts import read_script_content
 from arclight.application import production_versions
@@ -18,6 +19,8 @@ from arclight.domain.screenwriter_revision import (
     REVISION_WORKFLOWS,
     SERIES_PATCH_TOOL,
 )
+from arclight.domain.service_models import ServiceModelPolicy
+from arclight.persistence.models import WorkflowRun
 from arclight.providers import llm_transport, text
 
 FIXTURE_HOST = "screenwriter.example"
@@ -482,35 +485,63 @@ def _respond(request):
     )
 
 
-def install():
+def install(credential_id: UUID):
     original_capture = production_versions.capture_text
-
-    def capture(db, project_id, run, settings, *, actor=None):
-        if run.workflow_version in {
+    professional_versions = (
+        {
             SCREENWRITER_VERSION,
             SCREENWRITER_OUTLINE_VERSION,
-        } | REVISION_WORKFLOWS | DIRECTOR_VERSIONS | {
             "art-proposal/1.0",
             "art-proposal/2.0",
             "producer/1",
-        }:
+        }
+        | REVISION_WORKFLOWS
+        | DIRECTOR_VERSIONS
+    )
+    destination = {
+        "base_url": f"https://{FIXTURE_HOST}/v1",
+        "model": "offline-professional",
+        "supplier": "custom",
+        "protocol": "openai_chat",
+    }
+
+    @event.listens_for(WorkflowRun, "before_insert")
+    def freeze_fixture_service(_mapper, _connection, run):
+        # Assign the synthetic binding before the immutable workflow input is persisted.
+        if run.workflow_version in professional_versions and not run.input_json.get(
+            "_text_service"
+        ):
+            run.input_json = {
+                **run.input_json,
+                "_text_service": {
+                    **destination,
+                    "credential_id": str(credential_id),
+                    "response_format": "json_schema",
+                },
+            }
+
+    def capture(db, project_id, run, settings, *, actor=None):
+        service = run.input_json.get("_text_service") or {}
+        if service.get("credential_id") == str(credential_id):
+            supports_images = run.workflow_type == "art_proposal" or run.input_json.get(
+                "director", {}
+            ).get("art_collaboration")
+            capabilities = AgentModelCapabilities(
+                version="e2e:1",
+                supplier=destination["supplier"],
+                model=destination["model"],
+                tools=True,
+                max_input_images=4 if supports_images else 0,
+                response_formats=frozenset({"json_schema", "json_object"}),
+            )
             settings = settings.model_copy(
                 update={
-                    "provider": "openai_compatible",
-                    "llm_model": "offline-professional",
-                    "llm_supplier": "custom",
-                    "llm_base_url": f"https://{FIXTURE_HOST}/v1",
-                    "llm_agent_capabilities": AgentModelCapabilities(
-                        version="e2e:1",
-                        supplier="custom",
-                        model="offline-professional",
-                        tools=True,
-                        max_input_images=4
-                        if run.workflow_type == "art_proposal"
-                        or run.input_json.get("director", {}).get("art_collaboration")
-                        else 0,
-                        response_formats=frozenset({"json_schema", "json_object"}),
-                    ),
+                    "service_model_policies": [
+                        *settings.service_model_policies,
+                        ServiceModelPolicy(
+                            **destination, kind="text", agent_capabilities=capabilities
+                        ),
+                    ],
                     "model_gateway_policy": GatewayPolicy(
                         text_maximum_cost="0", pricing_version="offline:1"
                     ),

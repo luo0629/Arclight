@@ -4,20 +4,22 @@ import base64
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 from threading import Barrier
+from unittest.mock import patch
 from uuid import UUID, uuid4
 
 import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from test_asset_selection import approved, current
 from test_asset_versions import image_bytes, private_objects  # noqa: F401
 from test_assets import create
 from test_concurrency import require_postgres
-from test_generation_budget import set_policy
+from test_generation_budget import budget, set_policy
 from test_generation_candidates import candidates
 from test_generation_delivery import deliver, event_for
 from test_generation_jobs import base, capture, capture_ok, payload
@@ -25,6 +27,7 @@ from test_generation_queues import messages
 from test_generation_reconciliation import QueryFake, query
 from test_openai_image_sdk import sdk_calls as sdk_calls
 
+from arclight.application import generation_budget, media_services
 from arclight.application.generation_candidates import import_attempt
 from arclight.application.generation_jobs import create_job
 from arclight.core.errors import DomainError
@@ -33,6 +36,7 @@ from arclight.domain.generation_requests import GenerationCreate, GenerationSpec
 from arclight.domain.versions import digest
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import DependencyManifest, GenerationAttempt, GenerationJob
+from arclight.providers import media_pricing
 from arclight.providers.media_io import JSON_RESPONSE_LIMIT
 from arclight.providers.media_outputs import get_media_output_provider
 from arclight.providers.media_query import QueryReceipt
@@ -70,6 +74,81 @@ def image_request(settings, target=None, count=1):
     return body
 
 
+@contextmanager
+def historical_image_admission(settings):
+    """Seed pre-retirement media jobs without changing the production admission path."""
+    select_for_spec = media_services.select_for_spec
+    provider_quote = generation_budget.provider_quote
+
+    def historical_selection(db, actor, spec, task_type, frozen=None):
+        if spec.provider == "openai":
+            return None
+        return select_for_spec(db, actor, spec, task_type, frozen)
+
+    def historical_quote(db, spec, task_type, **kwargs):
+        if spec.provider == "openai":
+            return media_pricing.quote(spec, task_type, settings.image_service)
+        return provider_quote(db, spec, task_type, **kwargs)
+
+    def freeze_configuration(_mapper, _connection, manifest):
+        context = manifest.snapshot_json.get("context", {})
+        if context.get("generation", {}).get("provider") == "openai":
+            context["provider_configuration"] = settings.image_service.public_configuration()
+
+    event.listen(DependencyManifest, "before_insert", freeze_configuration)
+    try:
+        with (
+            patch.object(media_services, "select_for_spec", historical_selection),
+            patch.object(generation_budget, "provider_quote", historical_quote),
+        ):
+            yield
+    finally:
+        event.remove(DependencyManifest, "before_insert", freeze_configuration)
+
+
+def capture_historical_image(client, project_id, body, key=None):
+    with historical_image_admission(client.app.state.settings):
+        return capture(client, project_id, body, key)
+
+
+def historical_image_job(client, project_id, body):
+    response = capture_historical_image(client, project_id, body)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_server_image_is_rejected_for_new_jobs_and_quotes(configured, client, episode):
+    project_id = episode["project_id"]
+    config_path = base(project_id) + "/services/image/configuration"
+    public = client.get(config_path)
+    assert public.status_code == 200
+    assert public.json() == {
+        "configured": False,
+        "enabled": False,
+        "message": "请先配置该类型的账号服务",
+    }
+    unavailable = client.get(config_path + "?source=server")
+    assert unavailable.status_code == 422
+    assert unavailable.json()["error"]["code"] == "INVALID_SERVICE_QUERY"
+    assert CANARY not in public.text and CANARY not in unavailable.text
+    retired = client.get(
+        base(project_id) + f"/providers/openai/capabilities?model={configured.image_service.model}"
+    )
+    assert retired.status_code == 422
+    assert retired.json()["error"]["code"] == "PROVIDER_NOT_INSTALLED"
+
+    body = image_request(configured)
+    rejected = capture(client, project_id, body)
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "SERVICE_INCOMPLETE"
+    estimate = client.post(budget(project_id) + "/estimate", json=body)
+    assert estimate.status_code == 422
+    assert estimate.json()["error"]["code"] == "SERVICE_INCOMPLETE"
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(GenerationJob)) == 0
+        assert db.scalar(select(func.count()).select_from(GatewayCall)) == 0
+
+
 def response(body, status=200):
     raw = json.dumps(body).encode()
     return httpx.Response(
@@ -105,7 +184,7 @@ def test_http_adapter_through_gateway_ledger_and_real_candidate_import(
     target = create(client, project_id)
     body = image_request(configured, target, count=2)
     key = str(uuid4())
-    first = capture(client, project_id, body, key)
+    first = capture_historical_image(client, project_id, body, key)
     assert first.status_code == 201, first.text
     job = first.json()
     assert capture(client, project_id, body, key).json() == job
@@ -193,7 +272,7 @@ def test_unsupported_capabilities_and_configuration_are_rejected_before_work(
     set_policy(client, episode["project_id"], "20")
     body = image_request(configured)
     body["spec"].update(changes)
-    assert capture(client, episode["project_id"], body).status_code in {409, 422}
+    assert capture_historical_image(client, episode["project_id"], body).status_code in {409, 422}
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(GenerationJob)) == 0
         assert db.scalar(select(func.count()).select_from(GatewayCall)) == 0
@@ -208,10 +287,10 @@ def test_disabled_missing_quote_or_secret_never_create_billable_work(configured,
     ):
         original = configured.image_service
         configured.image_service = original.model_copy(update=changes)
-        assert capture(client, episode["project_id"], image_request(configured)).status_code in {
-            409,
-            422,
-        }
+        rejected = capture_historical_image(
+            client, episode["project_id"], image_request(configured)
+        )
+        assert rejected.status_code in {409, 422}
         configured.image_service = original
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(GenerationJob)) == 0
@@ -225,11 +304,9 @@ def test_disabled_missing_quote_or_secret_never_create_billable_work(configured,
         {"model": "gpt-image-2.5-sunburst"},
     ],
 )
-def test_server_config_change_fails_before_attempt_and_public_config_is_secret_free(
-    configured, client, episode, changes
-):
+def test_historical_server_config_change_fails_before_attempt(configured, client, episode, changes):
     set_policy(client, episode["project_id"], "20")
-    job = capture_ok(client, episode["project_id"], image_request(configured))
+    job = historical_image_job(client, episode["project_id"], image_request(configured))
     before = configured.image_service.public_configuration()
     configured.image_service = configured.image_service.model_copy(update=changes)
     assert (
@@ -242,9 +319,6 @@ def test_server_config_change_fails_before_attempt_and_public_config_is_secret_f
     )
     assert deliver(client, job, provider) == "FAILED"
     assert not requests and attempt_for(client, job) is None
-    public = client.get(base(episode["project_id"]) + "/services/image/configuration?source=server")
-    assert public.status_code == 200 and public.json()["enabled"]
-    assert CANARY not in public.text and "api_key" not in public.text
 
 
 class UnreadableErrorBody(httpx.SyncByteStream):
@@ -262,7 +336,7 @@ def test_definite_http_rejection_releases_reservation_and_never_retries_inline(
     configured, client, episode, status
 ):
     set_policy(client, episode["project_id"], "20")
-    job = capture_ok(client, episode["project_id"], image_request(configured))
+    job = historical_image_job(client, episode["project_id"], image_request(configured))
     requests = []
     error_body = UnreadableErrorBody()
 
@@ -299,7 +373,7 @@ def test_uncertain_response_holds_budget_and_goes_to_manual_without_resubmit(
 ):
     project_id = episode["project_id"]
     set_policy(client, project_id, "20")
-    job = capture_ok(client, project_id, image_request(configured))
+    job = historical_image_job(client, project_id, image_request(configured))
     requests = []
 
     def fail(request):
@@ -348,7 +422,7 @@ def test_key_file_and_output_handles_are_private_and_bound_to_the_attempt(
         update={"api_key": SecretStr(""), "api_key_file": secret_file}
     )
     set_policy(client, episode["project_id"], "20")
-    job = capture_ok(client, episode["project_id"], image_request(configured))
+    job = historical_image_job(client, episode["project_id"], image_request(configured))
     provider = OpenAIImageProvider(
         configured, transport=httpx.MockTransport(lambda req: response(success()))
     )
@@ -402,7 +476,7 @@ def test_supported_outputs_use_worker_selection_and_candidate_validation(
         output_spec={"width": width, "height": height, "format": kind},
         parameters={"quality": quality},
     )
-    job = capture_ok(client, episode["project_id"], body)
+    job = historical_image_job(client, episode["project_id"], body)
     image_kind = "PNG" if kind == "png" else "JPEG"
     data = image_bytes(image_kind, (width, height))
     requests = []
@@ -444,7 +518,7 @@ def test_reference_images_are_rejected_before_a_billable_attempt(configured, cli
     body["inputs"] = [
         {"source_asset_version_id": source["id"], "dependency_type": "REFERENCE_DEPENDENCY"}
     ]
-    rejected = capture(client, episode["project_id"], body)
+    rejected = capture_historical_image(client, episode["project_id"], body)
     assert rejected.status_code == 422, rejected.text
     assert rejected.json()["error"]["code"] == "PROVIDER_REFERENCES_UNSUPPORTED"
     assert attempt_for(client, {"id": str(uuid4())}) is None
@@ -455,7 +529,7 @@ def test_storage_unavailable_releases_only_before_acceptance(
     configured, client, episode, monkeypatch, phase
 ):
     set_policy(client, episode["project_id"], "20")
-    job = capture_ok(client, episode["project_id"], image_request(configured))
+    job = historical_image_job(client, episode["project_id"], image_request(configured))
     requests = []
 
     def handle(request):
@@ -478,7 +552,7 @@ def test_storage_unavailable_releases_only_before_acceptance(
 
 def test_corrupt_private_result_is_rejected_on_download(configured, client, episode):
     set_policy(client, episode["project_id"], "20")
-    job = capture_ok(client, episode["project_id"], image_request(configured))
+    job = historical_image_job(client, episode["project_id"], image_request(configured))
     provider = OpenAIImageProvider(
         configured, transport=httpx.MockTransport(lambda req: response(success()))
     )
@@ -502,7 +576,7 @@ def test_image_network_fails_closed_without_following_or_retrying(
     from arclight.providers import network
 
     set_policy(client, episode["project_id"], "20")
-    job = capture_ok(client, episode["project_id"], image_request(configured))
+    job = historical_image_job(client, episode["project_id"], image_request(configured))
     requests = []
 
     def redirect(request):
@@ -526,23 +600,23 @@ def test_image_network_fails_closed_without_following_or_retrying(
         assert receipt.actual_cost == (Decimal("0") if blocked_before_send else None)
 
 
-def test_postgres_real_provider_quotes_compete_for_one_budget(configured, client, episode):
-    require_postgres(configured)
-    project_id = UUID(episode["project_id"])
-    set_policy(client, project_id, "0.500000")
+def test_postgres_real_provider_quotes_compete_for_one_budget(settings, client):
+    from test_model_services import account
+    from test_native_media_integration import body_for, configure, project
+
+    require_postgres(settings)
+    actor = account(client)
+    configure(client, settings)
+    project_id = UUID(project(client))
+    set_policy(client, project_id, "1.000000")
+    body = GenerationCreate.model_validate(body_for(client, project_id))
     barrier = Barrier(2)
 
     def create_one(_):
         barrier.wait(timeout=15)
         try:
             with client.app.state.session_factory.begin() as db:
-                create_job(
-                    db,
-                    project_id,
-                    "service-owner",
-                    str(uuid4()),
-                    GenerationCreate.model_validate(image_request(configured)),
-                )
+                create_job(db, project_id, actor, str(uuid4()), body)
             return "CREATED"
         except DomainError as exc:
             return exc.code
@@ -550,7 +624,7 @@ def test_postgres_real_provider_quotes_compete_for_one_budget(configured, client
     with ThreadPoolExecutor(max_workers=2) as pool:
         assert sorted(pool.map(create_one, range(2))) == ["BUDGET_EXCEEDED", "CREATED"]
     costs = client.get(f"/api/v1/projects/{project_id}/costs").json()["summary"]
-    assert costs["pending_estimate"] == "0.500000" and costs["entry_count"] == 1
+    assert costs["pending_estimate"] == "1.000000" and costs["entry_count"] == 1
 
 
 def test_live_acceptance_harness_with_mock_http_only(
@@ -649,7 +723,7 @@ def test_provider_output_variants_keep_actual_metadata_and_cost_evidence(
         }
     )
     target = create(client, project_id)
-    job = capture_ok(client, project_id, image_request(configured, target))
+    job = historical_image_job(client, project_id, image_request(configured, target))
     requests = []
 
     def handle(request):

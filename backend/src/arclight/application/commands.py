@@ -15,7 +15,7 @@ from arclight.application.content_duration import validate_duration
 from arclight.application.content_references import (
     validate_script_assets,
 )
-from arclight.application.model_services import text_snapshot
+from arclight.application.model_services import require_text_snapshot
 from arclight.application.source_objects import source_text
 from arclight.application.story_context import build_story_context
 from arclight.application.story_sources import (
@@ -356,6 +356,8 @@ def start_run(
                     raise DomainError("NOT_FOUND", "大纲来源不存在", 404)
         if not inputs["story"] or len(inputs["story"]) > min(20000, settings.max_story_chars):
             raise DomainError("STORY_TOO_LARGE", "故事不能为空且不能超过服务长度限制", 422)
+    snapshot = require_text_snapshot(db, actor, settings)
+    if script_version_id is None:
         if story_source is None:
             story_source = capture_inline(db, episode, actor, inputs["story"], settings=settings)
         inputs["source_revision"] = provenance(db, story_source)
@@ -363,7 +365,6 @@ def start_run(
         from arclight.application.writing_context import capture_narrative_context
 
         inputs["narrative_context"] = capture_narrative_context(db, episode, actor, narrative)
-    snapshot = text_snapshot(db, actor)
     if rebuild_from_version_id is not None:
         inputs["rebuild_from_version_id"] = str(rebuild_from_version_id)
     if snapshot:

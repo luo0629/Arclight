@@ -166,7 +166,7 @@ def test_saved_key_stays_on_its_account_destination_and_protocol(client, setting
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     account(client)
     path = PATH + "/text"
-    saved = client.put(path, json=draft(mode="custom"))
+    saved = client.put(path, json=draft())
     assert saved.status_code == 200
     payload = draft(api_key=None, expected_revision=1)
     response = client.post(path + "/connection", json=payload)

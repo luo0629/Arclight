@@ -17,7 +17,7 @@ from arclight.application.agent_tools import (
 from arclight.application.commands import emit, require_episode, require_run
 from arclight.application.gateway_text import execution_actor, validate_publication
 from arclight.application.model_gateway import lock_gate
-from arclight.application.model_services import text_snapshot
+from arclight.application.model_services import require_text_snapshot
 from arclight.application.producer_series import has_series_scope
 from arclight.application.production_versions import bind, capture_text, find_binding, text_settings
 from arclight.core.config import Settings
@@ -117,7 +117,7 @@ def start_producer(
         from arclight.application.producer_series import capture_scope
 
         inputs["series_scope"] = capture_scope(db, episode, actor, series)
-    service = text_snapshot(db, actor)
+    service = require_text_snapshot(db, actor, settings)
     if service:
         inputs["_text_service"] = service
     run = WorkflowRun(

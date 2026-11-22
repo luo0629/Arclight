@@ -11,7 +11,7 @@ from arclight.agents.script_rewrite import RewriteRequest, RewriteResult
 from arclight.application.commands import emit, require_episode, require_project
 from arclight.application.content_duration import duration_bounds, validate_duration
 from arclight.application.content_references import validate_script_assets
-from arclight.application.model_services import text_snapshot
+from arclight.application.model_services import require_text_snapshot
 from arclight.application.rewrite_content import content_hash, merge_rewrite, provider_context
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -146,7 +146,7 @@ def start_rewrite(
         from arclight.application.writing_context import capture_narrative_context
 
         inputs["narrative_context"] = capture_narrative_context(db, episode, actor, narrative)
-    service = text_snapshot(db, actor)
+    service = require_text_snapshot(db, actor, settings)
     if service:
         inputs["_text_service"] = service
     if professional:
