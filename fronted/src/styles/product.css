@@ -39,6 +39,16 @@
 }
 .header-login {
   justify-self: end;
+  min-height: 44px;
+  padding-inline: 16px;
+  border-radius: 999px;
+  background: var(--foreground);
+  color: var(--background);
+  font-weight: 650;
+}
+.header-login:hover {
+  background: var(--primary);
+  color: var(--background);
 }
 .skip-link {
   position: fixed;

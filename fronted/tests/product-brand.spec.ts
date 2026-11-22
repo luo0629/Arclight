@@ -20,6 +20,15 @@ test("产品首页：响应式故事拼贴、真实入口与能力说明", async
     ).toBeVisible();
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await noOverflow(page);
+    const login = page.getByRole("button", { name: "登录", exact: true });
+    await expect(login).toBeInViewport({ ratio: 1 });
+    expect(
+      await login.evaluate((button) => button.getBoundingClientRect().height),
+    ).toBeGreaterThanOrEqual(44);
+    const ink = await page
+      .locator("body")
+      .evaluate((body) => getComputedStyle(body).color);
+    await expect(login).toHaveCSS("background-color", ink);
     const start = page.getByRole("button", {
       name: "开始我的故事",
       exact: true,
@@ -50,7 +59,7 @@ test("产品登录：错误提示、忙碌保护、登录注册切换与焦点�
 }) => {
   await page.goto("/");
   const login = page.getByRole("button", { name: "登录", exact: true });
-  await login.click();
+  await login.press("Enter");
   const dialog = page.getByRole("dialog");
   await expect(
     dialog.getByRole("heading", { name: "欢迎回来，继续你的故事。" }),
