@@ -5,6 +5,7 @@ from fastapi import APIRouter, Query, Request, Response
 from pydantic import Field, SecretStr
 from sqlalchemy import select, tuple_, update
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.orm import Session
 
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input
@@ -23,25 +24,30 @@ from arclight.domain.model_suppliers import (
     PROTOCOLS,
     SPEECH_MODEL_PRESETS,
     SUPPLIERS,
+    Supplier,
     supplier_by_id,
 )
 from arclight.persistence.models import ModelService, ServiceAudit
+from arclight.providers.service_connection import ConnectionCheck, probe_connection
 
 Kind = Literal["text", "image", "video", "speech"]
 router = APIRouter(prefix="/api/v1/me/model-services", tags=["model-services"])
 
 
-class ServiceInput(Input):
-    mode: Literal["server", "custom"] = "server"
+class ServiceConnectionInput(Input):
     base_url: str = Field(default="", max_length=500)
     model: str = Field(default="", max_length=160)
     supplier: str = Field(default="custom", max_length=40)
-    supplier_name: str = Field(default="", max_length=100)
-    response_format: Literal["json_schema", "json_object"] = "json_schema"
     protocol: str = Field(default="", max_length=40)
     api_key: SecretStr | None = Field(default=None, max_length=2000)
-    clear_key: bool = False
     expected_revision: int = Field(ge=0)
+
+
+class ServiceInput(ServiceConnectionInput):
+    mode: Literal["server", "custom"] = "server"
+    supplier_name: str = Field(default="", max_length=100)
+    response_format: Literal["json_schema", "json_object"] = "json_schema"
+    clear_key: bool = False
 
 
 def user_id(actor: str) -> UUID:
@@ -136,6 +142,68 @@ def list_audit(
     }
 
 
+def current_service(
+    db: Session, uid: UUID, kind: Kind, expected_revision: int
+) -> ModelService | None:
+    row = db.scalar(
+        select(ModelService).where(ModelService.user_id == uid, ModelService.kind == kind)
+    )
+    if expected_revision != (row.revision if row else 0):
+        raise DomainError("SERVICE_CONFLICT", "配置已在其他页面更新，请重新打开后再操作", 409)
+    return row
+
+
+def service_destination(
+    kind: Kind, payload: ServiceConnectionInput
+) -> tuple[Supplier | None, str, str]:
+    preset = supplier_by_id(payload.supplier, kind)
+    if payload.supplier != "custom" and preset is None:
+        raise DomainError("INVALID_SUPPLIER", "请选择当前类型的服务商或自定义", 422)
+    protocol = preset.protocol if preset else (payload.protocol or PROTOCOLS[kind][0])
+    if protocol not in PROTOCOLS[kind] or (
+        preset and payload.protocol and protocol != payload.protocol
+    ):
+        raise DomainError("INVALID_PROTOCOL", "协议与服务类型或预设不匹配", 422)
+    base = payload.base_url.strip() or (preset.base_url if preset else "")
+    if base:
+        base = validate_endpoint(base)
+    if preset and base != preset.base_url:
+        raise DomainError("SUPPLIER_MISMATCH", "预设地址已变化，请切换自定义供应商", 422)
+    return preset, base, protocol
+
+
+@router.post("/{kind}/connection")
+def check_connection(
+    kind: Kind,
+    payload: ServiceConnectionInput,
+    db: Database,
+    actor: Actor,
+    request: Request,
+    response: Response,
+) -> ConnectionCheck:
+    row = current_service(db, user_id(actor), kind, payload.expected_revision)
+    _, base, protocol = service_destination(kind, payload)
+    model = payload.model.strip()
+    if not base or not model:
+        raise DomainError("SERVICE_INCOMPLETE", "请填写模型 ID，自定义服务还需 Base URL", 422)
+    settings = request.app.state.settings
+    key = payload.api_key.get_secret_value() if payload.api_key else ""
+    if not key:
+        if row is None or not (row.credential_id or row.encrypted_key):
+            raise DomainError("SERVICE_INCOMPLETE", "请填写当前服务的 API Key", 422)
+        stored_protocol = row.protocol or ("openai_chat" if kind == "text" else "")
+        if (row.base_url, row.supplier, stored_protocol) != (base, payload.supplier, protocol):
+            raise DomainError(
+                "SERVICE_KEY_REENTRY_REQUIRED", "服务地址或协议已改变，请重新填写 API Key", 422
+            )
+        key = read_credential(db, settings, credential_snapshot(row))
+
+    # This endpoint only reads account configuration. Release the DB transaction before I/O.
+    db.rollback()
+    response.headers["Cache-Control"] = "no-store"
+    return probe_connection(base, protocol, model, key, settings.llm_dns_timeout_seconds)
+
+
 @router.put("/{kind}")
 def save_service(
     kind: Kind,
@@ -148,29 +216,15 @@ def save_service(
     uid = user_id(actor)
     # Same lock order as rotation, including when preserving an existing credential.
     state = key_state(db)
-    row = db.scalar(
-        select(ModelService).where(ModelService.user_id == uid, ModelService.kind == kind)
-    )
-    if payload.expected_revision != (row.revision if row else 0):
-        raise DomainError("SERVICE_CONFLICT", "配置已在其他页面更新，请重新打开后再保存", 409)
+    row = current_service(db, uid, kind, payload.expected_revision)
     settings = request.app.state.settings
-    preset = supplier_by_id(payload.supplier, kind)
-    if payload.supplier != "custom" and preset is None:
-        raise DomainError("INVALID_SUPPLIER", "请选择当前类型的服务商或自定义", 422)
-    protocol = preset.protocol if preset else (payload.protocol or PROTOCOLS[kind][0])
-    if protocol not in PROTOCOLS[kind] or (
-        preset and payload.protocol and protocol != payload.protocol
-    ):
-        raise DomainError("INVALID_PROTOCOL", "协议与服务类型或预设不匹配", 422)
-    base = payload.base_url.strip() or (preset.base_url if preset else "")
-    if base:
-        base = validate_endpoint(base)
+    preset, base, protocol = service_destination(kind, payload)
     response_format = (
         preset.response_format
         if preset and "response_format" not in payload.model_fields_set
         else payload.response_format
     )
-    if preset and (base != preset.base_url or response_format != preset.response_format):
+    if preset and response_format != preset.response_format:
         raise DomainError("SUPPLIER_MISMATCH", "预设地址或输出格式已变化，请切换自定义供应商", 422)
     name = preset.name if preset else payload.supplier_name.strip()
     model = payload.model.strip()

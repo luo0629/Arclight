@@ -15,11 +15,13 @@ JSON_RESPONSE_LIMIT = 2 * 1024 * 1024
 _CAPACITY = BoundedSemaphore(32)
 
 
-def bounded_call[T](call: Callable[[], T], seconds: float) -> T:
+def bounded_call[T](
+    call: Callable[[], T], seconds: float, *, slots: BoundedSemaphore = _CAPACITY
+) -> T:
     if seconds <= 0:
-        raise TimeoutError("Media call deadline reached")
-    if not _CAPACITY.acquire(blocking=False):
-        raise TimeoutError("Media adapter capacity is occupied")
+        raise TimeoutError("Provider call deadline reached")
+    if not slots.acquire(blocking=False):
+        raise TimeoutError("Provider I/O capacity is occupied")
     output: Queue[tuple[bool, object]] = Queue(maxsize=1)
 
     def invoke() -> None:
@@ -28,15 +30,19 @@ def bounded_call[T](call: Callable[[], T], seconds: float) -> T:
         except BaseException as exc:
             output.put((False, exc))
         finally:
-            _CAPACITY.release()
+            slots.release()
 
     # A timed-out thread retains its slot until it exits. Waiting is bounded, not the
     # external operation; durable generation capacity requires authoritative evidence.
-    Thread(target=invoke, name="media-provider-io", daemon=True).start()
+    try:
+        Thread(target=invoke, name="provider-io", daemon=True).start()
+    except RuntimeError:
+        slots.release()
+        raise
     try:
         successful, value = output.get(timeout=seconds)
     except Empty as exc:
-        raise TimeoutError("Media provider response was not received before the deadline") from exc
+        raise TimeoutError("Provider response was not received before the deadline") from exc
     if not successful:
         assert isinstance(value, BaseException)
         raise value

@@ -11,6 +11,7 @@ import {
   X,
   Check,
   Info,
+  PlugZap,
 } from "lucide-react";
 import Dialog from "@/components/shared/app-dialog";
 import ServiceProviders, {
@@ -49,6 +50,10 @@ type Profile = {
   key_status?: string;
 };
 type Draft = Profile & { api_key: string; clear_key: boolean; dirty: boolean };
+type ConnectionResult = {
+  status: "model_found" | "reachable" | "failed";
+  message: string;
+};
 type SpeechModelPreset = {
   supplier: string;
   model: string;
@@ -130,6 +135,11 @@ export default function ServiceSettings({
   const modelInput = useRef<HTMLInputElement>(null);
   const [modelError, setModelError] = useState("");
   const [attempt, setAttempt] = useState(0);
+  const [connection, setConnection] = useState<
+    ConnectionResult | "checking" | null
+  >(null);
+  const probe = useRef<AbortController | null>(null);
+  useEffect(() => () => probe.current?.abort(), []);
   useEffect(() => {
     if (confirmClose) {
       confirmation.current?.scrollIntoView({ block: "nearest" });
@@ -189,7 +199,19 @@ export default function ServiceSettings({
     stored.supplier === draft.supplier &&
     endpoint(stored.base_url) === endpoint(draft.base_url) &&
     (!stored.protocol || stored.protocol === draft.protocol);
+  const checking = connection === "checking";
+  const canCheck =
+    draft.mode === "custom" &&
+    !!draft.model.trim() &&
+    (preset || !!draft.base_url.trim()) &&
+    !draft.clear_key &&
+    (!!draft.api_key.trim() || hasStoredKey);
 
+  function resetConnection() {
+    probe.current?.abort();
+    probe.current = null;
+    setConnection(null);
+  }
   function change(patch: Partial<Draft>) {
     setDrafts((current) => ({
       ...current,
@@ -199,6 +221,7 @@ export default function ServiceSettings({
     setError("");
     setModelError("");
     setConfirmClose(false);
+    resetConnection();
   }
   function selectProvider(id: string) {
     if (id === "server") {
@@ -232,6 +255,35 @@ export default function ServiceSettings({
     if (Object.values(drafts).some((row) => row.dirty)) setConfirmClose(true);
     else onDismiss();
   }
+  async function checkConnection() {
+    if (!canCheck || busy || probe.current) return;
+    const request = new AbortController();
+    probe.current = request;
+    setConnection("checking");
+    try {
+      const result = await api<ConnectionResult>(
+        `/me/model-services/${kind}/connection`,
+        {
+          ...json("POST", {
+            supplier: draft.supplier,
+            protocol: draft.protocol || config?.protocols[kind][0],
+            base_url: preset ? undefined : draft.base_url,
+            model: draft.model,
+            api_key: draft.api_key || null,
+            expected_revision: draft.revision,
+          }),
+          signal: request.signal,
+          cache: "no-store",
+        },
+      );
+      if (probe.current === request) setConnection(result);
+    } catch (err) {
+      if (probe.current === request)
+        setConnection({ status: "failed", message: message(err) });
+    } finally {
+      if (probe.current === request) probe.current = null;
+    }
+  }
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (busy || !draft.dirty) return;
@@ -240,6 +292,7 @@ export default function ServiceSettings({
       modelInput.current?.focus();
       return;
     }
+    resetConnection();
     setBusy(true);
     setError("");
     setSaved("");
@@ -339,6 +392,7 @@ export default function ServiceSettings({
               value={kind}
               onValueChange={(value) => {
                 if (!value) return;
+                resetConnection();
                 setKind(value as Kind);
                 setError("");
                 setModelError("");
@@ -662,13 +716,29 @@ export default function ServiceSettings({
                     Key 后保存。
                   </Notice>
                 )}
-              <p className="text-xs leading-relaxed text-muted-foreground">
-                保存配置不会测试连接或产生模型费用。
-                {kind === "text" &&
-                  (draft.mode === "custom"
-                    ? "新任务会将故事素材发送到所选服务，按供应商规则计费。"
-                    : `当前使用服务器默认：${config.text_runtime === "mock" ? "Mock（不调用外部模型）" : config.text_runtime}。`)}
-              </p>
+              {(draft.mode === "custom" || kind === "text") && (
+                <p className="text-xs leading-relaxed text-muted-foreground">
+                  {draft.mode === "custom" &&
+                    "检测连接会用当前 API Key 向所选服务发送只读请求。"}
+                  {kind === "text" &&
+                    (draft.mode === "custom"
+                      ? "新任务会将故事素材发送到所选服务，按供应商规则计费。"
+                      : `当前使用服务器默认：${config.text_runtime === "mock" ? "Mock（不调用外部模型）" : config.text_runtime}。`)}
+                </p>
+              )}
+              {connection && connection !== "checking" && (
+                <Notice
+                  tone={
+                    connection.status === "model_found"
+                      ? "success"
+                      : connection.status === "failed"
+                        ? "error"
+                        : "info"
+                  }
+                >
+                  {connection.message}
+                </Notice>
+              )}
               {error && (
                 <Notice tone="error" role="alert">
                   {error}
@@ -713,7 +783,7 @@ export default function ServiceSettings({
                   <ShieldCheck className="size-4" />
                   账号隔离 · 密钥不回传浏览器
                 </span>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   <Button
                     type="button"
                     variant="outline"
@@ -722,6 +792,22 @@ export default function ServiceSettings({
                   >
                     关闭
                   </Button>
+                  {draft.mode === "custom" && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={busy || checking || !canCheck}
+                      aria-busy={checking}
+                      onClick={checkConnection}
+                    >
+                      {checking ? (
+                        <Spinner aria-hidden="true" />
+                      ) : (
+                        <PlugZap aria-hidden="true" />
+                      )}
+                      {checking ? "检测中…" : "检测连接"}
+                    </Button>
+                  )}
                   <Button disabled={busy || !draft.dirty}>
                     {busy && <Spinner aria-hidden="true" />}
                     {busy ? "保存中…" : "保存此服务"}

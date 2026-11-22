@@ -25,6 +25,87 @@ async function openSettings(page: Page) {
   return { dialog, headers };
 }
 
+test("检测连接使用未保存的输入，显示结果且编辑后清除（手机）", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const { dialog, headers } = await openSettings(page);
+  await dialog
+    .getByRole("radio", { name: "自定义服务商", exact: true })
+    .click();
+  const check = dialog.getByRole("button", { name: "检测连接", exact: true });
+  const model = dialog.getByLabel("模型 ID", { exact: true });
+  await expect(check).toBeDisabled();
+  await dialog
+    .getByLabel("Base URL", { exact: true })
+    .fill("https://probe.example/v1");
+  await model.fill("draft-model");
+  const key = dialog.getByLabel("API Key", { exact: true });
+  await key.fill("ephemeral-browser-key");
+  await expect(check).toBeEnabled();
+
+  let release = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requests: unknown[] = [];
+  await page.route(
+    "**/api/v1/me/model-services/text/connection",
+    async (route) => {
+      expect(route.request().method()).toBe("POST");
+      requests.push(route.request().postDataJSON());
+      if (requests.length === 1) {
+        await pending;
+        await route.fulfill({
+          json: { status: "model_found", message: "服务可达，已查到该模型。" },
+        });
+      } else {
+        await route.fulfill({
+          json: {
+            status: "failed",
+            message: "服务拒绝访问，请检查 API Key 和账号权限。",
+          },
+        });
+      }
+    },
+  );
+  try {
+    await check.click();
+    await expect(
+      dialog.getByRole("button", { name: "检测中…" }),
+    ).toBeDisabled();
+  } finally {
+    release();
+  }
+  await expect(dialog.getByRole("status")).toContainText("已查到该模型");
+  expect(requests).toEqual([
+    {
+      supplier: "custom",
+      protocol: "openai_chat",
+      base_url: "https://probe.example/v1",
+      model: "draft-model",
+      api_key: "ephemeral-browser-key",
+      expected_revision: 0,
+    },
+  ]);
+  await expect(key).toHaveValue("ephemeral-browser-key");
+  const stored = await page.request.get("/api/v1/me/model-services", {
+    headers,
+  });
+  expect((await stored.json()).services).toEqual([]);
+  expect(await dialog.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+    true,
+  );
+  await model.fill("other-model");
+  await expect(dialog.getByRole("status")).toHaveCount(0);
+  await check.click();
+  await expect(dialog.getByRole("alert")).toContainText("服务拒绝访问");
+  await dialog.getByRole("radio", { name: "图片模型" }).click();
+  await expect(dialog.getByText("服务拒绝访问", { exact: false })).toHaveCount(
+    0,
+  );
+});
+
 test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   page,
   browser,
