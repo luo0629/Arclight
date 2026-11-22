@@ -18,7 +18,7 @@ from arclight.providers.media_capabilities import OPENAI_IMAGE_CAPABILITIES, res
 from arclight.providers.media_outputs import MediaOutput
 from arclight.providers.media_submission import MediaSubmission, SubmissionReceipt
 from arclight.providers.network import PublicHTTPTransport
-from arclight.providers.openai_image_sdk import stream_image_generation
+from arclight.providers.openai_image_sdk import image_response_request_id, stream_image_generation
 from arclight.storage.objects import ObjectStorage
 
 
@@ -115,6 +115,7 @@ class OpenAIImageProvider:
             **({"output_compression": 85} if kind == "jpeg" else {}),
         }
         started = time.monotonic()
+        request_id = None
         try:
             with stream_image_generation(
                 base_url=service.base_url,
@@ -124,12 +125,17 @@ class OpenAIImageProvider:
                 transport=self.transport or PublicHTTPTransport(service.dns_timeout_seconds),
                 validate_response=_validate_server_response,
             ) as response:
+                request_id = image_response_request_id(response, secret)
                 raw = bytearray()
                 for chunk in response.iter_raw(chunk_size=65536):
                     raw.extend(chunk)
                 result = ImageResponse.model_validate_json(raw)
-                request_id = response.headers.get("x-request-id")
         except (httpx.HTTPError, DomainError, ValidationError, ValueError):
+            # An incomplete response with a trustworthy header is traceable, not retryable.
+            if request_id is not None:
+                return SubmissionReceipt(
+                    status="RESULT_UNKNOWN", request_id=request_id, error_code="RESULT_UNKNOWN"
+                )
             # A redirect, timeout, malformed or lost response cannot prove rejection.
             raise GatewayFailure("INVALID_RESPONSE") from None
         if len(result.data) != spec.batch_size:
@@ -167,9 +173,7 @@ class OpenAIImageProvider:
         # Dollar charges are not returned by Images. Tokens never become an invoice.
         return SubmissionReceipt(
             status="SUCCEEDED",
-            request_id=request_id
-            if request_id and re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", request_id)
-            else None,
+            request_id=request_id,
             result=GenerationResult(output_handles=handles, usage=usage),
             latency_ms=min(int((time.monotonic() - started) * 1000), 2147483647),
             cost=None,

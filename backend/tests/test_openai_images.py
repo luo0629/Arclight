@@ -517,10 +517,13 @@ def test_image_network_fails_closed_without_following_or_retrying(
     provider = OpenAIImageProvider(
         configured, transport=httpx.MockTransport(redirect) if failure == "redirect" else None
     )
-    assert deliver(client, job, provider) == "RESULT_UNKNOWN"
-    assert len(requests) == (1 if failure == "redirect" else 0)
+    blocked_before_send = failure == "dns"
+    assert deliver(client, job, provider) == ("FAILED" if blocked_before_send else "RESULT_UNKNOWN")
+    assert len(requests) == (0 if blocked_before_send else 1)
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(GatewayReceipt)).actual_cost is None
+        receipt = db.scalar(select(GatewayReceipt))
+        assert receipt.status == ("NOT_ACCEPTED" if blocked_before_send else "RESULT_UNKNOWN")
+        assert receipt.actual_cost == (Decimal("0") if blocked_before_send else None)
 
 
 def test_postgres_real_provider_quotes_compete_for_one_budget(configured, client, episode):

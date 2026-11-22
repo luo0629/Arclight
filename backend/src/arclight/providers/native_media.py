@@ -31,6 +31,7 @@ from arclight.providers.native_media_protocols import (
     submission,
 )
 from arclight.providers.network import PublicHTTPTransport, validate_endpoint
+from arclight.providers.openai_image_sdk import image_response_request_id, stream_image_generation
 from arclight.storage.objects import ObjectStorage
 
 
@@ -150,21 +151,11 @@ class NativeMediaProvider:
         maximum: int | None = JSON_RESPONSE_LIMIT,
     ) -> dict:
         base = validate_endpoint(self.connection.configuration["base_url"])
-        if method == "POST" and self.name == "openai_image" and body is not None:
-            from arclight.providers.openai_image_sdk import stream_image_generation
+        raw, _, _ = self._read(method, base + path, payload=body, extra=extra, maximum=maximum)
+        return self._parse_json(method, raw)
 
-            with stream_image_generation(
-                base_url=base,
-                path=path,
-                api_key=self.connection.api_key,
-                parameters=body,
-                timeout=self.settings.media_execution_policy.call_timeout_seconds,
-                transport=self.transport
-                or PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),
-            ) as response:
-                raw = read_provider_response(response, maximum=maximum)
-        else:
-            raw, _, _ = self._read(method, base + path, payload=body, extra=extra, maximum=maximum)
+    @staticmethod
+    def _parse_json(method: str, raw: bytes) -> dict:
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise GatewayFailure("INVALID_RESPONSE")
@@ -314,6 +305,31 @@ class NativeMediaProvider:
             seen.add(identity)
         return request.image_inputs
 
+    def _submit_image_json(self, path: str, body: dict) -> tuple[dict | None, str | None]:
+        base = validate_endpoint(self.connection.configuration["base_url"])
+        api_key = self.connection.api_key
+        with stream_image_generation(
+            base_url=base,
+            path=path,
+            api_key=api_key,
+            parameters=body,
+            timeout=self.settings.media_execution_policy.call_timeout_seconds,
+            transport=self.transport or PublicHTTPTransport(self.settings.llm_dns_timeout_seconds),
+        ) as response:
+            request_id = image_response_request_id(response, api_key)
+            try:
+                return self._parse_json(
+                    "POST", read_provider_response(response, maximum=None)
+                ), request_id
+            except GatewayFailure as exc:
+                if request_id is None or exc.not_accepted or exc.completed:
+                    raise
+            except (httpx.HTTPError, ValueError):
+                if request_id is None:
+                    raise
+            # We can correlate the submission, but cannot infer a final outcome.
+            return None, request_id
+
     def submit(self, request: MediaSubmission) -> SubmissionReceipt:
         completed = False
         try:
@@ -348,15 +364,23 @@ class NativeMediaProvider:
                     ],
                 )
                 return SubmissionReceipt(status="SUCCEEDED", result=result)
-            value = self._json(
-                "POST",
-                path,
-                body,
-                extra,
-                maximum=None
-                if self.name not in ASYNC and KINDS[self.name] in {"IMAGE", "VIDEO"}
-                else JSON_RESPONSE_LIMIT,
-            )
+            request_id = None
+            if self.name == "openai_image":
+                value, request_id = self._submit_image_json(path, body)
+                if value is None:
+                    return SubmissionReceipt(
+                        status="RESULT_UNKNOWN", request_id=request_id, error_code="RESULT_UNKNOWN"
+                    )
+            else:
+                value = self._json(
+                    "POST",
+                    path,
+                    body,
+                    extra,
+                    maximum=None
+                    if self.name not in ASYNC and KINDS[self.name] in {"IMAGE", "VIDEO"}
+                    else JSON_RESPONSE_LIMIT,
+                )
             if self.name in ASYNC:
                 identity = value.get("id") or value.get("request_id")
                 if self.name == "wan":
@@ -376,6 +400,7 @@ class NativeMediaProvider:
             completed = True
             return SubmissionReceipt(
                 status="SUCCEEDED",
+                request_id=request_id,
                 result=self._success(request, self._sources(value), value.get("usage")),
             )
         except (httpx.HTTPError, DomainError, KeyError, TypeError, ValueError, AttributeError):

@@ -1,5 +1,6 @@
 """Single-submit Images SDK transport for account and server routes."""
 
+import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 
@@ -10,6 +11,13 @@ from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.providers.media_io import JSON_RESPONSE_LIMIT, read_provider_response
 from arclight.providers.sdk_logging import suppress_sdk_logging
+
+
+def image_response_request_id(response: httpx.Response, api_key: str) -> str | None:
+    header = response.headers.get("x-request-id", "")
+    if re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", header) and api_key not in header:
+        return header
+    return None
 
 
 def _validate_account_response(response: httpx.Response) -> None:
@@ -51,7 +59,22 @@ class _ImageTransport(httpx.BaseTransport):
             extensions=request.extensions,
         )
         self.sent = True
-        response = self.transport.handle_request(outbound)
+        try:
+            response = self.transport.handle_request(outbound)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            # This transport makes a single attempt without proxying or retries.
+            # These failures precede writing the POST; write/read failures do not.
+            raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True) from None
+        except DomainError as exc:
+            if exc.code not in {
+                "INVALID_SERVICE_URL",
+                "SERVICE_ADDRESS_BLOCKED",
+                "SERVICE_DNS_UNAVAILABLE",
+            }:
+                raise
+            # Public HTTP transport raises these while validating/resolving the URL.
+            # A blocked redirect happens after sending and is deliberately excluded.
+            raise GatewayFailure(exc.code, not_accepted=True) from None
         try:
             # Validate before the SDK can read an error body or remap a provider status.
             self.validate_response(response)
