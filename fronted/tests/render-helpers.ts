@@ -351,7 +351,7 @@ export async function renderFixture(page: Page) {
   const reviews: ReturnType<typeof review>[] = [];
   const control: {
     role: "owner" | "editor" | "viewer";
-    archived: boolean;
+    readonly archived: boolean;
     readStatus?: number;
     jobNetworkFailure?: boolean;
     jobGate?: Promise<void>;
@@ -359,7 +359,13 @@ export async function renderFixture(page: Page) {
     detailGate?: (route: Route, row: Delivery) => Promise<void>;
     reportGate?: (route: Route, row: Delivery) => Promise<void>;
     contentGate?: (route: Route, row: Delivery) => Promise<void>;
-  } = { role: "owner", archived: false, warnings: false };
+  } = {
+    role: "owner",
+    get archived() {
+      return episodes.every((episode) => episode.status === "ARCHIVED");
+    },
+    warnings: false,
+  };
   const mutations: Mutation[] = [];
   const reads: string[] = [];
   const contentReads: { path: string; authorization: string }[] = [];
@@ -475,21 +481,6 @@ export async function renderFixture(page: Page) {
     }
     if (path === `/api/v1/projects/${project.id}/access`)
       return route.fulfill({ json: { role: control.role } });
-    if (
-      control.archived &&
-      method === "GET" &&
-      (path === `/api/v1/projects/${project.id}/episodes` ||
-        episodes.some((episode) => path === `/api/v1/episodes/${episode.id}`))
-    ) {
-      const original = await route.fetch();
-      const data = await original.json();
-      return route.fulfill({
-        response: original,
-        json: Array.isArray(data)
-          ? data.map((row: Episode) => ({ ...row, status: "ARCHIVED" }))
-          : { ...data, status: "ARCHIVED" },
-      });
-    }
     const rendererPath =
       /\/(timelines|render-manifests|render-jobs|deliveries|human-reviews)(\/|$)/.test(
         path,
@@ -859,6 +850,17 @@ export async function renderFixture(page: Page) {
     reads,
     contentReads,
     control,
+    async archiveEpisodes() {
+      for (const [index, episode] of episodes.entries()) {
+        const archived = await page.request.patch(
+          `/api/v1/episodes/${episode.id}`,
+          { headers, data: { archived: true } },
+        );
+        expect(archived.status()).toBe(200);
+        episodes[index] = await archived.json();
+        expect(episodes[index].status).toBe("ARCHIVED");
+      }
+    },
     href,
     open,
     mediaBytes: () => Buffer.from(media),

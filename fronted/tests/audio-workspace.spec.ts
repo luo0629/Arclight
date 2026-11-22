@@ -565,7 +565,7 @@ for (const mode of ["viewer", "archived"] as const)
     const env = await audioFixture(page);
     env.addHistory();
     if (mode === "viewer") env.control.role = "viewer";
-    else env.control.archived = true;
+    else await env.archiveEpisodes();
     const panel = await env.open();
     await expect(panel.getByText(/当前为只读模式/)).toBeVisible();
     await expect(

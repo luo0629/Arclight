@@ -573,7 +573,7 @@ test("RENDER-12：Viewer 可查报告与下载，没有生产或人工确认写�
 
 test("RENDER-12：归档剧集保持成片只读，禁止创建与提交", async ({ page }) => {
   const env = await renderFixture(page);
-  env.control.archived = true;
+  await env.archiveEpisodes();
   const panel = await env.open();
   await expect(
     panel.getByRole("button", { name: "提交渲染", exact: true }),
@@ -585,8 +585,6 @@ test("RENDER-12：归档剧集保持成片只读，禁止创建与提交", async
     panel.getByRole("button", { name: "下载 MP4", exact: true }),
   ).toBeEnabled();
   expect(env.mutations).toHaveLength(0);
-  // Finish stream.ready episode reads before this page is torn down.
-  await page.unrouteAll({ behavior: "wait" });
 });
 
 test("RENDER-12：撤权后的刷新清除旧成片和报告，并显示 request ID", async ({
