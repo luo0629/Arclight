@@ -23,6 +23,9 @@ OPERATOR_ONLY_CHECKS = {
     "tests.test_audio_tts_live::test_three_authorized_original_tts_lines": (
         "Paid TTS requires explicit authorization, dedicated credentials and a USD cap"
     ),
+    "tests.test_openai_images_live::test_one_authorized_synthetic_image": (
+        "Real paid image acceptance requires explicit cost/data authorization"
+    ),
 }
 
 

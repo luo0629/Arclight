@@ -247,15 +247,26 @@ def test_other_database_pass_does_not_hide_an_invalid_skip(repo, reason):
 
 
 @pytest.mark.parametrize("outcome", ["authorization", "unrelated", "regression", "failure"])
-def test_only_exact_live_provider_authorization_skip_is_operator_only(repo, outcome):
-    module = "tests.test_audio_tts_live"
-    live_case = "test_three_authorized_original_tts_lines"
-    name = live_case if outcome != "unrelated" else "test_ordinary_speech_contract"
-    reason = (
-        "Provider regression"
-        if outcome == "regression"
-        else "Paid TTS requires explicit authorization, dedicated credentials and a USD cap"
-    )
+@pytest.mark.parametrize(
+    ("module", "live_case", "approval_reason"),
+    [
+        (
+            "tests.test_audio_tts_live",
+            "test_three_authorized_original_tts_lines",
+            "Paid TTS requires explicit authorization, dedicated credentials and a USD cap",
+        ),
+        (
+            "tests.test_openai_images_live",
+            "test_one_authorized_synthetic_image",
+            "Real paid image acceptance requires explicit cost/data authorization",
+        ),
+    ],
+)
+def test_only_exact_live_provider_authorization_skip_is_operator_only(
+    repo, outcome, module, live_case, approval_reason
+):
+    name = live_case if outcome != "unrelated" else "test_ordinary_provider_contract"
+    reason = "Provider regression" if outcome == "regression" else approval_reason
     result = preflight.junit_evidence(
         [
             junit(
@@ -266,7 +277,7 @@ def test_only_exact_live_provider_authorization_skip_is_operator_only(repo, outc
                 + "</testcase>",
             )
         ],
-        ("backend/tests/test_audio_tts_live.py",),
+        (f"backend/{module.replace('.', '/')}.py",),
     )
     case = f"{module}::{name}"
     assert not result.passed and not result.missing
