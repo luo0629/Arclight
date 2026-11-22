@@ -1,6 +1,7 @@
 """ARUN-05 exercises the real persistent graph, journals and gateway, with HTTP Fakes."""
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -497,7 +498,7 @@ def test_real_process_exit_after_response_replays_without_calling_provider_again
     payload.write_text(
         json.dumps(
             {
-                "settings": settings.model_dump(mode="json"),
+                "settings": settings.model_dump(mode="json", exclude={"service_encryption_key"}),
                 "request": seed.model_dump(mode="json"),
                 "response": final(),
             }
@@ -520,7 +521,11 @@ class FinalResult(BaseModel):
     summary: str = Field(min_length=1, max_length=1000)
     requires_human_review: bool
 data = json.load(open(sys.argv[1], encoding="utf-8"))
-settings = Settings(_env_file=None, **data["settings"])
+settings = Settings(
+    _env_file=None,
+    service_encryption_key=os.environ["ARCLIGHT_TEST_AGENT_RECOVERY_KEY"],
+    **data["settings"],
+)
 llm_transport.PublicHTTPTransport = lambda *a, **kw: httpx.MockTransport(
     lambda req: httpx.Response(200, json=data["response"]))
 original = r._PersistentRuntime.decide
@@ -535,12 +540,34 @@ r.run_persistent_agent_loop(session_factory(build_engine(settings), settings), s
         encoding="utf-8",
     )
     process = subprocess.run(
-        [sys.executable, str(script), str(payload)], capture_output=True, text=True, timeout=45
+        [sys.executable, str(script), str(payload)],
+        capture_output=True,
+        text=True,
+        timeout=45,
+        env={
+            **os.environ,
+            "ARCLIGHT_TEST_AGENT_RECOVERY_KEY": settings.service_encryption_key.get_secret_value(),
+        },
     )
     assert process.returncode == 51, process.stderr
+    loop_id = loop_for(client, run_id)
+    with client.app.state.session_factory() as db:
+        action = db.scalars(
+            select(AgentLoopAction).where(
+                AgentLoopAction.loop_id == loop_id, AgentLoopAction.kind == "MODEL"
+            )
+        ).one()
+        assert action.result_json is not None, "child did not commit a model result"
+        assert action.result_json["final"]["decision"] == "COMPLETE"
+        receipt = db.scalars(
+            select(GatewayReceipt)
+            .join(GatewayCall)
+            .where(GatewayCall.id == action.gateway_call_id, GatewayCall.workflow_id == run_id)
+        ).one()
+        assert receipt.status == "SUCCEEDED"
     time.sleep(3.2)
     model_service(lambda request: pytest.fail("a committed model result must never be resent"))
-    result = resume(client, settings, loop_for(client, run_id), actor, registry)
+    result = resume(client, settings, loop_id, actor, registry)
     assert result.status == "COMPLETED" and result.model_turns == 1
     assert len(rows_for(client, run_id)["actions"]) == 1
     with client.app.state.session_factory() as db:
