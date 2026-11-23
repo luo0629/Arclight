@@ -97,6 +97,9 @@ class AgentToolError(AgentToolContract):
         return value
 
 
+MAX_AGENT_TOOL_RESULT_BYTES = 65536
+
+
 class AgentToolFeedback(AgentToolContract):
     schema_version: Literal["1.0"] = "1.0"
     run_id: UUID
@@ -115,7 +118,8 @@ class AgentToolFeedback(AgentToolContract):
             raise ValueError("Tool feedback status and result must agree")
         if self.result is not None:
             safe_metadata(self.result)
-            if len(json.dumps(self.result, ensure_ascii=False, allow_nan=False).encode()) > 65536:
+            result_size = len(json.dumps(self.result, ensure_ascii=False, allow_nan=False).encode())
+            if result_size > MAX_AGENT_TOOL_RESULT_BYTES:
                 raise ValueError("Agent tool result exceeds the size limit")
         return self
 

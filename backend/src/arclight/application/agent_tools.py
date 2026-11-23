@@ -98,6 +98,9 @@ class AgentToolRegistry:
     def get(self, name: str) -> AgentToolDefinition | None:
         return self._tools.get(name)
 
+    def with_tools(self, tools: Iterable[AgentToolDefinition]) -> "AgentToolRegistry":
+        return AgentToolRegistry((*self._tools.values(), *tools))
+
 
 def available_agent_tools(
     db: Session,

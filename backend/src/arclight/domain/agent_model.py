@@ -92,6 +92,14 @@ AgentMessage = Annotated[
 ]
 
 
+class AgentSkillSnapshot(AgentModelValue):
+    model_config = ConfigDict(frozen=True)
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    instructions: str = Field(min_length=1, max_length=8000, repr=False)
+
+
 class AgentModelRequest(AgentModelValue):
     protocol_version: Literal["agent-model/1"] = PROTOCOL_VERSION
     run_id: UUID
@@ -102,6 +110,10 @@ class AgentModelRequest(AgentModelValue):
     prompt_version: str = Field(min_length=1, max_length=100)
     result_schema_version: str = Field(min_length=1, max_length=100)
     system_instruction: str = Field(min_length=1, max_length=20000, repr=False)
+    # An absent snapshot must round-trip without altering sealed request hashes.
+    skills: tuple[AgentSkillSnapshot, ...] = Field(
+        default=(), max_length=2, exclude_if=lambda value: not value
+    )
     evidence_round: int = Field(default=0, strict=True, ge=0, le=32)
     max_tokens: int = Field(default=4096, strict=True, ge=1, le=16000)
     messages: list[AgentMessage] = Field(min_length=1, max_length=128, repr=False)

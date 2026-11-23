@@ -169,7 +169,13 @@ def test_real_art_advice_precedes_final_storyboard_and_records_exact_choice(
     assert observed["status"] == "ADVICE" and len(art_sent) == 4
     assert all(
         {tool["function"]["name"] for tool in payload["tools"]}
-        == {"investigate_art", "compare_art_options"}
+        == {
+            "investigate_art",
+            "compare_art_options",
+            "arclight_read_content",
+            "arclight_read_shot_context",
+            "arclight_read_visual_references",
+        }
         for payload in art_sent
     )
     envelope = json.loads(art_sent[0]["messages"][2]["content"])["data"]["director_opinion"]

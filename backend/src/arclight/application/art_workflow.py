@@ -5,10 +5,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.application.agent_tools import grant_agent_tools
 from arclight.application.agent_workflows import creation_loops, waiting_for_answer
 from arclight.application.art_direction import art_direction_registry
 from arclight.application.commands import emit, require_run
+from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_tools import AgentToolGrantRequest
@@ -28,7 +28,7 @@ from arclight.persistence.models import Episode, OutboxEvent, WorkflowRun
 
 
 def authorize_art(db: Session, run: WorkflowRun, actor: str, settings: Settings) -> None:
-    grant_agent_tools(
+    grant_professional_agent_tools(
         db,
         AgentToolGrantRequest(
             run_id=run.id,

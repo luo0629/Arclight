@@ -9,6 +9,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from arclight.agent_skills import freeze_agent_skills
 from arclight.application.agent_limits import configure_agent_run, validate_agent_execution
 from arclight.application.agent_memory import project_agent_memory
 from arclight.application.agent_runtime_state import scope_for_run
@@ -17,6 +18,7 @@ from arclight.application.context_evidence import read_trace
 from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.gateway_text import execution_actor
 from arclight.application.model_gateway import lock_gate
+from arclight.application.shared_agent_reads import with_project_reads
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentExecutionContext, AgentRunLimits
@@ -64,7 +66,7 @@ class _AgentRuntime[T: BaseModel]:
         output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
     ):
         self.factory, self.settings, self.seed = factory, settings, seed
-        self.registry, self.result_model = registry, result_model
+        self.registry, self.result_model = with_project_reads(registry), result_model
         self.decision_model = cast(
             type[AgentDecision[T]], AgentDecision.__class_getitem__(result_model)
         )
@@ -339,6 +341,7 @@ def run_agent_loop[T: BaseModel](
     request = AgentModelRequest.model_validate(request.model_dump(mode="json"))
     if any(not isinstance(item, AgentUserMessage) for item in request.messages):
         raise DomainError("AGENT_HISTORY_INVALID", "新循环不能注入模型或工具历史", 422)
+    request = freeze_agent_skills(request)
     runtime = _AgentRuntime(factory, settings, request, registry, result_model, validate_result)
     runtime.prepare(limits, parent_run_id)
     graph = build_agent_graph(runtime)

@@ -11,7 +11,6 @@ from arclight.application import screenwriter_planning as planning
 from arclight.application.agent_loop_recovery import run_persistent_agent_loop
 from arclight.application.agent_tools import (
     build_agent_tool_registry,
-    grant_agent_tools,
 )
 from arclight.application.agent_workflows import (
     creation_loops as creation_loops,
@@ -21,6 +20,7 @@ from arclight.application.agent_workflows import (
 )
 from arclight.application.commands import require_run
 from arclight.application.content_references import validate_script_assets
+from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -65,7 +65,7 @@ def authorize_screenwriter(db: Session, run: WorkflowRun, actor: str, settings: 
     # Choosing professional creation explicitly authorizes this read-only investigation.
     series = "narrative_context" in run.input_json
     revision = run.input_json["screenwriter"].get("revision_rounds") is not None
-    grant_agent_tools(
+    grant_professional_agent_tools(
         db,
         AgentToolGrantRequest(
             run_id=run.id,

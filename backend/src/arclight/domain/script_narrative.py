@@ -29,6 +29,16 @@ class NarrativeRequest(LedgerValue):
         return self
 
 
+class FrozenWritingQuery(LedgerValue):
+    run_id: UUID
+    story_time: StoryTime | None = None
+    scene_no: int | None = Field(default=None, strict=True, ge=1, le=50)
+    character_id: UUID | None = None
+    causal_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    limit: int = Field(default=20, strict=True, ge=1, le=100)
+    offset: int = Field(default=0, strict=True, ge=0, le=1000)
+
+
 class NarrativeContext(NarrativeRequest):
     schema_version: Literal["writing-context/1"] = "writing-context/1"
     label: Literal["WRITING_TARGET"] = "WRITING_TARGET"

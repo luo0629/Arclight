@@ -27,6 +27,7 @@ from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
 from test_generation_budget import set_policy
 
+from arclight.agent_skills import freeze_agent_skills
 from arclight.application import agent_loop_recovery as recovery
 from arclight.application.agent_loop_recovery import resume_agent_loop, run_persistent_agent_loop
 from arclight.application.agent_loop_store import (
@@ -47,6 +48,7 @@ from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision
 from arclight.domain.model_gateway import GatewayUsage
+from arclight.domain.versions import digest
 from arclight.main import create_app
 from arclight.persistence.agent_loops import (
     AgentLoop,
@@ -90,11 +92,14 @@ def loop_for(client, run_id):
         return db.scalar(select(AgentLoop).where(AgentLoop.run_id == run_id)).id
 
 
+@pytest.mark.parametrize("with_skills", [True, False], ids=["with-skills", "historical-seed"])
 def test_human_question_survives_app_restart_and_answer_continues_same_thread(
     client,
     episode,
     settings,
     model_service,
+    monkeypatch,
+    with_skills,
 ):
     run_id, actor, registry = setup_loop(client, episode, settings)
     seed = model_request(run_id)
@@ -107,7 +112,10 @@ def test_human_question_survives_app_restart_and_answer_continues_same_thread(
         return httpx.Response(200, json=final() if responded else final("HUMAN_REVIEW"))
 
     model_service(respond)
-    waiting = start(client, settings, seed, registry)
+    with monkeypatch.context() as before_skill_loading:
+        if not with_skills:
+            before_skill_loading.setattr(recovery, "freeze_agent_skills", lambda request: request)
+        waiting = start(client, settings, seed, registry)
     assert waiting.status == "HUMAN_REVIEW" and waiting.question_id is not None
     assert waiting.input_sha256 and waiting.loop_id
     with client.app.state.session_factory() as db:
@@ -117,8 +125,23 @@ def test_human_question_survives_app_restart_and_answer_continues_same_thread(
         question = db.get(AgentLoopQuestion, waiting.question_id)
         assert question.question_json == waiting.human_request.model_dump(mode="json")
         original_input = db.get(WorkflowRun, run_id).input_json
+        frozen_seed = loop.seed_json
+        assert loop.request_sha256 == digest(frozen_seed)
+        if with_skills:
+            assert [item["name"] for item in frozen_seed["skills"]] == [
+                "approved-version-evidence",
+                "screenwriter-revision",
+            ]
+            for skill in frozen_seed["skills"]:
+                assert skill["instructions"] in sent[0]["messages"][0]["content"]
+        else:
+            assert frozen_seed == seed.model_dump(mode="json")
+    monkeypatch.setattr(
+        recovery, "freeze_agent_skills", lambda _: pytest.fail("Recovery must reuse frozen Skills")
+    )
     # A new application, engine and official saver read only persistent state.
     with TestClient(create_app(settings)) as restarted:
+        assert start(restarted, settings, seed, registry) == waiting
         still_waiting = resume(restarted, settings, waiting.loop_id, actor, registry)
         assert still_waiting == waiting and len(sent) == 1
         completed = resume(
@@ -127,9 +150,11 @@ def test_human_question_survives_app_restart_and_answer_continues_same_thread(
         assert completed.status == "COMPLETED" and completed.model_turns == 2
         assert resume(restarted, settings, waiting.loop_id, actor, registry) == completed
     assert len(sent) == 2
+    assert sent[0]["messages"][0] == sent[1]["messages"][0]
     assert "decision_id" in json.dumps(sent[-1], ensure_ascii=False)
     with client.app.state.session_factory() as db:
         assert len(list(db.scalars(select(AgentLoopDecision)))) == 1
+        assert db.get(AgentLoop, waiting.loop_id).seed_json == frozen_seed
         assert db.get(WorkflowRun, run_id).input_json == original_input
         assert db.get(WorkflowRun, run_id).status == "RUNNING"
         assert db.get(WorkflowRun, run_id).pending_review is None
@@ -727,7 +752,7 @@ def test_human_answer_context_overflow_stops_without_discarding_frozen_evidence(
         memory = read_agent_memory(db, db.get(WorkflowRun, run_id), "script", actor)
     seed = model_request(run_id, messages=[AgentUserMessage(data={"padding": ""})])
     observed = AgentModelRequest.model_validate(
-        seed.model_dump(mode="json")
+        freeze_agent_skills(seed).model_dump(mode="json")
         | {
             "messages": [item.model_dump(mode="json") for item in seed.messages]
             + [AgentUserMessage(data=memory).model_dump(mode="json")]
@@ -746,5 +771,7 @@ def test_human_answer_context_overflow_stops_without_discarding_frozen_evidence(
     stopped = resume(client, settings, waiting.loop_id, actor, registry, decision=answer(waiting))
     assert stopped.stop_code == "AGENT_CONTEXT_LIMIT" and len(sent) == 1
     with client.app.state.session_factory() as db:
-        assert db.get(AgentLoop, waiting.loop_id).seed_json == seed.model_dump(mode="json")
+        assert db.get(AgentLoop, waiting.loop_id).seed_json == freeze_agent_skills(seed).model_dump(
+            mode="json"
+        )
         assert read_trace(db, db.get(WorkflowRun, run_id), "script", actor) == memory["observation"]

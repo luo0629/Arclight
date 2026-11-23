@@ -17,6 +17,7 @@ from test_story_ledger import approve_ledger, approved_script, ledger_content, s
 from test_writing_context import writing_case as writing_case  # noqa: F401
 
 from arclight.application import agent_limits
+from arclight.application.agent_project_reads import ProjectReads
 from arclight.application.narrative_review import read_work
 from arclight.application.narrative_review_evidence import validate_assessment
 from arclight.application.runtime import execute_run
@@ -25,7 +26,7 @@ from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.narrative_review import CATEGORIES, NarrativeAssessment
 from arclight.main import create_app
 from arclight.persistence.agent_limits import AgentRunLimit
-from arclight.persistence.models import AssetVersion, Episode, OutboxEvent, WorkflowRun
+from arclight.persistence.models import AssetVersion, Episode, OutboxEvent, Project, WorkflowRun
 
 
 def prepare(client, case):
@@ -225,6 +226,14 @@ def test_reviewer_uses_exact_evidence_and_blocker_cannot_be_approved(
     assert value["status"] == "WAITING_REVIEW", value
     assert len(calls) == 1
     assert value["report"]["assessment"]["checks"][0]["issues"][0]["severity"] == "BLOCKER"
+    with client.app.state.session_factory() as db:
+        run = db.get(WorkflowRun, UUID(run_id))
+        episode = db.get(Episode, run.episode_id)
+        actor = db.get(Project, episode.project_id).owner_id
+        evidence = ProjectReads(db, actor).arclight_read_review_evidence(run.id, "review")
+    (report,) = evidence["review_reports"]
+    assert report["kind"] == "NARRATIVE" and report["report"] == value["report"]
+    assert report["cited_locations"]
     human_id = value["human_review"]["id"]
     response = client.post(
         f"/api/v1/human-reviews/{human_id}/decisions", json=human_decision(value)

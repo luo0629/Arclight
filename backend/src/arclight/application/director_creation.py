@@ -11,12 +11,13 @@ from arclight.agents.contracts import (
 )
 from arclight.application import director_planning as planning
 from arclight.application.agent_loop_recovery import run_persistent_agent_loop
-from arclight.application.agent_tools import build_agent_tool_registry, grant_agent_tools
+from arclight.application.agent_tools import build_agent_tool_registry
 from arclight.application.commands import require_run
 from arclight.application.content_references import validate_storyboard_assets
 from arclight.application.director_research import approved_input
 from arclight.application.gateway_text import execution_actor
 from arclight.application.screenwriter_creation import creation_loops, operation
+from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -48,7 +49,7 @@ def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Sett
         if options.get("performance") is True
         else build_agent_tool_registry(settings=settings)
     )
-    grant_agent_tools(
+    grant_professional_agent_tools(
         db,
         AgentToolGrantRequest(
             run_id=run.id,
@@ -61,7 +62,7 @@ def authorize_director(db: Session, run: WorkflowRun, actor: str, settings: Sett
         catalog,
     )
     if collaboration:
-        grant_agent_tools(
+        grant_professional_agent_tools(
             db,
             AgentToolGrantRequest(
                 run_id=run.id,

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from arclight.application.series_planning import validate_planning_source
 from arclight.application.story_ledger import get_head, script_source, timestamp, version_approval
 from arclight.core.errors import DomainError
-from arclight.domain.script_narrative import NarrativeContext, NarrativeRequest
+from arclight.domain.script_narrative import FrozenWritingQuery, NarrativeContext, NarrativeRequest
 from arclight.domain.series_planning import SeriesOutlineContent
 from arclight.domain.story_ledger import entry_visible, read_ledger_content
 from arclight.domain.versions import digest
@@ -28,12 +28,41 @@ from arclight.persistence.models import (
     StoryLedgerVersion,
     StoryOutline,
     VisualAsset,
+    WorkflowRun,
 )
 
 NARRATIVE_SOURCE_KINDS = frozenset(
     {"SERIES_PLAN", "STORY_LEDGER", "WRITING_TARGET", "NARRATIVE_QUERY"}
 )
 MAX_PROJECTION_BYTES = 65536
+
+
+def query_frozen_writing(
+    db: Session, episode_id: UUID, actor: str, query: FrozenWritingQuery
+) -> dict:
+    from arclight.application.commands import require_episode
+
+    episode = require_episode(db, episode_id, actor)
+    run = db.get(WorkflowRun, query.run_id)
+    if run is None or run.episode_id != episode.id:
+        raise DomainError("NOT_FOUND", "运行不存在", 404)
+    context = run.input_json.get("narrative_context")
+    if context is None:
+        raise DomainError("NARRATIVE_CONTEXT_UNAVAILABLE", "该运行没有冻结叙事上下文", 409)
+    if context.get("episode_id") != str(episode_id):
+        _invalid()
+    return load_narrative_projection(
+        db,
+        episode.project_id,
+        actor,
+        context,
+        story_time=query.story_time,
+        scene_no=query.scene_no,
+        character_id=query.character_id,
+        causal_ids=query.causal_ids,
+        limit=query.limit,
+        offset=query.offset,
+    )
 
 
 def _invalid(message: str = "叙事上下文的精确来源不匹配") -> NoReturn:

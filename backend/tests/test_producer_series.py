@@ -23,6 +23,7 @@ from test_writing_context import writing_case as writing_case  # noqa: F401
 
 from arclight.application import producer_planning as planning
 from arclight.application.agent_limits import action_usage, validate_agent_execution
+from arclight.application.agent_project_reads import ProjectReads
 from arclight.application.producer_series_delivery import control_series, paused
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -211,6 +212,10 @@ def test_cross_episode_delegation_and_restart_replay_keep_root_limits(
         )
         assert policy.root_run_id == run_id and policy.parent_run_id == run_id
         assert policy.limits_json == root.limits_json and policy.deadline_at == root.deadline_at
+        status = ProjectReads(db, actor).arclight_read_production_status(run_id)
+        tasks = {task["task_key"]: task for task in status["latest_plan"]["tasks"]}
+        assert tasks["second"]["episode_id"] == series_case["later"]["id"]
+        assert tasks["second"]["child_run_id"] == first["child_run_id"]
         assert (
             db.scalar(
                 select(func.count())

@@ -10,6 +10,7 @@ from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from arclight.agent_skills import freeze_agent_skills
 from arclight.application.agent_loop_store import (
     AgentLoopStore,
     checked_loop,
@@ -403,11 +404,10 @@ def run_persistent_agent_loop[T: BaseModel](
                 AgentLoop.run_id == run.id, AgentLoop.operation_sha256 == runtime.identity
             )
         )
-        checksum, schema = (
-            digest(request.model_dump(mode="json")),
-            digest(result_model.model_json_schema()),
-        )
+        schema = digest(result_model.model_json_schema())
         if loop is None:
+            seed = freeze_agent_skills(request)
+            seed_json = seed.model_dump(mode="json")
             identity = uuid4()
             loop = AgentLoop(
                 id=identity,
@@ -415,18 +415,25 @@ def run_persistent_agent_loop[T: BaseModel](
                 project_id=project_id,
                 actor_id=actor,
                 operation_sha256=runtime.identity,
-                request_sha256=checksum,
+                request_sha256=digest(seed_json),
                 input_sha256=scope_for_run(run, project_id).input_sha256,
                 result_schema_sha256=schema,
                 thread_id=f"agent-loop:{identity}",
-                seed_json=request.model_dump(mode="json"),
+                seed_json=seed_json,
                 status="RUNNING",
             )
             db.add(loop)
             db.flush()
-        if loop.request_sha256 != checksum or loop.result_schema_sha256 != schema:
-            raise DomainError("AGENT_LOOP_CONFLICT", "同一操作不能更换请求或结果合同", 409)
+        else:
+            # Reentry supplies the same business request. The stored seed owns the
+            # exact instructions, including operations sealed before Skill loading.
+            seed = AgentModelRequest.model_validate(loop.seed_json)
+            if loop.result_schema_sha256 != schema or digest(
+                seed.model_dump(mode="json", exclude={"skills"})
+            ) != digest(request.model_dump(mode="json", exclude={"skills"})):
+                raise DomainError("AGENT_LOOP_CONFLICT", "同一操作不能更换请求或结果合同", 409)
         loop_id = loop.id
+    runtime.seed = seed
     return _execute(runtime, loop_id, actor=None, lease_policy=lease_policy)
 
 

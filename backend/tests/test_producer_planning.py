@@ -74,7 +74,7 @@ def begin_producer(
 
 
 def install_plan_model(
-    model_service, *, tasks=None, patch=None, on_http=None, cost="0", human=False
+    model_service, *, tasks=None, patch=None, on_http=None, cost="0", human=False, status_run=None
 ):
     sent, errors = [], []
 
@@ -90,7 +90,11 @@ def install_plan_model(
                 item["role"] == "user" and "human_decision" in (item.get("content") or "")
                 for item in payload["messages"]
             )
-            if not feedback:
+            if status_run and not feedback:
+                value = call_response(
+                    ("status", "arclight_read_production_status", {"run_id": str(status_run)})
+                )
+            elif not any(item["tool_name"] == "investigate_project" for item in feedback):
                 value = call_response(
                     ("project-state", "investigate_project", {"query": {"path": "overview"}})
                 )
@@ -103,7 +107,7 @@ def install_plan_model(
                         "evidence_sha256": item["result"]["evidence_sha256"],
                     }
                     for item in feedback
-                    if item["status"] == "SUCCEEDED"
+                    if item["status"] == "SUCCEEDED" and item["tool_name"] == "investigate_project"
                 ]
                 proposed = tasks(seed, feedback) if callable(tasks) else tasks
                 result = {
@@ -171,9 +175,32 @@ def test_producer_start_has_frozen_scope_and_grants_without_dispatch(client, epi
             ("producer", "RUNNING")
         ]
         assert control.root_run_id == run.id and control.parent_run_id is None
-        assert set(grant.allowed_tools_json) == {"investigate_project", "delegate_production"}
+        assert set(grant.allowed_tools_json) == {
+            "investigate_project",
+            "delegate_production",
+            "arclight_read_production_status",
+            "arclight_read_review_evidence",
+            "arclight_preview_change_impact",
+        }
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 0
         assert db.scalar(select(func.count()).select_from(AgentAction)) == 0
+
+
+def test_producer_uses_shared_status_in_its_real_runtime(client, episode, settings, model_service):
+    run_id, actor = begin_producer(client, episode, settings)
+    sent, errors = install_plan_model(model_service, status_run=run_id)
+    result = planning.plan_producer(client.app.state.session_factory, settings, run_id, actor)
+    assert result.status == "COMPLETED", (result.model_dump_json(), errors)
+    assert not errors
+    assert "producer-planning" in sent[0]["messages"][0]["content"]
+    status = next(
+        item
+        for item in tool_feedback(sent[-1])
+        if item["tool_name"] == "arclight_read_production_status"
+    )
+    assert status["status"] == "SUCCEEDED"
+    assert status["result"]["data"]["run_id"] == str(run_id)
+    assert status["result"]["data"]["status"] == "RUNNING"
 
 
 def test_start_replay_is_identical_and_changed_goal_or_limits_conflicts(client, episode, settings):

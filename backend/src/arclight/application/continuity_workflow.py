@@ -8,7 +8,6 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
 from arclight.application.agent_runtime_state import initialize_run_state
-from arclight.application.agent_tools import grant_agent_tools
 from arclight.application.audit import audit
 from arclight.application.candidate_checks import require_candidate_media_check
 from arclight.application.commands import emit, require_episode, require_project
@@ -20,6 +19,7 @@ from arclight.application.dependencies import lock_dependency_graph
 from arclight.application.model_gateway import lock_gate
 from arclight.application.model_services import require_text_snapshot
 from arclight.application.production_versions import bind, checked_snapshot, find_binding
+from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_tools import AgentToolGrantRequest
@@ -299,7 +299,7 @@ def start_candidate_review(
                 db, run.id, actor, payload.agent_limits, parent_run_id=producer_parent_run_id
             )
         capture_text(db, project_id, run, settings, actor=actor)
-        grant_agent_tools(
+        grant_professional_agent_tools(
             db,
             AgentToolGrantRequest(
                 run_id=run.id,

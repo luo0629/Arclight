@@ -12,7 +12,6 @@ from arclight.application.agent_runtime_state import initialize_run_state, scope
 from arclight.application.agent_tools import (
     AgentToolRegistry,
     build_agent_tool_registry,
-    grant_agent_tools,
 )
 from arclight.application.commands import emit, require_episode, require_run
 from arclight.application.gateway_text import execution_actor, validate_publication
@@ -20,6 +19,7 @@ from arclight.application.model_gateway import lock_gate
 from arclight.application.model_services import require_text_snapshot
 from arclight.application.producer_series import has_series_scope
 from arclight.application.production_versions import bind, capture_text, find_binding, text_settings
+from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -147,7 +147,7 @@ def start_producer(
     run.agent_state_json = state.model_dump(mode="json")
     capture_text(db, episode.project_id, run, settings, actor=actor)
     configure_agent_run(db, run.id, actor, limits)
-    grant_agent_tools(
+    grant_professional_agent_tools(
         db,
         AgentToolGrantRequest(
             run_id=run.id, agent_name="producer", allowed_tools=[RESEARCH_TOOL, DELEGATE_TOOL]

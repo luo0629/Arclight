@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.routing import Route
 
 from arclight.api.art_direction import router as art_direction_router
 from arclight.api.art_proposals import router as art_proposals_router
@@ -67,6 +68,7 @@ from arclight.api.visual_bible import router as visual_bible_router
 from arclight.api.writing_context import router as writing_context_router
 from arclight.core.config import Settings, get_settings
 from arclight.core.errors import DomainError
+from arclight.mcp.server import MCP_PATH, McpEndpoint, create_mcp_app
 from arclight.persistence.session import build_engine, session_factory
 from arclight.storage.objects import ObjectStorage
 
@@ -82,10 +84,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         app.state.settings = settings
         app.state.engine = engine
         app.state.session_factory = session_factory(engine, settings)
-        yield
-        engine.dispose()
+        try:
+            mcp_app = create_mcp_app(app.state.session_factory, settings)
+            app.state.mcp_app = mcp_app
+            async with mcp_app.router.lifespan_context(mcp_app):
+                yield
+        finally:
+            engine.dispose()
 
     app = FastAPI(title="Arclight API", version="0.1.0", lifespan=lifespan)
+    app.router.routes.append(Route(MCP_PATH, McpEndpoint()))
 
     app.add_middleware(
         RequestProtection,
@@ -101,6 +109,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
+        if request.url.path == MCP_PATH:
+            response.headers["Cache-Control"] = "private, no-store"
         return response
 
     def error(request: Request, code: str, message: str, status: int, details=None):
