@@ -251,7 +251,7 @@ test("DAG-04：切换精确版本丢弃迟到影响分析并恢复新版本操�
   await expect(
     page
       .getByLabel("精确资产版本详情", { exact: true })
-      .getByRole("heading", { name: /^版本 v1 · 已批准 · 状态修订/ }),
+      .getByRole("heading", { name: "版本 v1 · 已批准", exact: true }),
   ).toBeVisible();
   await page.getByLabel("版本状态说明", { exact: true }).fill("当前版本的说明");
   const invalidate = page.getByRole("button", {
@@ -261,12 +261,21 @@ test("DAG-04：切换精确版本丢弃迟到影响分析并恢复新版本操�
   await expect(invalidate).toBeEnabled();
   release();
   await expect(page.getByRole("dialog")).toHaveCount(0);
+  const impactRead = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return (
+      request.method() === "GET" &&
+      url.pathname.endsWith("/dependency-impact") &&
+      url.searchParams.get("asset_version_id") === f.first.id
+    );
+  });
   await invalidate.click();
   const dialog = page.getByRole("dialog", {
     name: "确认变更影响",
     exact: true,
   });
   await expect(dialog).toContainText(f.child.version.id);
+  await impactRead;
   await dialog.getByRole("button", { name: "取消变更", exact: true }).click();
 });
 
@@ -648,12 +657,23 @@ test("DAG-06：预览失败可重试，切换版本隔离迟到图片，位置�
     .getByRole("region", { name: "精确版本依赖", exact: true })
     .getByRole("button", { name: "上游角色 · v1", exact: true })
     .click();
-  await expect(details).toContainText(f.first.id);
+  await expect(
+    details.getByRole("heading", { name: "上游角色" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(
+    (url) => url.searchParams.get("node") === `asset-version:${f.first.id}`,
+  );
   await page
     .getByRole("region", { name: "精确版本依赖", exact: true })
     .getByRole("button", { name: "下游场景 · v1", exact: true })
     .click();
-  await expect(details).toContainText(f.child.version.id);
+  await expect(
+    details.getByRole("heading", { name: "下游场景" }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(
+    (url) =>
+      url.searchParams.get("node") === `asset-version:${f.child.version.id}`,
+  );
   release();
   await expect(details.getByAltText("精确资产版本原图")).toHaveJSProperty(
     "naturalWidth",

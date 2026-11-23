@@ -54,7 +54,7 @@ export default function DefaultTimeline({
             <option value="">请选择精确分镜版本</option>
             {approved.map((row) => (
               <option key={row.id} value={row.id}>
-                分镜 v{row.version_no} · {row.id}
+                分镜 v{row.version_no}
               </option>
             ))}
           </select>
@@ -164,7 +164,7 @@ function PreparedTimeline({
       className="flex min-w-0 flex-col gap-4"
     >
       <p className="break-all text-xs text-muted-foreground">
-        分镜版本：{board.id}
+        分镜版本：v{board.version_no}
       </p>
       <Button
         className="self-start"
@@ -195,9 +195,6 @@ function PreparedTimeline({
               >
                 <h5>镜头 {shot.shot_no}</h5>
                 <p>{shot.description}</p>
-                <p className="break-all text-xs text-muted-foreground">
-                  镜头 ID：{shot.shot_id}
-                </p>
                 {shot.options.length === 0 ? (
                   <p className="text-destructive">
                     缺少有效的已选用
@@ -206,8 +203,7 @@ function PreparedTimeline({
                 ) : shot.options.length === 1 ? (
                   <p className="break-all text-xs">
                     已选用{shot.options[0].video ? "视频" : "图片"} v
-                    {shot.options[0].version_no}：
-                    {shot.options[0].asset_version_id}
+                    {shot.options[0].version_no}
                     {shot.options[0].video && (
                       <>
                         {" "}
@@ -237,14 +233,13 @@ function PreparedTimeline({
                         }}
                       >
                         <option value="">请选择精确素材版本</option>
-                        {shot.options.map((option) => (
+                        {shot.options.map((option, index) => (
                           <option
                             key={option.asset_version_id}
                             value={option.asset_version_id}
                           >
-                            {option.video ? "视频" : "图片"} ·{" "}
-                            {option.description} v{option.version_no} ·{" "}
-                            {option.asset_version_id}
+                            {index + 1}. {option.video ? "视频" : "图片"} ·{" "}
+                            {option.description} v{option.version_no}
                           </option>
                         ))}
                       </select>

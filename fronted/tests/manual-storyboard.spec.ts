@@ -325,7 +325,7 @@ test("TXT-01：无效引用与真实版本冲突保留草稿，刷新后显式�
   const save = page.getByRole("button", { name: "保存人工分镜", exact: true });
   await save.click();
   await expect(
-    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+    page.getByRole("alert").filter({ hasText: "分镜引用了无效的场景或角色" }),
   ).toContainText("分镜引用了无效的场景或角色");
   await expect(page.getByLabel("画面描述", { exact: true })).toHaveValue(
     "不能丢失的人工草稿",
@@ -345,7 +345,9 @@ test("TXT-01：无效引用与真实版本冲突保留草稿，刷新后显式�
   ).toBe(201);
   await save.click();
   await expect(
-    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+    page
+      .getByRole("alert")
+      .filter({ hasText: "内容已有新版本，请刷新后再保存" }),
   ).toContainText("内容已有新版本，请刷新后再保存");
   await expect(page.getByLabel("画面描述", { exact: true })).toHaveValue(
     "不能丢失的人工草稿",

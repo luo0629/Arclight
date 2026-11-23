@@ -146,7 +146,7 @@ export async function shotRevisionFixture(page: Page) {
       .selectOption(candidate.id);
     await expect(
       production.getByRole("img", {
-        name: `镜头 1 精确候选 ${candidate.version_id}`,
+        name: `镜头 1 候选 1 · v${candidate.version_no}`,
         exact: true,
       }),
     ).toBeVisible();

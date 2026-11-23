@@ -371,7 +371,7 @@ test("UI-07 UI7-04/08：未分集generation_job入口精确读取UI-05详情并�
     new RegExp(`section=tasks&generation_job=${job.id}$`),
   );
   const detail = page.getByRole("region", {
-    name: `媒体任务详情 ${job.id}`,
+    name: "媒体任务详情",
     exact: true,
   });
   await expect(detail.getByLabel("媒体任务修订", { exact: true })).toHaveText(
@@ -436,7 +436,13 @@ test("UI-07 UI7-02/06/07：待审队列独立分页并保留各来源精确版�
     ).toHaveAttribute("href", path);
   await page.getByRole("button", { name: "下一页待审", exact: true }).click();
   await expect(list.getByRole("article")).toHaveCount(1);
-  await expect(list).toContainText(env.reviews[20].version_id!);
+  await expect(
+    list.getByRole("link", { name: "查看精确审核", exact: true }),
+  ).toHaveAttribute(
+    "href",
+    `${episode}?view=list&node=script:${env.reviews[20].version_id}`,
+  );
+  await expect(list).not.toContainText(env.reviews[20].version_id!);
   await expect(list).toContainText("审核当前受阻，请在原工作区核对");
   await expect(page.locator("body")).not.toContainText(productionSecret);
   expect(
@@ -621,7 +627,8 @@ for (const canApprove of [true, false]) {
       name: "精确版本人工处理",
       exact: true,
     });
-    await expect(review).toContainText(original.id);
+    await expect(review).toContainText("等待决定");
+    await expect(review).not.toContainText(original.id);
     await review
       .getByLabel("人工处理意见（必填）", { exact: true })
       .fill("核对本次精确图片与原始审核证据。");

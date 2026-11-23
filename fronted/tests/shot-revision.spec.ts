@@ -388,7 +388,7 @@ test("UI-04：Viewer只读候选可见且局部修订入口禁用", async ({ pag
     .selectOption(env.candidate.id);
   await expect(
     dialog.getByRole("img", {
-      name: `镜头 1 精确候选 ${env.candidate.version_id}`,
+      name: `镜头 1 候选 1 · v${env.candidate.version_no}`,
       exact: true,
     }),
   ).toBeVisible();

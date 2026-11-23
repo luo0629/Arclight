@@ -48,7 +48,7 @@ test("TXT-10：剧本估算时长越界保留草稿，修正后另存并展示�
   await estimate.fill("33.001");
   await page.getByRole("button", { name: "保存人工剧本", exact: true }).click();
   await expect(
-    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+    page.getByRole("alert").filter({ hasText: "剧本估算时长 33001ms" }),
   ).toContainText(
     "剧本估算时长 33001ms 不在目标 30000ms 的允许范围 [27000, 33000]ms 内",
   );
@@ -132,7 +132,7 @@ test("TXT-10：镜头总时长由服务端求和，超限保存失败后可修�
   ).toBeVisible();
   await page.getByRole("button", { name: "保存人工分镜", exact: true }).click();
   await expect(
-    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
+    page.getByRole("alert").filter({ hasText: "镜头总时长 26999ms" }),
   ).toContainText(
     "镜头总时长 26999ms 不在目标 30000ms 的允许范围 [27000, 33000]ms 内",
   );

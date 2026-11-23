@@ -330,14 +330,14 @@ export default function useShotProduction(
             if (!item.request)
               throw new Error("缺少冻结的生成请求，请重新核对。");
             sent = true;
-            const result = await api<{ id: string; status: string }>(
+            await api<{ id: string; status: string }>(
               projectPath + "/generation-jobs",
               {
                 ...json("POST", item.request),
                 headers: { "Idempotency-Key": item.key },
               },
             );
-            item.result = `生成任务已受理 · ${result.id}`;
+            item.result = "生成任务已受理";
           } else if (next.action === "retry") {
             if (!item.job) throw new Error("缺少原任务快照，请重新核对。");
             const path = projectPath + `/generation-jobs/${item.job.id}`;
@@ -373,7 +373,7 @@ export default function useShotProduction(
                   "GENERATION_NOT_RETRYABLE",
                   "原任务未进入重试，请在任务中心核对重试限制、预算和失败原因。",
                 );
-              item.result = `原失败任务已进入重试 · ${item.job.id}`;
+              item.result = "原失败任务已进入重试";
             }
           } else {
             if (!item.candidate) throw new Error("缺少精确候选，请重新核对。");

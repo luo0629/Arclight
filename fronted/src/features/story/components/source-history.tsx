@@ -87,15 +87,17 @@ export default function SourceHistory({
               )[row.workflow_type] ?? row.workflow_type}
             </span>
             <StatusBadge status={row.status} />
-            <span className="break-all">任务：{row.run_id}</span>
-            {row.analysis_id && (
-              <span className="break-all">提炼版本：{row.analysis_id}</span>
-            )}
-            {row.outline_id && (
-              <span className="break-all">大纲版本：{row.outline_id}</span>
-            )}
-            {row.script_id && (
-              <span className="break-all">剧本版本：{row.script_id}</span>
+            {[row.analysis_id, row.outline_id, row.script_id].some(Boolean) && (
+              <span className="text-muted-foreground">
+                已生成
+                {[
+                  row.analysis_id && "故事提炼",
+                  row.outline_id && "分集大纲",
+                  row.script_id && "剧本",
+                ]
+                  .filter(Boolean)
+                  .join("、")}
+              </span>
             )}
           </div>
         ))}

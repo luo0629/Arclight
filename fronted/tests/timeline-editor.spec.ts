@@ -21,7 +21,7 @@ test.afterEach(async ({}, info) => {
   );
 });
 
-test("RENDER-05：五轨显示精确来源，键盘选中片段与恢复本机草稿", async ({
+test("RENDER-05：五轨编辑、键盘选中片段与恢复草稿后保留精确来源", async ({
   page,
 }) => {
   const env = await timelineFixture(page);
@@ -34,10 +34,9 @@ test("RENDER-05：五轨显示精确来源，键盘选中片段与恢复本机�
   await shot.focus();
   await page.keyboard.press("Enter");
   await editor.getByLabel("片段时长（毫秒）", { exact: true }).fill("1700");
-  await editor.getByText("片段精确来源", { exact: true }).click();
-  await expect(editor).toContainText(
-    env.original.snapshot.tracks[0].clips[1].source_asset_version_id,
-  );
+  const source = env.original.snapshot.tracks[0].clips[1];
+  await expect(editor).not.toContainText(source.source_asset_version_id);
+  await expect(editor).not.toContainText(source.source_sha256);
   await page.reload();
   await page.getByText("时间轴编辑器（有本机草稿）", { exact: true }).click();
   await expect(
@@ -47,6 +46,16 @@ test("RENDER-05：五轨显示精确来源，键盘选中片段与恢复本机�
   await expect(
     page.getByLabel("片段时长（毫秒）", { exact: true }),
   ).toHaveValue("1700");
+  await editor
+    .getByRole("button", { name: "保存时间轴新版本", exact: true })
+    .click();
+  await expect.poll(() => env.saves.length).toBe(1);
+  const snapshot = env.saves[0].body.snapshot as TimelineSnapshot;
+  expect(snapshot.tracks[0].clips[1]).toMatchObject({
+    duration_ms: 1700,
+    source_asset_version_id: source.source_asset_version_id,
+    source_sha256: source.source_sha256,
+  });
 });
 
 test("RENDER-05：时长顺延画面，声音字幕时点保留并另存新版本", async ({

@@ -655,7 +655,7 @@ export default function useMediaTasks({
         const status = result.status_label || result.status;
         setNotice(
           action === "replay"
-            ? `已创建新任务 ${result.id}，状态：${status}。原任务与费用历史保留，新任务独立预留预算。`
+            ? `已创建新任务，状态：${status}。原任务与费用历史保留，新任务独立预留预算。`
             : action === "cancel"
               ? result.status === "CANCELLED"
                 ? "任务已取消。"

@@ -42,14 +42,7 @@ export default function RenderReviewActions({
           ? "决定仅对应当前报告中的全部警告，不适用于其他成片版本。"
           : "批准仅对应当前清单的精确时间轴与素材版本。"}
       </p>
-      <dl className="grid min-w-0 grid-cols-1 gap-1 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-        <dt>审核请求</dt>
-        <dd>{review.id}</dd>
-        <dt>精确版本</dt>
-        <dd>{review.snapshot.version_id}</dd>
-        <dt>状态</dt>
-        <dd>{renderLabel(review.status)}</dd>
-      </dl>
+      <p className="text-sm">审核状态：{renderLabel(review.status)}</p>
       {review.blocking_code && (
         <Notice tone="error">
           当前请求受阻：{review.blocking_code}。请刷新并核对来源与权限。
@@ -148,17 +141,6 @@ export default function RenderReviewActions({
           需要当前项目拥有者权限，且项目和剧集未归档。
         </p>
       )}
-      <details className="min-w-0 text-xs">
-        <summary>审核与恢复凭据</summary>
-        <dl className="mt-2 grid gap-1 [&_dd]:break-all">
-          <dt>请求摘要</dt>
-          <dd>{review.request_sha256}</dd>
-          <dt>决定 ID</dt>
-          <dd>{review.decision?.id ?? "尚无决定"}</dd>
-          <dt>恢复收据</dt>
-          <dd>{review.resume?.id ?? "尚未恢复"}</dd>
-        </dl>
-      </details>
     </section>
   );
 }

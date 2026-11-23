@@ -207,15 +207,22 @@ export default function MediaTasks({
             {state.jobs.map((job) => (
               <li key={job.id} className="min-w-0 p-4 sm:p-5">
                 <article
-                  aria-label={`媒体任务 ${job.id}`}
+                  id={`media-task-${job.id}`}
+                  aria-labelledby={`media-task-title-${job.id} media-task-scope-${job.id}`}
                   className="flex min-w-0 flex-col gap-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="flex min-w-0 flex-col gap-1">
-                      <h3 className="break-words font-semibold [overflow-wrap:anywhere]">
+                      <h3
+                        id={`media-task-title-${job.id}`}
+                        className="break-words font-semibold [overflow-wrap:anywhere]"
+                      >
                         {taskName(job)}
                       </h3>
-                      <p className="text-xs text-muted-foreground">
+                      <p
+                        id={`media-task-scope-${job.id}`}
+                        className="text-xs text-muted-foreground"
+                      >
                         {job.episode_id === episodeId
                           ? "当前剧集"
                           : job.episode_id
@@ -243,23 +250,11 @@ export default function MediaTasks({
                         {job.attempt_count} 次 / 修订 {job.revision}
                       </dd>
                     </div>
-                    <div className="min-w-0">
-                      <dt className="text-xs text-muted-foreground">
-                        所属剧集
-                      </dt>
-                      <dd className="mt-1 break-words [overflow-wrap:anywhere]">
-                        {job.episode_id ?? "未分集"}
-                      </dd>
-                    </div>
                   </dl>
-                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
-                    <p className="min-w-0 break-all text-xs text-muted-foreground">
-                      任务 {job.id}
-                    </p>
+                  <div className="flex justify-end">
                     <Button
                       variant="outline"
                       size="lg"
-                      aria-label={`${state.selectedId === job.id ? "收起" : "查看"}媒体任务 ${job.id}`}
                       aria-expanded={state.selectedId === job.id}
                       aria-controls={
                         state.selectedId === job.id

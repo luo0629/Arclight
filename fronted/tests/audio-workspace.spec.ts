@@ -173,9 +173,15 @@ test("AUDIO-07：单句提交去重，未知网络回执同键重试并刷新恢
   }
   await expect(generate).toBeEnabled();
   await generate.click();
+  const taskHref = new RegExp(`[?&]generation_job=${env.tasks[0].job_id}$`);
+  const detail = panel.getByRole("region", {
+    name: "本句配音任务",
+    exact: true,
+  });
   await expect(
-    panel.getByRole("region", { name: "本句配音任务", exact: true }),
-  ).toContainText(env.tasks[0].job_id);
+    detail.getByRole("link", { name: "在任务中心查看", exact: true }),
+  ).toHaveAttribute("href", taskHref);
+  await expect(detail).not.toContainText(env.tasks[0].job_id);
   expect(env.audioMutations).toHaveLength(2);
   expect(env.audioMutations[0].body.creation_key).toBe(
     env.audioMutations[1].body.creation_key,
@@ -183,8 +189,10 @@ test("AUDIO-07：单句提交去重，未知网络回执同键重试并刷新恢
   expect(env.tasks).toHaveLength(1);
   await page.reload();
   await expect(
-    page.getByRole("region", { name: "本句配音任务", exact: true }),
-  ).toContainText(env.tasks[0].job_id);
+    page
+      .getByRole("region", { name: "本句配音任务", exact: true })
+      .getByRole("link", { name: "在任务中心查看", exact: true }),
+  ).toHaveAttribute("href", taskHref);
   expect(env.audioMutations).toHaveLength(2);
 });
 
@@ -262,7 +270,8 @@ test("AUDIO-07：任务轮询未知结果停止且阻止再次生成，任务中
     name: "本句配音任务",
     exact: true,
   });
-  await expect(detail).toContainText(task.job_id);
+  await expect(detail).toBeVisible();
+  await expect(detail).not.toContainText(task.job_id);
   task.status = "RESULT_UNKNOWN";
   task.revision++;
   await expect(detail.getByText(/供应商结果尚未核清/)).toBeVisible({

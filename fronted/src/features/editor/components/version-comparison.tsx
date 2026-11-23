@@ -102,16 +102,13 @@ const names: Record<string, string> = {
   duration_ms: "时长（毫秒）",
   camera_movement: "镜头运动",
   subtitle: "字幕",
-  schema_version: "合同版本",
-  scene_id: "稳定场景 ID",
-  line_id: "稳定台词 ID",
   line_type: "台词类别",
   emotion: "情绪",
   character_assets: "角色精确资产",
   character_details: "角色表演",
   character: "角色",
   asset: "角色资产",
-  asset_id: "资产 ID",
+  asset_id: "引用资产",
   asset_version_id: "精确资产版本",
   scene_asset: "场景资产",
   location_asset: "地点资产",
@@ -126,12 +123,25 @@ const names: Record<string, string> = {
   notes: "人工备注",
   selected_visual_asset: "选用画面版本",
   quality_review: "质检批准引用",
-  review_id: "审核记录 ID",
+  review_id: "审核记录",
+  character_id: "引用人物",
+  subject_id: "主体",
+  target_id: "对象",
+  series_plan_version_id: "引用规划版本",
+  ledger_version_id: "引用账本版本",
   order: "排列顺序",
 };
 
-// 台词按稳定 ID 配对；场景和镜头保持原业务编号比较。
-function fields(value: unknown, path = "", result = new Map<string, string>()) {
+type ComparisonField = { value: string; reference: boolean };
+
+// 基准与当前共用台词编号。台词匹配仍使用稳定标识。
+function fields(
+  value: unknown,
+  lineLabels: Map<string, number>,
+  path = "",
+  result = new Map<string, ComparisonField>(),
+  reference = false,
+) {
   if (
     Array.isArray(value) &&
     value.length &&
@@ -142,38 +152,66 @@ function fields(value: unknown, path = "", result = new Map<string, string>()) {
         ("scene_no" in row || "shot_no" in row || "line_id" in row),
     )
   ) {
-    const ids = value.map((row) => row.line_id ?? row.shot_no ?? row.scene_no);
-    result.set(`${path} / 排列顺序`, ids.join(" → "));
-    value.forEach((row) =>
-      fields(
-        row,
-        `${path} ${row.line_id ?? row.shot_no ?? row.scene_no}`,
-        result,
-      ),
+    const labels = value.map((row) => {
+      if (!row.line_id) return row.shot_no ?? row.scene_no;
+      if (!lineLabels.has(row.line_id))
+        lineLabels.set(row.line_id, lineLabels.size + 1);
+      return lineLabels.get(row.line_id);
+    });
+    result.set(`${path} / 排列顺序`, {
+      value: labels.join(" → "),
+      reference: false,
+    });
+    value.forEach((row, index) =>
+      fields(row, lineLabels, `${path} ${labels[index]}`, result),
     );
   } else if (
     Array.isArray(value) &&
     value.length &&
     value.some((row) => row && typeof row === "object")
   ) {
-    value.forEach((row, index) => fields(row, `${path} ${index + 1}`, result));
+    value.forEach((row, index) =>
+      fields(row, lineLabels, `${path} ${index + 1}`, result, reference),
+    );
   } else if (
     value &&
     typeof value === "object" &&
     !Array.isArray(value) &&
     Object.keys(value).length
   ) {
-    Object.entries(value).forEach(([key, row]) =>
+    Object.entries(value).forEach(([key, row]) => {
+      if (
+        ["id", "scene_id", "line_id", "schema_version"].includes(key) ||
+        /sha256|checksum|fingerprint/.test(key)
+      )
+        return;
       fields(
         row,
+        lineLabels,
         [path, names[key] ?? key].filter(Boolean).join(" / "),
         result,
-      ),
-    );
+        /(?:^|_)ids?$/.test(key) || key === "causes",
+      );
+    });
   } else {
-    result.set(path, typeof value === "string" ? value : JSON.stringify(value));
+    result.set(path, {
+      value: typeof value === "string" ? value : JSON.stringify(value),
+      reference,
+    });
   }
   return result;
+}
+
+function comparisonText(
+  field: ComparisonField | undefined,
+  changedReference: string,
+) {
+  if (!field) return "（不存在）";
+  if (field.reference)
+    return ["", "null", "[]"].includes(field.value)
+      ? "无引用"
+      : changedReference;
+  return field.value === "" ? "（空文本）" : field.value;
 }
 
 function Metadata({
@@ -277,9 +315,7 @@ function Metadata({
           {row.impact.storyboards.length > 0 && (
             <ul className="mt-2 list-inside list-disc">
               {row.impact.storyboards.map((board) => (
-                <li key={board.id}>
-                  分镜 v{board.version_no} · {board.id}
-                </li>
+                <li key={board.id}>分镜 v{board.version_no}</li>
               ))}
             </ul>
           )}
@@ -337,10 +373,11 @@ function ComparisonPanel({
   }, [prefix, version.id, baseId, attempt]);
   const changes = useMemo(() => {
     if (!data) return [];
+    const lineLabels = new Map<string, number>();
     const before = data.base
-      ? fields(data.base.content_json)
-      : new Map<string, string>();
-    const after = fields(data.target.content_json);
+      ? fields(data.base.content_json, lineLabels)
+      : new Map<string, ComparisonField>();
+    const after = fields(data.target.content_json, lineLabels);
     return [...new Set([...before.keys(), ...after.keys()])].map((path) => ({
       path,
       before: before.get(path),
@@ -349,7 +386,7 @@ function ComparisonPanel({
         ? "新增"
         : !after.has(path)
           ? "删除"
-          : before.get(path) === after.get(path)
+          : before.get(path)?.value === after.get(path)?.value
             ? "未变"
             : "修改",
     }));
@@ -454,11 +491,10 @@ function ComparisonPanel({
                       基准内容
                     </p>
                     <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                      {row.before === undefined
-                        ? "（不存在）"
-                        : row.before === ""
-                          ? "（空文本）"
-                          : row.before}
+                      {comparisonText(
+                        row.before,
+                        row.type === "修改" ? "原有引用" : "已引用",
+                      )}
                     </p>
                   </div>
                   <div className="min-w-0 rounded-md bg-accent/60 p-3">
@@ -466,11 +502,10 @@ function ComparisonPanel({
                       当前内容
                     </p>
                     <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                      {row.after === undefined
-                        ? "（不存在）"
-                        : row.after === ""
-                          ? "（空文本）"
-                          : row.after}
+                      {comparisonText(
+                        row.after,
+                        row.type === "修改" ? "已更换引用" : "已引用",
+                      )}
                     </p>
                   </div>
                 </div>

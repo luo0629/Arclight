@@ -105,6 +105,21 @@ type Issue = {
   suggestion: string;
 };
 type RuleIssue = { code: string; message: string };
+type ProjectedFact = { id: string; value: string; story_start: number };
+type NarrativeProjection = {
+  scene_id: string;
+  views: {
+    perspective: "AUTHOR" | "CHARACTER";
+    character_id: string | null;
+    character_name: string | null;
+    target: { scene_no: number; story_time: number };
+    facts: ProjectedFact[];
+    planned: ProjectedFact[];
+    proposals: ProjectedFact[];
+    causal_summaries: { episode_no: number; summary: string }[];
+    truncated: boolean;
+  }[];
+};
 type Revision = {
   round: number;
   remaining_patches: number;
@@ -117,13 +132,25 @@ type Revision = {
     schema_version?: string;
     narrative_context?: Record<string, unknown>;
   };
-  narrative_projections?: unknown[];
+  narrative_projections?: NarrativeProjection[];
   patch_checks: {
     accepted: boolean;
     patch_sha256: string;
     issues: RuleIssue[];
   }[];
 };
+const sourceNames: Record<string, string> = {
+  SCRIPT: "精确剧本",
+  NARRATIVE_QUERY: "时点事实调查",
+  VISUAL: "视觉规范",
+  ASSET: "精确资产",
+  CAPABILITY: "生产能力声明",
+};
+const projectedFactGroups = [
+  ["facts", "已确认事实"],
+  ["planned", "作者规划"],
+  ["proposals", "待确认事实"],
+] as const;
 type Operation = {
   observations?: {
     tool: string;
@@ -346,15 +373,7 @@ export default function ScreenwriterProgress({
                         : "未成功"}
                       {observation.feedback.result?.materials?.map((item) => (
                         <p key={item.source_id}>
-                          {(
-                            {
-                              SCRIPT: "精确剧本",
-                              NARRATIVE_QUERY: "时点事实调查",
-                              VISUAL: "视觉规范",
-                              ASSET: "精确资产",
-                              CAPABILITY: "生产能力声明",
-                            } as Record<string, string>
-                          )[item.source_kind] ?? item.source_kind}
+                          {sourceNames[item.source_kind] ?? item.source_kind}
                         </p>
                       ))}
                       {observation.feedback.result?.missing?.map(
@@ -429,14 +448,13 @@ export default function ScreenwriterProgress({
                 <summary>
                   调查来源（{operation.result.evidence.length}）
                 </summary>
-                <ul>
-                  {operation.result.evidence.map((evidence, i) => (
-                    <li key={i} className="break-all text-xs">
-                      来源 {evidence.source_id} · 调查 {evidence.manifest_id} ·
-                      SHA-256 {evidence.content_sha256}
+                <ol className="list-decimal pl-5 text-sm">
+                  {operation.result.evidence.map((evidence) => (
+                    <li key={`${evidence.manifest_id}:${evidence.source_id}`}>
+                      {sourceNames[evidence.source_kind ?? ""] ?? "调查材料"}
                     </li>
                   ))}
-                </ul>
+                </ol>
               </details>
             ) : null}
             {operation.stop_code && (
@@ -501,18 +519,49 @@ const categories: Record<string, string> = {
 function RevisionDetails({ operation }: { operation: Operation }) {
   const revision = operation.revision!;
   const issues = operation.result?.issues ?? revision.previous_issues;
+  const projections = revision.narrative_projections ?? [];
   return (
     <>
       <p>剩余自动修订：{revision.remaining_patches} 轮</p>
       {revision.working_script.schema_version === "3.0" && (
         <ScriptNarrativeSummary content={revision.working_script} />
       )}
-      {!!revision.narrative_projections?.length && (
+      {projections.length > 0 && (
         <details>
           <summary>本轮作者与角色事实证据</summary>
-          <pre className="max-h-80 min-w-0 overflow-auto whitespace-pre-wrap break-all text-xs">
-            {JSON.stringify(revision.narrative_projections, null, 2)}
-          </pre>
+          <div className="flex max-h-80 min-w-0 flex-col gap-3 overflow-auto text-sm">
+            {projections.flatMap(({ scene_id, views }) =>
+              views.map((view) => (
+                <section key={`${scene_id}:${view.character_id ?? "author"}`}>
+                  <h5 className="font-medium">
+                    第 {view.target.scene_no} 场 · 故事时点{" "}
+                    {view.target.story_time} ·{" "}
+                    {view.perspective === "AUTHOR"
+                      ? "作者视角"
+                      : (view.character_name ?? "角色视角")}
+                  </h5>
+                  {projectedFactGroups.map(([key, name]) => {
+                    const facts = view[key];
+                    return facts.length ? (
+                      <ul key={key} className="list-disc pl-5">
+                        {facts.map((fact) => (
+                          <li key={fact.id}>
+                            {name} · 时点 {fact.story_start} · {fact.value}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null;
+                  })}
+                  {view.causal_summaries.map((item) => (
+                    <p key={item.episode_no}>
+                      第 {item.episode_no} 集 · {item.summary}
+                    </p>
+                  ))}
+                  {view.truncated && <p>取证结果已截取。</p>}
+                </section>
+              )),
+            )}
+          </div>
         </details>
       )}
       {operation.result?.checks && (
@@ -591,9 +640,6 @@ function RevisionDetails({ operation }: { operation: Operation }) {
             ))}
           </section>
         ))}
-        <p className="break-all text-xs">
-          工作稿 SHA-256：{revision.source_sha256}
-        </p>
       </details>
     </>
   );

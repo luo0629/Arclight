@@ -11,6 +11,7 @@ for (const mobile of [false, true]) {
   }, testInfo) => {
     if (mobile) await page.setViewportSize({ width: 390, height: 844 });
     const env = await mediaFixture(page);
+    const eventReads: string[] = [];
     env.jobs.splice(
       0,
       env.jobs.length,
@@ -33,7 +34,8 @@ for (const mobile of [false, true]) {
       if (path === `/api/v1/episodes/${env.episodes[0].id}/runs`)
         return route.fulfill({ json: runs });
       const run = runs.find((row) => path === `/api/v1/runs/${row.id}/events`);
-      if (run)
+      if (run) {
+        eventReads.push(path);
         return route.fulfill({
           json: [
             {
@@ -44,11 +46,14 @@ for (const mobile of [false, true]) {
             },
           ],
         });
+      }
       return route.fallback();
     });
     await env.open();
     await expect(
-      page.getByRole("button", { name: /^查看媒体任务 / }),
+      page
+        .getByRole("region", { name: "项目媒体任务", exact: true })
+        .getByRole("button", { name: "查看详情", exact: true }),
     ).toHaveCount(6);
     const cards = page.locator("article.task");
     await expect(cards).toHaveCount(6);
@@ -62,8 +67,9 @@ for (const mobile of [false, true]) {
       .getByRole("button", { name: "查看执行记录", exact: true })
       .click();
     const history = page.getByRole("region", { name: "执行记录", exact: true });
-    await expect(history).toContainText(runs[5].id);
+    await expect(history).not.toContainText(runs[5].id);
     await expect(history).toContainText("workflow.finished");
+    expect(eventReads).toContain(`/api/v1/runs/${runs[5].id}/events`);
     await last.scrollIntoViewIfNeeded();
     await expect(last).toBeInViewport();
     await page.screenshot({

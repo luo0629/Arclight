@@ -6,8 +6,14 @@ test("QA-08：桌面逐图比较、精确依据、旧审查禁选与跨资产轮
 }, info) => {
   await page.setViewportSize({ width: 1440, height: 1100 });
   const env = await continuityFixture(page);
-  const dialog = await env.open();
   const model = env.models[1];
+  const reference = model.reviews[0].references[1];
+  const referenceRead = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname === `/api/v1${reference.image_path}` &&
+      response.ok(),
+  );
+  const dialog = await env.open();
   await expect(
     dialog.getByText("红色箱子应保持关闭。", { exact: true }),
   ).toBeVisible();
@@ -24,7 +30,7 @@ test("QA-08：桌面逐图比较、精确依据、旧审查禁选与跨资产轮
   ).toBeVisible();
   await expect(
     dialog.getByRole("img", {
-      name: "当前检查图片 · " + model.version.id,
+      name: `当前检查图片 · ${model.asset.name} v${model.version.version_no}`,
       exact: true,
     }),
   ).toBeVisible();
@@ -70,12 +76,21 @@ test("QA-08：桌面逐图比较、精确依据、旧审查禁选与跨资产轮
     .getByRole("option", { name: "第 2 次 · 需要修订 · 最新", exact: true })
     .click();
   const references = dialog.getByLabel("精确审查参考", { exact: true });
-  await expect(references).toContainText(
-    model.reviews[0].references[1].reference.resource_id,
+  await expect(
+    references.getByRole("img", { name: reference.name, exact: true }),
+  ).toBeVisible();
+  await referenceRead;
+  await expect(references).not.toContainText(reference.reference.resource_id);
+  await expect(references).not.toContainText(
+    reference.reference.content_sha256,
   );
-  await expect(references).toContainText(
-    model.reviews[0].references[1].reference.content_sha256,
-  );
+  const evidence = model.reviews[0].record.review.evidence[0];
+  await expect(
+    dialog.getByRole("link", { name: "依据 1", exact: true }),
+  ).toHaveAttribute("href", `#evidence-${evidence.evidence_id}`);
+  await expect(
+    dialog.getByRole("link", { name: "查看候选图片", exact: true }),
+  ).toHaveAttribute("href", `#review-reference-${evidence.reference_id}`);
   await references.scrollIntoViewIfNeeded();
   await page.screenshot({
     path: info.outputPath("qa08-desktop-evidence.png"),
@@ -89,6 +104,12 @@ test("QA-08：桌面逐图比较、精确依据、旧审查禁选与跨资产轮
       exact: true,
     }),
   ).toBeVisible();
+  await expect(
+    dialog.getByRole("link", { name: "查看修订媒体任务", exact: true }),
+  ).toHaveAttribute(
+    "href",
+    `/projects/${model.project_id}?section=tasks&generation_job=${model.revisions[0].record.job_id}`,
+  );
   await dialog
     .getByRole("button", { name: "检查此轮图片与报告", exact: true })
     .click();
@@ -372,12 +393,14 @@ test("QA-08：切换精确图片取消旧请求，迟到数据不回填", async 
     release = resolve;
   });
   let waiting = false;
+  let settled = false;
   env.control.interceptRead = async (route, model) => {
     if (model === env.models[0]) {
       waiting = true;
       await delayed;
     }
     await route.fulfill({ json: model }).catch(() => {});
+    if (model === env.models[0]) settled = true;
   };
   await page.goto(env.href(0));
   await page
@@ -404,11 +427,19 @@ test("QA-08：切换精确图片取消旧请求，迟到数据不回填", async 
     .click();
   await expect(
     dialog.getByLabel("当前候选状态", { exact: true }),
-  ).toContainText(env.models[1].version.id);
+  ).toContainText(env.models[1].asset.name);
   release();
+  await expect.poll(() => settled).toBe(true);
   await expect(
     dialog.getByLabel("当前候选状态", { exact: true }),
-  ).not.toContainText(env.models[0].version.id);
+  ).toContainText(env.models[1].asset.name);
+  expect(
+    env.reads.some((url) =>
+      new URL(url).pathname.endsWith(
+        `/versions/${env.models[1].version.id}/continuity`,
+      ),
+    ),
+  ).toBe(true);
   await expect(
     dialog.getByRole("button", { name: "正式选用此图片", exact: true }),
   ).toBeDisabled();
@@ -505,7 +536,7 @@ test("QA-08：原图缺失暂停版本选用，刷新成功后才能操作", asy
     .click();
   await expect(
     dialog.getByRole("img", {
-      name: "当前检查图片 · " + model.version.id,
+      name: `当前检查图片 · ${model.asset.name} v${model.version.version_no}`,
       exact: true,
     }),
   ).toBeVisible();

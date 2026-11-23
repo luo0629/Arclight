@@ -160,7 +160,7 @@ export default function MediaTaskDetail({
     return (
       <section
         id={`media-detail-${selectedId}`}
-        aria-label={`媒体任务详情 ${selectedId}`}
+        aria-label="媒体任务详情"
         className="min-w-0 border-t pt-4"
       >
         {detailError ? (
@@ -201,7 +201,7 @@ export default function MediaTaskDetail({
   return (
     <section
       id={`media-detail-${job.id}`}
-      aria-label={`媒体任务详情 ${job.id}`}
+      aria-label="媒体任务详情"
       aria-busy={detailLoading || state.mutating}
       className="flex min-w-0 flex-col gap-5 border-t pt-5"
     >
@@ -231,8 +231,9 @@ export default function MediaTaskDetail({
           {job.provider} / {job.model}
         </Data>
         <Data label="目标类型">{job.target_type}</Data>
-        <Data label="目标资产">{job.target_asset_id ?? "尚未登记"}</Data>
-        <Data label="输入清单">{job.input_manifest_id}</Data>
+        <Data label="目标资产">
+          {job.target_asset_id ? "已登记" : "尚未登记"}
+        </Data>
         <Data label="尝试总数">{job.attempt_count}</Data>
         <Data label="取消意图">
           <output aria-label="媒体任务取消请求">
@@ -538,12 +539,6 @@ export default function MediaTaskDetail({
                     <Data label="核账状态">
                       {entry.cost_is_estimate ? "估算 / 待核账" : "已核账"}
                     </Data>
-                    {entry.attempt_id && (
-                      <Data label="尝试标识">{entry.attempt_id}</Data>
-                    )}
-                    {entry.call_id && (
-                      <Data label="调用标识">{entry.call_id}</Data>
-                    )}
                   </dl>
                 </li>
               ))}

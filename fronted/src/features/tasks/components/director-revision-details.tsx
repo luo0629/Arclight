@@ -227,9 +227,6 @@ export default function DirectorRevisionDetails({
             </ol>
           </section>
         ))}
-        <p className="break-all text-xs">
-          工作稿 SHA-256：{revision.source_sha256}
-        </p>
       </details>
     </section>
   );

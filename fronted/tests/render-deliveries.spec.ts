@@ -217,9 +217,7 @@ test("RENDER-12：真实任务进度轮询，取消使用最新 revision", async
     exact: true,
   });
   await expect(progress).toHaveAttribute("value", "37");
-  await expect(
-    detail.getByText(`任务 ${job.id} · 修订 7`, { exact: true }),
-  ).toBeVisible();
+  await expect(detail).not.toContainText(job.id);
   const gate = deferred();
   const completed = deferred();
   const stale = structuredClone([job]);
@@ -240,22 +238,17 @@ test("RENDER-12：真实任务进度轮询，取消使用最新 revision", async
   Object.assign(job, { revision: 8, progress: 62, phase: "INSPECTING" });
   try {
     await expect(progress).toHaveAttribute("value", "62", { timeout: 10000 });
-    await expect(
-      detail.getByText(`任务 ${job.id} · 修订 8`, { exact: true }),
-    ).toBeVisible();
   } finally {
     gate.release();
   }
   await completed.promise;
   await expect(progress).toHaveAttribute("value", "62");
-  await expect(
-    detail.getByText(`任务 ${job.id} · 修订 8`, { exact: true }),
-  ).toBeVisible();
   await panel.getByRole("button", { name: "取消渲染", exact: true }).click();
   await expect(detail.getByRole("heading", { level: 4 })).toHaveText(
     "已取消 · 62%",
   );
   const cancelled = env.mutations.find((row) => row.path.endsWith("/cancel"))!;
+  expect(cancelled.path).toContain(`/render-jobs/${job.id}/cancel`);
   expect(cancelled.body).toEqual({ expected_revision: 8 });
   expect(job.status).toBe("CANCELLED");
 });
@@ -704,13 +697,26 @@ test("RENDER-12：切集后丢弃旧下载回执，不触发其他剧集的下�
   await openDirectory(page);
   await page.getByRole("button", { name: /第二集的独立成片/ }).click();
   await expect(page).toHaveURL(env.href(1).replace("?view=render", ""));
+  const delivery = env.deliveries[3];
+  const selectedRead = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      new URL(response.url()).pathname.endsWith(
+        `/episodes/${env.episodes[1].id}/deliveries/${delivery.id}`,
+      ),
+  );
   await page.getByRole("radio", { name: "渲染与成片", exact: true }).click();
   await expect(
     page.getByRole("region", { name: "渲染与成片", exact: true }),
   ).toBeVisible();
-  await expect(page.getByLabel("当前成片版本", { exact: true })).toContainText(
-    env.deliveries[3].asset_version_id,
-  );
+  const detail = page.getByLabel("当前成片版本", { exact: true });
+  await expect(
+    detail.getByRole("heading", { name: `成片版本 v${delivery.version_no}` }),
+  ).toBeVisible();
+  expect(await (await selectedRead).json()).toMatchObject({
+    asset_version_id: delivery.asset_version_id,
+  });
+  await expect(detail).not.toContainText(delivery.asset_version_id);
   gate.release();
   await contentSettled.promise;
   expect((await abortedContent).failure()?.errorText).toBe("net::ERR_ABORTED");
@@ -786,18 +792,21 @@ test("RENDER-12：清单与任务分别有界分页并保留精确选择", async
   await panel
     .getByRole("button", { name: "加载更多渲染任务", exact: true })
     .click();
+  const lastJob = panel.getByRole("button", { name: /^查看第 31 条渲染记录/ });
+  await expect(lastJob).toBeVisible();
   await expect(
-    panel.getByRole("button", {
-      name: `查看渲染任务 ${env.jobs[30].id}`,
-      exact: true,
-    }),
+    panel.getByRole("button", { name: /^查看第 1 条渲染记录/ }),
   ).toBeVisible();
-  await expect(
-    panel.getByRole("button", {
-      name: `查看渲染任务 ${env.jobs[0].id}`,
-      exact: true,
-    }),
-  ).toBeVisible();
+  const attemptsRead = page.waitForRequest(
+    (request) =>
+      request.method() === "GET" &&
+      new URL(request.url()).pathname.endsWith(
+        `/render-jobs/${env.jobs[30].id}/attempts`,
+      ),
+  );
+  await lastJob.click();
+  await attemptsRead;
+  await expect(panel).not.toContainText(env.jobs[30].id);
   for (const [ending, cursor] of [
     ["/render-manifests", env.manifests[29].id],
     ["/jobs", env.jobs[29].id],

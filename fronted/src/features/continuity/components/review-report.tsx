@@ -6,9 +6,11 @@ import { label, type ComparisonReview } from "../types";
 
 export default function ReviewReport({
   item,
+  previousSequence,
   onUnavailable,
 }: {
   item: ComparisonReview;
+  previousSequence?: number;
   onUnavailable: (error: unknown) => void;
 }) {
   const { record, references } = item;
@@ -109,9 +111,17 @@ export default function ReviewReport({
                     {evidence.region.height}
                   </p>
                 )}
-                <p className="break-all text-xs text-muted-foreground">
-                  精确引用：{evidence.reference_id}
-                </p>
+                {citation && (
+                  <a
+                    className="w-fit text-sm underline underline-offset-4"
+                    href={`#review-reference-${citation.reference.reference_id}`}
+                  >
+                    查看
+                    {citation.reference.role === "REFERENCE"
+                      ? citation.name
+                      : label(citation.reference.role)}
+                  </a>
+                )}
               </li>
             );
           })}
@@ -127,7 +137,8 @@ export default function ReviewReport({
           {references.map((item) => (
             <figure
               key={item.reference.reference_id}
-              className="flex min-w-0 flex-col gap-2 rounded-lg border p-3"
+              id={`review-reference-${item.reference.reference_id}`}
+              className="flex min-w-0 scroll-mt-4 flex-col gap-2 rounded-lg border p-3"
             >
               <figcaption className="text-sm font-medium">
                 {label(item.reference.role)}
@@ -139,7 +150,11 @@ export default function ReviewReport({
                   key={item.image_path}
                   compact
                   path={item.image_path}
-                  alt={`${label(item.reference.role)} · ${item.reference.resource_id}`}
+                  alt={
+                    item.reference.role === "REFERENCE"
+                      ? item.name
+                      : label(item.reference.role)
+                  }
                   onUnavailable={onUnavailable}
                 />
               )}
@@ -148,47 +163,36 @@ export default function ReviewReport({
                   此精确参考暂不可读：{item.unavailable_code}
                 </Notice>
               )}
-              <dl className="grid min-w-0 grid-cols-1 gap-1 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-                <dt>引用 ID</dt>
-                <dd>{item.reference.reference_id}</dd>
-                <dt>精确资源 ID</dt>
-                <dd>{item.reference.resource_id}</dd>
-                <dt>内容 SHA-256</dt>
-                <dd>{item.reference.content_sha256}</dd>
-              </dl>
             </figure>
           ))}
         </div>
       </section>
-      <details className="min-w-0 text-xs">
-        <summary className="cursor-pointer">审查版本与追溯</summary>
-        <dl className="mt-3 grid min-w-0 grid-cols-1 gap-1 [&_dd]:break-all [&_dt]:text-muted-foreground">
-          <dt>审查 ID</dt>
-          <dd>{review.result_id}</dd>
-          <dt>精确镜头／分镜</dt>
-          <dd>
-            {review.target.shot_id} / {review.target.storyboard_id}
-          </dd>
-          <dt>记录人</dt>
-          <dd>{record.recorded_by}</dd>
-          {review.rerun && (
-            <>
-              <dt>重审来源</dt>
-              <dd>
-                {review.rerun.previous_review_id} · {review.rerun.reason}
-              </dd>
-            </>
-          )}
-          {review.versions.map((version) => (
-            <div key={version.id} className="min-w-0">
-              <dt>{version.kind}</dt>
-              <dd>
-                {version.name} · {version.version} · {version.digest}
-              </dd>
-            </div>
-          ))}
-        </dl>
-      </details>
+      {(review.rerun || review.versions.length > 0) && (
+        <details className="min-w-0 text-sm">
+          <summary className="cursor-pointer">审查版本与追溯</summary>
+          <dl className="mt-3 grid min-w-0 grid-cols-1 gap-1 [&_dt]:text-muted-foreground">
+            {review.rerun && (
+              <>
+                <dt>重审原因</dt>
+                <dd>
+                  {previousSequence !== undefined
+                    ? `第 ${previousSequence} 次审查 · `
+                    : ""}
+                  {review.rerun.reason}
+                </dd>
+              </>
+            )}
+            {review.versions.map((version) => (
+              <div key={version.id} className="min-w-0">
+                <dt>{label(version.kind)}</dt>
+                <dd>
+                  {version.name} · {version.version}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      )}
     </section>
   );
 }

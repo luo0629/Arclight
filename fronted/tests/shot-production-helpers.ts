@@ -122,7 +122,7 @@ export async function shotProductionFixture(
       await page.goto(`/projects/${project.id}/episodes/${episode.id}`);
       await openWorkspacePanels(page);
       await page.getByRole("radio", { name: "版本列表", exact: true }).click();
-      const row = page.locator(".version-row").filter({ hasText: board.id });
+      const row = page.locator(`[data-node-id="storyboard:${board.id}"]`);
       await expect(row).toHaveCount(1);
       await row.click();
       await expect(page.locator(".inspector .section-heading h3")).toHaveText(

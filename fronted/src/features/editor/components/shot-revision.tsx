@@ -160,7 +160,7 @@ function RevisionBody(props: RevisionProps & { onDismiss: () => void }) {
           {state.pending?.phase === "accepted" ? (
             <>
               <p role="status" className="break-all text-sm">
-                已受理修订任务 {state.pending.receipt?.job_id}
+                已受理修订任务
                 。完成后刷新镜头候选并比较审核；失败时在任务中心重试原任务，未知结果先核验。
               </p>
               <Button

@@ -1,4 +1,5 @@
 import type { LedgerEntry, LedgerKind } from "@/features/story/story-ledger";
+import type { OutlineEntry, SeriesPlan } from "@/features/story/series-plan";
 
 export type NarrativeRequest = {
   series_plan_version_id: string;
@@ -60,8 +61,18 @@ export type NarrativeScene = {
 export type NarrativeProjection = {
   perspective: "AUTHOR" | "CHARACTER";
   character_id: string | null;
+  character_name: string | null;
   target: { story_time: number; scene_no: number; episode_no: number };
-  plan: Record<string, unknown> | null;
+  plan:
+    | (Pick<
+        SeriesPlan,
+        "threads" | "character_arcs" | "relationship_arcs" | "foreshadowing"
+      > & {
+        episode: OutlineEntry;
+        progression: SeriesPlan["episode_progressions"][number];
+        truncated: boolean;
+      })
+    | null;
   facts: Omit<LedgerEntry, "known_by">[];
   planned: Omit<LedgerEntry, "known_by">[];
   proposals: Omit<LedgerEntry, "known_by">[];

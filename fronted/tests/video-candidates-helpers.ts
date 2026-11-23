@@ -201,7 +201,10 @@ export async function realVideoFixture(
     expect(generationKeys[0]).toBe(generationKeys[1]);
     expect(generationJobs[0]).toBe(generationJobs[1]);
   }
-  await expect(confirmation.getByRole("status")).toContainText(job.id);
+  await expect(confirmation.getByRole("status")).toContainText(
+    "视频任务已受理",
+  );
+  await expect(confirmation.getByRole("status")).not.toContainText(job.id);
   let candidate!: VideoCandidate;
   await expect(async () => {
     const response = await page.request.get(

@@ -1,4 +1,4 @@
-import { expect, type Page, type Route } from "@playwright/test";
+import { expect, type Locator, type Page, type Route } from "@playwright/test";
 import type { Episode, Project } from "../src/types/api";
 import type { MediaJob, MediaStatus } from "../src/features/tasks/media-types";
 import { closeDirectory } from "./workspace-helpers";
@@ -6,6 +6,8 @@ import { closeDirectory } from "./workspace-helpers";
 const now = "2026-11-11T07:00:00Z";
 const id = () => crypto.randomUUID();
 export const secret = "UI05_PRIVATE_SNAPSHOT_DO_NOT_DISPLAY";
+export const mediaTaskRow = (container: Locator, jobId: string) =>
+  container.locator(`#media-task-${jobId}`);
 type Mutation = {
   command: string;
   jobId: string;
@@ -425,13 +427,9 @@ export async function mediaFixture(page: Page) {
       name: "项目媒体任务",
       exact: true,
     });
-    await panel
-      .getByRole("button", { name: `查看媒体任务 ${job.id}`, exact: true })
-      .click();
-    const detail = panel.getByRole("region", {
-      name: `媒体任务详情 ${job.id}`,
-      exact: true,
-    });
+    const row = mediaTaskRow(panel, job.id);
+    await row.getByRole("button", { name: "查看详情", exact: true }).click();
+    const detail = row.locator(`#media-detail-${job.id}`);
     await expect(detail).toBeVisible();
     return detail;
   };

@@ -253,10 +253,10 @@ export default function VideoLipSyncPanel({
             请播放候选试听开口与停顿。正式时间轴通过配音轨使用同一音频，不重复混入试听轨。
           </p>
           <ul className="grid gap-1 text-xs text-muted-foreground">
-            {receipt.lines.map((line) => (
-              <li className="break-all" key={line.line_id}>
-                {line.start_ms}–{line.start_ms + line.duration_ms} ms · 音频版本{" "}
-                {line.audio_version_id}
+            {receipt.lines.map((line, index) => (
+              <li key={line.line_id}>
+                第 {index + 1} 句 · {line.start_ms}–
+                {line.start_ms + line.duration_ms} ms
               </li>
             ))}
           </ul>
@@ -334,13 +334,13 @@ export default function VideoLipSyncPanel({
                         <NativeSelectOption value="">
                           请选择已选配音
                         </NativeSelectOption>
-                        {line.sources.map((source) => (
+                        {line.sources.map((source, sourceIndex) => (
                           <NativeSelectOption
                             key={source.audio_version_id}
                             value={source.audio_version_id}
                           >
-                            {source.name} · {source.duration_ms} ms ·{" "}
-                            {source.audio_version_id.slice(0, 8)}
+                            配音 {sourceIndex + 1} · {source.name} ·{" "}
+                            {source.duration_ms} ms
                           </NativeSelectOption>
                         ))}
                       </NativeSelect>

@@ -491,6 +491,11 @@ test("TXT-04：切换任务丢弃旧事件响应、空列表和首批失败重�
   await expect(pager(page, "事件").getByRole("alert")).toBeVisible();
   release();
   fail = false;
+  const currentRead = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      new URL(response.url()).pathname.endsWith(`/runs/${runs[1].id}/events`),
+  );
   await pager(page, "事件")
     .getByRole("button", { name: "重试加载事件", exact: true })
     .click();
@@ -498,7 +503,8 @@ test("TXT-04：切换任务丢弃旧事件响应、空列表和首批失败重�
   await expect(page.getByText("暂无执行记录", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("region", { name: "执行记录", exact: true }),
-  ).toContainText(runs[1].id);
+  ).not.toContainText(runs[1].id);
+  expect((await currentRead).status()).toBe(200);
   await expect(page.getByText("不应显示的旧事件", { exact: true })).toHaveCount(
     0,
   );

@@ -512,9 +512,8 @@ export default function ShotPerformanceDetails({
           </p>
           {performance.props.map((prop, i) => (
             <p key={i}>
-              道具 {prop.asset.asset_id} · 精确版本{" "}
-              {prop.asset.asset_version_id}：{prop.holder_start}／
-              {prop.position_start} → {prop.holder_end}／{prop.position_end}
+              道具 {i + 1}：{prop.holder_start}／{prop.position_start} →{" "}
+              {prop.holder_end}／{prop.position_end}
             </p>
           ))}
           {performance.dialogue.map((line) => (
@@ -534,7 +533,6 @@ export default function ShotPerformanceDetails({
               {line.exemption_reason && (
                 <p>豁免理由：{line.exemption_reason}</p>
               )}
-              <small className="break-all">台词 ID：{line.line_id}</small>
             </div>
           ))}
         </div>

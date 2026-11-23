@@ -100,6 +100,9 @@ function Progress({
     !data ||
     data.revision < run.revision;
   const latestPlan = data?.plans.at(-1);
+  const planVersions = new Map(
+    data?.plans.map((plan) => [plan.plan_id, plan.version_no]),
+  );
 
   async function refreshAfterWrite() {
     setRefreshError("");
@@ -380,11 +383,12 @@ function Progress({
                     修订原因：{plan.reason}
                   </p>
                 )}
-                {plan.previous_plan_id && (
-                  <p className="mt-2 break-all text-xs text-muted-foreground">
-                    承接计划：{plan.previous_plan_id}
-                  </p>
-                )}
+                {plan.previous_plan_id &&
+                  planVersions.has(plan.previous_plan_id) && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      承接计划 v{planVersions.get(plan.previous_plan_id)}
+                    </p>
+                  )}
                 <ol className="mt-4 flex flex-col divide-y">
                   {plan.tasks.map((task) => (
                     <li

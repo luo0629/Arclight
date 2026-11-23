@@ -217,7 +217,7 @@ test("TXT-09：制作字段、精确台词引用及草稿恢复，角色移除�
   );
 });
 
-test("TXT-09：切换场景清空旧台词，归档只读展示元数据", async ({ page }) => {
+test("TXT-09：切换场景清空旧台词，归档只读展示分镜内容", async ({ page }) => {
   const env = await setup(page);
   await beginBoard(page, env);
   await page.getByLabel("画面描述", { exact: true }).fill("屋檐下的空镜");
@@ -248,8 +248,18 @@ test("TXT-09：切换场景清空旧台词，归档只读展示元数据", async
   await expect(
     page.getByRole("button", { name: "编辑并另存新版本" }),
   ).toHaveCount(0);
-  await page.getByText("稳定标识与精确引用（只读）", { exact: true }).click();
-  await expect(page.locator(".contract-metadata pre")).toContainText(
+  const inspector = page.getByRole("complementary", { name: "内容与属性" });
+  await expect(inspector).toContainText("屋檐下的空镜");
+  await expect(inspector).not.toContainText(
     env.script.content_json.scenes[1].scene_id,
   );
+  const boards = await (
+    await page.request.get(env.prefix + "/storyboards", {
+      headers: env.headers,
+    })
+  ).json();
+  expect(boards[0].content_json.shots[0]).toMatchObject({
+    scene_id: env.script.content_json.scenes[1].scene_id,
+    dialogue_line_ids: [],
+  });
 });

@@ -452,7 +452,8 @@ test("VIDEO-01模拟媒体拒绝：任务成功但候选检查失败时保留原
   await expect(form.getByRole("alert")).toContainText(
     "视频结果未通过媒体检查，未登记为可用候选",
   );
-  await expect(form.getByRole("status")).toContainText(env.job.id);
+  await expect(form.getByRole("status")).toContainText("视频任务已受理");
+  await expect(form.getByRole("status")).not.toContainText(env.job.id);
   await expect(
     form.getByRole("button", { name: "准备另一个视频任务", exact: true }),
   ).toBeEnabled();
@@ -574,16 +575,25 @@ async function admitVideoInWorkspace(
     exact: true,
   });
   const endpoint = `/api/v1${env.candidate.content_path?.replace(/\/content$/, "")}`;
+  let reviewRequestId: string;
   await panel
     .getByRole("button", { name: "提交视频时序审查", exact: true })
     .click();
   await expect(async () => {
     const response = await page.request.get(endpoint, { headers: env.headers });
     expect(response.status()).toBe(200);
-    expect((await response.json()).admission.blocked_code).toBe(
-      "HUMAN_DECISION_REQUIRED",
-    );
+    const { admission } = await response.json();
+    expect(admission.blocked_code).toBe("HUMAN_DECISION_REQUIRED");
+    reviewRequestId = admission.human_review_request_id;
+    expect(reviewRequestId).toBeTruthy();
   }).toPass({ timeout: 20000 });
+  const reviewRead = page.waitForResponse(
+    (response) =>
+      response.request().method() === "GET" &&
+      new URL(response.url()).pathname.endsWith(
+        `/human-reviews/${reviewRequestId}`,
+      ),
+  );
   await detail
     .getByRole("button", { name: "刷新视频候选", exact: true })
     .click();
@@ -601,7 +611,11 @@ async function admitVideoInWorkspace(
     name: "精确版本人工处理",
     exact: true,
   });
-  await expect(queue).toContainText(env.candidate.asset_version_id!);
+  await expect(queue).toContainText("等待决定");
+  await expect(queue).not.toContainText(env.candidate.asset_version_id!);
+  expect(await (await reviewRead).json()).toMatchObject({
+    snapshot: { version_id: env.candidate.asset_version_id },
+  });
   await queue
     .getByLabel("人工处理意见（必填）")
     .fill("已观看完整离线合成候选，接受抽样覆盖限制。");
@@ -651,9 +665,9 @@ test("VIDEO-03：工作区选用视频、另存裁切和原声并播放真实预
   await panel
     .getByRole("button", { name: "核对当前选用镜头", exact: true })
     .click();
-  await expect(
-    panel.getByRole("region", { name: "默认时间轴镜头核对" }),
-  ).toContainText(env.candidate.asset_version_id!);
+  const selection = panel.getByRole("region", { name: "默认时间轴镜头核对" });
+  await expect(selection).toContainText(/已选用视频 v\d+/);
+  await expect(selection).not.toContainText(env.candidate.asset_version_id!);
   await panel
     .getByRole("checkbox", {
       name: "我已核对全部镜头及精确素材版本",
@@ -669,6 +683,9 @@ test("VIDEO-03：工作区选用视频、另存裁切和原声并播放真实预
     .getByRole("button", { name: "创建默认时间轴", exact: true })
     .click();
   const original = await (await created).json();
+  expect(original.snapshot.tracks[0].clips[0].source_asset_version_id).toBe(
+    env.candidate.asset_version_id,
+  );
   expect(original.snapshot.tracks[0].clips[0].video.keep_audio).toBe(false);
 
   await panel.getByText("时间轴编辑器", { exact: true }).click();

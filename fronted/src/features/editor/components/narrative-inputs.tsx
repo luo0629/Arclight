@@ -13,8 +13,95 @@ import {
   emptyNarrativeRequest,
   narrativeRequestProblem,
   type NarrativeCapture,
+  type NarrativeProjection,
   type NarrativeRequest,
 } from "../script-narrative";
+
+function WritingPlanPreview({
+  plan,
+  characters,
+}: {
+  plan: NonNullable<NarrativeProjection["plan"]>;
+  characters: StoryEntry[];
+}) {
+  const { episode, progression, threads } = plan;
+  const characterName = (id: string) =>
+    characters.find((row) => row.id === id)?.name ?? "角色暂不可见";
+  const threadTitle = (id: string) =>
+    threads.find((row) => row.id === id)?.title ?? "故事线";
+  return (
+    <div className="grid gap-3 py-2 text-sm">
+      <div>
+        <h5 className="font-medium">
+          第 {episode.episode_no} 集 · {episode.title}
+        </h5>
+        <p>目标：{episode.goal}</p>
+        <p>冲突：{episode.conflict}</p>
+        <p>转折：{episode.turning_point}</p>
+        <p>结尾钩子：{episode.ending_hook}</p>
+        {progression.caused_by_episode_nos.length > 0 && (
+          <p>承接第 {progression.caused_by_episode_nos.join("、")} 集</p>
+        )}
+        <p>{progression.causal_link}</p>
+        <p>{progression.ending_handoff}</p>
+        {progression.thread_beats.map((beat) => (
+          <p key={beat.thread_id}>
+            {threadTitle(beat.thread_id)}：{beat.progression}
+          </p>
+        ))}
+      </div>
+      {threads.map((thread) => (
+        <div key={thread.id}>
+          <h5 className="font-medium">{thread.title}</h5>
+          <p>核心冲突：{thread.central_conflict}</p>
+          <p>计划结局：{thread.planned_resolution}</p>
+        </div>
+      ))}
+      {plan.character_arcs.map((arc) => (
+        <div key={arc.character_id}>
+          <h5 className="font-medium">
+            角色成长 · {characterName(arc.character_id)}
+          </h5>
+          <p>初始目标：{arc.starting_goal}</p>
+          <p>内在冲突：{arc.internal_conflict}</p>
+          <p>计划成长：{arc.planned_growth}</p>
+          {arc.milestones.map((item) => (
+            <p key={item.episode_no}>
+              第 {item.episode_no} 集：{item.change}
+            </p>
+          ))}
+        </div>
+      ))}
+      {plan.relationship_arcs.map((arc) => (
+        <div key={arc.id}>
+          <h5 className="font-medium">
+            关系发展 · {characterName(arc.source_character_id)}与
+            {characterName(arc.target_character_id)}
+          </h5>
+          <p>初始关系：{arc.initial_relationship}</p>
+          <p>计划发展：{arc.planned_development}</p>
+          {arc.milestones.map((item) => (
+            <p key={item.episode_no}>
+              第 {item.episode_no} 集：{item.change}
+            </p>
+          ))}
+        </div>
+      ))}
+      {plan.foreshadowing.map((item) => (
+        <div key={item.id}>
+          <h5 className="font-medium">伏笔 · {threadTitle(item.thread_id)}</h5>
+          <p>
+            第 {item.setup_episode_no} 集埋设：{item.setup}
+          </p>
+          <p>
+            第 {item.expected_payoff_episode_no} 集计划回收：
+            {item.planned_payoff}
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function NarrativeInputs({
   episode,
@@ -207,8 +294,8 @@ export default function NarrativeInputs({
             {value.character_ids
               .filter((id) => !entries.rows.some((e) => e.id === id))
               .map((id) => (
-                <p key={id} className="break-all text-xs">
-                  已绑定角色 {id}（目录尚未加载或已归档，服务端会复验）
+                <p key={id} className="text-xs">
+                  已绑定的角色暂不可见
                 </p>
               ))}
           </fieldset>
@@ -255,7 +342,7 @@ export default function NarrativeInputs({
                 <summary>
                   {projection.perspective === "AUTHOR"
                     ? "作者计划与已确认事实"
-                    : `角色所知 · ${entries.rows.find((e) => e.id === projection.character_id)?.name ?? projection.character_id}`}
+                    : `角色所知 · ${projection.character_name ?? "未命名角色"}`}
                 </summary>
                 <p className="text-sm">
                   第 {projection.target.episode_no} 集 · 场景{" "}
@@ -265,9 +352,10 @@ export default function NarrativeInputs({
                 {projection.plan && (
                   <details>
                     <summary>作者全剧计划（尚未发生）</summary>
-                    <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">
-                      {JSON.stringify(projection.plan, null, 2)}
-                    </pre>
+                    <WritingPlanPreview
+                      plan={projection.plan}
+                      characters={entries.rows}
+                    />
                   </details>
                 )}
                 {(
@@ -325,19 +413,6 @@ export default function NarrativeInputs({
                     作者规划已按上下文上限裁剪，请结合精确规划版本核对。
                   </Notice>
                 )}
-                <details>
-                  <summary>精确来源与摘要校验</summary>
-                  <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">
-                    {JSON.stringify(
-                      {
-                        sources: projection.sources,
-                        result_sha256: projection.result_sha256,
-                      },
-                      null,
-                      2,
-                    )}
-                  </pre>
-                </details>
               </details>
             ),
           )}

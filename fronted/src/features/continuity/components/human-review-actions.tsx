@@ -61,8 +61,11 @@ export default function HumanReviewActions({
       className="flex min-w-0 flex-col gap-3 rounded-lg border p-4"
     >
       <h4 className="font-semibold">{label(row.status)}</h4>
-      <p className="break-all text-xs text-muted-foreground">
-        审核请求：{row.id} · 精确版本：{row.snapshot.version_id}
+      <p className="text-xs text-muted-foreground">
+        提交于{" "}
+        <time dateTime={row.created_at}>
+          {new Date(row.created_at).toLocaleString()}
+        </time>
       </p>
       {row.blocking_code && (
         <Notice tone="error">
@@ -75,8 +78,8 @@ export default function HumanReviewActions({
           <p className="whitespace-pre-wrap">
             {row.decision.decision_json.comment}
           </p>
-          <p className="break-all text-xs text-muted-foreground">
-            审核人：{row.decision.actor_id} ·{" "}
+          <p className="text-xs text-muted-foreground">
+            决定于{" "}
             <time dateTime={row.decision.created_at}>
               {new Date(row.decision.created_at).toLocaleString()}
             </time>
@@ -147,7 +150,13 @@ export default function HumanReviewActions({
       )}
       {row.resume && (
         <p className="text-sm">
-          恢复结果：{label(row.resume.result_json.status ?? "RESUMED")}
+          <span>
+            恢复结果：{label(row.resume.result_json.status ?? "RESUMED")}
+          </span>{" "}
+          ·{" "}
+          <time dateTime={row.resume.created_at}>
+            {new Date(row.resume.created_at).toLocaleString()}
+          </time>
         </p>
       )}
       {!allowed && (
@@ -155,25 +164,6 @@ export default function HumanReviewActions({
           人工处理需要当前项目 Owner 权限和最新审查。
         </p>
       )}
-      <details className="min-w-0 text-xs">
-        <summary className="cursor-pointer">精确请求与恢复凭据</summary>
-        <dl className="mt-3 grid grid-cols-1 gap-1 [&_dd]:break-all [&_dt]:text-muted-foreground">
-          <dt>请求摘要</dt>
-          <dd>{row.request_sha256}</dd>
-          <dt>输入／图片摘要</dt>
-          <dd>
-            {row.snapshot.input_sha256} / {row.snapshot.content_sha256}
-          </dd>
-          <dt>原 run／thread</dt>
-          <dd>
-            {row.snapshot.run_id ?? "无"} / {row.snapshot.thread_id}
-          </dd>
-          <dt>决定 ID</dt>
-          <dd>{row.decision?.id ?? "尚无决定"}</dd>
-          <dt>恢复收据</dt>
-          <dd>{row.resume?.id ?? "尚未恢复"}</dd>
-        </dl>
-      </details>
     </section>
   );
 }

@@ -1,5 +1,10 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { deferred, mediaFixture, secret } from "./media-tasks-helpers";
+import {
+  deferred,
+  mediaFixture,
+  mediaTaskRow,
+  secret,
+} from "./media-tasks-helpers";
 import { openDirectory } from "./workspace-helpers";
 
 const byName = (scope: Locator, name: string) =>
@@ -40,8 +45,16 @@ test("UI-05 UI5-01/02/03/04/08：项目列表保留文字入口，历史尝试�
   const detail = await env.select();
   await ready(detail);
   await expect(status(detail)).toHaveText("服务端状态 FAILED");
-  await expect(detail).toContainText(env.jobs[0].input_manifest_id);
-  await expect(detail).toContainText(env.jobs[0].target_asset_id!);
+  const job = env.jobs[0];
+  await expect(detail).toContainText("已登记");
+  await expect(detail).not.toContainText(job.input_manifest_id);
+  await expect(detail).not.toContainText(job.target_asset_id!);
+  await expect(mediaTaskRow(panel, job.id)).not.toContainText(job.id);
+  expect(
+    env.reads.some((url) =>
+      new URL(url).pathname.endsWith(`/generation-jobs/${job.id}`),
+    ),
+  ).toBe(true);
   await expect(detail).toContainText(
     "historical-provider / frozen-image-model-v7",
   );
@@ -93,13 +106,13 @@ test("UI-05 UI5-01/07：列表按项目有界分页，不把当前页冒充剧�
     ),
   );
   const panel = await env.open();
-  await expect(byName(panel, `查看媒体任务 ${env.jobs[0].id}`)).toBeVisible();
-  await expect(byName(panel, `查看媒体任务 ${env.jobs[20].id}`)).toHaveCount(0);
+  await expect(mediaTaskRow(panel, env.jobs[0].id)).toBeVisible();
+  await expect(mediaTaskRow(panel, env.jobs[20].id)).toHaveCount(0);
   await expect(panel).toContainText("其他剧集");
   await expect(panel).toContainText("未分集任务");
   await byName(panel, "下一页媒体任务").click();
-  await expect(byName(panel, `查看媒体任务 ${env.jobs[20].id}`)).toBeVisible();
-  await expect(byName(panel, `查看媒体任务 ${env.jobs[0].id}`)).toHaveCount(0);
+  await expect(mediaTaskRow(panel, env.jobs[20].id)).toBeVisible();
+  await expect(mediaTaskRow(panel, env.jobs[0].id)).toHaveCount(0);
   expect(
     env.reads.some((value) => {
       const url = new URL(value);
@@ -112,7 +125,7 @@ test("UI-05 UI5-01/07：列表按项目有界分页，不把当前页冒充剧�
     }),
   ).toBe(true);
   await byName(panel, "上一页媒体任务").click();
-  await expect(byName(panel, `查看媒体任务 ${env.jobs[0].id}`)).toBeVisible();
+  await expect(mediaTaskRow(panel, env.jobs[0].id)).toBeVisible();
 });
 
 test("UI-05 UI5-02/04：attempt、调用和费用明细各自分页，历史快照不受当前配置影响", async ({
@@ -588,9 +601,9 @@ test("UI-05 UI5-06/07：死信重新发起响应丢失后刷新仍复用同一ke
   expect(env.replayed.size).toBe(1);
   await page.reload();
   await expect(
-    byName(
+    mediaTaskRow(
       page.getByRole("region", { name: "项目媒体任务", exact: true }),
-      `查看媒体任务 ${source.id}`,
+      source.id,
     ),
   ).toBeVisible();
   detail = await env.select(source);
@@ -793,12 +806,9 @@ test("UI-05 UI5-07：写动作废弃尚未完成的旧列表读取，取消结�
   await page.unroute(`**/api/v1/projects/${env.project.id}/generation-jobs?*`);
   await expect(status(detail)).toHaveText("服务端状态 CANCEL_REQUESTED");
   await expect(revision(detail)).toHaveText("修订 8");
-  await expect(
-    panel.getByRole("article", {
-      name: `媒体任务 ${env.jobs[0].id}`,
-      exact: true,
-    }),
-  ).toContainText("服务端状态 CANCEL_REQUESTED");
+  await expect(mediaTaskRow(panel, env.jobs[0].id)).toContainText(
+    "服务端状态 CANCEL_REQUESTED",
+  );
 });
 
 test("UI-05 UI5-07：切集取消旧详情请求，迟到旧响应不能复活选择", async ({
@@ -821,7 +831,7 @@ test("UI-05 UI5-07：切集取消旧详情请求，迟到旧响应不能复活�
     await route.fulfill({ json: row }).catch(() => {});
     return true;
   };
-  await byName(panel, `查看媒体任务 ${job.id}`).click();
+  await byName(mediaTaskRow(panel, job.id), "查看详情").click();
   await expect.poll(() => started).toBe(true);
   await openDirectory(page);
   await page
@@ -833,9 +843,7 @@ test("UI-05 UI5-07：切集取消旧详情请求，迟到旧响应不能复活�
   } finally {
     gate.release();
   }
-  await expect(
-    page.getByRole("region", { name: `媒体任务详情 ${job.id}`, exact: true }),
-  ).toHaveCount(0);
+  await expect(page.locator(`#media-detail-${job.id}`)).toHaveCount(0);
   expect(env.mutations).toHaveLength(0);
 });
 

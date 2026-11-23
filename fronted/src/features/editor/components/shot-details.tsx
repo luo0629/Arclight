@@ -37,21 +37,6 @@ export type ShotExtensions = {
 };
 export type SourceLine = PerformanceSourceLine;
 
-export function ContractMetadata({ content }: { content: unknown }) {
-  return (
-    <details className="contract-metadata min-w-0 text-sm">
-      <summary>稳定标识与精确引用（只读）</summary>
-      <p className="my-3 text-muted-foreground">
-        台词由 ID
-        关联到精确剧本版本，字幕不是台词引用。资产及质检关联必须通过服务端校验；此处不会生成或批准素材。
-      </p>
-      <pre className="max-h-80 overflow-auto rounded-lg bg-muted p-3 text-xs">
-        {JSON.stringify(content, null, 2)}
-      </pre>
-    </details>
-  );
-}
-
 export default function ShotDetails({
   shot,
   lines,
@@ -162,7 +147,7 @@ export default function ShotDetails({
                 ))}
             </NativeSelect>
             <small className="text-muted-foreground">
-              只引用当前场景的稳定台词 ID。
+              台词来自当前场景。
               {!lines && "精确来源剧本尚未加载，现有引用会保留。"}
             </small>
           </Field>

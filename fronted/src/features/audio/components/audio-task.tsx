@@ -138,7 +138,6 @@ export default function AudioTaskDetail({
         <h4 className="font-semibold">本句配音任务</h4>
         {task.data && <StatusBadge status={task.data.status} />}
       </div>
-      <p className="break-all text-xs text-muted-foreground">任务：{jobId}</p>
       <AudioFeedback error={task.error || pollError || asset.error} />
       {task.data?.error_code && (
         <Notice tone="error">

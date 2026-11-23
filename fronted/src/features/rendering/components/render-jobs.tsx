@@ -353,21 +353,18 @@ export default function RenderJobs({
         <p className="text-sm text-muted-foreground">本清单还没有渲染任务。</p>
       )}
       <div className="flex min-w-0 flex-col gap-2">
-        {jobRows.map((job) => (
+        {jobRows.map((job, index) => (
           <Button
             key={job.id}
             variant="outline"
             className="h-auto min-w-0 flex-wrap justify-between gap-2 px-3 py-3 text-left whitespace-normal"
-            aria-label={`查看渲染任务 ${job.id}`}
+            aria-label={`查看第 ${index + 1} 条渲染记录：${renderLabel(job.status)} · ${date(job.created_at)}`}
             aria-pressed={selected?.id === job.id}
             onClick={() => setSelectedId(job.id)}
           >
             <span className="min-w-0">
               <strong>{renderLabel(job.status)}</strong>
               <span className="ml-2">{job.progress}%</span>
-              <span className="mt-1 block break-all text-xs text-muted-foreground">
-                {job.id}
-              </span>
             </span>
             <time
               className="text-xs text-muted-foreground"
@@ -448,9 +445,6 @@ function JobDetail({
         aria-label="渲染进度"
         className="h-2 w-full accent-primary"
       />
-      <p className="break-all text-xs text-muted-foreground">
-        任务 {job.id} · 修订 {job.revision}
-      </p>
       {job.error_code && (
         <Notice tone="error">
           渲染错误：{job.error_code}

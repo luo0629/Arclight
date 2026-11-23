@@ -205,8 +205,8 @@ function MatchingForm({
                       {confirmation.entry.name} · 修订{" "}
                       {confirmation.entry.revision}
                     </p>
-                    <p className="break-all text-xs text-muted-foreground">
-                      角色 ID：{confirmation.entry.id} ·{" "}
+                    <p className="text-xs text-muted-foreground">
+                      确认于{" "}
                       {new Date(confirmation.created_at).toLocaleString(
                         "zh-CN",
                       )}
@@ -243,7 +243,7 @@ function MatchingForm({
                           options={[
                             ...data.entries.map((entry) => ({
                               value: entry.id,
-                              label: `${entry.name}${entry.archived ? "（已归档）" : ""} · ${entry.id.slice(0, 8)}`,
+                              label: `${entry.name}${entry.archived ? "（已归档）" : ""}`,
                               disabled: entry.archived,
                             })),
                             ...(matched.length

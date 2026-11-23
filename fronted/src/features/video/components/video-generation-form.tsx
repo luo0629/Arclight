@@ -209,8 +209,7 @@ function Fields(props: Props) {
             </Button>
           ) : (
             <p role="status">
-              视频任务已受理：{state.pending.job_id} ·{" "}
-              {state.jobStatus || "正在核对"}
+              视频任务已受理 · {state.jobStatus || "正在核对"}
             </p>
           )}
           {state.pending.phase === "UNKNOWN" && (

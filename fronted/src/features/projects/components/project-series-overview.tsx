@@ -135,7 +135,9 @@ function SeriesDetails({ episodes }: { episodes: Episode[] }) {
                   href={`${episodePath(projectId, row.episode_id, "tasks")}&run=${row.id}`}
                 >
                   查看多集运行 · 锚点第 {row.episode_no} 集 ·{" "}
-                  {row.id.slice(0, 8)}
+                  <time dateTime={row.created_at}>
+                    {new Date(row.created_at).toLocaleString("zh-CN")}
+                  </time>
                 </Link>
                 {row.paused ? (
                   <span>已暂停</span>
@@ -228,16 +230,15 @@ function PlanDetails({
         <ul className="divide-y text-sm">
           {value.character_arcs.map((arc) => (
             <li key={arc.character_id} className="py-2 break-words">
-              <strong>{names.get(arc.character_id) ?? arc.character_id}</strong>{" "}
+              <strong>{names.get(arc.character_id) ?? "角色名称未记录"}</strong>{" "}
               · {arc.starting_goal} → {arc.planned_growth}
             </li>
           ))}
           {value.relationship_arcs.map((arc) => (
             <li key={arc.id} className="py-2 break-words">
               <strong>
-                {names.get(arc.source_character_id) ?? arc.source_character_id}{" "}
-                ↔{" "}
-                {names.get(arc.target_character_id) ?? arc.target_character_id}
+                {names.get(arc.source_character_id) ?? "角色名称未记录"} ↔{" "}
+                {names.get(arc.target_character_id) ?? "角色名称未记录"}
               </strong>{" "}
               · {arc.initial_relationship} → {arc.planned_development}
             </li>

@@ -143,9 +143,7 @@ async function setup(page: Page) {
     await page.goto(`/projects/${project.id}/episodes/${episode.id}`);
     await openWorkspacePanels(page);
     await page.getByRole("radio", { name: "版本列表", exact: true }).click();
-    const versionRow = page
-      .locator(".version-row")
-      .filter({ hasText: board.id });
+    const versionRow = page.locator(`[data-node-id="storyboard:${board.id}"]`);
     await expect(versionRow).toHaveCount(1);
     await versionRow.click();
     await expect(page.locator(".inspector .section-heading h3")).toHaveText(
@@ -409,7 +407,11 @@ test("UI-02：并发另存冲突保留表格草稿和全部旧版本", async ({ 
   await expect(
     page.getByRole("button", { name: "保存为新版本", exact: true }),
   ).toBeEnabled();
-  await expect(page.locator(".workspace-error")).toBeVisible();
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "内容已有新版本，请刷新后再保存" }),
+  ).toBeVisible();
   const versions = await env.versions();
   expect(versions).toHaveLength(2);
   for (const row of versions)

@@ -236,18 +236,12 @@ function ProductionBody({
                     <p className="mt-2 whitespace-pre-wrap">
                       {shot.description}
                     </p>
-                    <p className="mt-2 break-all text-xs text-muted-foreground">
-                      {shot.id}
-                    </p>
                   </th>
                   <td className="min-w-44">
                     {shot.job ? (
                       <div className="flex flex-col gap-2">
                         <StatusBadge status={shot.job.status} />
                         <p>已尝试 {shot.job.attempt_count} 次</p>
-                        <p className="break-all text-xs text-muted-foreground">
-                          {shot.job.id}
-                        </p>
                       </div>
                     ) : (
                       <span>尚未生成</span>
@@ -278,10 +272,10 @@ function ProductionBody({
                             <NativeSelectOption value="">
                               选择并查看精确候选
                             </NativeSelectOption>
-                            {shot.candidates.map((row) => (
+                            {shot.candidates.map((row, index) => (
                               <NativeSelectOption key={row.id} value={row.id}>
-                                v{row.version_no} · {row.status} ·{" "}
-                                {row.version_id.slice(0, 8)}
+                                候选 {index + 1} · v{row.version_no} ·{" "}
+                                {row.status}
                               </NativeSelectOption>
                             ))}
                           </NativeSelect>
@@ -292,7 +286,7 @@ function ProductionBody({
                               key={candidate.version_id}
                               path={candidate.image_path}
                               compact
-                              alt={`镜头 ${shot.shot_no} 精确候选 ${candidate.version_id}`}
+                              alt={`镜头 ${shot.shot_no} 候选 ${shot.candidates.indexOf(candidate) + 1} · v${candidate.version_no}`}
                               onUnavailable={unavailable}
                             />
                             <StatusBadge status={candidate.status} />
@@ -552,8 +546,8 @@ function ProductionBody({
                 </span>
                 <p className="break-all text-sm">{item.result}</p>
                 {item.candidate && (
-                  <p className="break-all text-xs text-muted-foreground">
-                    候选版本：{item.candidate.version_id}
+                  <p className="text-xs text-muted-foreground">
+                    候选版本 v{item.candidate.version_no}
                   </p>
                 )}
               </li>

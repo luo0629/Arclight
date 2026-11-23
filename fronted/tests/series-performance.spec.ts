@@ -101,7 +101,7 @@ async function setup(page: Page, dramatic = true, series = false) {
     await page.goto(`/projects/${project.id}/episodes/${episode.id}`);
     await openWorkspacePanels(page);
     await page.getByRole("radio", { name: "版本列表", exact: true }).click();
-    await page.locator(".version-row").filter({ hasText: id }).click();
+    await page.locator(`[data-node-id$=":${id}"]`).click();
   }
   return { session, headers, project, episode, prefix, source, openVersion };
 }
@@ -519,7 +519,7 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   await page.reload();
   await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
-  await page.locator(".version-row").filter({ hasText: board.id }).click();
+  await page.locator(`[data-node-id="storyboard:${board.id}"]`).click();
   await expect(details).toHaveCount(3);
   for (const detail of await details.all())
     if ((await detail.getAttribute("open")) === null)
@@ -583,9 +583,9 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   expect(await rejected.json()).toMatchObject({
     error: { code: "PERFORMANCE_NOT_READY" },
   });
-  await expect(page.locator(".workspace-error")).toContainText(
-    "表演分镜尚不具备制作条件",
-  );
+  await expect(
+    page.getByRole("alert").filter({ hasText: "表演分镜尚不具备制作条件" }),
+  ).toBeVisible();
   expect(
     (
       await (

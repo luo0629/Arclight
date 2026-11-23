@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useId, useState } from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { isResourceId } from "@/lib/routes";
+import { isResourceId, productionTaskPath } from "@/lib/routes";
 import { api, message } from "@/lib/api/client";
 import { ChoiceSelect } from "@/components/choice-select";
 import Dialog from "@/components/shared/app-dialog";
@@ -164,14 +165,9 @@ function ComparisonBody({
         <VersionImage
           key={image.image_path}
           path={image.image_path}
-          alt={`${roundLabel(image)} · ${image.version.id}`}
+          alt={`${roundLabel(image)} · ${image.asset_name}`}
           onUnavailable={unavailable}
         />
-        <p className="break-all text-xs text-muted-foreground">
-          精确版本：{image.version.id}
-          <br />
-          SHA-256：{image.version.checksum}
-        </p>
         <Button
           variant="outline"
           disabled={busy || loading}
@@ -229,10 +225,9 @@ function ComparisonBody({
                 ? ` · ${data.candidate.media_check.error_code}`
                 : ""}
             </p>
-            <p className="break-all text-xs text-muted-foreground">
-              候选：{data.candidate?.id ?? "未登记"} · 精确版本：
-              {data.version.id}
-            </p>
+            {!data.candidate && (
+              <p className="text-xs text-muted-foreground">尚未登记候选</p>
+            )}
             {data.actions.blocker ? (
               <Notice>
                 <p>{data.actions.blocker.message}</p>
@@ -311,14 +306,9 @@ function ComparisonBody({
                 <VersionImage
                   key={data.image_path}
                   path={data.image_path}
-                  alt={`当前检查图片 · ${data.version.id}`}
+                  alt={`当前检查图片 · ${data.asset.name} v${data.version.version_no}`}
                   onUnavailable={unavailable}
                 />
-                <p className="break-all text-xs text-muted-foreground">
-                  精确版本：{data.version.id}
-                  <br />
-                  SHA-256：{data.version.checksum}
-                </p>
               </figure>
             </div>
             {data.images_truncated && (
@@ -357,7 +347,17 @@ function ComparisonBody({
                     正在查看历史审查。请切回最新审查后操作；旧结论不能替代当前门禁。
                   </Notice>
                 )}
-                <ReviewReport item={selected} onUnavailable={unavailable} />
+                <ReviewReport
+                  item={selected}
+                  previousSequence={
+                    data.reviews.find(
+                      (item) =>
+                        item.record.review.result_id ===
+                        selected.record.review.rerun?.previous_review_id,
+                    )?.record.sequence
+                  }
+                  onUnavailable={unavailable}
+                />
               </>
             ) : (
               <Empty>
@@ -390,60 +390,88 @@ function ComparisonBody({
             {!data.revisions.length && (
               <p className="text-sm text-muted-foreground">尚无修订请求。</p>
             )}
-            {data.revisions.map(({ record, feedback }) => (
-              <details
-                key={record.revision_id}
-                className="min-w-0 rounded-lg border p-4"
-              >
-                <summary className="cursor-pointer text-sm font-medium">
-                  修订第 {record.round} 轮 / 最多 {record.max_rounds} 轮 ·{" "}
-                  {label(record.status)}
-                </summary>
-                <div className="mt-3 flex min-w-0 flex-col gap-3 text-sm">
-                  <p>
-                    {label(record.request.action)} ·{" "}
-                    <time dateTime={record.created_at}>
-                      {new Date(record.created_at).toLocaleString()}
-                    </time>
-                  </p>
-                  <p className="break-all text-xs text-muted-foreground">
-                    修订：{record.revision_id}
-                    <br />
-                    来源审查：{record.request.review_id}
-                    <br />
-                    来源图片：{record.target.asset_version_id}
-                    <br />
-                    媒体任务：{record.job_id ?? "未创建（已达上限）"}
-                  </p>
-                  <p className="break-all text-xs text-muted-foreground">
-                    问题：{record.request.issue_ids.join("、")}
-                    <br />
-                    依据：{record.evidence_ids.join("、")}
-                  </p>
-                  {!feedback.length && (
-                    <p className="text-muted-foreground">尚无本轮反馈决定。</p>
-                  )}
-                  {feedback.map((item) => (
-                    <div
-                      key={item.feedback_id}
-                      className="flex min-w-0 flex-col gap-1"
-                    >
+            {data.revisions.map(({ record, feedback }) => {
+              const sourceReview = data.reviews.find(
+                (item) =>
+                  item.record.review.result_id === record.request.review_id,
+              );
+              const sourceImage = data.images.find(
+                (item) => item.version.id === record.target.asset_version_id,
+              );
+              const jobHref =
+                record.job_id &&
+                productionTaskPath({
+                  id: record.job_id,
+                  project_id: projectId,
+                  family: "GENERATION",
+                });
+              return (
+                <details
+                  key={record.revision_id}
+                  className="min-w-0 rounded-lg border p-4"
+                >
+                  <summary className="cursor-pointer text-sm font-medium">
+                    修订第 {record.round} 轮 / 最多 {record.max_rounds} 轮 ·{" "}
+                    {label(record.status)}
+                  </summary>
+                  <div className="mt-3 flex min-w-0 flex-col gap-3 text-sm">
+                    <p>
+                      {label(record.request.action)} ·{" "}
+                      <time dateTime={record.created_at}>
+                        {new Date(record.created_at).toLocaleString()}
+                      </time>
+                    </p>
+                    {sourceReview && (
+                      <p>来源审查：第 {sourceReview.record.sequence} 次</p>
+                    )}
+                    {sourceImage && (
                       <p>
-                        <strong>
-                          反馈第 {item.sequence} 次 · {label(item.action)}
-                        </strong>{" "}
-                        · {label(item.source)}
+                        来源图片：{sourceImage.asset_name} ·{" "}
+                        {roundLabel(sourceImage)}
                       </p>
-                      <p>{item.reason}</p>
-                      <p className="break-all text-xs text-muted-foreground">
-                        {label(item.status)} · 审查 {item.review_id} ·{" "}
-                        {new Date(item.created_at).toLocaleString()}
+                    )}
+                    <p className="text-xs text-muted-foreground">
+                      {record.request.issue_ids.length} 项问题 ·{" "}
+                      {record.evidence_ids.length} 条依据
+                    </p>
+                    {jobHref && (
+                      <Link
+                        href={jobHref}
+                        className="w-fit underline underline-offset-4"
+                      >
+                        查看修订媒体任务
+                      </Link>
+                    )}
+                    {!record.job_id && <p>媒体任务未创建（已达上限）</p>}
+                    {!feedback.length && (
+                      <p className="text-muted-foreground">
+                        尚无本轮反馈决定。
                       </p>
-                    </div>
-                  ))}
-                </div>
-              </details>
-            ))}
+                    )}
+                    {feedback.map((item) => (
+                      <div
+                        key={item.feedback_id}
+                        className="flex min-w-0 flex-col gap-1"
+                      >
+                        <p>
+                          <strong>
+                            反馈第 {item.sequence} 次 · {label(item.action)}
+                          </strong>{" "}
+                          · {label(item.source)}
+                        </p>
+                        <p>{item.reason}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {label(item.status)} ·{" "}
+                          <time dateTime={item.created_at}>
+                            {new Date(item.created_at).toLocaleString()}
+                          </time>
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              );
+            })}
           </section>
           <Separator />
           <section

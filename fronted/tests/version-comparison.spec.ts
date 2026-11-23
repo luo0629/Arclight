@@ -267,8 +267,8 @@ test("TXT-07：跨100个历史版本追加和读取失败重试，基准保持�
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page
     .getByRole("region", { name: "内容与媒体列表", exact: true })
-    .getByLabel("搜索名称或版本 ID", { exact: true })
-    .fill(previous);
+    .getByLabel("搜索名称或版本", { exact: true })
+    .fill("历史正文 102");
   await page
     .locator(".version-row")
     .filter({ hasText: "历史正文 102" })
@@ -288,10 +288,18 @@ test("TXT-07：跨100个历史版本追加和读取失败重试，基准保持�
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("alert")).toContainText("对比暂时不可用");
   failComparison = false;
+  const comparisonRead = page.waitForRequest(
+    (request) =>
+      request.method() === "GET" &&
+      new URL(request.url()).pathname.endsWith(
+        `/scripts/${previous}/comparison`,
+      ),
+  );
   await dialog.getByRole("button", { name: "重试读取对比" }).click();
   await expect(
     dialog.getByRole("region", { name: "标题", exact: true }),
   ).toContainText("历史正文 101");
+  await comparisonRead;
   await dialog
     .getByRole("button", { name: "加载更多对比版本", exact: true })
     .click();

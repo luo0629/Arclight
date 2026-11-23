@@ -65,14 +65,9 @@ export default function ArtConceptRounds({
               >
                 <p className="text-sm">候选 {candidate.ordinal + 1}</p>
                 {candidate.asset_id && candidate.asset_version_id && (
-                  <>
-                    <VersionImage
-                      path={`/projects/${projectId}/assets/${candidate.asset_id}/versions/${candidate.asset_version_id}/image`}
-                    />
-                    <p className="break-all text-xs text-muted-foreground">
-                      精确版本：{candidate.asset_version_id}
-                    </p>
-                  </>
+                  <VersionImage
+                    path={`/projects/${projectId}/assets/${candidate.asset_id}/versions/${candidate.asset_version_id}/image`}
+                  />
                 )}
                 {candidate.error_code && (
                   <Notice tone="error">

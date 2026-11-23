@@ -1203,7 +1203,13 @@ test("SERIES-08 launches the exact approved scope from overview and replays the 
       .click();
   };
   const entries = history.getByRole("link", { name: /查看多集运行/ });
-  const target = entries.filter({ hasText: original.slice(0, 8) });
+  const target = entries.and(history.locator(`a[href$="&run=${original}"]`));
+  await expect(target).toHaveText(/^查看多集运行 · 锚点第 \d+ 集 · .+/);
+  await expect(target.locator("time")).toHaveAttribute(
+    "datetime",
+    catalog.items[0].created_at,
+  );
+  await expect(target).not.toContainText(original.slice(0, 8));
   const scope = page.getByRole("region", { name: "多集制作范围", exact: true });
   const pause = scope.getByRole("button", {
     name: "暂停多集制作",

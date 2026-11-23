@@ -94,8 +94,7 @@ export default function StoryBible({ projectId, writable, owner }: Props) {
       <details className="studio-disclosure">
         <summary>关于设定、资产与历史快照</summary>
         <Notice tone="info">
-          这不是视觉资产中心。只有绑定已批准的精确资产版本才构成正式资产引用；名称或设定
-          ID 不等于资产。活动任务期间不可修改。
+          可以为设定绑定已批准的视觉资产版本。相关任务运行期间无法修改设定。
         </Notice>
       </details>
       {!writable && (
@@ -321,11 +320,8 @@ function StoryEntryEditor({
       <h2 className="text-lg font-semibold">
         {entry ? entry.name + " · 修订 " + entry.revision : "新建设定"}
       </h2>
-      {entry && (
-        <p className="break-all text-xs text-muted-foreground">
-          稳定 ID：{entry.id}
-          {entry.archived ? " · 已归档" : ""}
-        </p>
+      {entry?.archived && (
+        <p className="text-xs text-muted-foreground">已归档</p>
       )}
       {error && (
         <Notice tone="error" role="alert">
@@ -416,7 +412,7 @@ function StoryEntryEditor({
                 <span className="min-w-0 break-all">
                   {links[link.relation].label}：
                   {entries.find((row) => row.id === link.target_id)?.name ??
-                    link.target_id}
+                    "设定暂不可见"}
                 </span>
                 <Button
                   type="button"

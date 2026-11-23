@@ -40,9 +40,7 @@ import {
 import type { ContentVersion, Episode } from "@/types/api";
 
 import Dialog from "@/components/shared/app-dialog";
-import ShotDetails, {
-  ContractMetadata,
-} from "@/features/editor/components/shot-details";
+import ShotDetails from "@/features/editor/components/shot-details";
 import { useSessionDraft } from "@/providers/draft-provider";
 import ShotProductionButton from "@/features/editor/components/shot-production";
 import StoryboardTable, {
@@ -1147,7 +1145,6 @@ export default function VersionEditor({
       {kind === "script" && !editing && (
         <ScriptNarrativeSummary content={draft} />
       )}
-      <ContractMetadata content={draft} />
       {editing && invalidBoard && (
         <p className="hint text-xs leading-relaxed text-muted-foreground">
           {performanceIssue ||

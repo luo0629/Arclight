@@ -303,7 +303,7 @@ test("UI-01：时间轴匹配真实MP4可定位片段并打开同一历史编辑
   await expect
     .poll(() => video.evaluate((v: HTMLVideoElement) => v.readyState))
     .toBeGreaterThan(0);
-  await panel.getByRole("button", { name: /^1\.5 秒 ·/ }).click();
+  await panel.getByRole("button", { name: /^片段 2 · 1\.5 秒 起/ }).click();
   await expect
     .poll(() => video.evaluate((v: HTMLVideoElement) => v.currentTime))
     .toBeCloseTo(1.5, 1);
@@ -455,7 +455,13 @@ for (const size of [
           exact: true,
         })
         .click();
-      await expect(panel).toContainText(env.original.id);
+      await expect(
+        panel.getByRole("heading", { name: /^时间轴 v/ }),
+      ).toBeVisible();
+      await expect(page).toHaveURL(
+        (url) => url.searchParams.get("node") === env.timeline.id,
+      );
+      await expect(panel).not.toContainText(env.original.id);
       await tile(env.image.id)
         .getByRole("button", {
           name: `查看镜头候选图：${env.image.title} v${env.image.version_no}`,

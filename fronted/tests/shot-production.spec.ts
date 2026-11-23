@@ -383,7 +383,7 @@ test("UI-03：精确候选多选批准、必填意见及逐项CAS冲突", async 
       .selectOption(shot.candidates[0].id);
     await expect(
       dialog.getByRole("img", {
-        name: `镜头 ${index + 1} 精确候选 ${shot.candidates[0].version_id}`,
+        name: `镜头 ${index + 1} 候选 1 · v${shot.candidates[0].version_no}`,
         exact: true,
       }),
     ).toBeVisible();

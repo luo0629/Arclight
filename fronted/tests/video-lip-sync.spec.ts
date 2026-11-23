@@ -55,31 +55,28 @@ test("VIDEO-04：校正表单提交精确配音和参考帧，原候选不自动
           },
         });
       saved = route.request().postDataJSON() as LipSyncRequest;
-      return route.fulfill({
-        status: 201,
-        json: {
-          ...env.second,
-          source: "REPLACEMENT",
-          replaces_candidate_id: env.first.id,
-          lip_sync_required: true,
-          lip_sync: {
-            engine: "local-mouth-pose/1",
-            source_candidate_id: env.first.id,
-            source_video_version_id: env.first.asset_version_id,
-            source_video_sha256: env.first.version!.checksum,
-            script_version_id: crypto.randomUUID(),
-            output_sha256: env.second.version!.checksum,
-            lines: [
-              {
-                ...cue,
-                audio_file_id: crypto.randomUUID(),
-                audio_sha256: "c".repeat(64),
-                duration_ms: 800,
-              },
-            ],
-          },
+      Object.assign(env.second, {
+        source: "REPLACEMENT",
+        replaces_candidate_id: env.first.id,
+        lip_sync_required: true,
+        lip_sync: {
+          engine: "local-mouth-pose/1",
+          source_candidate_id: env.first.id,
+          source_video_version_id: env.first.asset_version_id,
+          source_video_sha256: env.first.version!.checksum,
+          script_version_id: crypto.randomUUID(),
+          output_sha256: env.second.version!.checksum,
+          lines: [
+            {
+              ...cue,
+              audio_file_id: crypto.randomUUID(),
+              audio_sha256: "c".repeat(64),
+              duration_ms: 800,
+            },
+          ],
         },
       });
+      return route.fulfill({ status: 201, json: env.second });
     },
   );
   await env.openCanvas(env.videoNodes[0]);
@@ -120,4 +117,12 @@ test("VIDEO-04：校正表单提交精确配音和参考帧，原候选不自动
   await expect(
     detail.getByRole("button", { name: "提交视频版本审核", exact: true }),
   ).toBeDisabled();
+
+  await env.selectNode(env.videoNodes[1]);
+  const receipt = detail.getByRole("region", {
+    name: "口型校正回执",
+    exact: true,
+  });
+  await expect(receipt).toContainText("第 1 句 · 400–1200 ms");
+  await expect(receipt).not.toContainText(cue.audio_version_id);
 });

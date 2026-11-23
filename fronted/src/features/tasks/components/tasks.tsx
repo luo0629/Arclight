@@ -528,9 +528,7 @@ function EventHistory({ runId, close }: { runId: string; close: () => void }) {
           收起记录
         </Button>
       </div>
-      <p className="muted text-sm text-muted-foreground">
-        任务 {runId} · 按时间从早到晚
-      </p>
+      <p className="muted text-sm text-muted-foreground">按时间从早到晚</p>
       {events.loaded && !events.rows.length && (
         <p className="hint text-xs leading-relaxed text-muted-foreground">
           暂无执行记录
