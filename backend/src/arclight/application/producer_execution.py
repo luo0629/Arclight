@@ -49,7 +49,13 @@ def _invoke(factory: sessionmaker[Session], settings: Settings, command_id: UUID
     # Every delivery rechecks authority, including replay of an already completed loop.
     with factory.begin() as db:
         lock_gate(db)
-        require_producer(db, run_id, actor)
+        run, _ = require_producer(db, run_id, actor)
+        if run.input_json.get("short_drama"):
+            from arclight.application.short_drama import require_exact_inputs
+            from arclight.application.short_drama_delivery import require_run_authorization
+
+            episode, _, spec = require_run_authorization(db, run)
+            require_exact_inputs(db, episode, spec)
         if action == "ANSWER":
             loop = db.get(AgentLoop, UUID(payload["loop_id"]))
             if loop is None or loop.run_id != run_id or loop.actor_id != actor:

@@ -141,7 +141,7 @@ def snapshot(db: Session, row: Script | Storyboard, project_id: UUID) -> Version
     rewrite = None
     if isinstance(row, Script) and row.run_id:
         run = db.get(WorkflowRun, row.run_id)
-        if run and run.workflow_type == "script_rewrite":
+        if run and "rewrite_input" in run.input_json:
             inputs = run.input_json["rewrite_input"]
             request = inputs["request"]
             candidate = db.get(Script, UUID(request["base_version_id"]))

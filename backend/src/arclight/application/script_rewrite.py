@@ -22,6 +22,7 @@ from arclight.domain.screenwriter_revision import (
     SERIES_REWRITE_SCREENWRITER_VERSION,
     ScreenwriterRevisionOptions,
 )
+from arclight.domain.script_drafts import SCRIPT_REWRITE_DRAFT, ScriptWritingPurpose
 from arclight.domain.script_narrative import NarrativeRequest
 from arclight.persistence.models import AuditEvent, OutboxEvent, Script, WorkflowRun
 from arclight.providers.text import build_provider
@@ -37,6 +38,7 @@ def start_rewrite(
     request_id: str,
     settings: Settings,
     *,
+    purpose: ScriptWritingPurpose = "REVIEW_WORKFLOW",
     professional: bool = False,
     agent_limits: AgentRunLimits | None = None,
     revision_rounds: int | None = None,
@@ -55,7 +57,8 @@ def start_rewrite(
     db.refresh(episode, with_for_update={"key_share": True})
     if episode.status == "ARCHIVED":
         raise DomainError("EPISODE_ARCHIVED", "归档剧集只允许查看", 409)
-    payload = {"workflow_type": "script_rewrite", **request.model_dump(mode="json")}
+    workflow_type = SCRIPT_REWRITE_DRAFT if purpose == "EDITABLE_DRAFT" else "script_rewrite"
+    payload = {"workflow_type": workflow_type, **request.model_dump(mode="json")}
     if professional:
         payload |= {
             "professional": True,
@@ -159,7 +162,7 @@ def start_rewrite(
         trace_id=request_id,
         idempotency_key=key,
         request_fingerprint=fingerprint,
-        workflow_type="script_rewrite",
+        workflow_type=workflow_type,
         workflow_version=SERIES_REWRITE_SCREENWRITER_VERSION
         if narrative is not None
         else REWRITE_SCREENWRITER_VERSION

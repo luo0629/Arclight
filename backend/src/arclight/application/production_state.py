@@ -518,7 +518,10 @@ def production_facts(db: Session, episode_id: UUID, actor: str) -> EpisodeFacts:
             board if script and board and board.script_version_id == script.id else None,
         ),
         script_execution=latest_execution(
-            db, episode, ("script_storyboard", "script_rewrite"), script
+            db,
+            episode,
+            ("script_storyboard", "script_rewrite", "script_draft", "script_rewrite_draft"),
+            script,
         ),
         storyboard_execution=latest_execution(
             db, episode, ("script_storyboard", "storyboard"), board, source_script=script

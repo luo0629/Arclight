@@ -68,6 +68,7 @@ def start_producer(
     *,
     limits: AgentRunLimits | None = None,
     series: SeriesProducerScope | None = None,
+    short_drama: dict | None = None,
 ) -> WorkflowRun:
     """Trusted application entry; UI and automatic observation belong to PROD-03/04.
 
@@ -85,6 +86,7 @@ def start_producer(
     fingerprint = digest(
         {"workflow": version, "goal": value.goal, "limits": limits.model_dump(mode="json")}
         | ({"series": series.model_dump(mode="json")} if series else {})
+        | ({"short_drama": short_drama} if short_drama is not None else {})
     )
     previous = db.scalar(
         select(WorkflowRun).where(
@@ -117,6 +119,8 @@ def start_producer(
         from arclight.application.producer_series import capture_scope
 
         inputs["series_scope"] = capture_scope(db, episode, actor, series)
+    if short_drama is not None:
+        inputs["short_drama"] = short_drama
     service = require_text_snapshot(db, actor, settings)
     if service:
         inputs["_text_service"] = service

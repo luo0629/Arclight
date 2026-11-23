@@ -13,9 +13,15 @@ from arclight.application.producer_interaction import (
 )
 from arclight.application.producer_progress import read_progress
 from arclight.application.producer_series_delivery import complete_series, control_series
+from arclight.application.short_drama import (
+    read_short_drama,
+    short_drama_preflight,
+    start_short_drama,
+)
 from arclight.domain.agent_runtime import AgentHumanDecision
 from arclight.domain.producer_interaction import ProducerCommand, ProducerRunCreate
 from arclight.domain.producer_series import SeriesCompletion, SeriesControl, SeriesProducerCreate
+from arclight.domain.short_drama import ShortDramaCreate, ShortDramaPreflight
 
 router = APIRouter(prefix="/api/v1", tags=["producer"])
 CommandKey = Annotated[
@@ -52,6 +58,42 @@ def create(
             key,
             request.state.request_id,
         )
+    )
+
+
+@router.post("/episodes/{episode_id}/short-drama", status_code=202)
+def create_short_drama(
+    episode_id: UUID,
+    payload: ShortDramaCreate,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    key: CommandKey,
+) -> AcceptedRun:
+    return _accepted(
+        start_short_drama(
+            db,
+            request.app.state.settings,
+            episode_id,
+            actor,
+            payload,
+            key,
+            request.state.request_id,
+        )
+    )
+
+
+@router.get("/episodes/{episode_id}/short-drama")
+def short_drama_progress(episode_id: UUID, db: Database, actor: Actor) -> dict | None:
+    return read_short_drama(db, episode_id, actor)
+
+
+@router.get("/episodes/{episode_id}/short-drama/preflight")
+def short_drama_audio_preflight(
+    episode_id: UUID, script_version_id: UUID, request: Request, db: Database, actor: Actor
+) -> ShortDramaPreflight:
+    return short_drama_preflight(
+        db, request.app.state.settings, episode_id, actor, script_version_id
     )
 
 

@@ -339,6 +339,7 @@ export default function StoryOutline({
     setError("");
     const writerBody = {
       outline_version_id: detail.id,
+      purpose: "EDITABLE_DRAFT",
       ...creationPayload(creation),
     };
     const signature = JSON.stringify(writerBody);
@@ -363,7 +364,7 @@ export default function StoryOutline({
         episode_id: episode.id,
         id: accepted.run_id,
         status: accepted.status,
-        workflow_type: "script_storyboard",
+        workflow_type: "script_draft",
         revision: 0,
         pending_review: null,
         error_code: null,

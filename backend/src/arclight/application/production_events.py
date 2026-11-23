@@ -98,7 +98,13 @@ def _record_source(
 
 
 def enqueue_text(db: Session, run: WorkflowRun) -> None:
-    if run.workflow_type not in {"script_storyboard", "storyboard", "script_rewrite"}:
+    if run.workflow_type not in {
+        "script_storyboard",
+        "storyboard",
+        "script_rewrite",
+        "script_draft",
+        "script_rewrite_draft",
+    }:
         return
     actor = db.scalar(
         select(AuditEvent.actor_id)

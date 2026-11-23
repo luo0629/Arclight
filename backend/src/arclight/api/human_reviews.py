@@ -17,12 +17,15 @@ from arclight.application.human_reviews import (
     review_blocker,
     submit_decision,
 )
+from arclight.application.short_drama_budget import root_for_workflow
 from arclight.domain.human_reviews import HumanDecision, ReviewResume, ReviewSnapshot
+from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.human_reviews import (
     HumanReviewDecision,
     HumanReviewRequest,
     HumanReviewResume,
 )
+from arclight.persistence.models import WorkflowRun
 
 router = APIRouter(prefix="/api/v1", tags=["human-reviews"])
 
@@ -54,6 +57,7 @@ class HumanReviewRead(ReviewResource):
     snapshot: ReviewSnapshot
     status: Literal["WAITING_REVIEW", "DECIDED", "RESUMED", "BLOCKED"]
     blocking_code: str | None
+    automatic_production_id: UUID | None
     decision: DecisionRead | None
     resume: ResumeRead | None
 
@@ -64,6 +68,7 @@ def serialize(db: Database, row: HumanReviewRequest) -> HumanReviewRead:
     )
     receipt = db.scalar(select(HumanReviewResume).where(HumanReviewResume.request_id == row.id))
     blocker = review_blocker(db, row) if receipt is None else None
+    root = root_for_workflow(db, row.run_id)
     return HumanReviewRead(
         id=row.id,
         created_at=row.created_at,
@@ -80,6 +85,7 @@ def serialize(db: Database, row: HumanReviewRequest) -> HumanReviewRead:
         if decision
         else "WAITING_REVIEW",
         blocking_code=blocker,
+        automatic_production_id=root.id if root is not None else None,
         decision=DecisionRead.model_validate(decision) if decision else None,
         resume=ResumeRead.model_validate(receipt) if receipt else None,
     )
@@ -95,6 +101,15 @@ def list_reviews(
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[HumanReviewRead]:
     require_project(db, project_id, actor)
+    automatic = (
+        select(AgentRunLimit.run_id)
+        .join(WorkflowRun, WorkflowRun.id == AgentRunLimit.root_run_id)
+        .where(
+            AgentRunLimit.run_id == HumanReviewRequest.run_id,
+            WorkflowRun.input_json["short_drama"]["script_version_id"].as_string().is_not(None),
+        )
+        .exists()
+    )
     rows = db.scalars(
         select(HumanReviewRequest)
         .where(
@@ -102,7 +117,7 @@ def list_reviews(
             *(
                 [HumanReviewRequest.snapshot_json["version_id"].as_string() == str(version_id)]
                 if version_id is not None
-                else []
+                else [~automatic]
             ),
         )
         .order_by(HumanReviewRequest.created_at.desc(), HumanReviewRequest.id)

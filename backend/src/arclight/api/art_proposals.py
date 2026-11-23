@@ -14,6 +14,7 @@ from arclight.application.art_proposal_store import (
     archive_proposal,
     asset_content,
     current_version,
+    require_manual_proposal,
     require_proposal,
     save_proposal,
 )
@@ -21,6 +22,7 @@ from arclight.application.art_proposals import asset_baseline
 from arclight.application.art_protection import compare_art_proposal
 from arclight.application.art_reviews import decide_art, request_id, selection, submit_art
 from arclight.application.commands import require_project
+from arclight.application.short_drama_budget import root_for_workflow
 from arclight.application.visual_bible import snapshot
 from arclight.core.errors import DomainError
 from arclight.domain.art_proposals import ArtProposal
@@ -73,6 +75,7 @@ class ArtRead(ReviewResource):
     revision: int
     archived: bool
     current_version_no: int
+    automatic_production_id: UUID | None
     version: ArtVersionRead
     review: HumanReviewRead | None
     review_confirmation: ArtConfirmation | None
@@ -84,6 +87,7 @@ def serialize(
 ) -> ArtRead:
     version = version or current_version(db, row)
     request = db.get(HumanReviewRequest, request_id(version, row.project_id))
+    root = root_for_workflow(db, request.run_id if request else None)
     outputs = db.scalars(
         select(ArtApprovedVersion)
         .where(ArtApprovedVersion.proposal_version_id == version.id)
@@ -97,6 +101,7 @@ def serialize(
         revision=row.revision,
         archived=row.archived,
         current_version_no=row.version_no,
+        automatic_production_id=root.id if root is not None else None,
         version=ArtVersionRead.model_validate(version),
         review=serialize_review(db, request) if request else None,
         review_confirmation=selection(db, version.id) if request else None,
@@ -260,6 +265,7 @@ def submit(
     db: Database,
     actor: Actor,
 ) -> ArtRead:
+    require_manual_proposal(db, require_proposal(db, project_id, proposal_id, actor, write=True))
     submit_art(db, project_id, proposal_id, actor, payload)
     return get_proposal(project_id, proposal_id, db, actor)
 

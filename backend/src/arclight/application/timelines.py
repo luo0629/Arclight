@@ -315,7 +315,13 @@ def require_lip_sync_voices(db: Session, tracks: list[TrackSnapshot]) -> None:
 
 
 def create_timeline(
-    db: Session, settings: Settings, episode_id: UUID, actor: str, payload: TimelineCreate
+    db: Session,
+    settings: Settings,
+    episode_id: UUID,
+    actor: str,
+    payload: TimelineCreate,
+    *,
+    use_storyboard_durations: bool = False,
 ) -> TimelineRead:
     episode = write_episode(db, episode_id, actor)
     request_hash = digest(
@@ -325,6 +331,7 @@ def create_timeline(
                 [item.model_dump(mode="json") for item in payload.selected_shots],
                 key=lambda item: item["shot_id"],
             ),
+            **({"use_storyboard_durations": True} if use_storyboard_durations else {}),
         }
     )
     replay = replay_timeline(db, episode.id, payload.creation_key, request_hash, actor)
@@ -346,7 +353,7 @@ def create_timeline(
             shot,
             selection.asset_version_id,
             index,
-            payload.default_duration_ms,
+            shot.duration_ms if use_storyboard_durations else payload.default_duration_ms,
             trim=selection.video,
         )
         verify_visual_object(db, settings, episode, clip, actor)

@@ -16,6 +16,7 @@ from arclight.application.director_performance import director_contracts, requir
 from arclight.application.director_research import approved_input
 from arclight.application.gateway_text import execution_actor, validate_publication
 from arclight.application.model_gateway import lock_gate
+from arclight.application.short_drama_director import director_model_input
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -211,10 +212,13 @@ def plan_director(
                 AgentLoop.operation_sha256 == _operation(run.id, attempt, contracts.plan_version),
             )
         )
-        request = (
-            AgentModelRequest.model_validate(previous.seed_json)
-            if previous
-            else AgentModelRequest(
+        if previous:
+            request = AgentModelRequest.model_validate(previous.seed_json)
+        else:
+            prompt, messages = director_model_input(
+                db, run, contracts.plan_prompt, plan_seed.model_dump(mode="json")
+            )
+            request = AgentModelRequest(
                 run_id=run.id,
                 agent_name="director",
                 stage="storyboard",
@@ -222,11 +226,10 @@ def plan_director(
                 agent_version=contracts.plan_version,
                 prompt_version=contracts.plan_version,
                 result_schema_version=contracts.plan_version,
-                system_instruction=contracts.plan_prompt,
+                system_instruction=prompt,
                 max_tokens=16000,
-                messages=[AgentUserMessage(data=plan_seed.model_dump(mode="json"))],
+                messages=messages,
             )
-        )
     result = run_persistent_agent_loop(
         factory,
         settings,

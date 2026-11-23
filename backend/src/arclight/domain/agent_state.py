@@ -51,11 +51,13 @@ WORKFLOW_PLANS: dict[str, tuple[AgentStepId, ...]] = {
     "story_analysis": ("analyze",),
     "story_outline": ("outline",),
     "script_rewrite": ("rewrite", "script_review"),
+    "script_rewrite_draft": ("rewrite",),
     "storyboard": ("storyboard", "storyboard_review"),
     # Art investigation already uses the shared storyboard visual stage and Context.
     "art_proposal": ("storyboard", "storyboard_review"),
     "continuity_review": ("storyboard",),
     "script_storyboard": ("script", "script_review", "storyboard", "storyboard_review"),
+    "script_draft": ("script",),
 }
 
 _ALLOWED_STEP_TRANSITIONS: dict[str, frozenset[str]] = {

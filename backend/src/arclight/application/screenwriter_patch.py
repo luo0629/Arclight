@@ -104,7 +104,7 @@ def deterministic_issues(
 def patch_seed(db: Session, run: WorkflowRun, operation_key: str) -> tuple[AgentLoop, RevisionSeed]:
     if run.workflow_version not in REVISION_WORKFLOWS:
         raise DomainError("SCREENWRITER_PATCH_SCOPE", "此运行未授权评价补丁检查", 422)
-    stage = "rewrite" if run.workflow_type == "script_rewrite" else "script"
+    stage = "rewrite" if "rewrite_input" in run.input_json else "script"
     loop = db.scalar(
         select(AgentLoop).where(
             AgentLoop.run_id == run.id,

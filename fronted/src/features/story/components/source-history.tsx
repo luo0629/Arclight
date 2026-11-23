@@ -81,7 +81,9 @@ export default function SourceHistory({
                   story_analysis: "故事提炼",
                   story_outline: "分集大纲",
                   script_storyboard: "编剧与分镜",
+                  script_draft: "剧本草稿",
                   script_rewrite: "局部改写",
+                  script_rewrite_draft: "局部改写",
                   storyboard: "独立分镜",
                 } as Record<string, string>
               )[row.workflow_type] ?? row.workflow_type}

@@ -42,8 +42,9 @@ from arclight.domain.agent_state import (
 )
 from arclight.domain.screenwriter_creation import ScriptFragment
 from arclight.domain.screenwriter_planning import EpisodePlan, SeasonPlan
+from arclight.domain.script_drafts import DRAFT_WORKFLOWS, REWRITE_WORKFLOWS
 from arclight.persistence.agent_loops import AgentLoop
-from arclight.persistence.models import Episode, Script, WorkflowRun
+from arclight.persistence.models import Episode, Script, Storyboard, WorkflowRun
 from arclight.providers.context import bind_contexts
 from arclight.providers.text import build_provider
 from arclight.workflows.checkpoints import open_checkpointer
@@ -80,6 +81,22 @@ def _finish_outline(factory: sessionmaker[Session], run_id: UUID, revision: int,
         )
 
 
+def _finish_draft(db: Session, run: WorkflowRun, project_id: UUID, candidate: UUID) -> None:
+    scope = scope_for_run(run, project_id)
+    state = restore_agent_state(run.agent_state_json, None, scope)
+    run.agent_state_json = transition_agent_step(
+        state,
+        scope,
+        expected_revision=state.revision,
+        step_id="rewrite" if run.workflow_type in REWRITE_WORKFLOWS else "script",
+        target="SUCCEEDED",
+        draft_id=candidate,
+    ).model_dump(mode="json")
+    run.status, run.error_code, run.pending_review = "SUCCEEDED", None, None
+    run.revision += 1
+    emit(db, run, "workflow.finished", {"status": run.status, "script_version_id": str(candidate)})
+
+
 def _review_graph(
     factory: sessionmaker[Session], settings: Settings, run_id: UUID, revision: int
 ) -> None:
@@ -103,6 +120,27 @@ def _review_graph(
         settings = text_settings(db, project_id, run, settings)
         provider_settings = run_settings(settings, run.input_json.get("_text_service"), db)
         inputs, resume = public_startup(run.input_json), run.resume_json
+        if resume and resume.get("authority") == "SHORT_DRAMA":
+            from arclight.application.short_drama_reviews import verify_service_review
+            from arclight.domain.versions import digest
+
+            board = db.get(Storyboard, UUID(resume["version_id"]))
+            if (
+                board is None
+                or board.run_id != run.id
+                or board.status != "APPROVED"
+                or digest(board.content_json) != resume.get("content_sha256")
+            ):
+                raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "分镜内容与自动检查证据不一致", 409)
+            verify_service_review(
+                db,
+                run,
+                {
+                    key: value
+                    for key, value in resume.items()
+                    if key not in {"decision", "authority"}
+                },
+            )
         state = restore_agent_state(run.agent_state_json, None, scope)
     store = AgentLoopStore(factory, loop_id, token)
     with keep_loop_alive(store), open_checkpointer(settings) as saver:
@@ -248,7 +286,7 @@ def execute_screenwriter(
                 "outline"
                 if run.workflow_type == "story_outline"
                 else "rewrite"
-                if run.workflow_type == "script_rewrite"
+                if run.workflow_type in REWRITE_WORKFLOWS
                 else "script"
             )
             if next(step for step in state.steps if step.step_id == stage).status == "PENDING":
@@ -314,9 +352,9 @@ def execute_screenwriter(
             with factory.begin() as db:
                 run = active_workflow(db, run_id, revision)
                 lock_dependency_graph(db, scope.project_id)
-                existing = db.scalar(select(Script.id).where(Script.run_id == run.id))
-                if existing is None:
-                    save_script_candidate(
+                candidate = db.scalar(select(Script.id).where(Script.run_id == run.id))
+                if candidate is None:
+                    identity, _ = save_script_candidate(
                         db,
                         run.id,
                         run.episode_id,
@@ -324,6 +362,15 @@ def execute_screenwriter(
                         run.input_json["target_duration_ms"],
                         settings.text_duration_tolerance_percent,
                     )
+                    candidate = UUID(identity)
+                if run.workflow_type in DRAFT_WORKFLOWS:
+                    _finish_draft(db, run, scope.project_id, candidate)
+                    return True
+        elif run.workflow_type in DRAFT_WORKFLOWS:
+            with factory.begin() as db:
+                run = active_workflow(db, run_id, revision)
+                _finish_draft(db, run, scope.project_id, candidate)
+            return True
         _review_graph(factory, settings, run_id, revision)
     except DomainError as exc:
         if exc.code in {"AGENT_LOOP_BUSY", "AGENT_EXECUTION_LOST"}:

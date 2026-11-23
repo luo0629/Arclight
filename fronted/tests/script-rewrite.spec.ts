@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import type { Run } from "../src/types/api";
 import { openWorkspacePanels } from "./workspace-helpers";
 
 async function setup(page: Page) {
@@ -126,14 +127,19 @@ test("rewrites one exact scene, preserves original and independently reviews wit
   await expect(page.getByText("剧本局部改写", { exact: true })).toBeVisible();
   await expect(
     page.getByRole("button", { name: "批准并继续", exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "批准并继续", exact: true }).click();
+  ).toHaveCount(0);
   await expect(async () => {
     const runs = await (
       await page.request.get(env.prefix + "/runs", { headers: env.headers })
     ).json();
     expect(runs[0].status).toBe("SUCCEEDED");
   }).toPass();
+  await page.getByRole("radio", { name: "版本列表", exact: true }).click();
+  await page.locator(".version-row").filter({ hasText: "版本 2" }).click();
+  await page.getByRole("button", { name: "批准该版本", exact: true }).click();
+  await expect(page.locator(".inspector .section-heading .status")).toHaveText(
+    "已批准",
+  );
   expect(
     await (
       await page.request.get(env.prefix + "/storyboards", {
@@ -233,6 +239,22 @@ test("lost POST receipt retries the same key without duplicate versions and reta
   const keys: string[] = [];
   const bodies: unknown[] = [];
   let first = true;
+  let showActiveRun = false;
+  await page.route(`**${env.prefix}/runs?**`, async (route) => {
+    if (!showActiveRun) return route.fallback();
+    const response = await route.fetch();
+    const runs: Run[] = await response.json();
+    // Keep the accepted run visible as active while the POST response is lost.
+    // The isolated worker can otherwise finish an editable draft before SSE refreshes.
+    await route.fulfill({
+      response,
+      json: runs.map((run) => ({
+        ...run,
+        status: "RUNNING",
+        pending_review: null,
+      })),
+    });
+  });
   await page.route(
     "**" + env.prefix + "/script-rewrite-runs",
     async (route) => {
@@ -240,6 +262,7 @@ test("lost POST receipt retries the same key without duplicate versions and reta
       bodies.push(route.request().postDataJSON());
       if (first) {
         first = false;
+        showActiveRun = true;
         const response = await route.fetch();
         expect(response.status()).toBe(202);
         // The accepted run must reach the workspace before its POST receipt is lost.
@@ -252,6 +275,7 @@ test("lost POST receipt retries the same key without duplicate versions and reta
         ).toBeVisible();
         return route.abort("connectionreset");
       }
+      showActiveRun = false;
       return route.continue();
     },
   );

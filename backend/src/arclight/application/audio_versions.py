@@ -59,6 +59,21 @@ def require_audio_version(
     ):
         raise DomainError("AUDIO_BINDING_REQUIRED", "音频缺少本快照台词的精确输入来源", 409)
     require_live_line_inputs(db, project_id, manifest)
+    file = require_audio_file(db, project_id, binding, version)
+    policy = POLICIES[file.media_type]
+    data = file_storage(settings, file).read(file.object_key, policy.max_bytes, file.checksum)
+    if len(data) != file.byte_size:
+        raise DomainError("OBJECT_UNAVAILABLE", "音频大小与不可变文件回执不符", 409)
+    details = probe(data, file.media_type)
+    if details["duration_ms"] <= 0 or details["silence"]["silent"]:
+        raise DomainError("AUDIO_SILENT", "音频没有有效语音，不能审核或选用", 422)
+    if details["duration_ms"] != binding.duration_ms:
+        raise DomainError("AUDIO_OUTPUT_MISMATCH", "音频实测时长与不可变台词绑定不符", 422)
+
+
+def require_audio_file(
+    db: Session, project_id: UUID, binding: AudioLineBinding, version: AssetVersion
+) -> StoredFile:
     files = list(db.scalars(select(StoredFile).where(StoredFile.asset_version_id == version.id)))
     if len(files) != 1:
         raise DomainError("AUDIO_FILE_INVALID", "音频须有唯一的不可变文件回执", 409)
@@ -78,11 +93,4 @@ def require_audio_version(
         or not file.rights_note.strip()
     ):
         raise DomainError("AUDIO_FILE_INVALID", "音频文件及来源授权不符合精确绑定", 409)
-    data = file_storage(settings, file).read(file.object_key, policy.max_bytes, file.checksum)
-    if len(data) != file.byte_size:
-        raise DomainError("OBJECT_UNAVAILABLE", "音频大小与不可变文件回执不符", 409)
-    details = probe(data, file.media_type)
-    if details["duration_ms"] <= 0 or details["silence"]["silent"]:
-        raise DomainError("AUDIO_SILENT", "音频没有有效语音，不能审核或选用", 422)
-    if details["duration_ms"] != binding.duration_ms:
-        raise DomainError("AUDIO_OUTPUT_MISMATCH", "音频实测时长与不可变台词绑定不符", 422)
+    return file

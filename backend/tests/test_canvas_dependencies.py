@@ -2,7 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
@@ -14,11 +14,70 @@ from test_dependency_manifests import capture, source_input
 from test_dependency_validation import registry_version
 
 from arclight.api import canvas
-from arclight.persistence.models import AssetDependency, AssetVersion
+from arclight.persistence.models import AssetDependency, AssetVersion, WorkflowRun
+from arclight.providers.text import MockTextProvider
 
 
 def path(episode):
     return f"/api/v1/episodes/{episode['id']}/canvas"
+
+
+def test_scene_nodes_keep_layout_across_revisions_and_pin_to_production(client, episode):
+    url = path(episode)
+    scripts = url.removesuffix("/canvas") + "/scripts"
+    content = MockTextProvider().script("初稿", {}).model_dump(mode="json")
+    first = client.post(scripts, json={"expected_version_no": 0, "content": content})
+    assert first.status_code == 201, first.text
+    first_id = first.json()["id"]
+    first_scene = content["scenes"][0]
+    second_scene = {**first_scene, "scene_no": 2, "scene_id": str(uuid4()), "title": "结尾"}
+    second_scene["dialogue"] = []
+    positions = {f"scene:{first_scene['scene_id']}": {"x": 100, "y": -100}}
+    saved = client.put(
+        url + "/layout",
+        json={
+            "expected_revision": 0,
+            "positions": positions,
+            "viewport": {"x": 0, "y": 0, "zoom": 1},
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    latest_content = {
+        **content,
+        "scenes": [{**first_scene, "title": "修改后的起点"}, second_scene],
+    }
+    latest = client.post(
+        scripts,
+        json={"expected_version_no": 1, "content": latest_content},
+    )
+    assert latest.status_code == 201, latest.text
+    graph = client.get(url).json()
+    scenes = [item for item in graph["nodes"] if item["kind"] == "scene"]
+    assert [item["title"] for item in scenes] == ["修改后的起点", "结尾"]
+    assert all(item["script_version_id"] == latest.json()["id"] for item in scenes)
+    assert [edge["source"] for edge in graph["edges"] if edge["id"].startswith("scene-order:")] == [
+        f"script:{latest.json()['id']}",
+        scenes[0]["id"],
+    ]
+    assert graph["layout"]["positions"] == positions
+    with client.app.state.session_factory.begin() as db:
+        db.add(
+            WorkflowRun(
+                episode_id=UUID(episode["id"]),
+                workflow_type="producer",
+                workflow_version="producer/1",
+                input_json={"short_drama": {"script_version_id": first_id}},
+                status="RUNNING",
+                idempotency_key="canvas-scene-pin",
+                request_fingerprint="canvas-scene-pin",
+                trace_id="canvas-scene-pin",
+            )
+        )
+    pinned = client.get(url).json()
+    scene = [item for item in pinned["nodes"] if item["kind"] == "scene"]
+    assert len(scene) == 1
+    assert scene[0]["script_version_id"] == first_id and scene[0]["title"] == first_scene["title"]
+    assert pinned["layout"]["positions"] == positions
 
 
 def test_canvas_exact_candidates_stale_selection_and_immutable_history(client, episode):

@@ -30,6 +30,9 @@ def restart_run(
     original = require_run(db, run_id, actor, lock=True)
     if original.workflow_type == "producer":
         raise DomainError("PRODUCER_CONTROL_REQUIRED", "请通过生产协作入口恢复原命令", 409)
+    from arclight.application.short_drama_budget import require_manual_workflow
+
+    require_manual_workflow(db, original.id)
     episode = require_episode(db, original.episode_id, actor, write=True)
     db.refresh(episode, with_for_update=True)
     fingerprint = digest({"restart_from_run_id": str(original.id), "actor": actor})

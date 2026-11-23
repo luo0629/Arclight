@@ -97,7 +97,9 @@ export default function ArtProgress({
     >
       <h4 className="font-semibold">美术调查与方案进度</h4>
       <p className="text-sm text-muted-foreground">
-        调查与方案会保存到本次任务。正式变更须由项目拥有者审核。
+        {run.automatic_production_id
+          ? "调查与方案会保存到本次任务，并由短剧制作流程检查。"
+          : "调查与方案会保存到本次任务。正式变更须由项目拥有者审核。"}
       </p>
       {error && (
         <Notice tone="error" role="alert">
@@ -142,7 +144,7 @@ export default function ArtProgress({
               </ol>
             </details>
           )}
-          {operation.human_request && (
+          {!run.automatic_production_id && operation.human_request && (
             <AgentAnswer
               key={operation.question_id}
               operation={operation}
@@ -182,7 +184,9 @@ export default function ArtProgress({
           </Button>
         ) : (
           <p className="text-sm text-muted-foreground">
-            可在项目视觉资产的“美术提案与审核”查看精确方案并审核。
+            {run.automatic_production_id
+              ? "可在项目视觉资产中查看精确美术方案。"
+              : "可在项目视觉资产的“美术提案与审核”查看精确方案并审核。"}
           </p>
         ))}
       {run.error_code && (

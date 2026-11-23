@@ -47,7 +47,9 @@ def _binding(db: Session, project_id: UUID, run_id: UUID) -> VersionBinding | No
     return find_binding(db, project_id, "WORKFLOW", run_id)
 
 
-def _result(db: Session, run: WorkflowRun, project_id: UUID) -> WorkflowResult | None:
+def _result(
+    db: Session, run: WorkflowRun, project_id: UUID, *, automatic: bool
+) -> WorkflowResult | None:
     if run.workflow_type == "art_proposal":
         from arclight.application.art_workflow import delivered
 
@@ -60,10 +62,10 @@ def _result(db: Session, run: WorkflowRun, project_id: UUID) -> WorkflowResult |
             episode_id=run.episode_id,
             agent_name="art_director",
             status=RunStatus(run.status),
-            summary="已登记美术提案，正式变更经人工批准",
+            summary="已登记短剧美术提案" if automatic else "已登记美术提案，正式变更经人工批准",
             artifact_ids=[delivery.version_id],
             warnings=[run.error_code] if run.error_code else [],
-            requires_human_review=run.status == "WAITING_REVIEW",
+            requires_human_review=not automatic and run.status == "WAITING_REVIEW",
         )
     artifacts: list[UUID] = []
     labels: list[str] = []
@@ -95,7 +97,7 @@ def _result(db: Session, run: WorkflowRun, project_id: UUID) -> WorkflowResult |
         summary="已登记" + "、".join(labels),
         artifact_ids=artifacts,
         warnings=[run.error_code] if run.error_code else [],
-        requires_human_review=needs_review,
+        requires_human_review=not automatic and needs_review,
     )
 
 
@@ -241,7 +243,7 @@ def _usage(db: Session, project_id: UUID, run_id: UUID) -> RunUsage:
     return RunUsage(total_calls=total, calls=result)
 
 
-def run_contract(db: Session, run: WorkflowRun) -> WorkflowRunContract:
+def run_contract(db: Session, run: WorkflowRun, *, automatic: bool) -> WorkflowRunContract:
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
     binding = _binding(db, episode.project_id, run.id)
@@ -283,14 +285,17 @@ def run_contract(db: Session, run: WorkflowRun) -> WorkflowRunContract:
         usage=_usage(db, episode.project_id, run.id),
         trace_id=run.trace_id,
         status=RunStatus(run.status),
-        result=_result(db, run, episode.project_id),
+        result=_result(db, run, episode.project_id, automatic=automatic),
     )
 
 
 def serialize_run(db: Session, run: WorkflowRun) -> dict:
     """Keep the legacy resource fields and add a strictly validated public view."""
+    from arclight.application.short_drama_budget import root_for_workflow
+
+    root = root_for_workflow(db, run.id)
     try:
-        contract = run_contract(db, run)
+        contract = run_contract(db, run, automatic=root is not None)
     except (ValidationError, KeyError, TypeError, ValueError):
         raise DomainError("RUN_CONTRACT_INVALID", "运行合同包含不兼容的数据", 409) from None
     return {
@@ -305,5 +310,6 @@ def serialize_run(db: Session, run: WorkflowRun) -> dict:
         "pending_review": run.pending_review,
         "error_code": run.error_code,
         "revision": run.revision,
+        "automatic_production_id": root.id if root is not None else None,
         "contract": contract,
     }

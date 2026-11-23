@@ -75,10 +75,12 @@ const stages: Record<string, string> = {
 const workflows: Record<string, string> = {
   producer: "Producer 生产协作",
   script_storyboard: "编剧与分镜",
+  script_draft: "剧本草稿",
   storyboard: "分镜创作",
   story_analysis: "故事提炼",
   story_outline: "分集大纲",
   script_rewrite: "局部改写",
+  script_rewrite_draft: "局部改写",
 };
 function time(value: string) {
   return new Date(

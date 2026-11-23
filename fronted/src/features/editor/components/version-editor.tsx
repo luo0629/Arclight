@@ -50,6 +50,15 @@ import StoryboardTable, {
 } from "@/features/editor/components/storyboard-table";
 
 export type VersionKind = "script" | "storyboard";
+export function versionEditorDraftId(
+  episodeId: string,
+  kind: VersionKind,
+  versionId: string | null,
+  sourceScriptId: string | null = null,
+) {
+  return JSON.stringify([episodeId, kind, versionId, sourceScriptId]);
+}
+
 export type VersionCreated = (
   version: ContentVersion,
   kind: VersionKind,
@@ -227,12 +236,12 @@ export default function VersionEditor({
           },
   );
   const local = useSessionDraft({
-    id: JSON.stringify([
+    id: versionEditorDraftId(
       episode.id,
       kind,
       version?.id ?? null,
       version ? null : (sourceScript?.id ?? null),
-    ]),
+    ),
     episodeId: episode.id,
     label: version
       ? `${kind === "script" ? "剧本" : "分镜"} v${version.version_no} 的修改`
@@ -598,6 +607,8 @@ export default function VersionEditor({
           {script.scenes.map((scene, index) => (
             <section
               className="scene flex min-w-0 flex-col gap-3 rounded-lg border border-dashed bg-background/70 p-3"
+              data-script-scene={scene.scene_id}
+              tabIndex={-1}
               key={index}
             >
               {editing ? (

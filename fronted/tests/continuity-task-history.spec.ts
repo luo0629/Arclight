@@ -115,3 +115,30 @@ for (const [destination, message] of [
     expect(env.mutations).toHaveLength(0);
   });
 }
+
+test("短剧自动审查在任务历史中显示制作状态", async ({ page }) => {
+  const env = await mediaFixture(page);
+  const run: Run = {
+    id: crypto.randomUUID(),
+    automatic_production_id: crypto.randomUUID(),
+    episode_id: env.episodes[0].id,
+    workflow_type: "continuity_review",
+    status: "WAITING_REVIEW",
+    revision: 1,
+    created_at: "2026-11-12T07:00:00Z",
+    error_code: null,
+    pending_review: {
+      resource_type: "continuity_review",
+      destination: "HUMAN_REVIEW",
+    },
+  };
+  await page.route(`**/api/v1/episodes/${env.episodes[0].id}/runs*`, (route) =>
+    route.fulfill({ json: [run] }),
+  );
+  await env.open();
+  const card = page.locator(`#run-${run.id}`);
+  await expect(card).toContainText("本环节由短剧制作流程处理。");
+  await expect(card).not.toContainText("请在素材审查页处理人工决定");
+  await expect(card.getByRole("button", { name: "批准并继续" })).toHaveCount(0);
+  expect(env.mutations).toHaveLength(0);
+});

@@ -94,12 +94,23 @@ def require_priced_history(db: Session, project_id: UUID) -> None:
 
 
 def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> None:
+    from arclight.application.dependencies import lock_dependency_graph
     from arclight.application.generation_accounting import costs as project_costs
     from arclight.application.generation_budget import policy_for
+    from arclight.application.short_drama_budget import (
+        check_budget,
+        root_for_job,
+        root_for_workflow,
+    )
     from arclight.persistence.generation import GenerationAttempt, GenerationJob
     from arclight.persistence.generation_accounting import GenerationBudgetReservation
     from arclight.persistence.models import Project
 
+    if request.generation_attempt_id is None:
+        if (root := root_for_workflow(db, request.workflow_id)) is not None:
+            check_budget(db, root, request.project_id, route.maximum_cost)
+        elif route.maximum_cost:
+            lock_dependency_graph(db, request.project_id)
     if route.maximum_cost is None:
         if (
             request.generation_attempt_id is None
@@ -139,6 +150,8 @@ def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> N
             or job.model != route.model
         ):
             raise DomainError("BUDGET_RESERVATION_CONFLICT", "媒体调用与现有预算预留不匹配", 409)
+        if (root := root_for_job(db, job)) is not None:
+            check_budget(db, root, request.project_id, Decimal(0))
         return
     project = db.get(Project, request.project_id)
     assert project is not None

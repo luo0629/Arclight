@@ -35,7 +35,9 @@ export default function HumanReviewActions({
   const input = useId();
   const [comment, setComment] = useState("");
   const endpoint = `/human-reviews/${row.id}`;
-  const canDecide = allowed && row.status === "WAITING_REVIEW" && !row.decision;
+  const automatic = Boolean(row.automatic_production_id);
+  const canDecide =
+    !automatic && allowed && row.status === "WAITING_REVIEW" && !row.decision;
   async function decide(decision: "APPROVE" | "REJECT") {
     if (
       !canDecide ||
@@ -57,19 +59,23 @@ export default function HumanReviewActions({
   }
   return (
     <section
-      aria-label="精确版本人工处理"
+      aria-label={automatic ? "短剧制作检查" : "精确版本人工处理"}
       className="flex min-w-0 flex-col gap-3 rounded-lg border p-4"
     >
-      <h4 className="font-semibold">{label(row.status)}</h4>
+      <h4 className="font-semibold">
+        {automatic ? "短剧制作检查" : label(row.status)}
+      </h4>
       <p className="text-xs text-muted-foreground">
         提交于{" "}
         <time dateTime={row.created_at}>
           {new Date(row.created_at).toLocaleString()}
         </time>
       </p>
-      {row.blocking_code && (
+      {automatic && <Notice tone="info">本环节由短剧制作流程处理。</Notice>}
+      {row.blocking_code && row.blocking_code !== "SHORT_DRAMA_AUTOMATIC" && (
         <Notice tone="error">
-          当前请求受阻：{row.blocking_code}。请刷新并核对版本与权限。
+          当前请求受阻：{row.blocking_code}。
+          {!automatic && "请刷新并核对版本与权限。"}
         </Notice>
       )}
       {row.decision && (
@@ -124,7 +130,7 @@ export default function HumanReviewActions({
           本轮尚未完成必需审查，只能拒绝本次请求；人工决定不能替代审查结论。
         </Notice>
       )}
-      {row.status === "DECIDED" && row.decision && (
+      {!automatic && row.status === "DECIDED" && row.decision && (
         <>
           <p className="text-sm">
             决定已持久化。恢复会复验精确版本与当前权限，并沿用原执行记录。
@@ -159,7 +165,7 @@ export default function HumanReviewActions({
           </time>
         </p>
       )}
-      {!allowed && (
+      {!automatic && !allowed && (
         <p className="text-sm text-muted-foreground">
           人工处理需要当前项目 Owner 权限和最新审查。
         </p>

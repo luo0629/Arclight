@@ -72,8 +72,13 @@ export default function ArtProposalDetail({
     ]),
   );
   const historical = row.version.version_no !== row.current_version_no;
+  const automatic = !!row.automatic_production_id;
+  const editable = writable && !automatic;
   const waiting =
-    row.review?.status === "WAITING_REVIEW" && !historical && !row.archived;
+    row.review?.status === "WAITING_REVIEW" &&
+    !historical &&
+    !row.archived &&
+    !automatic;
   const allConfirmed =
     changes.length > 0 &&
     changes.every((change) =>
@@ -103,13 +108,16 @@ export default function ArtProposalDetail({
           正在查看历史版本，当前版本为 v{row.current_version_no}。
         </Notice>
       )}
-      {row.review?.blocking_code && (
+      {automatic && !row.outputs.length && (
+        <Notice tone="info">本提案由短剧制作流程检查和处理。</Notice>
+      )}
+      {!automatic && row.review?.blocking_code && (
         <Notice tone="error">
           基准、权限或输入已变化，原审核不能继续。请重新读取当前内容并保存新修订。
         </Notice>
       )}
       <div className="flex flex-wrap gap-2">
-        {writable && !row.archived && (
+        {editable && !row.archived && (
           <Button variant="outline" disabled={busy} onClick={onEdit}>
             修订当前提案
           </Button>
@@ -121,7 +129,7 @@ export default function ArtProposalDetail({
         >
           {showHistory ? "收起提案历史" : "查看提案历史"}
         </Button>
-        {writable && (
+        {editable && (
           <Button
             variant="ghost"
             disabled={busy}
@@ -320,7 +328,7 @@ export default function ArtProposalDetail({
           );
         })}
       </section>
-      {writable && !row.review && !row.archived && !historical && (
+      {editable && !row.review && !row.archived && !historical && (
         <Button
           disabled={busy || !changes.length || !!proposal.questions?.length}
           onClick={() =>
@@ -369,19 +377,22 @@ export default function ArtProposalDetail({
       {waiting && !owner && (
         <Notice tone="info">等待项目Owner审核；批准前正式资产保持原值。</Notice>
       )}
-      {owner && row.review?.status === "DECIDED" && row.review.decision && (
-        <Button
-          disabled={busy || row.archived || historical}
-          onClick={() =>
-            onAction("resume", {
-              decision_id: row.review?.decision?.id,
-              request_sha256: row.review?.request_sha256,
-            })
-          }
-        >
-          使已保存决定生效
-        </Button>
-      )}
+      {owner &&
+        !automatic &&
+        row.review?.status === "DECIDED" &&
+        row.review.decision && (
+          <Button
+            disabled={busy || row.archived || historical}
+            onClick={() =>
+              onAction("resume", {
+                decision_id: row.review?.decision?.id,
+                request_sha256: row.review?.request_sha256,
+              })
+            }
+          >
+            使已保存决定生效
+          </Button>
+        )}
       {row.review?.decision && (
         <Notice tone="info">
           {row.review.decision.decision_json.decision === "APPROVE"

@@ -52,9 +52,8 @@ test("starts segmented creation, views saved work, answers after refresh and use
   await page
     .getByRole("radio", { name: "调查、规划与分段创作", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "请编剧开始创作", exact: true })
-    .click();
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   const working = page.getByRole("region", { name: "编剧计划与工作稿" });
   await expect(
     working.getByText("纸船是否送回失主？", { exact: true }),
@@ -204,9 +203,18 @@ test("delivers professional season outline and derives a professional episode fr
     .getByRole("button", { name: "从此大纲编写第1集剧本", exact: true })
     .click();
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
+  await expect(async () => {
+    const scripts = await (
+      await page.request.get(`/api/v1/episodes/${episode.id}/scripts`, {
+        headers,
+      })
+    ).json();
+    expect(scripts).toHaveLength(1);
+    expect(scripts[0].status).toBe("READY_FOR_REVIEW");
+  }).toPass({ timeout: 20000 });
   await expect(
-    page.getByText("等待审核：剧本版本", { exact: false }),
-  ).toBeVisible({ timeout: 20000 });
+    page.getByRole("button", { name: "批准并继续", exact: true }),
+  ).toHaveCount(0);
   const runs = await (
     await page.request.get(`/api/v1/episodes/${episode.id}/runs`, { headers })
   ).json();

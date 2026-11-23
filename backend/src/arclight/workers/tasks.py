@@ -1,6 +1,8 @@
+from datetime import timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import String, cast, func, select
+from sqlalchemy.orm import Session, aliased
 
 from arclight.application import generation_artifacts
 from arclight.application.agent_workflows import WorkflowExecutionDeferred
@@ -18,6 +20,8 @@ from arclight.application.rendering import execute_preview
 from arclight.application.runtime import execute_run
 from arclight.core.config import Settings, get_settings
 from arclight.domain.enums import RunStatus
+from arclight.persistence.agent_limits import AgentRunLimit
+from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import (
     GenerationAttempt,
@@ -28,6 +32,7 @@ from arclight.persistence.models import (
     WorkflowRun,
 )
 from arclight.persistence.session import build_engine, session_factory
+from arclight.persistence.versions import VersionBinding
 from arclight.providers.media_cancel import get_media_cancel_provider
 from arclight.providers.media_outputs import get_media_output_provider
 from arclight.providers.media_query import get_media_query_provider
@@ -189,6 +194,93 @@ def import_generation_candidates(attempt_id: str) -> int:
         engine.dispose()
 
 
+def pending_workflow_events(db: Session) -> list[OutboxEvent]:
+    from arclight.application.producer_interaction import COMMAND, RECEIPT
+
+    stamp = utcnow()
+    due = OutboxEvent.published_at.is_(None) | (
+        OutboxEvent.published_at < stamp - timedelta(seconds=30)
+    )
+    command, receipt = aliased(VersionBinding), aliased(VersionBinding)
+    producer_pending = (
+        select(command.id)
+        .where(
+            command.resource_type == COMMAND,
+            func.replace(command.snapshot_json["run_id"].as_string(), "-", "")
+            == func.replace(cast(WorkflowRun.id, String), "-", ""),
+            command.snapshot_json["revision"].as_integer() == OutboxEvent.revision,
+            ~select(receipt.id)
+            .where(
+                receipt.resource_type == RECEIPT,
+                receipt.project_id == command.project_id,
+                receipt.resource_id == command.resource_id,
+            )
+            .exists(),
+        )
+        .exists()
+    )
+    root = aliased(WorkflowRun)
+    automatic_specialist = (
+        select(AgentRunLimit.run_id)
+        .join(root, root.id == AgentRunLimit.root_run_id)
+        .where(
+            AgentRunLimit.run_id == WorkflowRun.id,
+            AgentRunLimit.parent_run_id == root.id,
+            root.workflow_type == "producer",
+            root.status == RunStatus.RUNNING,
+            root.input_json["short_drama"]["script_version_id"].as_string().is_not(None),
+        )
+        .exists()
+    )
+    # External waits have their own readiness scan. Live leases keep their current delivery.
+    specialist_busy = (
+        select(AgentLoop.id)
+        .where(
+            AgentLoop.run_id == WorkflowRun.id,
+            AgentLoop.status.in_(("WAITING_HUMAN", "WAITING_EXTERNAL"))
+            | (AgentLoop.lease_token.is_not(None) & (AgentLoop.lease_expires_at > stamp)),
+        )
+        .exists()
+    )
+    # 任务可在 Broker 丢失消息后重新投递。Worker 以精确 revision 和状态领用。
+    return list(
+        db.scalars(
+            select(OutboxEvent)
+            .join(WorkflowRun, OutboxEvent.run_id == WorkflowRun.id)
+            .where(
+                (
+                    (WorkflowRun.status == RunStatus.QUEUED)
+                    | (
+                        (WorkflowRun.workflow_type == "continuity_review")
+                        & (WorkflowRun.status == RunStatus.RUNNING)
+                        & WorkflowRun.pending_review["resource_type"].as_string().is_(None)
+                    )
+                    | (
+                        (WorkflowRun.workflow_type == "producer")
+                        & (WorkflowRun.status == RunStatus.RUNNING)
+                        & WorkflowRun.input_json["short_drama"]["script_version_id"]
+                        .as_string()
+                        .is_not(None)
+                        & producer_pending
+                        & due
+                    )
+                    | (
+                        WorkflowRun.workflow_type.in_(("art_proposal", "storyboard"))
+                        & (WorkflowRun.status == RunStatus.RUNNING)
+                        & automatic_specialist
+                        & ~specialist_busy
+                        & due
+                    )
+                ),
+                OutboxEvent.revision == WorkflowRun.revision,
+            )
+            .order_by(OutboxEvent.created_at)
+            .limit(100)
+            .with_for_update(skip_locked=True, of=OutboxEvent)
+        )
+    )
+
+
 @celery_app.task(name="arclight.dispatch_outbox")
 def dispatch_outbox() -> None:
     settings = get_settings()
@@ -200,28 +292,11 @@ def dispatch_outbox() -> None:
         from arclight.application.continuity_workflow import queue_pending_reviews
 
         queue_pending_reviews(session_factory(engine, settings), settings)
+        from arclight.application.short_drama_production import advance_pending
+
+        advance_pending(session_factory(engine, settings), settings)
         with session_factory(engine, settings).begin() as db:
-            # QUEUED 是业务事实；即使 Broker 丢失已发布消息，也会周期性重新投递。
-            # 重复投递由 revision + 状态 + 运行行锁消除，不能宣称外部模型 exactly-once。
-            events = db.scalars(
-                select(OutboxEvent)
-                .join(WorkflowRun, OutboxEvent.run_id == WorkflowRun.id)
-                .where(
-                    (
-                        (WorkflowRun.status == RunStatus.QUEUED)
-                        | (
-                            (WorkflowRun.workflow_type == "continuity_review")
-                            & (WorkflowRun.status == RunStatus.RUNNING)
-                            & WorkflowRun.pending_review["resource_type"].as_string().is_(None)
-                        )
-                    ),
-                    OutboxEvent.revision == WorkflowRun.revision,
-                )
-                .order_by(OutboxEvent.created_at)
-                .limit(100)
-                .with_for_update(skip_locked=True)
-            )
-            for event in events:
+            for event in pending_workflow_events(db):
                 execute_workflow.apply_async(args=[str(event.run_id), event.revision])
                 event.published_at = utcnow()
                 event.attempt_count += 1

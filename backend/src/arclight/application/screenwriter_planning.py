@@ -49,11 +49,18 @@ from arclight.domain.screenwriter_research import (
     InvestigateStoryResult,
 )
 from arclight.domain.screenwriter_revision import SERIES_WORKFLOWS
+from arclight.domain.script_drafts import SCRIPT_DRAFT, SCRIPT_REWRITE_DRAFT
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import WorkflowRun
 
-_STAGES = {"story_outline": "outline", "script_storyboard": "script", "script_rewrite": "rewrite"}
+_STAGES = {
+    "story_outline": "outline",
+    "script_storyboard": "script",
+    SCRIPT_DRAFT: "script",
+    "script_rewrite": "rewrite",
+    SCRIPT_REWRITE_DRAFT: "rewrite",
+}
 
 
 def _registry(settings: Settings, *, series: bool = False) -> AgentToolRegistry:

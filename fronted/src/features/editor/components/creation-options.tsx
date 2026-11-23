@@ -140,6 +140,7 @@ export default function CreationOptionsFields({
   allowReview = true,
   rewrite = false,
   allowDirector = false,
+  editableDraft = false,
   directorOnly = false,
   narrativeEpisode,
   performanceSourceSchema,
@@ -150,6 +151,7 @@ export default function CreationOptionsFields({
   allowReview?: boolean;
   rewrite?: boolean;
   allowDirector?: boolean;
+  editableDraft?: boolean;
   directorOnly?: boolean;
   narrativeEpisode?: Episode;
   performanceSourceSchema?: string;
@@ -227,8 +229,10 @@ export default function CreationOptionsFields({
                   ? "工具检查对白覆盖、镜头顺序和时长；导演选择局部修法并复查，通过后交完整分镜审核。"
                   : "先调查精确批准剧本并保存场景计划，再逐场景拆镜；遇到问题会等待你的回答，完整分镜仍须审核。"
                 : value.review
-                  ? "结合剧情评价和规则检查，按限定范围修订；无法解决的问题会请你决定。最终稿仍须审核。"
-                  : "先调查并保存计划，再逐段创作；遇到问题会等待你的回答。完整稿仍须审核。"}
+                  ? "结合剧情评价和规则检查，按限定范围修订；无法解决的问题会请你决定。"
+                  : "先调查并保存计划，再逐段创作；遇到问题会等待你的回答。"}
+              {!directorOnly &&
+                (editableDraft ? "完成后可编辑剧本。" : "完整稿仍须审核。")}
             </FieldDescription>
           )}
         </Field>
@@ -429,7 +433,10 @@ export default function CreationOptionsFields({
                 onChange={(e) => onChange({ ...value, calls: e.target.value })}
               />
               <FieldDescription>
-                调查、创作与后续分镜共用本次限制；重试和人工回答不会重置。
+                {editableDraft
+                  ? "调查与创作共用本次限制"
+                  : "调查、创作与后续分镜共用本次限制"}
+                ；重试和人工回答不会重置。
               </FieldDescription>
             </Field>
           </>

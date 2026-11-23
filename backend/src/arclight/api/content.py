@@ -28,7 +28,11 @@ from arclight.application.content_references import (
     validate_storyboard_assets,
 )
 from arclight.application.episode_copy import copy_episode
-from arclight.application.text_reviews import complete_manual_review, pause_for_content
+from arclight.application.text_reviews import (
+    complete_manual_review,
+    pause_for_content,
+    text_review_run,
+)
 from arclight.core.errors import DomainError
 from arclight.persistence.models import Episode, Script, Shot, Storyboard
 
@@ -241,7 +245,7 @@ def review_content(
     )
     if version is None or version.episode_id != episode_id:
         raise DomainError("NOT_FOUND", "内容版本不存在", 404)
-    if version.run_id is not None:
+    if text_review_run(db, version) is not None:
         raise DomainError("WORKFLOW_REVIEW_REQUIRED", "工作流产物必须通过任务审核入口处理", 409)
     if version.status != "READY_FOR_REVIEW":
         raise DomainError("ALREADY_REVIEWED", "该版本已审核；修改请创建新版本", 409)

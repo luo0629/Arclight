@@ -84,6 +84,25 @@ def review(client, state, decision="APPROVE"):
     )
 
 
+def test_editable_rewrite_releases_episode_with_exact_candidate_and_lineage(
+    client, episode, settings
+):
+    base = source(client, episode)
+    payload = {**body(base), "purpose": "EDITABLE_DRAFT"}
+    request = start(client, episode, payload)
+    assert request.status_code == 202, request.text
+    run_id = request.json()["run_id"]
+    run = advance(client, settings, run_id)
+    assert (run["status"], run["pending_review"]) == ("SUCCEEDED", None), run
+    draft, original = scripts(client, episode)
+    assert draft["status"] == "READY_FOR_REVIEW"
+    assert draft["run_id"] == run_id
+    assert original == base
+    assert draft["content_json"]["scenes"][0] == base["content_json"]["scenes"][0]
+    next_request = start(client, episode, {**body(draft), "purpose": "EDITABLE_DRAFT"}, key="next")
+    assert next_request.status_code == 202, next_request.text
+
+
 @pytest.mark.parametrize("decision,terminal", [("APPROVE", "SUCCEEDED"), ("REJECT", "REJECTED")])
 def test_rewrite_only_merges_selected_scene_and_reviews_exact_version(
     client, episode, settings, monkeypatch, stub_llm, decision, terminal

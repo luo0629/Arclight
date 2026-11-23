@@ -208,6 +208,7 @@ export async function continuityFixture(page: Page, human = false) {
     });
     const row: HumanReview = {
       id: id(),
+      automatic_production_id: null,
       can_approve: true,
       request_sha256: hash(version.id + "human"),
       status: "WAITING_REVIEW",

@@ -29,25 +29,45 @@ export default function RenderReviewActions({
   const [comment, setComment] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const warnings = purpose === "warnings";
+  const automatic = Boolean(review.automatic_production_id);
   const canDecide =
-    allowed && review.status === "WAITING_REVIEW" && !review.decision;
+    !automatic &&
+    allowed &&
+    review.status === "WAITING_REVIEW" &&
+    !review.decision;
   return (
     <section
       className="flex min-w-0 flex-col gap-3 rounded-xl border p-4"
-      aria-label={warnings ? "交付警告人工确认" : "正式导出人工审核"}
+      aria-label={
+        automatic
+          ? "短剧制作检查"
+          : warnings
+            ? "交付警告人工确认"
+            : "正式导出人工审核"
+      }
     >
-      <h4>{warnings ? "确认本次交付例外" : "审核本次正式导出"}</h4>
+      <h4>
+        {automatic
+          ? "短剧制作检查"
+          : warnings
+            ? "确认本次交付例外"
+            : "审核本次正式导出"}
+      </h4>
       <p className="text-sm text-muted-foreground">
-        {warnings
-          ? "决定仅对应当前报告中的全部警告，不适用于其他成片版本。"
-          : "批准仅对应当前清单的精确时间轴与素材版本。"}
+        {automatic
+          ? "本环节由短剧制作流程处理。"
+          : warnings
+            ? "决定仅对应当前报告中的全部警告，不适用于其他成片版本。"
+            : "批准仅对应当前清单的精确时间轴与素材版本。"}
       </p>
       <p className="text-sm">审核状态：{renderLabel(review.status)}</p>
-      {review.blocking_code && (
-        <Notice tone="error">
-          当前请求受阻：{review.blocking_code}。请刷新并核对来源与权限。
-        </Notice>
-      )}
+      {review.blocking_code &&
+        review.blocking_code !== "SHORT_DRAMA_AUTOMATIC" && (
+          <Notice tone="error">
+            当前请求受阻：{review.blocking_code}。
+            {!automatic && "请刷新并核对来源与权限。"}
+          </Notice>
+        )}
       {review.decision && (
         <div className="flex flex-col gap-1 text-sm">
           <p>
@@ -114,7 +134,7 @@ export default function RenderReviewActions({
           )}
         </>
       )}
-      {review.status === "DECIDED" && review.decision && (
+      {!automatic && review.status === "DECIDED" && review.decision && (
         <>
           <p className="text-sm">
             决定已保存。请核对后单独恢复，服务端将再次检查权限和精确来源。
@@ -136,7 +156,7 @@ export default function RenderReviewActions({
             : "已记录"}
         </Notice>
       )}
-      {!allowed && (
+      {!automatic && !allowed && (
         <p className="text-sm text-muted-foreground">
           需要当前项目拥有者权限，且项目和剧集未归档。
         </p>

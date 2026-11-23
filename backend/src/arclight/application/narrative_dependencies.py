@@ -11,6 +11,7 @@ from arclight.agents.contracts import ScriptContentV3
 from arclight.application.dependencies import invalidation_sequence
 from arclight.application.writing_context import replay_projection
 from arclight.core.errors import DomainError
+from arclight.domain.script_drafts import REWRITE_WORKFLOWS
 from arclight.domain.script_narrative import NarrativeContext
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoopAction
@@ -93,7 +94,7 @@ def _run_reads(db: Session, run: WorkflowRun, frozen: NarrativeContext) -> tuple
     from arclight.application.context_evidence import evidence_rounds
     from arclight.application.context_snapshots import manifest_references
 
-    stage = "rewrite" if run.workflow_type == "script_rewrite" else "script"
+    stage = "rewrite" if run.workflow_type in REWRITE_WORKFLOWS else "script"
     references = manifest_references(db, frozen.project_id, run.id) or {}
     root = db.get(DependencyManifest, UUID(references[stage])) if stage in references else None
     if root is None:

@@ -36,6 +36,7 @@ from arclight.domain.screenwriter_revision import (
     CheckPatchResult,
     ScriptCritique,
 )
+from arclight.domain.script_drafts import SCRIPT_DRAFT, SCRIPT_REWRITE_DRAFT
 from arclight.domain.versions import VersionRegistration, digest
 from arclight.persistence.models import (
     DependencyManifest,
@@ -48,10 +49,12 @@ from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
 TEXT_STAGES = {
     "producer": ("producer",),
     "script_storyboard": ("script", "storyboard"),
+    SCRIPT_DRAFT: ("script",),
     "storyboard": ("storyboard",),
     "art_proposal": ("storyboard",),
     "continuity_review": (),
     "script_rewrite": ("rewrite",),
+    SCRIPT_REWRITE_DRAFT: ("rewrite",),
     "story_analysis": ("analyze",),
     "story_outline": ("outline",),
 }

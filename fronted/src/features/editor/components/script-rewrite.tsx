@@ -190,6 +190,7 @@ export default function ScriptRewrite({
           };
   const body = {
     ...creationPayload(creation),
+    purpose: "EDITABLE_DRAFT",
     base_version_id: version.id,
     target,
     instructions: {

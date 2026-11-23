@@ -201,10 +201,16 @@ def start_interactive_producer(
     )
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
+    enqueue_initial_producer_plan(db, run, episode, actor)
+    return run
+
+
+def enqueue_initial_producer_plan(
+    db: Session, run: WorkflowRun, episode: Episode, actor: str
+) -> None:
     # An HTTP retry after completion must not create another operation.
     if not command_rows(db, run, episode.project_id):
         _enqueue(db, run, episode, actor, "initial-plan", {"action": "PLAN"})
-    return run
 
 
 def validate_delegation(
@@ -280,9 +286,24 @@ def queue_command(
     actor: str,
     payload: ProducerCommand,
     key: str,
+    *,
+    automatic: bool = False,
 ) -> WorkflowRun:
     lock_gate(db)
+    specialists = {}
+    if payload.action == "CANCEL":
+        candidate = db.get(WorkflowRun, run_id)
+        if candidate is not None and candidate.input_json.get("short_drama"):
+            from arclight.application.short_drama_production import lock_specialists
+
+            specialists = lock_specialists(db, candidate)
     run, episode = require_producer(db, run_id, actor, active=False)
+    if (
+        run.input_json.get("short_drama")
+        and payload.action not in {"CANCEL", "RECOVER"}
+        and not automatic
+    ):
+        raise DomainError("SHORT_DRAMA_AUTOMATIC", "本次短剧由后台自动推进", 409)
     value = payload.model_dump(mode="json")
     if _previous(db, run, episode.project_id, actor, key, value):
         return run
@@ -297,6 +318,28 @@ def queue_command(
     if run.status != "RUNNING":
         raise DomainError("AGENT_NOT_ACTIVE", "生产协调运行当前不可操作", 409)
     if payload.action == "CANCEL":
+        if run.input_json.get("short_drama"):
+            from arclight.application.render_jobs import cancel_job
+            from arclight.application.short_drama_production import (
+                render_for,
+                stop_media,
+                stop_specialists,
+            )
+            from arclight.domain.render_jobs import RenderCancel
+            from arclight.persistence.rendering import RenderExecution
+
+            if render := render_for(db, run, episode.project_id):
+                execution = db.get(RenderExecution, render.id, populate_existing=True)
+                if execution is not None and execution.status == "SUCCEEDED":
+                    raise DomainError(
+                        "SHORT_DRAMA_ALREADY_RENDERED", "成片已渲染，正在核对交付", 409
+                    )
+                if execution is not None and execution.status in {"QUEUED", "RUNNING"}:
+                    cancel_job(
+                        db, render.id, actor, RenderCancel(expected_revision=render.revision)
+                    )
+            stop_specialists(db, specialists)
+            stop_media(db, run, episode.project_id)
         # Cancellation is local and needs neither provider admission nor an unexpired budget.
         for pending in pending_commands(db, run, episode.project_id):
             record_receipt(db, run, episode.project_id, pending, "STOPPED", "AGENT_CANCELLED")
@@ -364,6 +407,8 @@ def queue_answer(
 ) -> WorkflowRun:
     lock_gate(db)
     run, episode = require_producer(db, run_id, actor, active=False)
+    if run.input_json.get("short_drama"):
+        raise DomainError("SHORT_DRAMA_AUTOMATIC", "本次短剧由后台自动推进", 409)
     loop = db.get(AgentLoop, loop_id)
     if (
         loop is None

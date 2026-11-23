@@ -46,7 +46,8 @@ test("真实 API：注册、创建项目剧集、双审核、画布保存、人�
   await page
     .getByLabel("故事灵感")
     .fill("雨夜里，小猫把一把会唱歌的伞借给迷路的小女孩，他们一起寻找星星。");
-  await page.getByRole("button", { name: "请编剧开始创作" }).click();
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await expect(
     page.getByText("等待审核：剧本版本", { exact: false }),
   ).toBeVisible({ timeout: 20000 });

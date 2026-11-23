@@ -10,9 +10,10 @@ from arclight.application.director_performance import director_contracts, offset
 from arclight.application.director_planning import _registry
 from arclight.application.director_validation import revision_input
 from arclight.application.screenwriter_creation import creation_loops, operation
+from arclight.application.short_drama_director import director_model_input
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
+from arclight.domain.agent_model import AgentModelRequest
 from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.director_planning import DirectorPlan
 from arclight.domain.director_revision import (
@@ -70,6 +71,17 @@ def create_working_fragment(
         if selected and (selected.status != "STOPPED" or operation(selected) == key):
             request = AgentModelRequest.model_validate(selected.seed_json)
         else:
+            seed = contracts.working_seed(
+                plan_loop_id=plan_id,
+                plan=plan,
+                scene=script.scenes[scene_no - 1],
+                characters=script.characters,
+                character_assets=script.character_assets,
+                previous_shots=[shot for fragment in previous for shot in fragment.shots][-2:],
+            )
+            prompt, messages = director_model_input(
+                db, run, contracts.working_prompt, seed.model_dump(mode="json")
+            )
             request = AgentModelRequest(
                 run_id=run.id,
                 agent_name="director",
@@ -78,22 +90,9 @@ def create_working_fragment(
                 agent_version=run.workflow_version,
                 prompt_version=contracts.working_version,
                 result_schema_version=contracts.working_version,
-                system_instruction=contracts.working_prompt,
+                system_instruction=prompt,
                 max_tokens=8000,
-                messages=[
-                    AgentUserMessage(
-                        data=contracts.working_seed(
-                            plan_loop_id=plan_id,
-                            plan=plan,
-                            scene=script.scenes[scene_no - 1],
-                            characters=script.characters,
-                            character_assets=script.character_assets,
-                            previous_shots=[
-                                shot for fragment in previous for shot in fragment.shots
-                            ][-2:],
-                        ).model_dump(mode="json")
-                    )
-                ],
+                messages=messages,
             )
     return run_persistent_agent_loop(
         factory,

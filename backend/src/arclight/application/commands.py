@@ -48,6 +48,7 @@ from arclight.domain.screenwriter_revision import (
     REVISED_SCREENWRITER_VERSION,
     ScreenwriterRevisionOptions,
 )
+from arclight.domain.script_drafts import SCRIPT_DRAFT, ScriptWritingPurpose
 from arclight.domain.script_narrative import NarrativeRequest
 from arclight.persistence.models import (
     AuditEvent,
@@ -145,6 +146,7 @@ def start_run(
     outline_version_id: UUID | None = None,
     source_id: UUID | None = None,
     narrative: NarrativeRequest | None = None,
+    purpose: ScriptWritingPurpose = "REVIEW_WORKFLOW",
     rebuild_from_version_id: UUID | None = None,
     professional: bool = False,
     agent_limits: AgentRunLimits | None = None,
@@ -158,6 +160,11 @@ def start_run(
     producer_parent_run_id: UUID | None = None,
     producer_context: dict | None = None,
 ) -> WorkflowRun:
+    draft_only = purpose == "EDITABLE_DRAFT"
+    if draft_only and (
+        script_version_id is not None or professional_director or art_task is not None
+    ):
+        raise DomainError("SCREENWRITER_TASK_INVALID", "剧本草稿不包含分镜或美术任务", 422)
     options = ScreenwriterRevisionOptions(
         professional=professional or professional_director or art_task is not None,
         agent_limits=agent_limits,
@@ -258,6 +265,8 @@ def start_run(
         payload["art_concept_plan"] = art_concept_plan.model_dump(mode="json")
     if narrative is not None:
         payload["narrative"] = narrative.model_dump(mode="json")
+    if draft_only:
+        payload["purpose"] = purpose
     if producer_parent_run_id is not None:
         payload["producer_parent_run_id"] = str(producer_parent_run_id)
     if producer_context is not None:
@@ -459,6 +468,8 @@ def start_run(
         request_fingerprint=fingerprint,
         workflow_type="art_proposal"
         if art_task is not None
+        else SCRIPT_DRAFT
+        if draft_only
         else "script_storyboard"
         if script_version_id is None
         else "storyboard",
@@ -510,6 +521,9 @@ def start_run(
 def resume_run(
     db: Session, run: WorkflowRun, actor: str, review: ReviewCreate, settings: Settings
 ) -> WorkflowRun:
+    from arclight.application.short_drama_budget import require_manual_workflow
+
+    require_manual_workflow(db, run.id)
     require_episode(db, run.episode_id, actor, write=True, owner=True)
     if run.status != RunStatus.WAITING_REVIEW or not run.pending_review:
         raise DomainError("NOT_WAITING_REVIEW", "当前工作流不在人工审核节点")
@@ -625,7 +639,9 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
         raise DomainError("PRODUCER_CONTROL_REQUIRED", "请通过生产协作入口停止原运行", 409)
     from arclight.application.agent_external_waits import cancel_concepts, waiting_for_external
     from arclight.application.screenwriter_creation import waiting_for_answer
+    from arclight.application.short_drama_budget import require_manual_workflow
 
+    require_manual_workflow(db, run.id)
     if run.status not in [RunStatus.QUEUED, RunStatus.WAITING_REVIEW] and not (
         waiting_for_external(db, run)
         or waiting_for_answer(db, run)
@@ -634,6 +650,12 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
         or waiting_for_answer(db, run, "continuity_reviewer")
     ):
         raise DomainError("NOT_CANCELLABLE", "仅排队、等待审核或等待创作回答的工作流可以取消")
+    cancel_concepts(db, run.id)
+    return cancel_workflow_state(db, run)
+
+
+def cancel_workflow_state(db: Session, run: WorkflowRun) -> WorkflowRun:
+    """Fence a locked workflow and preserve any existing external-call journal."""
     agent_state = None
     if run.agent_state_json is not None:
         from arclight.domain.agent_state import AgentStateError, terminate_agent_state
@@ -663,7 +685,6 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
                 "AGENT_STATE_INVALID", "运行状态不可安全取消，请联系管理员", 409
             ) from exc
         agent_state = state.model_dump(mode="json")
-    cancel_concepts(db, run.id)
     run.status = RunStatus.CANCELLED
     run.pending_review = None
     if agent_state is not None:
@@ -676,6 +697,9 @@ def cancel_run(db: Session, run: WorkflowRun) -> WorkflowRun:
 def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     if run.workflow_type == "producer":
         raise DomainError("PRODUCER_CONTROL_REQUIRED", "请通过生产协作入口恢复原命令", 409)
+    from arclight.application.short_drama_budget import require_manual_workflow
+
+    require_manual_workflow(db, run.id)
     if run.status != RunStatus.FAILED:
         raise DomainError("NOT_RETRYABLE", "只有失败的工作流可以显式重试")
     if run.workflow_type == "art_proposal":

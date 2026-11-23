@@ -7,6 +7,7 @@ import {
   Film,
   Image,
   Folder,
+  MapPin,
   Volume2,
   Trash2,
 } from "lucide-react";
@@ -30,17 +31,21 @@ import type { Graph, GraphNode, Layout } from "@/types/api";
 import VersionImage from "@/features/assets/components/version-image";
 import { useAuth } from "@/features/auth/auth-context";
 import { imagePath, nodeGroup, nodeLabel, selectionLabel } from "../nodes";
+import SceneShots from "./scene-shots";
 
 type Paper = Node<
   GraphNode & {
     projectId: string;
     unavailable: (cause: unknown) => void;
     selectNode: (node: GraphNode) => void;
+    openShot: (node: GraphNode) => void;
+    nodeIndex: ReadonlyMap<string, GraphNode>;
     removeNode?: (node: GraphNode) => void;
   } & Record<string, unknown>,
   "paper"
 >;
 function PaperNode({ data, selected }: NodeProps<Paper>) {
+  const [expanded, setExpanded] = useState(false);
   const path = imagePath(data, data.projectId);
   const Icon =
     data.preview_kind === "AUDIO"
@@ -52,6 +57,7 @@ function PaperNode({ data, selected }: NodeProps<Paper>) {
           : ({
               episode: Sprout,
               script: FileText,
+              scene: MapPin,
               storyboard: Clapperboard,
               shot: Film,
               asset: Folder,
@@ -98,7 +104,7 @@ function PaperNode({ data, selected }: NodeProps<Paper>) {
         <span className="flex size-7 items-center justify-center rounded-lg bg-background text-primary">
           <Icon className="size-4" />
         </span>
-        {nodeLabel(data)}
+        {data.kind === "scene" ? `第 ${data.scene_no} 场` : nodeLabel(data)}
         {data.version_no ? ` / v${data.version_no}` : ""}
       </div>
       <strong>{data.title}</strong>
@@ -111,6 +117,32 @@ function PaperNode({ data, selected }: NodeProps<Paper>) {
         />
       )}
       {data.description && <p>{data.description}</p>}
+      {data.kind === "scene" && (
+        <div
+          className="nodrag nopan flex flex-col gap-2"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <Button
+            variant="outline"
+            size="sm"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "收起镜头" : "展开镜头"} · {data.shots?.length ?? 0}
+          </Button>
+          {expanded && (
+            <div className="nowheel max-h-72 overflow-y-auto">
+              <SceneShots
+                shots={data.shots ?? []}
+                nodes={data.nodeIndex}
+                projectId={data.projectId}
+                onUnavailable={data.unavailable}
+                onOpenShot={data.openShot}
+              />
+            </div>
+          )}
+        </div>
+      )}
       <StatusBadge status={data.status} />
       {data.stale && data.status !== "STALE" && <StatusBadge status="STALE" />}
       {selectionLabel(data) && <small>{selectionLabel(data)}</small>}
@@ -137,9 +169,11 @@ function buildNodes(
   projectId: string,
   unavailable: (cause: unknown) => void,
   selectNode: (node: GraphNode) => void,
+  openShot: (node: GraphNode) => void,
   removeNode?: (node: GraphNode) => void,
 ): Paper[] {
   const counts: Record<string, number> = {};
+  const nodeIndex = new Map(graph.nodes.map((node) => [node.id, node]));
   return graph.nodes.map((data) => {
     const group = data.kind === "asset_version" ? nodeGroup(data) : data.kind;
     const index = counts[group] ?? 0;
@@ -166,13 +200,19 @@ function buildNodes(
         projectId,
         unavailable,
         selectNode,
+        openShot,
+        nodeIndex,
         removeNode: data.kind === "episode" ? undefined : removeNode,
       },
       ariaLabel: `${nodeLabel(data)}：${data.title}${data.version_no ? ` v${data.version_no}` : ""}`,
-      position: graph.layout.positions[data.id] ?? {
-        x: 30 + column * 290,
-        y: 45 + index * (data.kind === "asset_version" ? 320 : 210),
-      },
+      position:
+        graph.layout.positions[data.id] ??
+        (data.kind === "scene"
+          ? { x: 610 + index * 290, y: -535 }
+          : {
+              x: 30 + column * 290,
+              y: 45 + index * (data.kind === "asset_version" ? 320 : 210),
+            }),
     };
   });
 }
@@ -241,12 +281,17 @@ export default function Canvas({
   );
   const remove = writable ? removeNode : undefined;
   const [nodes, setNodes, onNodesChange] = useNodesState<Paper>(
-    buildNodes(graph, projectId, onUnavailable, onSelect, remove).map(
-      (node) => ({
-        ...node,
-        selected: node.id === selectedId,
-      }),
-    ),
+    buildNodes(
+      graph,
+      projectId,
+      onUnavailable,
+      onSelect,
+      onOpenShot,
+      remove,
+    ).map((node) => ({
+      ...node,
+      selected: node.id === selectedId,
+    })),
   );
   const [instance, setInstance] = useState<ReactFlowInstance<Paper> | null>(
     null,
@@ -292,20 +337,34 @@ export default function Canvas({
   }, [storageKey]);
   useEffect(() => {
     setNodes((current) =>
-      buildNodes(graph, projectId, onUnavailable, onSelect, remove).map(
-        (node) => {
-          const prior = current.find((item) => item.id === node.id);
-          return {
-            ...node,
-            position: prior?.position ?? node.position,
-            selected: node.id === selectedId,
-          };
-        },
-      ),
+      buildNodes(
+        graph,
+        projectId,
+        onUnavailable,
+        onSelect,
+        onOpenShot,
+        remove,
+      ).map((node) => {
+        const prior = current.find((item) => item.id === node.id);
+        return {
+          ...node,
+          position: prior?.position ?? node.position,
+          selected: node.id === selectedId,
+        };
+      }),
     );
     if (graph.layout.revision > revision.current)
       setNotice("布局已被其他成员更新；保存可能冲突，请先刷新页面。");
-  }, [graph, selectedId, setNodes, projectId, onUnavailable, onSelect, remove]);
+  }, [
+    graph,
+    selectedId,
+    setNodes,
+    projectId,
+    onUnavailable,
+    onSelect,
+    onOpenShot,
+    remove,
+  ]);
   useEffect(() => {
     if (!instance || !focusId || focused.current === focusId) return;
     const target = visibleNodes.find((node) => node.id === focusId);

@@ -592,6 +592,7 @@ test("previews distant approved causality with separate character knowledge and 
     `/projects/${env.project.id}/episodes/${seventh.id}?view=create`,
   );
   await openWorkspacePanels(page);
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
   await page
     .getByLabel("故事灵感", { exact: true })
     .fill(
@@ -639,9 +640,7 @@ test("previews distant approved causality with separate character knowledge and 
     path: info.outputPath("distant-cause-author-and-knowledge.png"),
     fullPage: true,
   });
-  await page
-    .getByRole("button", { name: "请编剧开始创作", exact: true })
-    .click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "批准并继续", exact: true }),

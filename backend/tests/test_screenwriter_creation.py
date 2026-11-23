@@ -184,6 +184,34 @@ def test_complete_segmented_candidate_and_original_two_reviews(
     assert len(progress(client, run_id)) == 3
 
 
+def test_editable_professional_script_finishes_before_independent_review(
+    client, episode, settings, model_service, monkeypatch
+):
+    sent, errors = install(model_service, monkeypatch, settings)
+    run_id = start(client, episode, purpose="EDITABLE_DRAFT")
+    run = run_once(client, settings, run_id)
+    assert (run["status"], run["pending_review"]) == ("SUCCEEDED", None), (run, errors)
+    assert run_once(client, settings, run_id) == run
+    assert len(sent) == 4
+    episode_path = f"/api/v1/episodes/{episode['id']}"
+    draft = client.get(episode_path + "/scripts").json()[0]
+    assert draft["run_id"] == str(run_id)
+    assert draft["status"] == "READY_FOR_REVIEW"
+    edited = copy.deepcopy(draft["content_json"])
+    edited["scenes"][0]["dialogue"][0]["text"] = "我要把信还给他。"
+    saved = client.post(
+        episode_path + "/scripts",
+        json={"expected_version_no": 1, "base_version_id": draft["id"], "content": edited},
+    )
+    assert saved.status_code == 201, saved.text
+    approval = client.post(
+        f"{episode_path}/scripts/{draft['id']}/review", json={"decision": "APPROVE"}
+    )
+    assert approval.status_code == 200, approval.text
+    assert client.get(episode_path + "/storyboards").json() == []
+    assert client.get(episode_path + "/scripts").json()[0]["content_json"] == edited
+
+
 def test_season_uses_original_candidate_confirmation(
     client, episode, settings, model_service, monkeypatch
 ):

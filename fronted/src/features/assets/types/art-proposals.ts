@@ -137,6 +137,7 @@ export type ArtVersion = {
 export type ArtRecord = {
   id: string;
   project_id: string;
+  automatic_production_id?: string | null;
   revision: number;
   archived: boolean;
   current_version_no: number;
@@ -174,6 +175,8 @@ export type ArtRecord = {
 
 export function artStatus(row: ArtRecord) {
   if (row.archived) return "已归档";
+  if (row.automatic_production_id)
+    return row.outputs.length ? "已应用" : "自动制作提案";
   if (row.review?.resume)
     return row.review.resume.result_json.status === "APPROVED"
       ? "已批准"

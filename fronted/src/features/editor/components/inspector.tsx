@@ -19,12 +19,14 @@ import AssetDetails, {
 } from "@/features/canvas/components/asset-details";
 
 import VersionEditor, {
+  versionEditorDraftId,
   type Act,
   type VersionCreated,
 } from "@/features/editor/components/version-editor";
 import ManualStoryboard from "@/features/editor/components/manual-storyboard";
 import VersionComparison from "@/features/editor/components/version-comparison";
 import ScriptRewrite from "@/features/editor/components/script-rewrite";
+import ShortDramaStart from "@/features/editor/components/short-drama-start";
 import {
   ScriptNarrativeSummary,
   StoryStateReceiptSummary,
@@ -125,6 +127,7 @@ export default function Inspector({
   const directorKey = useRef({ scriptId: "", key: "" });
   const requestKey = useRef({ story: "", key: "" });
   const [creation, setCreation] = useState(initialCreationOptions);
+  const [manualProduction, setManualProduction] = useState(false);
   const [directorCreation, setDirectorCreation] = useState(
     initialCreationOptions,
   );
@@ -135,6 +138,37 @@ export default function Inspector({
     node?.kind === "script"
       ? scripts.find((row) => row.id === node.resource_id)
       : boards.find((row) => row.id === node?.resource_id);
+  const listedRun = runs.find((run) => run.id === version?.run_id);
+  const missingScriptRun =
+    node?.kind === "script" &&
+    version?.status === "READY_FOR_REVIEW" &&
+    !listedRun
+      ? version.run_id
+      : null;
+  const [exactScriptRun, setExactScriptRun] = useState<Run | null>(null);
+  useEffect(() => {
+    if (!missingScriptRun) return;
+    const controller = new AbortController();
+    void api<Run>(`/runs/${missingScriptRun}`, { signal: controller.signal })
+      .then((run) => {
+        if (
+          !controller.signal.aborted &&
+          run.id === missingScriptRun &&
+          run.episode_id === episode.id
+        )
+          setExactScriptRun(run);
+      })
+      .catch((cause) => {
+        if (!controller.signal.aborted) onUnavailable(cause);
+      });
+    return () => controller.abort();
+  }, [episode.id, missingScriptRun, onUnavailable]);
+  const versionRun =
+    listedRun ??
+    (exactScriptRun?.id === version?.run_id ? exactScriptRun : null);
+  const independentScriptReview =
+    node?.kind === "script" &&
+    (!version?.run_id || versionRun?.status === "SUCCEEDED");
   const reviewInput: PerformanceReviewInput =
     manualReview.versionId === version?.id
       ? manualReview
@@ -155,7 +189,11 @@ export default function Inspector({
     await onCreated(row, kind);
   };
   async function generate() {
-    const body = { story, ...creationPayload(creation) };
+    const body = {
+      story,
+      purpose: manualProduction ? "REVIEW_WORKFLOW" : "EDITABLE_DRAFT",
+      ...creationPayload(creation),
+    };
     const signature = JSON.stringify(body);
     if (requestKey.current.story !== signature || !requestKey.current.key)
       requestKey.current = { story: signature, key: crypto.randomUUID() };
@@ -271,7 +309,9 @@ export default function Inspector({
           )}
           <h2>先写下你的灵感</h2>
           <p className="muted text-sm text-muted-foreground">
-            一场相遇、一段对白，或者一个小小的“如果”。编剧会把它展开成可审核的剧本。
+            {manualProduction
+              ? "编剧和导演会分别提交剧本和分镜，供你逐步审核。"
+              : "一场相遇、一段对白，或者一个小小的“如果”。编剧会把它展开成可编辑的剧本。"}
           </p>
           <Field className="flex min-w-0 flex-col gap-2">
             <FormLabel htmlFor={storyId}>故事灵感</FormLabel>
@@ -290,10 +330,11 @@ export default function Inspector({
           </p>
           <CreationOptionsFields
             narrativeEpisode={episode}
-            allowDirector
             value={creation}
             onChange={setCreation}
             disabled={!writable || busy || active}
+            allowDirector={manualProduction}
+            editableDraft={!manualProduction}
           />
           <Button
             variant="default"
@@ -308,8 +349,32 @@ export default function Inspector({
             }
             onClick={() => void generate()}
           >
-            {busy ? "正在提交…" : "请编剧开始创作"}
+            {busy
+              ? "正在提交…"
+              : manualProduction
+                ? "开始分步制作"
+                : "请编剧开始创作"}
           </Button>
+          {writable && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="self-start"
+              aria-pressed={manualProduction}
+              disabled={busy || active}
+              onClick={() => {
+                if (manualProduction)
+                  setCreation({
+                    ...creation,
+                    professionalDirector: false,
+                    directorReview: false,
+                  });
+                setManualProduction(!manualProduction);
+              }}
+            >
+              分步制作
+            </Button>
+          )}
           {active && (
             <p className="hint text-xs leading-relaxed text-muted-foreground">
               已有进行中的创作任务。
@@ -323,10 +388,6 @@ export default function Inspector({
               </Button>
             </p>
           )}
-          <p className="hint text-xs leading-relaxed text-muted-foreground">
-            流程：生成剧本 → 你审核 → 生成分镜 →
-            你审核。真实生成需要配置模型，任务执行需要启动 Worker。
-          </p>
         </>
       ) : ["asset", "asset_version"].includes(node.kind) ? (
         <AssetDetails
@@ -347,7 +408,7 @@ export default function Inspector({
             时长：{(node.duration_ms ?? 0) / 1000} 秒
           </p>
           <p className="hint text-xs leading-relaxed text-muted-foreground">
-            修改镜头请选择所属分镜，再另存分镜新版本。图片生成链路尚未开放。
+            在所属分镜中可调整镜头，在场景节点中可查看已生成的镜头照片。
           </p>
         </>
       ) : version ? (
@@ -390,6 +451,37 @@ export default function Inspector({
             )}
             active={active}
           />
+          {node.kind === "script" &&
+            owner &&
+            writable &&
+            (version.status === "APPROVED" ||
+              (version.status === "READY_FOR_REVIEW" &&
+                independentScriptReview)) && (
+              <ShortDramaStart
+                key={`short-drama:${version.id}`}
+                episodeId={episode.id}
+                projectId={episode.project_id}
+                scriptId={version.id}
+                version={version.version_no}
+                awaitingApproval={version.status === "READY_FOR_REVIEW"}
+                unsavedScript={
+                  !!drafts[
+                    versionEditorDraftId(episode.id, "script", version.id)
+                  ]
+                }
+                hasDialogue={
+                  Array.isArray(version.content_json.scenes) &&
+                  version.content_json.scenes.some(
+                    (scene) =>
+                      Array.isArray(scene?.dialogue) &&
+                      scene.dialogue.length > 0,
+                  )
+                }
+                disabled={busy || active}
+                onStarted={reload}
+                onUnavailable={onUnavailable}
+              />
+            )}
           {node.kind === "storyboard" &&
             version.content_json.schema_version === "3.0" && (
               <PerformanceIntentReceipt
@@ -458,7 +550,9 @@ export default function Inspector({
               </>
             )}
           {version.status === "READY_FOR_REVIEW" &&
-            (version.run_id ? (
+            (version.automatic_production_id ? (
+              <Notice tone="info">本版本由短剧制作流程检查和处理。</Notice>
+            ) : version.run_id && !independentScriptReview ? (
               <Button
                 variant="default"
                 size="lg"
@@ -471,7 +565,7 @@ export default function Inspector({
               owner &&
               writable && (
                 <div className="manual-review flex flex-col gap-3 rounded-lg bg-accent p-4">
-                  <p>该版本由人工编辑创建，可在这里独立审核。</p>
+                  <p>可以独立审核此版本。</p>
                   {node.kind === "script" && (
                     <ScriptNarrativeSummary
                       content={version.content_json}

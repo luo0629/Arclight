@@ -189,12 +189,11 @@ test("combined professional creation selects director and keeps both human revie
   await page
     .getByRole("radio", { name: "调查、规划与分段创作", exact: true })
     .click();
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
   await page
     .getByRole("radio", { name: "调查、规划与逐场景拆镜", exact: true })
     .click();
-  await page
-    .getByRole("button", { name: "请编剧开始创作", exact: true })
-    .click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await expect(
     page.getByText("等待审核：剧本版本", { exact: false }),
   ).toBeVisible({ timeout: 20000 });

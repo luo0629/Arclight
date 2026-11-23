@@ -169,25 +169,28 @@ def bind_selection(db: Session, job: GenerationJob, selection: MediaSelection | 
     db.flush()
 
 
+def credential_for_selection(
+    db: Session, settings: Settings, project_id: UUID, selection: MediaSelection
+) -> str:
+    from arclight.application.commands import require_project
+    from arclight.persistence.models import User
+
+    require_project(db, project_id, selection.created_by, write=True)
+    user = db.get(User, UUID(selection.created_by))
+    if user is None or user.disabled:
+        raise DomainError("FORBIDDEN", "原媒体凭证所属账号已停用", 403)
+    return read_credential(db, settings, {"credential_id": str(selection.credential_id)})
+
+
 def connection_for_job(
     db: Session, job: GenerationJob, settings: Settings, *, for_output: bool = False
 ) -> MediaConnection | None:
     selection = selection_for_job(db, job)
     if selection is None:
         return None
-    if not for_output:
-        from arclight.application.commands import require_project
-        from arclight.persistence.models import User
-
-        require_project(db, job.project_id, selection.created_by, write=True)
-        user = db.get(User, UUID(selection.created_by))
-        if user is None or user.disabled:
-            raise DomainError("FORBIDDEN", "原媒体凭证所属账号已停用", 403)
     return MediaConnection(
         selection.configuration,
-        ""
-        if for_output
-        else read_credential(db, settings, {"credential_id": str(selection.credential_id)}),
+        "" if for_output else credential_for_selection(db, settings, job.project_id, selection),
     )
 
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useId, useState } from "react";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,23 +26,27 @@ export default function VoicePicker({
   projectId,
   speaker,
   characterId,
-  profiled,
+  profiled = false,
+  saveOnly = false,
   scope,
   writable,
-  selected,
+  selected = null,
   onSelected,
   unavailable,
 }: {
   projectId: string;
   speaker: string;
   characterId: string | null;
-  profiled: boolean;
+  profiled?: boolean;
+  saveOnly?: boolean;
   scope: string;
   writable: boolean;
-  selected: AudioVoice | null;
+  selected?: AudioVoice | null;
   onSelected: (voice: AudioVoice) => void;
   unavailable: (cause: unknown) => void;
 }) {
+  const fieldId = useId();
+  const selectable = !profiled && !saveOnly;
   const fetchVoices = useCallback(
     (offset: number | undefined, signal: AbortSignal) =>
       audioApi.voices(projectId, speaker, offset, signal),
@@ -71,11 +75,12 @@ export default function VoicePicker({
   const creationScope = `${scope}:voice:${JSON.stringify(parameters)}`;
   const mutation = useRenderMutation(creationScope, writable, unavailable);
   useEffect(() => {
-    if (!selected && voices.rows[0]) onSelected(voices.rows[0]);
-  }, [selected, voices.rows, onSelected]);
+    if (!saveOnly && !selected && voices.rows[0]) onSelected(voices.rows[0]);
+  }, [saveOnly, selected, voices.rows, onSelected]);
   const versionNo = Math.max(0, ...voices.rows.map((row) => row.version_no));
   async function save() {
     if (
+      !writable ||
       !voiceName.trim() ||
       !configuration.data?.configured ||
       voices.loading ||
@@ -106,14 +111,17 @@ export default function VoicePicker({
     );
   }
   return (
-    <section aria-label="本句音色" className="flex min-w-0 flex-col gap-3">
-      {!profiled && (
+    <section
+      aria-label={saveOnly ? `${speaker}的音色` : "本句音色"}
+      className="flex min-w-0 flex-col gap-3"
+    >
+      {selectable && (
         <Field>
-          <FieldLabel htmlFor="audio-voice-version">
+          <FieldLabel htmlFor={`${fieldId}-version`}>
             {speaker}的音色版本
           </FieldLabel>
           <ChoiceSelect
-            id="audio-voice-version"
+            id={`${fieldId}-version`}
             value={selected?.id ?? ""}
             placeholder="选择已保存音色"
             disabled={!writable || voices.loading || mutation.busy}
@@ -128,8 +136,8 @@ export default function VoicePicker({
           />
         </Field>
       )}
-      {!profiled && <AudioPagination list={voices} label="音色版本" />}
-      {!profiled && selected && (
+      {selectable && <AudioPagination list={voices} label="音色版本" />}
+      {selectable && selected && (
         <p className="text-xs text-muted-foreground">
           {selected.model} · 音色 v{selected.version_no}
         </p>
@@ -146,6 +154,18 @@ export default function VoicePicker({
               void save();
             }}
           >
+            {saveOnly && voices.error && (
+              <Notice tone="error">
+                {voices.error}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void voices.load()}
+                >
+                  重新读取音色版本
+                </Button>
+              </Notice>
+            )}
             {configuration.error && (
               <Notice tone="error">{configuration.error}</Notice>
             )}
@@ -168,11 +188,11 @@ export default function VoicePicker({
             </Button>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor="audio-voice-name">
+                <FieldLabel htmlFor={`${fieldId}-name`}>
                   供应商音色名称或 ID
                 </FieldLabel>
                 <Input
-                  id="audio-voice-name"
+                  id={`${fieldId}-name`}
                   value={voiceName}
                   required
                   maxLength={160}
@@ -185,11 +205,11 @@ export default function VoicePicker({
               </Field>
               {speedRange && (
                 <Field>
-                  <FieldLabel htmlFor="audio-voice-speed">
+                  <FieldLabel htmlFor={`${fieldId}-speed`}>
                     默认语速（可选）
                   </FieldLabel>
                   <Input
-                    id="audio-voice-speed"
+                    id={`${fieldId}-speed`}
                     type="number"
                     min={speedRange.minimum}
                     max={speedRange.maximum}
@@ -202,11 +222,11 @@ export default function VoicePicker({
               )}
               {supported.includes("instructions") && (
                 <Field>
-                  <FieldLabel htmlFor="audio-voice-emotion">
+                  <FieldLabel htmlFor={`${fieldId}-emotion`}>
                     语气与情绪说明（可选）
                   </FieldLabel>
                   <Textarea
-                    id="audio-voice-emotion"
+                    id={`${fieldId}-emotion`}
                     maxLength={2000}
                     value={instructions}
                     disabled={mutation.busy}
@@ -216,11 +236,11 @@ export default function VoicePicker({
               )}
               {supported.includes("language_type") && (
                 <Field>
-                  <FieldLabel htmlFor="audio-voice-language">
+                  <FieldLabel htmlFor={`${fieldId}-language`}>
                     发音语言（可选）
                   </FieldLabel>
                   <Input
-                    id="audio-voice-language"
+                    id={`${fieldId}-language`}
                     maxLength={160}
                     value={language}
                     disabled={mutation.busy}

@@ -15,7 +15,17 @@ from test_render_deliveries import delivery_case, history_url, viewer
 from test_video_candidates import finish_video, formal_video_case, imported_rows, video_bytes
 
 from arclight.application import generation_artifacts
-from arclight.persistence.models import AssetVersion, StoredFile
+from arclight.application.production_versions import bind
+from arclight.application.short_drama_budget import MEDIA_SCOPE
+from arclight.application.short_drama_production import set_progress
+from arclight.persistence.models import (
+    AssetVersion,
+    DependencyManifest,
+    GenerationJob,
+    StoredFile,
+    Storyboard,
+    WorkflowRun,
+)
 
 __all__ = [
     "audio_source",
@@ -38,6 +48,75 @@ def graph(client, episode):
 
 def exact(value, version_id):
     return next(node for node in value["nodes"] if node["id"] == f"asset-version:{version_id}")
+
+
+def test_canvas_automatic_scene_ignores_other_jobs_and_edits_of_the_same_storyboard(
+    client, episode, render_case
+):
+    storyboard_id = render_case["snapshot"]["storyboard_id"]
+    clip = render_case["snapshot"]["tracks"][0]["clips"][0]
+    shot_id = clip["shot_id"]
+
+    def projected_shot():
+        return next(
+            shot
+            for node in graph(client, episode)["nodes"]
+            if node["kind"] == "scene"
+            for shot in node["shots"]
+            if shot["id"] == f"shot:{shot_id}"
+        )
+
+    assert projected_shot()["media_node_id"] == f"asset-version:{clip['source_asset_version_id']}"
+
+    with client.app.state.session_factory.begin() as db:
+        board = db.get(Storyboard, UUID(storyboard_id))
+        project_id = UUID(episode["project_id"])
+        run = WorkflowRun(
+            episode_id=board.episode_id,
+            workflow_type="producer",
+            workflow_version="producer/1",
+            input_json={"short_drama": {"script_version_id": str(board.script_version_id)}},
+            status="RUNNING",
+            idempotency_key="canvas-auto-ownership",
+            request_fingerprint="canvas-auto-ownership",
+            trace_id="canvas-auto-ownership",
+        )
+        manifest = DependencyManifest(
+            project_id=project_id,
+            creation_key=uuid4(),
+            request_fingerprint="a" * 64,
+            created_by="service-owner",
+            snapshot_json={
+                "context": {
+                    "continuity_review": {"storyboard_id": storyboard_id, "shot_id": shot_id}
+                }
+            },
+        )
+        db.add_all([run, manifest])
+        db.flush()
+        set_progress(db, run, "SHOTS", storyboard_id=storyboard_id)
+        for key, status in [("own", "CREATED"), ("manual", "FAILED")]:
+            job = GenerationJob(
+                project_id=project_id,
+                episode_id=board.episode_id,
+                input_manifest_id=manifest.id,
+                target_type="SHOT_IMAGE",
+                task_type="IMAGE",
+                provider="mock",
+                model="mock",
+                status=status,
+                idempotency_key=f"canvas-job-{key}",
+                request_fingerprint="b" * 64,
+                created_by="service-owner",
+            )
+            db.add(job)
+            db.flush()
+            if key == "own":
+                bind(db, project_id, MEDIA_SCOPE, job.id, {"run_id": str(run.id)})
+
+    shot = projected_shot()
+    assert shot["status"] == "CREATED"
+    assert shot.get("cover_node_id") is None and shot.get("media_node_id") is None
 
 
 def test_canvas_dialogue_uses_exact_bound_file_and_original_episode(client, audio_source):
@@ -97,6 +176,16 @@ def test_canvas_sealed_timeline_and_candidates_keep_exact_history_and_dependenci
     assert timeline["duration_ms"] == render_case["snapshot"]["duration_ms"]
     assert timeline["checksum"] == render_case["content_sha256"]
     assert timeline["dependency_manifest_id"] == render_case["dependency_manifest_id"]
+    scene_shots = {
+        shot["id"]: shot
+        for item in value["nodes"]
+        if item["kind"] == "scene"
+        for shot in item["shots"]
+    }
+    for clip in render_case["snapshot"]["tracks"][0]["clips"]:
+        scene_shot = scene_shots[f"shot:{clip['shot_id']}"]
+        assert scene_shot["status"] == "READY"
+        assert scene_shot["media_node_id"] == f"asset-version:{clip['source_asset_version_id']}"
     visuals = [
         n
         for n in value["nodes"]

@@ -8,6 +8,7 @@ from sqlalchemy import select, update
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input
 from arclight.application.canvas_media import media_facts
+from arclight.application.canvas_scenes import add_scene_graph
 from arclight.application.commands import require_episode
 from arclight.application.dependencies import query_dependencies
 from arclight.application.project_reads import lock_project_snapshot
@@ -108,11 +109,14 @@ def graph_data(db, episode):
             }
         )
     board_ids = [board.id for board in boards]
-    for shot in db.scalars(
-        select(Shot)
-        .where(Shot.storyboard_id.in_(board_ids))
-        .order_by(Shot.storyboard_id, Shot.shot_no)
-    ):
+    shots = list(
+        db.scalars(
+            select(Shot)
+            .where(Shot.storyboard_id.in_(board_ids))
+            .order_by(Shot.storyboard_id, Shot.shot_no)
+        )
+    )
+    for shot in shots:
         node_id = "shot:" + str(shot.id)
         nodes.append(
             {
@@ -133,6 +137,9 @@ def graph_data(db, episode):
             }
         )
     add_asset_graph(db, episode, nodes, edges)
+    add_scene_graph(db, episode, scripts, boards, shots, nodes, edges)
+    if len(nodes) > MAX_CANVAS_NODES or len(edges) > MAX_CANVAS_EDGES:
+        raise DomainError("CANVAS_TOO_LARGE", "项目依赖过多，超过画布完整展示上限", 409)
     return {"nodes": nodes, "edges": edges}
 
 
@@ -242,8 +249,6 @@ def add_asset_graph(db, episode, nodes, edges):
             ),
             label=DEPENDENCY_LABELS[dependency.dependency_type],
         )
-    if len(nodes) > MAX_CANVAS_NODES or len(edges) > MAX_CANVAS_EDGES:
-        raise DomainError("CANVAS_TOO_LARGE", "项目依赖过多，超过画布完整展示上限", 409)
 
 
 @router.get("/episodes/{episode_id}/canvas")

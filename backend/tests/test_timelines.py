@@ -56,7 +56,7 @@ def timeline_case(client, episode, review_case):
     for index, (shot_id, checksum) in enumerate(identities):
         value = deepcopy(review_case)
         if index:
-            job, attempt = generate(client, episode["project_id"])
+            job, attempt = generate(client, episode["project_id"], episode_id=episode["id"])
             assert ingest(client, attempt) == 1
             candidate = candidates(client, episode["project_id"], job)[0]
             value = retarget(client, value, candidate)

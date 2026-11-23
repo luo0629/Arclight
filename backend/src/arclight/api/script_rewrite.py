@@ -8,12 +8,14 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import AcceptedRun
 from arclight.application.script_rewrite import start_rewrite
 from arclight.domain.screenwriter_revision import ScreenwriterRevisionOptions
+from arclight.domain.script_drafts import ScriptWritingPurpose
 from arclight.domain.script_narrative import NarrativeRequest
 
 router = APIRouter(prefix="/api/v1/episodes/{episode_id}", tags=["script rewrite"])
 
 
 class RewriteRunCreate(RewriteRequest, ScreenwriterRevisionOptions):
+    purpose: ScriptWritingPurpose = "REVIEW_WORKFLOW"
     narrative: NarrativeRequest | None = None
 
 
@@ -36,6 +38,7 @@ def create_rewrite(
         key,
         request.state.request_id,
         request.app.state.settings,
+        purpose=payload.purpose,
         professional=payload.professional,
         agent_limits=payload.agent_limits,
         revision_rounds=payload.revision_rounds,

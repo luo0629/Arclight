@@ -18,7 +18,12 @@ from arclight.persistence.models import Project, VisualAsset
 
 
 def apply_option(
-    db: Session, version: ArtProposalVersion, confirmation: ArtConfirmation, actor: str
+    db: Session,
+    version: ArtProposalVersion,
+    confirmation: ArtConfirmation,
+    actor: str,
+    *,
+    authority: str = "HUMAN",
 ) -> None:
     proposal = ArtProposal.model_validate(version.proposal_json)
     require_art_confirmation(db, proposal, actor, confirmation)
@@ -71,7 +76,12 @@ def apply_option(
                     asset_type=design.kind,
                     name=design.name,
                     metadata_json=AssetMetadata().model_dump(mode="json"),
-                    creation_source={"kind": "MANUAL", "note": "经人工审核的美术提案"},
+                    creation_source={
+                        "kind": "MANUAL",
+                        "note": "经短剧制作授权检查的美术提案"
+                        if authority == "SHORT_DRAMA"
+                        else "经人工审核的美术提案",
+                    },
                     created_by=actor,
                     revision=0,
                     lock_version=0,
@@ -119,5 +129,6 @@ def apply_option(
                 "proposal_version_id": str(version.id),
                 "design_id": str(design.design_id),
                 "target_type": design.kind,
+                "authority": authority,
             },
         )

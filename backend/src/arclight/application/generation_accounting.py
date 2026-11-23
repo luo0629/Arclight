@@ -50,6 +50,10 @@ def reserve_next(db: Session, job: GenerationJob, amount: Decimal) -> Generation
     from arclight.application.art_concept_jobs import enforce_concept_reservation
 
     enforce_concept_reservation(db, job, amount)
+    from arclight.application.short_drama_budget import check_budget, root_for_job
+
+    if (root := root_for_job(db, job)) is not None:
+        check_budget(db, root, job.project_id, amount)
     row = GenerationBudgetReservation(
         job_id=job.id,
         attempt_no=job.attempt_count + 1,

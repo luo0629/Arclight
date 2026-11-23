@@ -178,6 +178,23 @@ def validate_plan_tasks(
 ) -> None:
     """Validate existing exact inputs without creating or running a professional task."""
     require_producer_parent(db, root.id, root.episode_id, actor)
+    if spec := root.input_json.get("short_drama"):
+        art, director = (item.task for item in plan.tasks) if len(plan.tasks) == 2 else (None, None)
+        if (
+            not isinstance(art, ArtTask)
+            or not isinstance(director, DirectorTask)
+            or str(art.script_version_id) != spec["script_version_id"]
+            or director.script_version_id != art.script_version_id
+            or director.art_collaboration
+            or art.concept_plan is not None
+            or art.task.target_asset_ids
+            or art.task.minimum_reference_images
+            or plan.tasks[0].depends_on
+            or plan.tasks[1].depends_on != [plan.tasks[0].task_key]
+        ):
+            raise DomainError(
+                "SHORT_DRAMA_PLAN_SCOPE", "制作计划必须依次使用原剧本进行美术及分镜", 422
+            )
     validate_series_plan(db, root, plan)
     from arclight.application.producer_plan_history import read_current_plan
 
@@ -373,6 +390,12 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
             producer_context=shared_context,
         )
     elif task.kind == "director":
+        source = db.get(Script, task.script_version_id)
+        performance = has_series_scope(root) or bool(
+            root.input_json.get("short_drama")
+            and source is not None
+            and source.content_json.get("schema_version") == "3.0"
+        )
         child = start_run(
             db,
             episode_id,
@@ -387,7 +410,7 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
             settings=settings,
             agent_limits=limits,
             producer_parent_run_id=root.id,
-            performance=has_series_scope(root),
+            performance=performance,
             producer_context=shared_context,
         )
     elif task.kind == "art_director":

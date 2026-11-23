@@ -131,6 +131,31 @@ test("QA-08：桌面逐图比较、精确依据、旧审查禁选与跨资产轮
   expect(env.mutations).toHaveLength(0);
 });
 
+test("自动制作的精确审核记录不提供人工决定和恢复", async ({ page }) => {
+  const env = await continuityFixture(page, true);
+  const row = env.models[1].human_reviews[0];
+  row.automatic_production_id = crypto.randomUUID();
+  row.status = "DECIDED";
+  row.decision = {
+    id: crypto.randomUUID(),
+    actor_id: row.requested_by,
+    created_at: row.created_at,
+    decision_json: {
+      version_id: row.snapshot.version_id,
+      request_sha256: row.request_sha256,
+      decision: "APPROVE",
+      comment: "记录保留供查看",
+    },
+  };
+  const dialog = await env.open();
+  const section = dialog.getByRole("region", { name: "短剧制作检查" });
+  await expect(section).toContainText("本环节由短剧制作流程处理。");
+  await expect(section).toContainText("记录保留供查看");
+  await expect(section.getByRole("button")).toHaveCount(0);
+  await expect(section.getByRole("textbox")).toHaveCount(0);
+  expect(env.mutations).toHaveLength(0);
+});
+
 test("QA-08：移动端精确人工决定、刷新恢复、独立批准及 Owner 选用 CAS", async ({
   page,
 }, info) => {

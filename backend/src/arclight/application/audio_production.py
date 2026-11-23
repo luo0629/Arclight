@@ -7,7 +7,7 @@ from uuid import UUID, uuid5
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import SceneV3, read_script_content
+from arclight.agents.contracts import SceneV3, ScriptContent, read_script_content
 from arclight.application.audio_voice_profiles import (
     character_for,
     manifest_voice,
@@ -72,6 +72,19 @@ def approved_script(db: Session, episode: Episode, identity: UUID, actor: str) -
     return script
 
 
+def script_audio_lines(content: ScriptContent) -> list[AudioLine]:
+    return [
+        AudioLine(
+            **line.model_dump(),
+            scene_id=scene.scene_id,
+            scene_no=scene.scene_no,
+            sequence_no=index + 1,
+        )
+        for scene in content.scenes
+        for index, line in enumerate(scene.dialogue)
+    ]
+
+
 def capture_snapshot(
     db: Session, episode_id: UUID, actor: str, payload: AudioSnapshotCreate
 ) -> AudioSnapshot:
@@ -87,17 +100,7 @@ def capture_snapshot(
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一抽取键不能用于不同剧本", 409)
         return previous
     script = approved_script(db, episode, payload.script_version_id, actor)
-    content = read_script_content(script.content_json)
-    lines = [
-        AudioLine(
-            **line.model_dump(),
-            scene_id=scene.scene_id,
-            scene_no=scene.scene_no,
-            sequence_no=index + 1,
-        ).model_dump(mode="json")
-        for scene in content.scenes
-        for index, line in enumerate(scene.dialogue)
-    ]
+    lines = script_audio_lines(read_script_content(script.content_json))
     registry = db.get(AssetVersion, script.id)
     assert registry is not None
     row = AudioSnapshot(
@@ -105,7 +108,7 @@ def capture_snapshot(
         script_version_id=script.id,
         script_sha256=registry.checksum,
         creation_key=payload.creation_key,
-        lines_json=lines,
+        lines_json=[line.model_dump(mode="json") for line in lines],
         line_count=len(lines),
         created_by=actor,
     )

@@ -48,9 +48,13 @@ export function nodeLabel(node: GraphNode) {
   if (node.kind === "asset_version")
     return assetTypeNames[node.asset_type ?? ""] ?? "精确资产版本";
   return (
-    { episode: "故事起点", script: "剧本", storyboard: "分镜", shot: "镜头" }[
-      node.kind
-    ] ?? "内容版本"
+    {
+      episode: "故事起点",
+      script: "剧本",
+      scene: "剧情场景",
+      storyboard: "分镜",
+      shot: "镜头",
+    }[node.kind] ?? "内容版本"
   );
 }
 export function selectionLabel(node: GraphNode) {

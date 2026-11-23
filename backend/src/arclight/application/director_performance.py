@@ -407,11 +407,12 @@ def check_performance_work(db, run, work, plan, settings, checksum) -> DirectorC
     from arclight.application.content_duration import duration_bounds
     from arclight.application.content_references import validate_storyboard_assets
     from arclight.application.director_validation import revision_input
+    from arclight.application.short_drama_director import short_drama_media_issues
 
     script = revision_input(db, run, plan, settings)
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
-    issues = []
+    issues = short_drama_media_issues(db, run, episode.project_id, work)
     if [scene.scene_id for scene in work.scenes] != [scene.scene_id for scene in script.scenes]:
         issues.append(
             DirectorIssue(code="DIRECTOR_SCENE_ORDER", message="须完整保留剧本场景及原顺序")

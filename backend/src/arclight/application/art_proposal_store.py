@@ -69,6 +69,15 @@ def check_revision(row: ArtProposalRecord, expected: int) -> None:
         raise DomainError("ART_PROPOSAL_ARCHIVED", "归档提案只允许查看", 409)
 
 
+def require_manual_proposal(db: Session, row: ArtProposalRecord) -> None:
+    from arclight.application.short_drama_budget import require_manual_workflow
+    from arclight.persistence.agent_loops import AgentLoop
+
+    loop = db.get(AgentLoop, row.creation_key)
+    if loop is not None:
+        require_manual_workflow(db, loop.run_id)
+
+
 def save_proposal(
     db: Session,
     project_id: UUID,
@@ -113,6 +122,7 @@ def save_proposal(
         )
     else:
         row = require_proposal(db, project_id, proposal_id, actor, write=True)
+        require_manual_proposal(db, row)
         prior = db.scalar(
             select(ArtProposalVersion).where(
                 ArtProposalVersion.proposal_id == row.id,
@@ -179,6 +189,7 @@ def archive_proposal(
     db: Session, project_id: UUID, proposal_id: UUID, actor: str, payload: ArtArchive
 ) -> ArtProposalRecord:
     row = require_proposal(db, project_id, proposal_id, actor, write=True)
+    require_manual_proposal(db, row)
     if row.revision != payload.expected_revision:
         raise DomainError("VERSION_CONFLICT", "提案修订已变化", 409)
     if row.archived != payload.archived:

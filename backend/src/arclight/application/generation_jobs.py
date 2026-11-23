@@ -98,6 +98,7 @@ def create_job(
     frozen_service: dict | None = None,
     continuity_revision_origin: dict | None = None,
     audio_line_origin: dict | None = None,
+    short_drama_run_id: UUID | None = None,
 ) -> GenerationJob:
     require_project(db, project_id, actor)
     lock_dependency_graph(db, project_id)
@@ -110,6 +111,11 @@ def create_job(
         )
     )
     if existing is not None:
+        from arclight.application.short_drama_budget import root_for_job
+
+        scope = root_for_job(db, existing)
+        if (scope.id if scope else None) != short_drama_run_id:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一任务不能更换短剧制作范围", 409)
         if existing.request_fingerprint != fingerprint:
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一幂等键不能用于不同媒体请求", 409)
         manifest = db.get(DependencyManifest, existing.input_manifest_id)
@@ -145,9 +151,22 @@ def create_job(
     for item in payload.inputs:
         version, source = exact_version(db, project_id, item.source_asset_version_id)
         validate_dependency_type(source.asset_type, payload.target_type, item.dependency_type)
+        authorized_frame = False
+        if (
+            short_drama_run_id is not None
+            and payload.task_type == "VIDEO"
+            and item.dependency_type == "REFERENCE_DEPENDENCY"
+            and review_binding is not None
+        ):
+            from arclight.application.short_drama_visuals import production_first_frame
+
+            authorized_frame = production_first_frame(
+                db, project_id, version, short_drama_run_id, review_binding
+            )
         if (
             version.stale
-            or version.status not in {"APPROVED", "LOCKED"}
+            or not authorized_frame
+            and version.status not in {"APPROVED", "LOCKED"}
             or source.status == "ARCHIVED"
         ):
             raise DomainError("ASSET_NOT_USABLE", "输入版本必须已批准且有效", 409)
@@ -246,7 +265,15 @@ def create_job(
     if payload.task_type == "VIDEO":
         if "video_images" in payload.spec.context:
             raise DomainError("VIDEO_INPUT_INVALID", "视频首帧须使用精确参考依赖", 422)
-        video_images = freeze_video_images(db, project_id, actor, payload.episode_id, inputs)
+        video_images = freeze_video_images(
+            db,
+            project_id,
+            actor,
+            payload.episode_id,
+            inputs,
+            short_drama_run_id=short_drama_run_id,
+            shot_target=review_binding,
+        )
     configuration = service.configuration if service else None
     manifest = DependencyManifest(
         project_id=project_id,
@@ -335,6 +362,10 @@ def create_job(
     from arclight.application.generation_accounting import reserve_next
 
     db.flush()
+    if short_drama_run_id is not None:
+        from arclight.application.short_drama_budget import bind_media_job
+
+        bind_media_job(db, short_drama_run_id, job)
     reserve_next(db, job, budget_quote.maximum_cost)
     from arclight.application.production_versions import capture_media
 

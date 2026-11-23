@@ -222,13 +222,12 @@ test("combined checked director shares creation controls and keeps both reviews"
   await page
     .getByRole("radio", { name: "调查、规划与分段创作", exact: true })
     .click();
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
   await page
     .getByRole("radio", { name: "拆镜、检查与局部修订", exact: true })
     .click();
   await page.getByLabel("最多导演自动修订轮数", { exact: true }).fill("2");
-  await page
-    .getByRole("button", { name: "请编剧开始创作", exact: true })
-    .click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await expect(
     page.getByText("等待审核：剧本版本", { exact: false }),
   ).toBeVisible({ timeout: 20000 });

@@ -204,10 +204,21 @@ def mark_stale(db: Session, version: AssetVersion) -> bool:
 
 
 def input_expired(
-    db: Session, project_id: UUID, item: dict, target_kind: str, *, after_event_no: int = 0
+    db: Session,
+    project_id: UUID,
+    item: dict,
+    target_kind: str,
+    *,
+    after_event_no: int = 0,
+    authorized_reference: UUID | None = None,
 ) -> bool:
     version, asset = exact_version(db, project_id, UUID(item["source_asset_version_id"]))
-    if not input_usable(db, version, asset, target_kind):
+    production_frame = (
+        version.id == authorized_reference
+        and item["dependency_type"] == "REFERENCE_DEPENDENCY"
+        and target_kind == "VIDEO"
+    )
+    if not production_frame and not input_usable(db, version, asset, target_kind):
         return True
     for event in db.scalars(
         select(DependencyInvalidation).where(

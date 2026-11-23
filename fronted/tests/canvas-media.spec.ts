@@ -32,6 +32,88 @@ async function observeURLs(page: import("@playwright/test").Page) {
   });
 }
 
+test("剧情场景展开显示精确镜头照片，并定位对应剧本场景", async ({ page }) => {
+  const env = await canvasMediaFixture(page);
+  const episodeId = env.episodes[0].id;
+  const scriptId = crypto.randomUUID();
+  const scene = {
+    scene_id: crypto.randomUUID(),
+    scene_no: 1,
+    title: "深夜小店",
+    action: "柜台后的灯逐渐亮起。",
+    dialogue: [],
+  };
+  const sceneId = `scene:${scene.scene_id}`;
+  await page.route(`**/api/v1/episodes/${episodeId}/scripts?*`, (route) =>
+    route.fulfill({
+      json: [
+        {
+          id: scriptId,
+          episode_id: episodeId,
+          version_no: 1,
+          status: "READY_FOR_REVIEW",
+          run_id: null,
+          content_json: {
+            title: "重逢",
+            summary: "夜归",
+            characters: [],
+            scenes: [scene],
+          },
+        },
+      ],
+    }),
+  );
+  env.graph.nodes.push(
+    {
+      id: `script:${scriptId}`,
+      kind: "script",
+      resource_id: scriptId,
+      title: "重逢",
+      status: "READY_FOR_REVIEW",
+    },
+    {
+      id: sceneId,
+      kind: "scene",
+      script_version_id: scriptId,
+      scene_id: scene.scene_id,
+      scene_no: scene.scene_no,
+      title: scene.title,
+      status: "READY_FOR_REVIEW",
+      shots: [
+        {
+          id: `shot:${crypto.randomUUID()}`,
+          shot_no: 1,
+          description: "柜台近景",
+          status: "READY",
+          media_node_id: env.image.id,
+        },
+      ],
+    },
+  );
+  env.graph.layout.positions[sceneId] = { x: 280, y: 20 };
+  await env.openCanvas(undefined, "canvas");
+  const card = page.locator(`.react-flow__node[data-id="${sceneId}"]`);
+  const photo = card.getByRole("img", { name: "镜头 01照片", exact: true });
+  await expect(photo).toHaveCount(0);
+  await card.getByRole("button", { name: /^展开镜头/ }).click();
+  await expect(photo).toBeVisible();
+  expect(
+    await photo.evaluate((img: HTMLImageElement) => img.naturalWidth),
+  ).toBeGreaterThan(1);
+  expect(env.mediaReads).toContain("/api/v1" + env.image.preview_path);
+  await expect(card).toContainText("素材就绪");
+  await card
+    .getByRole("button", { name: `查看剧情场景：${scene.title}` })
+    .click();
+  const detail = page.getByRole("region", { name: "剧情场景详情" });
+  await expect(detail).toContainText(scene.action);
+  await detail.getByRole("button", { name: "在剧本中打开场景" }).click();
+  await expect(
+    page.locator(`[data-script-scene="${scene.scene_id}"]`),
+  ).toBeFocused();
+  expect(env.mutations).toHaveLength(0);
+});
+
 test("UI-01：候选原图、正式选用和历史失效状态来自同一精确图", async ({
   page,
 }) => {

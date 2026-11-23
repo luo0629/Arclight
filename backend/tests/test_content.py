@@ -38,7 +38,16 @@ def test_manual_versions_immutable_approved_reference_and_canvas(client, episode
     shots = client.get(prefix + "/shots", params={"storyboard_id": saved_board.json()["id"]}).json()
     assert shots and all(shot["status"] == "APPROVED" for shot in shots)
     canvas = client.get(prefix + "/canvas").json()
-    assert {row["kind"] for row in canvas["nodes"]} == {"episode", "script", "storyboard", "shot"}
+    assert {row["kind"] for row in canvas["nodes"]} == {
+        "episode",
+        "script",
+        "scene",
+        "storyboard",
+        "shot",
+    }
+    scene = next(row for row in canvas["nodes"] if row["kind"] == "scene")
+    assert scene["script_version_id"] == second.json()["id"]
+    assert [item["id"] for item in scene["shots"]] == [f"shot:{shot['id']}" for shot in shots]
     assert (
         len([node for node in canvas["nodes"] if node.get("resource_id") == second.json()["id"]])
         == 1

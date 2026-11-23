@@ -33,9 +33,23 @@ from arclight.domain.human_reviews import (
     PerformanceIntentApproval,
     ReviewSnapshot,
 )
+from arclight.domain.script_drafts import DRAFT_WORKFLOWS
 from arclight.domain.versions import digest
 from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
 from arclight.persistence.models import AssetVersion, Episode, Script, Shot, Storyboard, WorkflowRun
+
+
+def text_review_run(db: Session, artifact: Script | Storyboard) -> WorkflowRun | None:
+    """Editable drafts retain writing lineage and are reviewed independently of it."""
+    run = db.get(WorkflowRun, artifact.run_id) if artifact.run_id else None
+    if (
+        run is not None
+        and isinstance(artifact, Script)
+        and run.workflow_type in DRAFT_WORKFLOWS
+        and run.status == "SUCCEEDED"
+    ):
+        return None
+    return run
 
 
 def text_snapshot(
@@ -101,18 +115,16 @@ def read_text(db: Session, frozen: ReviewSnapshot) -> ReviewSnapshot:
         if frozen.kind == "SCRIPT"
         else db.get(Storyboard, frozen.version_id, populate_existing=True)
     )
-    if (
-        artifact is None
-        or artifact.episode_id != frozen.episode_id
-        or artifact.run_id != frozen.run_id
-    ):
+    if artifact is None or artifact.episode_id != frozen.episode_id:
         raise DomainError("REVIEW_INPUT_CHANGED", "精确文本对象不存在或作用域已变化", 409)
-    run = db.get(WorkflowRun, frozen.run_id, populate_existing=True) if frozen.run_id else None
+    run = text_review_run(db, artifact)
+    if (run.id if run else None) != frozen.run_id:
+        raise DomainError("REVIEW_INPUT_CHANGED", "精确文本对象不存在或作用域已变化", 409)
     return text_snapshot(db, artifact, run)
 
 
 def pause_for_content(db: Session, artifact: Script | Storyboard, actor: str) -> HumanReviewRequest:
-    run = db.get(WorkflowRun, artifact.run_id) if artifact.run_id else None
+    run = text_review_run(db, artifact)
     snapshot = text_snapshot(db, artifact, run)
     key = "text:" + str(artifact.id)
     existing = db.scalar(

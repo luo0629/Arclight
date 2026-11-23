@@ -3,7 +3,7 @@
 import base64
 import json
 import re
-from math import gcd
+from math import floor, gcd
 from typing import Literal, cast
 from urllib.parse import quote
 
@@ -66,6 +66,7 @@ NUMERIC_PARAMETER_RANGES: dict[str, dict[str, NumericParameterRange]] = {
 SEEDANCE_FIRST_FRAME_MODELS = frozenset({"doubao-seedance-1-0-pro-250528"})
 SEEDANCE_MAX_IMAGE_BYTES = 30 * 1024 * 1024
 SEEDANCE_MAX_REQUEST_BYTES = 64 * 1024 * 1024
+VIDEO_SIZES = {(1280, 720), (720, 1280), (1920, 1080), (1080, 1920)}
 
 
 def capabilities(protocol: str, model: str | None = None) -> MediaCapabilities:
@@ -187,7 +188,7 @@ def validate_spec(spec: GenerationSpec, reference_count: int = 0) -> None:
                 "PROVIDER_DURATION_UNSUPPORTED", "视频任务需要明确整数秒时长及 MP4 输出", 422
             )
         width, height = cast(int, output["width"]), cast(int, output["height"])
-        if (width, height) not in {(1280, 720), (720, 1280), (1920, 1080), (1080, 1920)}:
+        if (width, height) not in VIDEO_SIZES:
             raise DomainError(
                 "PROVIDER_SIZE_UNSUPPORTED", "当前视频适配支持 720p 或 1080p 横竖屏", 422
             )
@@ -233,6 +234,34 @@ def validate_spec(spec: GenerationSpec, reference_count: int = 0) -> None:
                 raise DomainError("PROVIDER_DURATION_UNSUPPORTED", "当前万相模型不支持该时长", 422)
     elif output.get("format", "png") not in {"png", "jpeg", "jpg"}:
         raise DomainError("PROVIDER_PARAMETERS_UNSUPPORTED", "图像输出仅支持 PNG 或 JPEG", 422)
+
+
+def fitting_video_spec(spec: GenerationSpec, *, min_seconds: int, portrait: bool) -> GenerationSpec:
+    """Choose the shortest accepted native clip that can cover a planned shot."""
+    maximum = floor(capabilities(spec.provider, spec.model).max_video_seconds or 0)
+    sizes = sorted(size for size in VIDEO_SIZES if (size[1] > size[0]) == portrait)
+    for seconds in range(min_seconds, maximum + 1):
+        for width, height in sizes:
+            candidate = spec.model_copy(
+                update={
+                    "output_spec": {
+                        "width": width,
+                        "height": height,
+                        "format": "mp4",
+                        "duration_seconds": seconds,
+                    }
+                }
+            )
+            try:
+                validate_spec(candidate, 1)
+            except DomainError as error:
+                if error.code not in {"PROVIDER_DURATION_UNSUPPORTED", "PROVIDER_SIZE_UNSUPPORTED"}:
+                    raise
+            else:
+                return candidate
+    raise DomainError(
+        "SHORT_DRAMA_VIDEO_FORMAT_UNSUPPORTED", "当前视频服务无法覆盖镜头时长和画幅", 409
+    )
 
 
 def image_content(image_inputs: tuple[MediaImageInput, ...]) -> list[dict]:

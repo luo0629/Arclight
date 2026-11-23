@@ -109,6 +109,17 @@ def review_target(delivery: ArtDelivery) -> dict:
 def saved_review(db: Session, delivery: ArtDelivery, resume: dict) -> bool:
     """Checkpoint data can only refer to an already committed business decision."""
     request = db.get(HumanReviewRequest, delivery.review_request_id)
+    if resume.get("authority") == "SHORT_DRAMA":
+        from arclight.application.short_drama_reviews import verify_service_review
+
+        child = db.get(WorkflowRun, delivery.run_id)
+        if request is None or child is None:
+            raise DomainError("ART_REVIEW_STALE", "自动检查须引用精确原提案", 409)
+        target = {**review_target(delivery), "request_sha256": request.request_sha256}
+        if resume != {**target, "decision": "APPROVE", "authority": "SHORT_DRAMA"}:
+            raise DomainError("ART_REVIEW_STALE", "自动检查的精确提案已变化", 409)
+        verify_service_review(db, child, target)
+        return True
     handoff = db.scalar(
         select(HumanReviewResume).where(HumanReviewResume.request_id == delivery.review_request_id)
     )

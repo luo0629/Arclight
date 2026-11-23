@@ -37,7 +37,12 @@ from arclight.application.generation_jobs import create_job
 from arclight.application.render_inputs import file_storage
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.audio_production import AudioBindingRead, AudioInputCreate, AudioValidationRead
+from arclight.domain.audio_production import (
+    AudioBindingRead,
+    AudioInputCreate,
+    AudioLine,
+    AudioValidationRead,
+)
 from arclight.domain.audio_tts import (
     AudioTTSCreate,
     AudioTTSRead,
@@ -50,7 +55,7 @@ from arclight.domain.file_policy import POLICIES
 from arclight.domain.generation_requests import ExpectedAsset, GenerationCreate
 from arclight.domain.generation_scheduling import DEFAULT_EXECUTION_POLICY, ExecutionPolicy
 from arclight.media.validation import probe
-from arclight.persistence.audio_production import AudioLineBinding
+from arclight.persistence.audio_production import AudioLineBinding, AudioSnapshot
 from arclight.persistence.audio_tts import AudioTTSRequest
 from arclight.persistence.audio_voices import AudioVoiceVersion
 from arclight.persistence.models import (
@@ -181,6 +186,35 @@ def performance_parameters(
     return {**requested, "instructions": instructions}
 
 
+def require_tts_voice(
+    db: Session,
+    project_id: UUID,
+    snapshot: AudioSnapshot,
+    line: AudioLine,
+    actor: str,
+    voice_id: UUID,
+    profile_id: UUID | None,
+    *,
+    write: bool = False,
+) -> tuple[AudioVoiceVersion, VoiceSelection | None]:
+    voice = require_voice(db, project_id, voice_id, actor, write=write)
+    content = script_content(db, snapshot)
+    _, profile = profile_for_line(db, project_id, content, line)
+    if profile_id != (profile.id if profile else None):
+        raise DomainError("AUDIO_VOICE_PROFILE_CONFLICT", "请重新读取本句当前声音档案再生成", 409)
+    if voice.speaker != line.speaker:
+        raise DomainError("AUDIO_VOICE_SPEAKER_MISMATCH", "音色版本不属于该台词的说话角色", 422)
+    if profile is None:
+        return voice, None
+    selection = resolve_selection(db, project_id, snapshot, content, line, profile)
+    if (
+        voice.id != selection.voice_version_id
+        or voice.character_asset_id != profile.character_asset_id
+    ):
+        raise DomainError("AUDIO_VOICE_PROFILE_CONFLICT", "该音色不是当前故事时点的角色音色", 409)
+    return voice, selection
+
+
 def create_tts(
     db: Session,
     snapshot_id: UUID,
@@ -190,6 +224,7 @@ def create_tts(
     *,
     execution_policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
     source_audio_version_id: UUID | None = None,
+    short_drama_run_id: UUID | None = None,
 ) -> tuple[AudioTTSRead, bool]:
     snapshot = require_snapshot(db, snapshot_id, actor, write=True)
     line = require_line(snapshot, line_id)
@@ -221,26 +256,26 @@ def create_tts(
         )
     )
     if previous is not None:
+        from arclight.application.short_drama_budget import root_for_job
+
+        job = db.get(GenerationJob, previous.job_id)
+        assert job is not None
+        scope = root_for_job(db, job)
+        if (scope.id if scope else None) != short_drama_run_id:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一配音不能更换短剧制作范围", 409)
         if previous.request_fingerprint != request_hash:
             raise DomainError("IDEMPOTENCY_CONFLICT", "同一配音标识不能更换台词或音色配置", 409)
         return read_tts(db, previous), False
-    voice = require_voice(db, episode.project_id, payload.voice_version_id, actor, write=True)
-    content = script_content(db, snapshot)
-    _, profile = profile_for_line(db, episode.project_id, content, line)
-    if payload.voice_profile_version_id != (profile.id if profile else None):
-        raise DomainError("AUDIO_VOICE_PROFILE_CONFLICT", "请重新读取本句当前声音档案再生成", 409)
-    if voice.speaker != line.speaker:
-        raise DomainError("AUDIO_VOICE_SPEAKER_MISMATCH", "音色版本不属于该台词的说话角色", 422)
-    selection = None
-    if profile is not None:
-        selection = resolve_selection(db, episode.project_id, snapshot, content, line, profile)
-        if (
-            voice.id != selection.voice_version_id
-            or voice.character_asset_id != profile.character_asset_id
-        ):
-            raise DomainError(
-                "AUDIO_VOICE_PROFILE_CONFLICT", "该音色不是当前故事时点的角色音色", 409
-            )
+    voice, selection = require_tts_voice(
+        db,
+        episode.project_id,
+        snapshot,
+        line,
+        actor,
+        payload.voice_version_id,
+        payload.voice_profile_version_id,
+        write=True,
+    )
     if source_audio_version_id is None:
         asset = line_target(
             db,
@@ -306,6 +341,7 @@ def create_tts(
         execution_policy=execution_policy,
         frozen_service=voice.service_snapshot_json,
         audio_line_origin=origin_for(request),
+        short_drama_run_id=short_drama_run_id,
     )
     request.job_id = job.id
     db.add(request)

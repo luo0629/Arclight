@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, api, message } from "@/lib/api/client";
 import CanvasNodeList from "@/features/canvas/components/canvas-node-list";
+import SceneShots from "@/features/canvas/components/scene-shots";
 import type {
   ContentVersion,
   Episode,
@@ -31,6 +32,7 @@ import { lazy, Suspense } from "react";
 import { LoadingState } from "@/components/ui-kit";
 const Canvas = lazy(() => import("@/features/canvas/components/canvas"));
 import Inspector from "@/features/editor/components/inspector";
+import { ShortDramaProgress } from "@/features/editor/components/short-drama-start";
 import AssetLibrary from "@/features/editor/components/asset-library";
 import ShotViewer from "@/features/editor/components/shot-viewer";
 
@@ -78,6 +80,12 @@ export default function EpisodeWorkspace({
   const [showSavedNotice, setShowSavedNotice] = useState(false);
   const [focused, setFocused] = useState(false);
   const [shotId, setShotId] = useState("");
+  const [sceneFocus, setSceneFocus] = useState<{
+    scriptId: string;
+    sceneId: string;
+  } | null>(null);
+  const inspectorRef = useRef<HTMLDivElement>(null);
+  const openShot = useCallback((node: GraphNode) => setShotId(node.id), []);
   const [draftId, setDraftId] = useState<string>();
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
@@ -261,6 +269,39 @@ export default function EpisodeWorkspace({
   // 画布仍是完整依赖图；点选未加载的历史节点时读取到该精确版本。
   const selectedResource = selected?.resource_id;
   const selectedKind = selected?.kind;
+  const sceneScriptId =
+    selected?.kind === "scene" ? selected.script_version_id : undefined;
+  const selectedSceneScript = sceneScriptId
+    ? scriptRows.find((row) => row.id === sceneScriptId)
+    : undefined;
+  const selectedScene = Array.isArray(selectedSceneScript?.content_json.scenes)
+    ? (
+        selectedSceneScript.content_json.scenes as {
+          scene_id?: string;
+          action: string;
+          dialogue: { line_id: string; speaker: string; text: string }[];
+        }[]
+      ).find((scene) => scene.scene_id === selected?.scene_id)
+    : undefined;
+  useEffect(() => {
+    if (sceneScriptId && !selectedSceneScript)
+      void ensureScript(sceneScriptId).catch(onUnavailable);
+  }, [sceneScriptId, selectedSceneScript, ensureScript, onUnavailable]);
+  useEffect(() => {
+    if (
+      !sceneFocus ||
+      selectedKind !== "script" ||
+      selectedResource !== sceneFocus.scriptId
+    )
+      return;
+    const target = inspectorRef.current?.querySelector<HTMLElement>(
+      `[data-script-scene="${sceneFocus.sceneId}"]`,
+    );
+    if (!target) return;
+    target.scrollIntoView({ block: "nearest" });
+    target.focus({ preventScroll: true });
+    setSceneFocus(null);
+  }, [sceneFocus, selectedKind, selectedResource, scriptRows]);
   const versionMissing =
     !!selectedResource &&
     (selectedKind === "script"
@@ -292,7 +333,7 @@ export default function EpisodeWorkspace({
   const visibleNodes =
     data?.graph.nodes.filter(
       (node) =>
-        ["episode", "asset", "asset_version"].includes(node.kind) ||
+        ["episode", "asset", "asset_version", "scene"].includes(node.kind) ||
         loadedIds.has(node.id),
     ) ?? [];
   if (savedNode && !visibleNodes.some((node) => node.id === savedNode.id))
@@ -365,9 +406,9 @@ export default function EpisodeWorkspace({
             <ToggleGroupItem key={key} value={key}>
               {label}
               {key === "tasks" &&
-                runs.rows.some((run) => run.pending_review) && (
-                  <span className="size-1.5 rounded-full bg-primary" />
-                )}
+                runs.rows.some(
+                  (run) => run.pending_review && !run.automatic_production_id,
+                ) && <span className="size-1.5 rounded-full bg-primary" />}
             </ToggleGroupItem>
           ))}
         </ToggleGroup>
@@ -493,6 +534,13 @@ export default function EpisodeWorkspace({
         <Notice tone="info" className="read-only mb-4" role="status">
           当前为只读模式：项目／剧集已归档，或你的角色是查看者。
         </Notice>
+      )}
+      {data && (
+        <ShortDramaProgress
+          episodeId={episode.id}
+          projectId={episode.project_id}
+          refreshRevision={refreshRevision}
+        />
       )}
       {!data ? (
         <EmptyState className="empty" role={loadError ? "alert" : "status"}>
@@ -654,7 +702,7 @@ export default function EpisodeWorkspace({
                   projectId={episode.project_id}
                   onUnavailable={onUnavailable}
                   writable={writable}
-                  onOpenShot={(node) => setShotId(node.id)}
+                  onOpenShot={openShot}
                   onRemove={(node) => {
                     if (selected?.id !== node.id) return;
                     navigate({ node: "" }, true);
@@ -680,6 +728,7 @@ export default function EpisodeWorkspace({
           </section>
           {(view !== "canvas" || inspectorOpen) && (
             <div
+              ref={inspectorRef}
               id="canvas-inspector"
               className={cn(
                 "min-w-0",
@@ -710,39 +759,106 @@ export default function EpisodeWorkspace({
                   独立查看镜头
                 </Button>
               )}
-              <Inspector
-                key={draftId ?? "default-inspector"}
-                draftId={draftId}
-                node={view === "create" ? null : selected}
-                graph={data.graph}
-                onSelectNode={(node) => setSelectedId(node.id)}
-                onUnavailable={onUnavailable}
-                episode={episode}
-                scripts={scriptRows}
-                boards={boardRows}
-                runs={runs.rows}
-                owner={owner}
-                writable={writable}
-                busy={busy}
-                act={act}
-                reload={reload}
-                versionLoading={scripts.loading || boards.loading}
-                onCreated={onCreated}
-                focusVersionId={saved?.version.id}
-                retryVersion={() =>
-                  selectedResource
-                    ? selectedKind === "script"
-                      ? ensureScript(selectedResource)
-                      : ensureBoard(selectedResource)
-                    : Promise.resolve()
-                }
-                showTasks={(runId) =>
-                  navigate({
-                    view: "tasks",
-                    run: runId && isResourceId(runId) ? runId : "",
-                  })
-                }
-              />
+              {selected?.kind === "scene" && view !== "create" ? (
+                <section
+                  className="flex min-w-0 flex-col gap-3 p-4"
+                  aria-label="剧情场景详情"
+                >
+                  <h3>{selected.title}</h3>
+                  {selectedScene ? (
+                    <>
+                      <p className="whitespace-pre-wrap">
+                        {selectedScene.action}
+                      </p>
+                      {selectedScene.dialogue.map((line) => (
+                        <p key={line.line_id}>
+                          {line.speaker}：{line.text}
+                        </p>
+                      ))}
+                    </>
+                  ) : scripts.loading ? (
+                    <Notice>正在读取对应的剧本场景。</Notice>
+                  ) : (
+                    <Notice tone="error" role="alert">
+                      <p>{scripts.error || "无法读取对应的剧本场景。"}</p>
+                      {sceneScriptId && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            void ensureScript(sceneScriptId).catch(
+                              onUnavailable,
+                            )
+                          }
+                        >
+                          重新读取场景
+                        </Button>
+                      )}
+                    </Notice>
+                  )}
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      if (
+                        !selected.script_version_id ||
+                        !selected.scene_id ||
+                        !isResourceId(selected.scene_id)
+                      )
+                        return;
+                      setSceneFocus({
+                        scriptId: selected.script_version_id,
+                        sceneId: selected.scene_id,
+                      });
+                      setSelectedId(`script:${selected.script_version_id}`);
+                    }}
+                  >
+                    在剧本中打开场景
+                  </Button>
+                  <SceneShots
+                    shots={selected.shots ?? []}
+                    nodes={
+                      new Map(data.graph.nodes.map((node) => [node.id, node]))
+                    }
+                    projectId={episode.project_id}
+                    onUnavailable={onUnavailable}
+                    onOpenShot={openShot}
+                  />
+                </section>
+              ) : (
+                <Inspector
+                  key={draftId ?? "default-inspector"}
+                  draftId={draftId}
+                  node={view === "create" ? null : selected}
+                  graph={data.graph}
+                  onSelectNode={(node) => setSelectedId(node.id)}
+                  onUnavailable={onUnavailable}
+                  episode={episode}
+                  scripts={scriptRows}
+                  boards={boardRows}
+                  runs={runs.rows}
+                  owner={owner}
+                  writable={writable}
+                  busy={busy}
+                  act={act}
+                  reload={reload}
+                  versionLoading={scripts.loading || boards.loading}
+                  onCreated={onCreated}
+                  focusVersionId={saved?.version.id}
+                  retryVersion={() =>
+                    selectedResource
+                      ? selectedKind === "script"
+                        ? ensureScript(selectedResource)
+                        : ensureBoard(selectedResource)
+                      : Promise.resolve()
+                  }
+                  showTasks={(runId) =>
+                    navigate({
+                      view: "tasks",
+                      run: runId && isResourceId(runId) ? runId : "",
+                    })
+                  }
+                />
+              )}
             </div>
           )}
         </div>

@@ -15,6 +15,7 @@ from arclight.application.content_duration import duration_bounds
 from arclight.application.content_references import validate_storyboard_assets
 from arclight.application.director_research import approved_input
 from arclight.application.gateway_text import execution_actor
+from arclight.application.short_drama_director import short_drama_media_issues
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.director_planning import DirectorPlan
@@ -60,7 +61,7 @@ def check_work(
     script = revision_input(db, run, plan, settings)
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
-    issues: list[DirectorIssue] = []
+    issues = short_drama_media_issues(db, run, episode.project_id, work)
     expected = {line.line_id: scene for scene in script.scenes for line in scene.dialogue}
     ordered_lines = {line: index for index, line in enumerate(expected)}
     script_scenes = {scene.scene_id: scene for scene in script.scenes}

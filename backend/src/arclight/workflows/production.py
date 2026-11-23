@@ -55,6 +55,7 @@ def build_graph(
     checkpointer,
     *,
     director_only: bool = False,
+    draft_only: bool = False,
     contexts: dict[str, dict] | None = None,
     agent_scope: AgentRunScope | None = None,
     agent_state_seed: AgentRunState | dict | None = None,
@@ -148,8 +149,8 @@ def build_graph(
                 step_id="script",
                 target="SUCCEEDED",
                 stage="script",
-                next_step_id="script_review",
-                next_step_status="WAITING_REVIEW",
+                next_step_id=None if draft_only else "script_review",
+                next_step_status=None if draft_only else "WAITING_REVIEW",
                 draft_id=version_id,
             ),
         }
@@ -218,6 +219,12 @@ def build_graph(
         }
 
     graph = StateGraph(ProductionState)
+    if draft_only:
+        graph.add_node("screenwriter", write_script)
+        graph.add_edge(START, "screenwriter")
+        graph.add_edge("screenwriter", END)
+        return graph.compile(checkpointer=checkpointer)
+
     graph.add_node("director", direct)
     graph.add_node("storyboard_review", review_storyboard)
     if director_only:

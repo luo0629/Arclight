@@ -285,6 +285,19 @@ def attach_output(
     db.flush()
     from arclight.application.invalidation import input_expired, mark_stale
 
+    authorized_frame = None
+    if target.asset_type == "VIDEO" and output.metadata_json.get("generation_job_id"):
+        from arclight.application.generation_video_inputs import checked_references
+        from arclight.application.short_drama_budget import root_for_job
+        from arclight.persistence.models import GenerationJob
+
+        generation = db.get(GenerationJob, UUID(output.metadata_json["generation_job_id"]))
+        if generation is not None and root_for_job(db, generation) is not None:
+            original = require_manifest(db, project_id, generation.input_manifest_id)
+            frozen = checked_references(db, generation, original.snapshot_json)
+            if frozen:
+                _, version, _ = frozen[0]
+                authorized_frame = version.id
     expired = [
         item["source_asset_version_id"]
         for item in manifest.snapshot_json["inputs"]
@@ -294,6 +307,7 @@ def attach_output(
             item,
             target.asset_type,
             after_event_no=manifest.snapshot_json.get("invalidation_seq", 0),
+            authorized_reference=authorized_frame,
         )
     ]
     narrative_expiry = None

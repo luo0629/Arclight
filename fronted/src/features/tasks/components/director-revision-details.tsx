@@ -135,11 +135,13 @@ function CheckDetails({
 
 export default function DirectorRevisionDetails({
   revision,
+  automatic,
   decision,
   reason,
   checks,
 }: {
   revision: DirectorRevision;
+  automatic: boolean;
   decision?: "ACCEPT" | "REVISE" | "ESCALATE";
   reason?: string;
   checks: DirectorCheck[];
@@ -153,10 +155,14 @@ export default function DirectorRevisionDetails({
       {decision && (
         <p>
           {decision === "ACCEPT"
-            ? "工具检查通过，交完整分镜审核。"
+            ? automatic
+              ? "工具检查通过，交短剧制作流程处理。"
+              : "工具检查通过，交完整分镜审核。"
             : decision === "REVISE"
               ? "已采用局部补丁，继续复查。"
-              : "保留问题，请你决定。"}
+              : automatic
+                ? "本轮仍有待处理问题。"
+                : "保留问题，请你决定。"}
           {reason && ` ${reason}`}
         </p>
       )}

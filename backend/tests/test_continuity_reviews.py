@@ -47,7 +47,7 @@ from arclight.persistence.models import (
 def review_case(client, episode):
     script = save_script(client, episode)
     board, shots = approved_board(client, episode, script)
-    job, attempt = generate(client, episode["project_id"])
+    job, attempt = generate(client, episode["project_id"], episode_id=episode["id"])
     assert ingest(client, attempt) == 1
     candidate = candidates(client, episode["project_id"], job)[0]
     value = review_payload()

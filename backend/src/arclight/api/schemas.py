@@ -16,6 +16,7 @@ from arclight.agents.contracts import Dialogue, Identifier, read_content, read_s
 from arclight.domain.director_revision import DirectorRevisionOptions
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.domain.screenwriter_revision import ScreenwriterRevisionOptions
+from arclight.domain.script_drafts import ScriptWritingPurpose
 from arclight.domain.script_narrative import NarrativeRequest
 from arclight.domain.visual_bible import VisualPatch
 from arclight.domain.workflow_contracts import WorkflowRunContract
@@ -63,6 +64,7 @@ class EpisodeRead(Resource, EpisodeCreate):
 
 
 class RunCreate(Input, ScreenwriterRevisionOptions, DirectorRevisionOptions):
+    purpose: ScriptWritingPurpose = "REVIEW_WORKFLOW"
     professional_director: bool = Field(default=False, strict=True)
     story: Annotated[str, StringConstraints(strip_whitespace=False)] | None = Field(
         default=None, min_length=1, max_length=20000
@@ -73,6 +75,8 @@ class RunCreate(Input, ScreenwriterRevisionOptions, DirectorRevisionOptions):
 
     @model_validator(mode="after")
     def one_source(self) -> "RunCreate":
+        if self.purpose == "EDITABLE_DRAFT" and self.professional_director:
+            raise ValueError("剧本草稿不包含分镜任务")
         if self.narrative is not None and (not self.professional or self.professional_director):
             raise ValueError("连续剧情创作须选择独立专业编剧")
         if self.professional_director and not self.professional:
@@ -128,6 +132,7 @@ class RunRead(Resource):
     pending_review: dict | None
     error_code: str | None
     revision: int
+    automatic_production_id: UUID | None
     contract: WorkflowRunContract
 
 
@@ -160,6 +165,7 @@ class DialogueLineRead(Dialogue):
 
 class StoryboardRead(ScriptRead):
     script_version_id: UUID
+    automatic_production_id: UUID | None = None
 
 
 class ShotRead(Resource):

@@ -39,7 +39,7 @@ def admitted(db: Session, settings: Settings, run: RenderExecution, job: RenderJ
         raise DomainError("RENDER_INPUT_CHANGED", "精确渲染清单已变化", 409)
     facts = admission_facts(db, row)
     check_support(facts.snapshot)
-    require_export_approval(db, row, facts)
+    require_export_approval(db, row, facts, submission=(run.created_by, job.creation_key))
     return facts
 
 

@@ -22,6 +22,7 @@ from arclight.persistence.human_reviews import (
     HumanReviewRequest,
     HumanReviewResume,
 )
+from arclight.persistence.models import AssetVersion
 from arclight.persistence.render_manifests import RenderManifest
 
 EXPORT_HANDLER = "RENDER_EXPORT"
@@ -76,10 +77,34 @@ def request_export_review(
 
 
 def require_export_approval(
-    db: Session, row: RenderManifest, facts: RenderFacts
+    db: Session,
+    row: RenderManifest,
+    facts: RenderFacts,
+    *,
+    submission: tuple[str, UUID] | None = None,
 ) -> tuple[UUID | None, UUID | None]:
     if facts.snapshot.output.name == "PREVIEW":
         return None, None
+    from arclight.application.short_drama_delivery import (
+        audio_in_scope,
+        render_key,
+        require_automatic_export,
+    )
+
+    automatic = require_automatic_export(db, row, facts)
+    if automatic is not None:
+        if submission is not None and submission != (row.created_by, render_key(automatic.id)):
+            raise DomainError(
+                "SHORT_DRAMA_EXPORT_SCOPE", "本清单的自动导出仅用于获授权的短剧任务", 409
+            )
+        return None, None
+    for source in facts.snapshot.sources:
+        if source.asset_type == "AUDIO":
+            version = db.get(AssetVersion, source.asset_version_id)
+            if version is None or not audio_in_scope(db, version, None):
+                raise DomainError(
+                    "SHORT_DRAMA_AUDIO_RIGHTS", "该配音的使用授权限于已确认的自动短剧", 409
+                )
     identity = uuid5(row.project_id, f"human-review/1:render:{row.id}")
     request = db.get(HumanReviewRequest, identity, populate_existing=True)
     if request is None:

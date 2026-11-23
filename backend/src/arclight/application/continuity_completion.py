@@ -57,7 +57,9 @@ def lock_selection_run(db: Session, project_id: UUID, version_id: UUID) -> None:
         db.get(WorkflowRun, work.run_id, populate_existing=True, with_for_update=True)
 
 
-def complete_selected_review(db: Session, record: ReviewContractRecord) -> None:
+def complete_selected_review(
+    db: Session, record: ReviewContractRecord, *, short_drama_run_id: UUID | None = None
+) -> None:
     """Called inside the Owner selection transaction, after admission and CAS checks."""
     review = record.review
     work = read_work(db, review.project_id, review.target.candidate_id)
@@ -100,12 +102,17 @@ def complete_selected_review(db: Session, record: ReviewContractRecord) -> None:
             "review_id": str(review.result_id),
             "candidate_id": str(review.target.candidate_id),
             "asset_version_id": str(version.id),
-            "reason": "OWNER_SELECTED_REVIEWED_IMAGE",
+            "reason": "SHORT_DRAMA_SELECTED_IMAGE"
+            if short_drama_run_id
+            else "OWNER_SELECTED_REVIEWED_IMAGE",
+            **({"short_drama_run_id": str(short_drama_run_id)} if short_drama_run_id else {}),
         },
     )
 
 
-def complete_selected_video_review(db: Session, record: VideoReviewRecord) -> None:
+def complete_selected_video_review(
+    db: Session, record: VideoReviewRecord, *, short_drama_run_id: UUID | None = None
+) -> None:
     from arclight.application.video_review_work import read_temporal_work
 
     report = record.report
@@ -128,7 +135,10 @@ def complete_selected_video_review(db: Session, record: VideoReviewRecord) -> No
             "review_id": str(report.report_id),
             "candidate_id": str(report.target.candidate_id),
             "asset_version_id": str(report.target.asset_version_id),
-            "reason": "OWNER_SELECTED_REVIEWED_VIDEO",
+            "reason": "SHORT_DRAMA_SELECTED_VIDEO"
+            if short_drama_run_id
+            else "OWNER_SELECTED_REVIEWED_VIDEO",
+            **({"short_drama_run_id": str(short_drama_run_id)} if short_drama_run_id else {}),
         },
     )
 

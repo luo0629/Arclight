@@ -203,6 +203,9 @@ def queue_answer(
 
     lock_gate(db)
     run = require_run(db, run_id, actor, lock=True)
+    from arclight.application.short_drama_budget import require_manual_workflow
+
+    require_manual_workflow(db, run.id)
     _enabled_actor(db, actor)
     validate_publication(db, run_id)
     loop = db.get(AgentLoop, loop_id)

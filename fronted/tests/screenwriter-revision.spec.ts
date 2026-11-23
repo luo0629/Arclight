@@ -70,9 +70,8 @@ test("creates a critiqued candidate, shows patch feedback and uses both original
     .getByRole("radio", { name: "创作、评价与局部修订", exact: true })
     .click();
   await page.getByLabel("最多自动修订轮数", { exact: true }).fill("2");
-  await page
-    .getByRole("button", { name: "请编剧开始创作", exact: true })
-    .click();
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await expect(
     page.getByText("等待审核：剧本版本", { exact: false }),
   ).toBeVisible({ timeout: 20000 });
@@ -127,9 +126,8 @@ test("retains exhausted issues and work across reload, then resumes the same run
     .getByRole("radio", { name: "创作、评价与局部修订", exact: true })
     .click();
   await page.getByLabel("最多自动修订轮数", { exact: true }).fill("1");
-  await page
-    .getByRole("button", { name: "请编剧开始创作", exact: true })
-    .click();
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   const work = page.getByRole("region", { name: "编剧计划与工作稿" });
   await expect(work.getByText(/编剧需要你的决定/)).toBeVisible({
     timeout: 20000,
@@ -225,9 +223,12 @@ test("starts professional Unicode paragraph rewrite at 390px and approves once w
   await page
     .getByRole("button", { name: "前往任务与审核", exact: true })
     .click();
+  await expect(page.locator(".task .status")).toHaveText("已完成", {
+    timeout: 20000,
+  });
   await expect(
-    page.getByText("等待审核：剧本版本", { exact: false }),
-  ).toBeVisible({ timeout: 20000 });
+    page.getByRole("button", { name: "批准并继续", exact: true }),
+  ).toHaveCount(0);
   const rows = await (
     await page.request.get(`/api/v1/episodes/${env.episode.id}/scripts`, {
       headers: env.headers,
@@ -241,10 +242,12 @@ test("starts professional Unicode paragraph rewrite at 390px and approves once w
     env.original.content_json.scenes.slice(1),
   );
   expect(rows[1].content_json).toEqual(env.original.content_json);
-  await page.getByRole("button", { name: "批准并继续", exact: true }).click();
-  await expect(page.locator(".task .status")).toHaveText("已完成", {
-    timeout: 20000,
-  });
+  await page.getByRole("radio", { name: "版本列表", exact: true }).click();
+  await page.locator(".version-row").filter({ hasText: "版本 2" }).click();
+  await page.getByRole("button", { name: "批准该版本", exact: true }).click();
+  await expect(page.locator(".inspector .section-heading .status")).toHaveText(
+    "已批准",
+  );
   expect(
     await (
       await page.request.get(`/api/v1/episodes/${env.episode.id}/storyboards`, {

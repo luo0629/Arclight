@@ -248,7 +248,7 @@ def revise_script(
         assert run is not None
         maximum = run.input_json["screenwriter"]["revision_rounds"]
         # The user's initial rewrite is distinct from subsequent repair rounds.
-        maximum += int(run.workflow_type == "script_rewrite")
+        maximum += int("rewrite_input" in run.input_json)
     previous: list[CritiqueIssue] = []
     for round_no in range(maximum + 1):
         outcome = _round(

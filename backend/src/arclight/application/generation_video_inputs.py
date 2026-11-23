@@ -45,7 +45,13 @@ def reference_inputs(inputs: list[dict]) -> list[dict]:
 
 
 def resolve_reference(
-    db: Session, project_id: UUID, episode_id: UUID | None, item: dict
+    db: Session,
+    project_id: UUID,
+    episode_id: UUID | None,
+    item: dict,
+    *,
+    short_drama_run_id: UUID | None = None,
+    shot_target: dict | None = None,
 ) -> tuple[dict, AssetVersion, StoredFile]:
     try:
         version_id = UUID(item["source_asset_version_id"])
@@ -60,7 +66,18 @@ def resolve_reference(
         or item.get("checksum") != version.checksum
     ):
         invalid()
-    if version.stale or version.status not in {"APPROVED", "LOCKED"} or asset.status == "ARCHIVED":
+    from arclight.application.short_drama_visuals import production_first_frame
+
+    production_frame = (
+        short_drama_run_id is not None
+        and shot_target is not None
+        and production_first_frame(db, project_id, version, short_drama_run_id, shot_target)
+    )
+    if (
+        version.stale
+        or asset.status in {"ARCHIVED", "STALE", "REJECTED"}
+        or (not production_frame and version.status not in {"APPROVED", "LOCKED"})
+    ):
         raise DomainError("ASSET_NOT_USABLE", "视频首帧必须已批准且有效", 409)
     scope = asset.metadata_json.get("usage_scope", {"kind": "PROJECT"})
     if not isinstance(scope, dict) or (
@@ -92,6 +109,7 @@ def resolve_reference(
         stored.rights_confirmed
         and media.get("rights_confirmed") is True
         or approved_concept_reference(db, version)
+        or production_frame
     ):
         raise DomainError("VIDEO_INPUT_RIGHTS_UNCONFIRMED", "视频首帧使用权尚未确认", 409)
     if (
@@ -170,12 +188,22 @@ def freeze_video_images(
     actor: str,
     episode_id: UUID | None,
     inputs: list[dict],
+    *,
+    short_drama_run_id: UUID | None = None,
+    shot_target: dict | None = None,
 ) -> list[dict]:
     references = reference_inputs(inputs)
     if not references:
         return []
     require_project(db, project_id, actor, write=True)
-    reference, version, stored = resolve_reference(db, project_id, episode_id, references[0])
+    reference, version, stored = resolve_reference(
+        db,
+        project_id,
+        episode_id,
+        references[0],
+        short_drama_run_id=short_drama_run_id,
+        shot_target=shot_target,
+    )
     read_image(db, reference, version, stored)
     return [reference]
 
@@ -200,7 +228,17 @@ def checked_references(
     if not references:
         return []
     require_project(db, job.project_id, job.created_by, write=True)
-    current, version, stored = resolve_reference(db, job.project_id, job.episode_id, references[0])
+    from arclight.application.short_drama_budget import root_for_job
+
+    root = root_for_job(db, job)
+    current, version, stored = resolve_reference(
+        db,
+        job.project_id,
+        job.episode_id,
+        references[0],
+        short_drama_run_id=root.id if root else None,
+        shot_target=snapshot["context"].get("continuity_review"),
+    )
     if frozen != [current]:
         invalid("视频首帧元数据、作用范围或文件身份已变化")
     return [(current, version, stored)]

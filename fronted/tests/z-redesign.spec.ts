@@ -510,7 +510,8 @@ test("新版页面截图：桌面各功能、专注画布、服务配置与手�
   await shot("comparison-desktop");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "开始创作", exact: true }).click();
-  await page.getByRole("button", { name: "请编剧开始创作" }).click();
+  await page.getByRole("button", { name: "分步制作", exact: true }).click();
+  await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await expect(
     page.getByText("等待审核：剧本版本", { exact: false }),
   ).toBeVisible({ timeout: 20000 });

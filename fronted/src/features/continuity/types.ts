@@ -79,6 +79,7 @@ export type ComparisonImage = {
 
 export type HumanReview = {
   id: string;
+  automatic_production_id: string | null;
   can_approve: boolean;
   request_sha256: string;
   status: "WAITING_REVIEW" | "DECIDED" | "RESUMED" | "BLOCKED";

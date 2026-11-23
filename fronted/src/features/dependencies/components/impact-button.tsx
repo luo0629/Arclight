@@ -37,9 +37,13 @@ export default function ImpactButton({
   onConfirm,
   children,
   disabled,
+  confirmedLabel = "确认影响并继续",
+  impactNote = "这里只确认影响范围，不会自动调用生成服务。依赖变化后须重新分析。",
   ...props
 }: {
   endpoint?: string;
+  confirmedLabel?: string;
+  impactNote?: string;
   onConfirm: (digest?: string) => Promise<unknown>;
 } & Omit<ComponentProps<typeof Button>, "onClick">) {
   const title = useId();
@@ -164,7 +168,7 @@ export default function ImpactButton({
             ))}
           </ul>
           <p className="text-sm text-muted-foreground">
-            这里只确认影响范围，不会自动调用生成服务。依赖变化后须重新分析。
+            {impactNote}
           </p>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -189,7 +193,7 @@ export default function ImpactButton({
                 });
               }}
             >
-              确认影响并继续
+              {confirmedLabel}
             </Button>
           </div>
         </Dialog>

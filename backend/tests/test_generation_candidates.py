@@ -38,8 +38,10 @@ from arclight.providers.media_query import QueryReceipt
 from arclight.providers.media_submission import MockMediaSubmissionProvider
 
 
-def generate(client, project_id, target=None, count=1):
+def generate(client, project_id, target=None, count=1, *, episode_id=None):
     body = payload(target)
+    if episode_id is not None:
+        body["episode_id"] = episode_id
     body["spec"]["batch_size"] = count
     body["spec"]["output_spec"] = {"width": 8, "height": 12, "format": "png"}
     job = capture_ok(client, project_id, body)

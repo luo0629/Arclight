@@ -225,13 +225,16 @@ export default function ScreenwriterProgress({
       clearTimeout(timer);
     };
   }, [run.id, run.status, run.revision, refresh, agent]);
+  const automatic = Boolean(run.automatic_production_id);
   const title =
     agent === "director" ? "导演计划与镜头工作稿" : "编剧计划与工作稿";
   return (
     <section aria-label={title} className="flex min-w-0 flex-col gap-3">
       <h4>{title}</h4>
       <p className="text-sm text-muted-foreground">
-        工作片段会逐段保存；完整候选通过校验后进入下方审核。
+        {automatic
+          ? "工作片段会逐段保存，完整候选由短剧制作流程检查。"
+          : "工作片段会逐段保存，完整候选通过校验后进入下方审核。"}
       </p>
       {data?.art_opinion_request && (
         <Notice>
@@ -270,7 +273,9 @@ export default function ScreenwriterProgress({
               : operation.status === "WAITING_HUMAN"
                 ? run.status === "CANCELLED"
                   ? "已停止"
-                  : "等待回答"
+                  : automatic
+                    ? "已暂停"
+                    : "等待回答"
                 : operation.status === "STOPPED"
                   ? "已停止"
                   : operation.status === "RECOVERY_REQUIRED"
@@ -278,10 +283,13 @@ export default function ScreenwriterProgress({
                     : "创作中"}
           </summary>
           <div className="flex flex-col gap-3 py-3">
-            {operation.revision && <RevisionDetails operation={operation} />}
+            {operation.revision && (
+              <RevisionDetails operation={operation} automatic={automatic} />
+            )}
             {operation.director_revision && (
               <DirectorRevisionDetails
                 revision={operation.director_revision}
+                automatic={automatic}
                 decision={operation.result?.decision}
                 reason={operation.result?.reason}
                 checks={(operation.observations ?? [])
@@ -460,10 +468,12 @@ export default function ScreenwriterProgress({
             {operation.stop_code && (
               <Notice>
                 停止原因：{operation.stop_code}
-                。可使用本任务的重试入口；已有成功片段会保留。
+                {automatic
+                  ? "。请在短剧制作进度查看当前结果。"
+                  : "。可使用本任务的重试入口，已有成功片段会保留。"}
               </Notice>
             )}
-            {operation.human_request && (
+            {!automatic && operation.human_request && (
               <AgentAnswer
                 key={operation.question_id}
                 operation={operation}
@@ -516,7 +526,13 @@ const categories: Record<string, string> = {
   SETTING: "设定",
   DETERMINISTIC: "规则检查",
 };
-function RevisionDetails({ operation }: { operation: Operation }) {
+function RevisionDetails({
+  operation,
+  automatic,
+}: {
+  operation: Operation;
+  automatic: boolean;
+}) {
   const revision = operation.revision!;
   const issues = operation.result?.issues ?? revision.previous_issues;
   const projections = revision.narrative_projections ?? [];
@@ -575,10 +591,14 @@ function RevisionDetails({ operation }: { operation: Operation }) {
       {operation.result?.decision && (
         <p>
           {operation.result.decision === "ACCEPT"
-            ? "评价与规则检查通过，交完整稿审核。"
+            ? automatic
+              ? "评价与规则检查通过，交短剧制作流程处理。"
+              : "评价与规则检查通过，交完整稿审核。"
             : operation.result.decision === "REVISE"
               ? "已采用范围内补丁，继续检查。"
-              : "保留问题，请你决定。"}
+              : automatic
+                ? "本轮仍有待处理问题。"
+                : "保留问题，请你决定。"}
         </p>
       )}
       {issues.length > 0 && (

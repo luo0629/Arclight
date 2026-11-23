@@ -322,6 +322,7 @@ export async function renderFixture(page: Page) {
     versionId: string,
   ): HumanReview => ({
     id: id(),
+    automatic_production_id: null,
     project_id: project.id,
     requested_by: session.user.id,
     request_sha256: hash(versionId + kind),

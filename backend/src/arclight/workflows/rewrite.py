@@ -36,6 +36,7 @@ def build_rewrite_graph(
     checkpointer,
     generate: Callable[[dict], dict],
     *,
+    draft_only: bool = False,
     contexts: dict[str, dict] | None = None,
     agent_scope: AgentRunScope | None = None,
     agent_state_seed: AgentRunState | dict | None = None,
@@ -105,8 +106,8 @@ def build_rewrite_graph(
                 state,
                 step_id="rewrite",
                 target="SUCCEEDED",
-                next_step_id="script_review",
-                next_step_status="WAITING_REVIEW",
+                next_step_id=None if draft_only else "script_review",
+                next_step_status=None if draft_only else "WAITING_REVIEW",
                 draft_id=identity,
             ),
         }
@@ -126,8 +127,11 @@ def build_rewrite_graph(
 
     graph = StateGraph(RewriteState)
     graph.add_node("rewrite", rewrite)
-    graph.add_node("script_review", review)
     graph.add_edge(START, "rewrite")
+    if draft_only:
+        graph.add_edge("rewrite", END)
+        return graph.compile(checkpointer=checkpointer)
+    graph.add_node("script_review", review)
     graph.add_edge("rewrite", "script_review")
     graph.add_edge("script_review", END)
     return graph.compile(checkpointer=checkpointer)

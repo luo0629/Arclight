@@ -16,9 +16,10 @@ from arclight.application.director_creation import creation_attempt
 from arclight.application.director_performance import director_contracts, require_performance_script
 from arclight.application.director_validation import check_work, publication_content, revision_input
 from arclight.application.screenwriter_creation import creation_loops, operation
+from arclight.application.short_drama_director import director_model_input
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
+from arclight.domain.agent_model import AgentModelRequest
 from arclight.domain.agent_runtime import AgentLoopResult, HumanDecisionRequest
 from arclight.domain.director_collaboration import (
     COLLABORATION_PROMPT,
@@ -170,6 +171,12 @@ def _round(
                 checks=checks,
                 previous_reason=previous,
             )
+            prompt, messages = director_model_input(
+                db,
+                run,
+                contracts.revision_prompt + (COLLABORATION_PROMPT if collaborative else ""),
+                seed.model_dump(mode="json"),
+            )
             request = AgentModelRequest(
                 run_id=run.id,
                 agent_name="director",
@@ -178,9 +185,8 @@ def _round(
                 agent_version=run.workflow_version,
                 prompt_version=contracts.revision_version,
                 result_schema_version=contracts.revision_version,
-                system_instruction=contracts.revision_prompt
-                + (COLLABORATION_PROMPT if collaborative else ""),
-                messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
+                system_instruction=prompt,
+                messages=messages,
                 max_tokens=8000,
             )
             if human:

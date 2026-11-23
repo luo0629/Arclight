@@ -435,7 +435,8 @@ function Progress({
                               </Link>
                             </Button>
                           )}
-                        {!task.child_run_id &&
+                        {!run.automatic_production_id &&
+                          !task.child_run_id &&
                           plan.plan_id === latestPlan?.plan_id && (
                             <Button
                               variant="outline"
@@ -491,17 +492,19 @@ function Progress({
                       <p className="text-sm text-muted-foreground">
                         {operation.human_request.reason}
                       </p>
-                      <AgentAnswer
-                        key={operation.question_id ?? operation.loop_id}
-                        operation={operation}
-                        run={run}
-                        disabled={
-                          locked || !data.can_operate || !operation.can_answer
-                        }
-                        canStop={operation.can_answer}
-                        submit={(value) => answer(operation, value)}
-                        stop={() => answer(operation)}
-                      />
+                      {!run.automatic_production_id && (
+                        <AgentAnswer
+                          key={operation.question_id ?? operation.loop_id}
+                          operation={operation}
+                          run={run}
+                          disabled={
+                            locked || !data.can_operate || !operation.can_answer
+                          }
+                          canStop={operation.can_answer}
+                          submit={(value) => answer(operation, value)}
+                          stop={() => answer(operation)}
+                        />
+                      )}
                       {!operation.can_answer && (
                         <p className="text-xs text-muted-foreground">
                           问题已处理或当前只可查看。
@@ -512,7 +515,7 @@ function Progress({
               </section>
             ))}
           </div>
-          {latestPlan && (
+          {latestPlan && !run.automatic_production_id && (
             <form
               className="flex flex-col gap-3 border-t pt-4"
               onSubmit={(event) => {

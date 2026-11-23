@@ -30,9 +30,11 @@ TaskStatus = Literal[
 ]
 WorkflowType = Literal[
     "script_storyboard",
+    "script_draft",
     "script",
     "storyboard",
     "script_rewrite",
+    "script_rewrite_draft",
     "story_analysis",
     "story_outline",
     "art_proposal",

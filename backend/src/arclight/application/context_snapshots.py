@@ -24,6 +24,7 @@ from arclight.domain.context import (
     check_size,
 )
 from arclight.domain.context_trace import TRACE_VERSION
+from arclight.domain.script_drafts import REWRITE_WORKFLOWS, SCRIPT_DRAFT, SCRIPT_REWRITE_DRAFT
 from arclight.domain.versions import digest
 from arclight.persistence.models import (
     DependencyManifest,
@@ -36,10 +37,12 @@ from arclight.persistence.models import (
 STAGES = {
     "producer": ("producer",),
     "script_storyboard": ("script", "storyboard"),
+    SCRIPT_DRAFT: ("script",),
     "storyboard": ("storyboard",),
     "art_proposal": ("storyboard",),
     "continuity_review": ("storyboard",),
     "script_rewrite": ("rewrite",),
+    SCRIPT_REWRITE_DRAFT: ("rewrite",),
     "story_analysis": ("analyze",),
     "story_outline": ("outline",),
 }
@@ -93,7 +96,7 @@ def capture_contexts(
     assert project is not None
     actor = actor or project.owner_id
     script_id = run.input_json.get("script_version_id")
-    if run.workflow_type == "script_rewrite":
+    if run.workflow_type in REWRITE_WORKFLOWS:
         script_id = run.input_json["rewrite_input"]["request"]["base_version_id"]
     contexts = {}
     for stage in STAGES[run.workflow_type]:

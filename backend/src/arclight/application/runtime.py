@@ -28,6 +28,12 @@ from arclight.domain.agent_state import (
     transition_agent_step,
 )
 from arclight.domain.enums import RunStatus
+from arclight.domain.script_drafts import (
+    DRAFT_WORKFLOWS,
+    REWRITE_WORKFLOWS,
+    SCRIPT_DRAFT,
+    SCRIPT_REWRITE_DRAFT,
+)
 from arclight.persistence.models import Episode, WorkflowRun
 from arclight.providers.context import bind_contexts
 from arclight.providers.text import build_provider
@@ -69,8 +75,9 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
             from arclight.application.art_execution import execute_art as execute
         elif kind == "storyboard" and "director" in inputs:
             from arclight.application.director_execution import execute_director as execute
-        elif kind in {"script_storyboard", "story_outline", "script_rewrite"} and (
-            "screenwriter" in inputs
+        elif (
+            kind in {"script_storyboard", "story_outline", "script_rewrite", *DRAFT_WORKFLOWS}
+            and "screenwriter" in inputs
         ):
             from arclight.application.screenwriter_execution import execute_screenwriter as execute
         else:
@@ -178,12 +185,15 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 return
             standard_version = {
                 "script_storyboard": WORKFLOW_VERSION,
+                SCRIPT_DRAFT: WORKFLOW_VERSION,
                 "storyboard": DIRECTOR_WORKFLOW_VERSION,
                 "script_rewrite": REWRITE_VERSION,
+                SCRIPT_REWRITE_DRAFT: REWRITE_VERSION,
             }.get(run.workflow_type)
             if standard_version is None or run.workflow_version != standard_version:
                 raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "工作流版本不兼容", 409)
-            rewrite = run.workflow_type == "script_rewrite"
+            rewrite = run.workflow_type in REWRITE_WORKFLOWS
+            draft_only = run.workflow_type in DRAFT_WORKFLOWS
             director_only = run.workflow_type == "storyboard"
             run.status = RunStatus.RUNNING
             # 不提前 flush：SQLite 的测试模式不允许跨连接同时写业务数据库。
@@ -212,6 +222,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                             run_settings(settings, run.input_json.get("_text_service"), db),
                             contexts,
                         ),
+                        draft_only=draft_only,
                         contexts=contexts,
                         agent_scope=agent_scope,
                         agent_state_seed=agent_state,
@@ -228,6 +239,7 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                         artifacts,
                         saver,
                         director_only=director_only,
+                        draft_only=draft_only,
                         contexts=contexts,
                         agent_scope=agent_scope,
                         agent_state_seed=agent_state,
@@ -305,13 +317,20 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     pause_for_run(db, run)
                     emit(db, run, "workflow.waiting_review", run.pending_review)
                 else:
-                    approved = snapshot.values.get(
-                        "script_approved" if rewrite else "storyboard_approved",
+                    complete = snapshot.values.get(
+                        "script_version_id"
+                        if draft_only
+                        else "script_approved"
+                        if rewrite
+                        else "storyboard_approved",
                         False,
                     )
-                    run.status = RunStatus.SUCCEEDED if approved else RunStatus.REJECTED
+                    run.status = RunStatus.SUCCEEDED if complete else RunStatus.REJECTED
                     run.pending_review = None
-                    emit(db, run, "workflow.finished", {"status": run.status})
+                    receipt: dict[str, str] = {"status": run.status}
+                    if draft_only and complete:
+                        receipt["script_version_id"] = str(complete)
+                    emit(db, run, "workflow.finished", receipt)
         except Exception as exc:
             if isinstance(exc, DomainError) and exc.code == "PRODUCER_PAUSED":
                 from arclight.application.agent_workflows import WorkflowExecutionDeferred

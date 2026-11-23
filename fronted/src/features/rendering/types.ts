@@ -362,6 +362,7 @@ export type ReviewResume = {
 };
 export type HumanReview = {
   id: string;
+  automatic_production_id: string | null;
   created_at: string;
   updated_at: string;
   project_id: string;

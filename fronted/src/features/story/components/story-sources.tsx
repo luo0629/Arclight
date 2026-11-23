@@ -180,7 +180,7 @@ export default function StorySources({
       runKey.current = { sourceId: detail.id, key: crypto.randomUUID() };
     try {
       await api(`/episodes/${episodeId}/script-runs`, {
-        ...json("POST", { source_id: detail.id }),
+        ...json("POST", { source_id: detail.id, purpose: "EDITABLE_DRAFT" }),
         headers: { "Idempotency-Key": runKey.current.key },
       });
       if (!live.current) return;

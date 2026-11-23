@@ -172,6 +172,7 @@ export type Episode = {
 export type ContentVersion = {
   id: string;
   episode_id: string;
+  automatic_production_id?: string | null;
   version_no: number;
   content_json: Record<string, unknown>;
   status: string;
@@ -179,6 +180,7 @@ export type ContentVersion = {
   script_version_id?: string;
 };
 export type Run = {
+  automatic_production_id?: string | null;
   workflow_version?: string;
   episode_id: string;
   workflow_type: string;
@@ -207,6 +209,16 @@ export type Member = {
   display_name: string;
   role: "editor" | "viewer";
 };
+export type CanvasSceneShot = {
+  id: string;
+  shot_no: number;
+  description: string;
+  status: string;
+  error_code?: string | null;
+  media_node_id?: string;
+  cover_node_id?: string | null;
+};
+
 export type GraphNode = {
   id: string;
   kind: string;
@@ -229,6 +241,10 @@ export type GraphNode = {
   media_type?: string;
   media_episode_id?: string;
   delivery_id?: string;
+  script_version_id?: string;
+  scene_id?: string;
+  scene_no?: number;
+  shots?: CanvasSceneShot[];
 };
 export type Layout = {
   revision: number;

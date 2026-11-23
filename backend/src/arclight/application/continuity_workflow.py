@@ -137,6 +137,15 @@ def start_candidate_review(
         raise DomainError("NOT_FOUND", "生成候选不存在", 404)
     job = db.get(GenerationJob, candidate.job_id)
     assert job is not None
+    from arclight.application.short_drama_budget import root_for_job
+
+    automatic = root_for_job(db, job)
+    if (
+        automatic is not None
+        and automatic.status == "RUNNING"
+        and producer_parent_run_id != automatic.id
+    ):
+        raise DomainError("SHORT_DRAMA_REVIEW_SCOPE", "短剧制作运行正在负责审查本镜头候选", 409)
     if job.target_type == "VIDEO":
         from arclight.application.video_review_work import start_temporal_review
 
@@ -343,6 +352,7 @@ def queue_pending_reviews(
     factory: sessionmaker[Session], settings: Settings, limit: int = 100
 ) -> int:
     """Candidate rows are durable intake facts; a lost dispatch never loses a review."""
+    from arclight.application.short_drama_budget import MEDIA_SCOPE
     from arclight.application.video_review_work import read_temporal_work
     from arclight.domain.video_temporal_reviewer import TEMPORAL_WORK_RESOURCE
 
@@ -373,6 +383,13 @@ def queue_pending_reviews(
                 )
                 .where(
                     blocked.id.is_(None),
+                    ~select(VersionBinding.id)
+                    .where(
+                        VersionBinding.project_id == GenerationJob.project_id,
+                        VersionBinding.resource_type == MEDIA_SCOPE,
+                        VersionBinding.resource_id == GenerationJob.id,
+                    )
+                    .exists(),
                     GenerationJob.target_type.in_(["SHOT_IMAGE", "VIDEO"]),
                     GenerationCandidate.asset_version_id.is_not(None),
                     current_work.id.is_(None),

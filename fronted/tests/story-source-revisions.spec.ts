@@ -129,7 +129,18 @@ test("saves original text, appends a revision, opens old bytes and exact writer 
   await page
     .getByRole("button", { name: "导入 1 · 故事.txt", exact: true })
     .click();
-  await expect(page.getByLabel("此版本的派生记录")).toContainText("编剧与分镜");
+  const lineage = page.getByRole("region", {
+    name: "此版本的派生记录",
+    exact: true,
+  });
+  await expect(lineage).toContainText("剧本草稿");
+  await expect(lineage).toContainText("已生成剧本");
+  const boards = await page.request.get(
+    `/api/v1/episodes/${env.episode.id}/storyboards`,
+    { headers: env.headers },
+  );
+  expect(boards.status()).toBe(200);
+  expect(await boards.json()).toEqual([]);
 });
 
 test("lost save receipt reuses its key, retains input and only appends once", async ({

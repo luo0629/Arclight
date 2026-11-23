@@ -137,10 +137,17 @@ def review_blocker(db: Session, row: HumanReviewRequest) -> str | None:
     if episode is not None and episode.status == "ARCHIVED":
         return "EPISODE_ARCHIVED"
     try:
+        require_manual_review(db, row)
         _current(db, row, handlers())
     except DomainError as exc:
         return exc.code
     return None
+
+
+def require_manual_review(db: Session, row: HumanReviewRequest) -> None:
+    from arclight.application.short_drama_budget import require_manual_workflow
+
+    require_manual_workflow(db, row.run_id)
 
 
 def request_review(
@@ -200,6 +207,7 @@ def submit_decision(
 ) -> HumanReviewDecision:
     decision = HumanDecision.model_validate(decision.model_dump(mode="json"))
     row = require_review(db, request_id, actor)
+    require_manual_review(db, row)
     require_review_authority(db, row, actor, owner=True)
     snapshot = ReviewSnapshot.model_validate(row.snapshot_json)
     if decision.narrative_content is not None and snapshot.kind != "NARRATIVE":
@@ -288,6 +296,7 @@ def resume_review(
 ) -> HumanReviewResume:
     payload = ReviewResume.model_validate(payload.model_dump(mode="json"))
     row = require_review(db, request_id, actor)
+    require_manual_review(db, row)
     require_review_authority(db, row, actor, owner=True)
     decision = db.scalar(
         select(HumanReviewDecision).where(HumanReviewDecision.request_id == row.id)

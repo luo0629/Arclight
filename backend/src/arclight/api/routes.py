@@ -146,6 +146,7 @@ def create_script_run(
         outline_version_id=payload.outline_version_id,
         source_id=payload.source_id,
         narrative=payload.narrative,
+        purpose=payload.purpose,
         professional=payload.professional,
         agent_limits=payload.agent_limits,
         revision_rounds=payload.revision_rounds,
@@ -282,17 +283,23 @@ def get_dialogue_lines(
 def get_storyboards(
     episode_id: UUID, db: Database, actor: Actor, limit: Limit = 20, offset: Offset = 0
 ) -> list[StoryboardRead]:
+    from arclight.application.short_drama_budget import root_for_workflow
+
     require_episode(db, episode_id, actor)
-    return [
-        StoryboardRead.model_validate(row)
-        for row in db.scalars(
-            select(Storyboard)
-            .where(Storyboard.episode_id == episode_id)
-            .order_by(Storyboard.version_no.desc())
-            .limit(limit)
-            .offset(offset)
-        )
-    ]
+    result = []
+    for row in db.scalars(
+        select(Storyboard)
+        .where(Storyboard.episode_id == episode_id)
+        .order_by(Storyboard.version_no.desc())
+        .limit(limit)
+        .offset(offset)
+    ):
+        item = StoryboardRead.model_validate(row)
+        root = root_for_workflow(db, row.run_id)
+        if root is not None:
+            item.automatic_production_id = root.id
+        result.append(item)
+    return result
 
 
 @router.get("/episodes/{episode_id}/shots", tags=["storyboards"])

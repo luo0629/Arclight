@@ -112,7 +112,8 @@ export default function Tasks({
     decision?: string,
     impact_digest?: string,
   ) {
-    if (run.workflow_type === "producer") return false;
+    if (run.workflow_type === "producer" || run.automatic_production_id)
+      return false;
     const versionId = reviewVersionId(run);
     const input = reviewInputs[versionId] ?? { intentOnly: false, comment: "" };
     const payload =
@@ -182,7 +183,7 @@ export default function Tasks({
       <PagePanel
         eyebrow="每一步都有迹可循"
         title="创作任务与审核"
-        description="创作会在后台继续，不必一直等待。生成完成后，由项目拥有者确认每一版剧本与分镜。"
+        description="查看后台创作进度、执行记录与待处理的审核。"
       >
         {pinError && <Notice tone="error">{pinError}</Notice>}
         {visibleRuns.length === 0 ? (
@@ -204,20 +205,26 @@ export default function Tasks({
                 <div className="task-heading flex flex-wrap items-center justify-between gap-2">
                   <strong>
                     {run.workflow_type === "producer"
-                      ? "Producer 生产协作"
+                      ? run.automatic_production_id
+                        ? "短剧自动制作"
+                        : "Producer 生产协作"
                       : run.workflow_type === "continuity_review"
                         ? "画面连续性审查"
                         : run.workflow_type === "art_proposal"
                           ? "美术提案生成"
-                          : run.workflow_type === "script_rewrite"
+                          : ["script_rewrite", "script_rewrite_draft"].includes(
+                                run.workflow_type,
+                              )
                             ? "剧本局部改写"
-                            : run.workflow_type === "story_outline"
-                              ? "分集大纲"
-                              : run.workflow_type === "story_analysis"
-                                ? "故事提炼"
-                                : run.workflow_type === "storyboard"
-                                  ? "分镜创作"
-                                  : "剧本与分镜创作"}
+                            : run.workflow_type === "script_draft"
+                              ? "剧本草稿"
+                              : run.workflow_type === "story_outline"
+                                ? "分集大纲"
+                                : run.workflow_type === "story_analysis"
+                                  ? "故事提炼"
+                                  : run.workflow_type === "storyboard"
+                                    ? "分镜创作"
+                                    : "剧本与分镜创作"}
                   </strong>
                   <StatusBadge status={run.status} />
                 </div>
@@ -228,7 +235,9 @@ export default function Tasks({
                   <ProducerProgress
                     projectId={projectId}
                     run={run}
-                    writable={writable}
+                    writable={
+                      writable && (!run.automatic_production_id || owner)
+                    }
                     busy={busy}
                     reload={reload}
                   />
@@ -249,7 +258,7 @@ export default function Tasks({
                 ].includes(run.workflow_version ?? "") && (
                   <ScreenwriterProgress
                     run={run}
-                    writable={writable}
+                    writable={writable && !run.automatic_production_id}
                     busy={busy}
                     act={act}
                     reload={reload}
@@ -270,7 +279,7 @@ export default function Tasks({
                   <ScreenwriterProgress
                     agent="director"
                     run={run}
-                    writable={writable}
+                    writable={writable && !run.automatic_production_id}
                     busy={busy}
                     act={act}
                     reload={reload}
@@ -279,7 +288,7 @@ export default function Tasks({
                 {run.workflow_type === "art_proposal" && (
                   <ArtProgress
                     run={run}
-                    writable={writable}
+                    writable={writable && !run.automatic_production_id}
                     busy={busy}
                     act={act}
                     reload={reload}
@@ -291,7 +300,13 @@ export default function Tasks({
                       {runErrorMessage(run.error_code)}
                     </Notice>
                   )}
-                {run.pending_review &&
+                {run.automatic_production_id && run.pending_review && (
+                  <p className="text-sm text-muted-foreground">
+                    本环节由短剧制作流程处理。
+                  </p>
+                )}
+                {!run.automatic_production_id &&
+                  run.pending_review &&
                   ["script", "storyboard"].includes(
                     run.pending_review.resource_type,
                   ) &&
@@ -306,6 +321,7 @@ export default function Tasks({
                   )}
                 {owner &&
                   writable &&
+                  !run.automatic_production_id &&
                   run.pending_review &&
                   ["script", "storyboard"].includes(
                     run.pending_review.resource_type,
@@ -409,15 +425,16 @@ export default function Tasks({
                       </div>
                     </>
                   )}
-                {run.pending_review?.resource_type === "continuity_review" && (
-                  <p className="text-sm text-muted-foreground">
-                    {run.pending_review.destination === "REVISION_REQUIRED"
-                      ? "画面需要局部修订，请在素材审查页处理。"
-                      : run.pending_review.destination === "READY_FOR_REVIEW"
-                        ? "审查已完成，等待人工批准并选用素材。"
-                        : "审查已暂停，请在素材审查页处理人工决定。"}
-                  </p>
-                )}
+                {!run.automatic_production_id &&
+                  run.pending_review?.resource_type === "continuity_review" && (
+                    <p className="text-sm text-muted-foreground">
+                      {run.pending_review.destination === "REVISION_REQUIRED"
+                        ? "画面需要局部修订，请在素材审查页处理。"
+                        : run.pending_review.destination === "READY_FOR_REVIEW"
+                          ? "审查已完成，等待人工批准并选用素材。"
+                          : "审查已暂停，请在素材审查页处理人工决定。"}
+                    </p>
+                  )}
                 {run.pending_review?.resource_type === "script" && (
                   <CharacterMatching
                     episodeId={run.episode_id}
@@ -429,6 +446,7 @@ export default function Tasks({
                 )}
                 <div className="button-row flex flex-wrap items-center gap-2">
                   {writable &&
+                    !run.automatic_production_id &&
                     run.workflow_type !== "producer" &&
                     ["QUEUED", "WAITING_REVIEW"].includes(run.status) && (
                       <Button
@@ -444,6 +462,7 @@ export default function Tasks({
                       </Button>
                     )}
                   {writable &&
+                    !run.automatic_production_id &&
                     run.status === "FAILED" &&
                     !["art_proposal", "producer"].includes(
                       run.workflow_type,
@@ -458,6 +477,7 @@ export default function Tasks({
                       </Button>
                     )}
                   {writable &&
+                    !run.automatic_production_id &&
                     run.workflow_type !== "producer" &&
                     run.status === "FAILED" && (
                       <Button
@@ -479,6 +499,7 @@ export default function Tasks({
                   </Button>
                 </div>
                 {writable &&
+                  !run.automatic_production_id &&
                   run.workflow_type !== "producer" &&
                   run.status === "FAILED" && (
                     <p className="text-xs text-muted-foreground">
