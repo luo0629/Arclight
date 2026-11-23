@@ -1073,7 +1073,8 @@ test("SERIES-05 previews the later episode before confirming a plan revision", a
   });
   await expect(dialog).toContainText("第 2 集");
   await expect(dialog).toContainText("读取的全剧规划有变化");
-  await expect(dialog).toContainText(script.id);
+  await expect(dialog).toContainText(`v${script.version_no}`);
+  await expect(dialog).not.toContainText(script.id);
   await dialog.getByRole("button", { name: "取消变更", exact: true }).click();
   await expect(dialog).toHaveCount(0);
   const read = () =>

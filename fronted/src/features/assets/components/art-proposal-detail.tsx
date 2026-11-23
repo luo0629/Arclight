@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -9,7 +10,9 @@ import { ChoiceSelect } from "@/components/choice-select";
 import { Notice } from "@/components/ui-kit";
 import ListPagination from "@/components/shared/list-pagination";
 import VersionImage from "./version-image";
+import ExactAssetLink from "./exact-asset-link";
 import usePagedList from "@/hooks/use-paged-list";
+import { episodePath } from "@/lib/routes";
 import {
   artKinds,
   artStatus,
@@ -18,6 +21,12 @@ import {
   type ArtRecord,
   type ArtVersion,
 } from "@/features/assets/types/art-proposals";
+
+const sourceLabels = {
+  SCRIPT: "剧本",
+  VISUAL_BIBLE: "视觉规范",
+  ASSET_VERSION: "视觉资产",
+};
 
 export default function ArtProposalDetail({
   row,
@@ -56,6 +65,12 @@ export default function ArtProposalDetail({
   const option = proposal.options.find((option) => option.option_id === chosen);
   const changes =
     report.options.find((option) => option.option_id === chosen)?.changes ?? [];
+  const referenceNumbers = new Map(
+    proposal.references?.map((reference, index) => [
+      reference.reference_id,
+      index + 1,
+    ]),
+  );
   const historical = row.version.version_no !== row.current_version_no;
   const waiting =
     row.review?.status === "WAITING_REVIEW" && !historical && !row.archived;
@@ -156,9 +171,22 @@ export default function ArtProposalDetail({
             key={source.source_id}
             className="break-words text-sm text-muted-foreground"
           >
-            {source.kind === "MANUAL"
-              ? source.statement
-              : `精确${source.resource_type}版本：${source.resource_id}`}
+            {source.kind === "MANUAL" ? (
+              source.statement
+            ) : source.resource_type === "SCRIPT" && proposal.episode_id ? (
+              <Link
+                className="underline underline-offset-4"
+                href={
+                  episodePath(row.project_id, proposal.episode_id, "list") +
+                  "&node=" +
+                  encodeURIComponent("script:" + source.resource_id)
+                }
+              >
+                查看来源剧本
+              </Link>
+            ) : (
+              `来源：${sourceLabels[source.resource_type]}的已登记版本`
+            )}
           </p>
         ))}
         {proposal.constraints?.map((text) => (
@@ -166,14 +194,20 @@ export default function ArtProposalDetail({
             {text}
           </p>
         ))}
-        {proposal.references?.map((reference) => (
+        {proposal.references?.map((reference, index) => (
           <div
             key={reference.reference_id}
             className="flex min-w-0 flex-col gap-2"
           >
             <p className="break-words text-sm">
-              参考用途：{reference.purpose} · 精确版本{" "}
-              {reference.asset.asset_version_id}
+              参考图 {index + 1} · {reference.purpose}
+              {" · "}
+              <ExactAssetLink
+                projectId={row.project_id}
+                reference={reference.asset}
+              >
+                查看图片版本
+              </ExactAssetLink>
             </p>
             <VersionImage
               path={`/projects/${row.project_id}/assets/${reference.asset.asset_id}/versions/${reference.asset.asset_version_id}/image`}
@@ -231,8 +265,14 @@ export default function ArtProposalDetail({
         )}
         {changes.map((change) => {
           const key = change.design_id + ":" + change.field_path;
-          const label =
-            artKinds[change.target_type] + " / " + changeLabel(change);
+          const referenceNumber = referenceNumbers.get(change.design_id);
+          const label = [
+            artKinds[change.target_type],
+            referenceNumber ? `参考图 ${referenceNumber}` : null,
+            changeLabel(change),
+          ]
+            .filter(Boolean)
+            .join(" / ");
           return (
             <div key={key} className="min-w-0 border-t pt-3">
               <div className="flex flex-wrap items-center gap-2">
@@ -247,13 +287,13 @@ export default function ArtProposalDetail({
                 <div className="min-w-0">
                   <dt className="text-muted-foreground">当前内容</dt>
                   <dd className="whitespace-pre-wrap break-words">
-                    {valueText(change.before)}
+                    {valueText(change.before, change.field_path)}
                   </dd>
                 </div>
                 <div className="min-w-0">
                   <dt className="text-muted-foreground">提议内容</dt>
                   <dd className="whitespace-pre-wrap break-words">
-                    {valueText(change.proposed)}
+                    {valueText(change.proposed, change.field_path)}
                   </dd>
                 </div>
               </dl>
@@ -348,15 +388,13 @@ export default function ArtProposalDetail({
             ? "批准"
             : "拒绝"}
           意见：{row.review.decision.decision_json.comment || "未填写意见"} ·{" "}
-          {new Date(row.review.decision.created_at).toLocaleString()} · 操作者{" "}
-          {row.review.decision.actor_id}
+          {new Date(row.review.decision.created_at).toLocaleString()}
         </Notice>
       )}
       {row.outputs.map((output) => (
         <Notice key={output.id} tone="success">
           已生成{artKinds[output.target_type]}正式版本 · 修订{" "}
-          {output.version_no} · 版本{" "}
-          {output.visual_bible_version_id ?? output.id}
+          {output.version_no}
         </Notice>
       ))}
     </article>

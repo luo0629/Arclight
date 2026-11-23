@@ -61,12 +61,26 @@ test("RENDER-12：预览清单绑定精确时间轴，重复点击只提交一�
     gate.release();
   }
   await expect.poll(() => env.jobs.length).toBe(1);
-  await expect(panel.getByLabel("当前渲染任务", { exact: true })).toContainText(
-    env.jobs[0].id,
+  const [job] = env.jobs;
+  const current = panel.getByLabel("当前渲染任务", { exact: true });
+  await expect(current.getByRole("heading", { level: 4 })).toHaveText(
+    "排队中 · 0%",
   );
+  await expect(current).not.toContainText(job.id);
+  await expect
+    .poll(() =>
+      env.reads.some(
+        (url) =>
+          new URL(url).pathname === `/api/v1/render-jobs/${job.id}/attempts`,
+      ),
+    )
+    .toBe(true);
   expect(
-    env.mutations.filter((row) => row.path.endsWith("/jobs"))[0].path,
-  ).toBe(`/api/v1/render-manifests/${frozen.id}/jobs`);
+    env.mutations.filter((row) => row.path.endsWith("/jobs"))[0],
+  ).toMatchObject({
+    path: `/api/v1/render-manifests/${frozen.id}/jobs`,
+    body: { creation_key: expect.stringMatching(/^[0-9a-f-]{36}$/) },
+  });
 });
 
 test("RENDER-12：存储受限时提交结果未知仍同键重试，刷新恢复持久任务", async ({
@@ -88,7 +102,7 @@ test("RENDER-12：存储受限时提交结果未知仍同键重试，刷新恢�
     };
   });
   env.control.jobNetworkFailure = true;
-  let panel = await env.open();
+  const panel = await env.open();
   await panel.getByRole("button", { name: "提交渲染", exact: true }).click();
   await expect(panel.getByRole("alert")).toContainText("网络");
   await panel.getByRole("button", { name: "提交渲染", exact: true }).click();
@@ -99,16 +113,34 @@ test("RENDER-12：存储受限时提交结果未知仍同键重试，刷新恢�
     .toBe(2);
   const submitted = env.mutations.filter((row) => row.path.endsWith("/jobs"));
   expect(submitted).toHaveLength(2);
-  expect(submitted[1].body).toEqual(submitted[0].body);
+  expect(submitted[0].path).toBe(
+    `/api/v1/render-manifests/${env.manifests[0].id}/jobs`,
+  );
+  expect(submitted[1]).toEqual(submitted[0]);
   expect(env.jobs).toHaveLength(1);
-  await expect(panel.getByLabel("当前渲染任务", { exact: true })).toContainText(
-    env.jobs[0].id,
-  );
+  const [job] = env.jobs;
+  const current = panel.getByLabel("当前渲染任务", { exact: true });
+  const heading = current.getByRole("heading", { level: 4 });
+  const attemptsPath = `/api/v1/render-jobs/${job.id}/attempts`;
+  await expect(heading).toHaveText("排队中 · 0%");
+  await expect
+    .poll(() => env.reads.some((url) => new URL(url).pathname === attemptsPath))
+    .toBe(true);
+
+  const readsBeforeReload = env.reads.length;
   await page.reload();
-  panel = page.getByRole("region", { name: "渲染与成片", exact: true });
-  await expect(panel.getByLabel("当前渲染任务", { exact: true })).toContainText(
-    env.jobs[0].id,
-  );
+  await expect(heading).toHaveText("排队中 · 0%");
+  await expect(current).not.toContainText(job.id);
+  await expect
+    .poll(() =>
+      env.reads
+        .slice(readsBeforeReload)
+        .some((url) => new URL(url).pathname === attemptsPath),
+    )
+    .toBe(true);
+  expect(
+    env.mutations.filter((row) => row.path.endsWith("/jobs")),
+  ).toHaveLength(2);
   await expect(page).toHaveURL(env.href());
 });
 
@@ -779,15 +811,18 @@ test("RENDER-12：清单与任务分别有界分页并保留精确选择", async
   );
   const panel = await env.open();
   const select = panel.getByLabel("渲染清单", { exact: true });
-  await expect(
-    select.locator(`option[value="${env.manifests[30].id}"]`),
-  ).toHaveCount(0);
+  const lastManifest = env.manifests[30];
+  const lastManifestOption = select.locator(
+    `option[value="${lastManifest.id}"]`,
+  );
+  await expect(lastManifestOption).toHaveCount(0);
   await panel
     .getByRole("button", { name: "加载更多渲染清单", exact: true })
     .click();
-  await expect(
-    select.locator(`option[value="${env.manifests[30].id}"]`),
-  ).toHaveCount(1);
+  await expect(lastManifestOption).toHaveText(/^清单 31 · 预览版 · \S/);
+  await expect(lastManifestOption).not.toContainText(
+    lastManifest.id.slice(0, 8),
+  );
   await expect(select).toHaveValue(env.manifests[0].id);
   await panel
     .getByRole("button", { name: "加载更多渲染任务", exact: true })
@@ -1284,14 +1319,28 @@ test("RENDER-12：初始清单及任务列表迟到不覆盖已成功创建的�
     await expect.poll(() => waiting).toBeGreaterThan(1);
     await panel.getByRole("button", { name: "提交渲染", exact: true }).click();
     await expect.poll(() => env.jobs.length).toBe(1);
+    const [job] = env.jobs;
     const current = panel.getByLabel("当前渲染任务", { exact: true });
-    await expect(current).toContainText(env.jobs[0].id);
+    const heading = current.getByRole("heading", { level: 4 });
+    await expect(heading).toHaveText("排队中 · 0%");
+
     gate.release();
     await expect.poll(() => settled).toBe(waiting);
+    const readsAfterStaleResponses = env.reads.length;
     await expect(panel.getByLabel("渲染清单", { exact: true })).toHaveValue(
       frozen.id,
     );
-    await expect(current).toContainText(env.jobs[0].id);
+    await expect
+      .poll(() =>
+        env.reads
+          .slice(readsAfterStaleResponses)
+          .some(
+            (url) => new URL(url).pathname === `/api/v1/render-jobs/${job.id}`,
+          ),
+      )
+      .toBe(true);
+    await expect(heading).toHaveText("排队中 · 0%");
+    await expect(current).not.toContainText(job.id);
   } finally {
     gate.release();
   }

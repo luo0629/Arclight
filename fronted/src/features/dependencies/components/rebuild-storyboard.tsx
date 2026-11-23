@@ -115,7 +115,10 @@ export default function RebuildStoryboard({
           <NativeSelectOption value="">请选择精确版本</NativeSelectOption>
           {scripts.map((row) => (
             <NativeSelectOption key={row.id} value={row.id}>
-              剧本 v{row.version_no} · {row.id}
+              剧本 v{row.version_no}
+              {typeof row.content_json.title === "string" &&
+                row.content_json.title &&
+                ` · ${row.content_json.title}`}
             </NativeSelectOption>
           ))}
         </NativeSelect>

@@ -504,12 +504,6 @@ function JobDetail({
                   清理错误：{attempt.cleanup_error_code}
                 </p>
               )}
-              {attempt.inspection && (
-                <details className="mt-2 min-w-0">
-                  <summary>本次技术检查</summary>
-                  <pre>{JSON.stringify(attempt.inspection, null, 2)}</pre>
-                </details>
-              )}
             </div>
           ))}
         </div>

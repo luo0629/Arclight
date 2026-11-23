@@ -6,6 +6,8 @@ import { FormLabel } from "@/components/ui-kit";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import type { ReferenceImage } from "@/types/api";
+import AssetReferencePicker from "@/features/assets/components/asset-reference-picker";
 import {
   NativeSelect,
   NativeSelectOption,
@@ -64,11 +66,15 @@ export default function ShotPerformanceDetails({
   performance,
   editing,
   lines,
+  referenceImages = [],
+  canAddProp,
   update,
 }: {
   performance: ShotPerformance;
   editing: boolean;
   lines?: PerformanceSourceLine[];
+  referenceImages?: ReferenceImage[];
+  canAddProp?: boolean;
   update: (performance: ShotPerformance) => void;
 }) {
   const id = useId();
@@ -294,33 +300,21 @@ export default function ShotPerformanceDetails({
           {performance.props.map((prop, index) => (
             <FieldGroup key={index} className="rounded-lg border p-3">
               <h6>接续道具 {index + 1}</h6>
-              {(["asset_id", "asset_version_id"] as const).map((field) => (
-                <Field key={field}>
-                  <FormLabel htmlFor={`${id}-prop-${index}-${field}`}>
-                    {`道具 ${index + 1} · ${field === "asset_id" ? "资产 ID" : "精确版本 ID"}`}
-                  </FormLabel>
-                  <Input
-                    id={`${id}-prop-${index}-${field}`}
-                    value={prop.asset[field]}
-                    disabled={!lines}
-                    onChange={(event) =>
-                      patch({
-                        props: performance.props.map((row, i) =>
-                          i === index
-                            ? {
-                                ...row,
-                                asset: {
-                                  ...row.asset,
-                                  [field]: event.target.value,
-                                },
-                              }
-                            : row,
-                        ),
-                      })
-                    }
-                  />
-                </Field>
-              ))}
+              <AssetReferencePicker
+                label={`道具 ${index + 1} · 资产版本`}
+                kind="PROP"
+                rows={referenceImages}
+                value={prop.asset}
+                disabled={!lines}
+                onChange={(asset) => {
+                  if (asset)
+                    patch({
+                      props: performance.props.map((row, i) =>
+                        i === index ? { ...row, asset } : row,
+                      ),
+                    });
+                }}
+              />
               {(
                 [
                   "holder_start",
@@ -358,7 +352,7 @@ export default function ShotPerformanceDetails({
           <Button
             type="button"
             variant="outline"
-            disabled={!lines || performance.props.length >= 50}
+            disabled={!canAddProp || performance.props.length >= 50}
             onClick={() =>
               patch({
                 props: [

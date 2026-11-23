@@ -139,7 +139,7 @@ export default function ImpactButton({
             {preview.affected.map((item) => (
               <li
                 key={item.asset_version_id}
-                className="min-w-0 break-all rounded-lg border p-3 text-sm"
+                className="min-w-0 wrap-anywhere rounded-lg border p-3 text-sm"
               >
                 <strong>
                   {item.asset_name} · v{item.version_no} ·{" "}
@@ -154,30 +154,12 @@ export default function ImpactButton({
                     镜头：{item.shots.map((shot) => shot.shot_no).join("、")}
                   </p>
                 ) : (
-                  item.shot_id && <p>镜头：{item.shot_id}</p>
+                  item.shot_id && <p>包含受影响的镜头</p>
                 )}
-                {item.reviews?.length ? (
-                  <details>
-                    <summary>
-                      关联审查 {item.reviews.length} 项（保留历史）
-                    </summary>
-                    <ul>
-                      {item.reviews.map((review) => (
-                        <li key={review.id}>
-                          {review.kind} · {review.id}
-                        </li>
-                      ))}
-                    </ul>
-                  </details>
-                ) : null}
-                <p>
-                  {item.asset_type} · {item.asset_version_id}
-                  {item.stale ? " · 已失效" : ""}
-                </p>
-                <p>
-                  来源 {item.source_asset_version_id} · {item.dependency_type} ·
-                  第 {item.depth} 层
-                </p>
+                {!!item.reviews?.length && (
+                  <p>关联审查 {item.reviews.length} 项（保留历史）</p>
+                )}
+                {item.stale && <p>已失效</p>}
               </li>
             ))}
           </ul>

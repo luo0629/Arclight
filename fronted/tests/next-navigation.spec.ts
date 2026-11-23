@@ -219,27 +219,24 @@ test("不存在和跨项目剧集链接显示错误，禁止加载错误资源�
 
 test("目录首批之外的项目和剧集可按 URL 精确读取", async ({ page }) => {
   const env = await setup(page);
+  const targetProject = env.projects[1];
+  const [listedEpisode, targetEpisode] = env.episodes.filter(
+    (episode) => episode.project_id === targetProject.id,
+  );
   try {
-    await page.route("**/api/v1/projects?*", async (route) => {
-      const response = await route.fetch();
-      await route.fulfill({
-        response,
-        json: (await response.json()).filter(
-          (row: { id: string }) => row.id !== env.projects[1].id,
-        ),
-      });
-    });
+    await page.route("**/api/v1/projects?*", (route) =>
+      route.fulfill({ json: [env.projects[0]] }),
+    );
     await page.route(
-      `**/api/v1/projects/${env.projects[1].id}/episodes?*`,
-      async (route) => {
-        const response = await route.fetch();
-        await route.fulfill({
-          response,
-          json: (await response.json()).filter(
-            (row: { id: string }) => row.id !== env.episodes[3].id,
-          ),
-        });
-      },
+      `**/api/v1/projects/${targetProject.id}/episodes?*`,
+      (route) => route.fulfill({ json: [listedEpisode] }),
+    );
+    const targetRead = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        new URL(response.url()).pathname ===
+          `/api/v1/episodes/${targetEpisode.id}` &&
+        response.ok(),
     );
     await page.goto(env.path(3) + "?view=tasks");
     await expect(
@@ -248,6 +245,7 @@ test("目录首批之外的项目和剧集可按 URL 精确读取", async ({ pag
     await expect(
       page.getByRole("radio", { name: "任务与审核", exact: true }),
     ).toHaveAttribute("aria-checked", "true");
+    await targetRead;
   } finally {
     await page.unrouteAll({ behavior: "wait" });
   }

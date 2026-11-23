@@ -17,7 +17,7 @@ import useRenderMutation, {
   pendingCreationKey,
 } from "../hooks/use-render-mutation";
 import { NumberField } from "./timeline-clip-fields";
-import { selectClass } from "./render-format";
+import { duration, selectClass } from "./render-format";
 
 const cursor = (track: SubtitleTrack) => track.next_offset ?? 0;
 export default function TimelineSubtitles({
@@ -400,17 +400,18 @@ function SubtitleEdit({
       {mutation.notice && <Notice tone="success">{mutation.notice}</Notice>}
       <details>
         <summary>字幕文字与原配音来源</summary>
-        <pre>
-          {JSON.stringify(
-            {
-              id: track.id,
-              checksum: track.checksum,
-              cues: track.source_cues ?? track.cues,
-            },
-            null,
-            2,
-          )}
-        </pre>
+        <ul className="mt-2 grid gap-2 text-sm">
+          {(track.source_cues ?? track.cues).map((cue) => (
+            <li key={cue.cue_no} className="rounded-md border p-2">
+              <p>{cue.text}</p>
+              <p className="text-muted-foreground">
+                {duration(cue.start_ms)}至
+                {duration(cue.start_ms + cue.duration_ms)}
+                {cue.audio_asset_version_id && " · 已关联原配音"}
+              </p>
+            </li>
+          ))}
+        </ul>
       </details>
     </div>
   );

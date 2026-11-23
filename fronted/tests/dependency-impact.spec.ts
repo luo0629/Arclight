@@ -124,7 +124,7 @@ test("DAG-04：变更前展示真实下游，取消不写入，确认后保留�
     exact: true,
   });
   await expect(dialog).toContainText("下游场景 · v1 · 重新生成");
-  await expect(dialog).toContainText(f.child.version.id);
+  await expect(dialog).not.toContainText(f.child.version.id);
   await page.screenshot({
     path: testInfo.outputPath("dependency-impact.png"),
     fullPage: true,
@@ -211,7 +211,8 @@ test("DAG-04：分析失败可重试，并发新增下游拒绝旧确认后重�
     ).current_version_id,
   ).toBe(f.first.id);
   await page.getByRole("button", { name: "重试影响分析", exact: true }).click();
-  await expect(dialog).toContainText(extra.version.id);
+  await expect(dialog).toContainText("并发增加的场景 · v1 · 重新生成");
+  await expect(dialog).not.toContainText(extra.version.id);
   await expect(dialog).toContainText("重新生成 2");
   await dialog
     .getByRole("button", { name: "确认影响并继续", exact: true })
@@ -274,7 +275,8 @@ test("DAG-04：切换精确版本丢弃迟到影响分析并恢复新版本操�
     name: "确认变更影响",
     exact: true,
   });
-  await expect(dialog).toContainText(f.child.version.id);
+  await expect(dialog).toContainText("下游场景 · v1 · 重新生成");
+  await expect(dialog).not.toContainText(f.child.version.id);
   await impactRead;
   await dialog.getByRole("button", { name: "取消变更", exact: true }).click();
 });

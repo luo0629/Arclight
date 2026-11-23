@@ -233,9 +233,10 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
   await expect(page.locator(".canvas-wrap")).toBeVisible();
   await noOverflow(page);
   await page.setViewportSize({ width: 900, height: 1000 });
+  await expect(page.locator(".canvas-wrap")).toBeVisible();
   await expect(
-    page.getByText("让灵感慢慢生长", { exact: true }),
-  ).not.toBeVisible();
+    page.getByRole("button", { name: "制作进度", exact: true }),
+  ).toBeVisible();
   await noOverflow(page);
 });
 

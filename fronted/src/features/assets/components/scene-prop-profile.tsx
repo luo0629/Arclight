@@ -12,6 +12,7 @@ import type {
   ReferenceImage,
 } from "@/types/api";
 import AssetProfileDialog from "@/features/assets/components/asset-profile-dialog";
+import ExactAssetLink from "./exact-asset-link";
 import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
 
@@ -71,7 +72,18 @@ export default function ScenePropPanel(props: Props) {
         ))}
         <div>
           <dt>{scene ? "精确场景参考版本" : "持有角色精确版本"}</dt>
-          <dd>{reference?.asset_version_id ?? "未指定"}</dd>
+          <dd>
+            {reference ? (
+              <ExactAssetLink
+                projectId={asset.project_id}
+                reference={reference}
+              >
+                查看绑定版本
+              </ExactAssetLink>
+            ) : (
+              "未指定"
+            )}
+          </dd>
         </div>
       </dl>
       <p className="text-sm text-muted-foreground">
@@ -134,7 +146,7 @@ function ExactReferenceChoice({
   if (value && !options.some((row) => row.value === value.asset_version_id))
     options.push({
       value: value.asset_version_id,
-      label: "已绑定版本 · " + value.asset_version_id,
+      label: "已绑定的版本（当前列表未显示）",
     });
   return (
     <FieldGroup>

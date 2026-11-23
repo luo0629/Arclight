@@ -10,7 +10,6 @@ import { statusText } from "@/lib/status";
 
 type Usage = {
   id: string;
-  asset_version_id: string;
   asset_version_no: number;
   episode_id: string;
   episode_no: number;
@@ -21,11 +20,29 @@ type Usage = {
   content_version_no: number;
   content_status: string;
   reference_path: string;
-  scene_id: string | null;
   scene_no: number | null;
   scene_title: string | null;
   shot_no: number | null;
 };
+
+function referenceLabel(path: string) {
+  const [group, , field, index, detail] = path.split(".");
+  if (group === "character_assets") return "剧本角色绑定";
+  switch (field) {
+    case "scene_asset":
+      return "场景资产";
+    case "location_asset":
+      return "地点资产";
+    case "selected_visual_asset":
+      return "选用画面";
+    case "props":
+      return `道具 ${Number(index) + 1}`;
+    case "character_details":
+      return `角色 ${Number(index) + 1} · ${detail === "costume" ? "服装" : "角色资产"}`;
+    default:
+      return "资产引用";
+  }
+}
 
 export default function AssetUsage({
   projectId,
@@ -83,12 +100,9 @@ function UsageList({ projectId, path }: { projectId: string; path: string }) {
               : `场景 ${row.scene_no}${row.scene_title ? " · " + row.scene_title : ""}`}
             {row.shot_no !== null && ` · 镜头 ${row.shot_no}`}
           </p>
-          <p>
-            引用图片 v{row.asset_version_no} · {row.asset_version_id}
-          </p>
+          <p>引用图片 v{row.asset_version_no}</p>
           <p className="text-muted-foreground">
-            引用位置：{row.reference_path}
-            {row.scene_id && ` · 场景 ID：${row.scene_id}`}
+            引用位置：{referenceLabel(row.reference_path)}
           </p>
           <Link
             className="underline underline-offset-4"

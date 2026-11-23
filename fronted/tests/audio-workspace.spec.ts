@@ -757,4 +757,46 @@ test("AUDIO-09：剧情变声、跨集恢复和本句表演参数", async ({ pag
   await expect(restored).toContainText("故事时点 20");
   await expect(restored.getByText(/回忆中嗓子受伤/)).toHaveCount(0);
   expect(env.audioMutations).toHaveLength(2);
+
+  const newerVoices = Array.from({ length: 30 }, (_, index) => ({
+    ...normal,
+    id: crypto.randomUUID(),
+    version_no: 32 - index,
+  }));
+  await page.route(
+    `**/api/v1/projects/${env.project.id}/audio-voices?*`,
+    (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      return params.get("character_asset_id") === characterId &&
+        params.get("offset") === "0"
+        ? route.fulfill({ json: newerVoices })
+        : route.fallback();
+    },
+  );
+  await later.getByRole("button", { name: "编辑跨集声音档案" }).click();
+  const savedProfile = later.getByRole("form", { name: "跨集声音档案" });
+  await expect(
+    savedProfile.getByRole("button", { name: "继续加载角色音色" }),
+  ).toBeVisible();
+  await expect(savedProfile.getByLabel("跨集默认音色")).toHaveText(
+    "已保存的默认音色",
+  );
+  await expect(savedProfile.getByLabel("变声音色")).toHaveText(
+    "剧情变声 1 的已保存音色",
+  );
+  await savedProfile.getByLabel("剧情原因").fill("回忆中声音沙哑");
+  await savedProfile.getByRole("button", { name: "保存声音档案" }).click();
+  await expect.poll(() => env.audioMutations.length).toBe(3);
+  expect(env.audioMutations[2].body).toMatchObject({
+    expected_version_no: 1,
+    default_voice_version_id: normal.id,
+    changes: [
+      {
+        story_start: 10,
+        story_end: 20,
+        voice_version_id: changed.id,
+        reason: "回忆中声音沙哑",
+      },
+    ],
+  });
 });

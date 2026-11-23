@@ -12,6 +12,7 @@ import { FormLabel } from "@/components/ui-kit";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
+import type { ReferenceImage } from "@/types/api";
 import {
   NativeSelect,
   NativeSelectOption,
@@ -41,11 +42,15 @@ export default function ShotDetails({
   shot,
   lines,
   editing,
+  referenceImages,
+  canAddProp,
   update,
 }: {
   shot: ShotExtensions & { characters: string[] };
   lines?: SourceLine[];
   editing: boolean;
+  referenceImages?: ReferenceImage[];
+  canAddProp?: boolean;
   update: (patch: ShotExtensions) => void;
 }) {
   const id = useId();
@@ -74,6 +79,8 @@ export default function ShotDetails({
             performance={shot.performance}
             editing={editing}
             lines={lines}
+            referenceImages={referenceImages}
+            canAddProp={canAddProp}
             update={(performance) =>
               update({
                 performance,
@@ -140,9 +147,9 @@ export default function ShotDetails({
                 ))}
               {selected
                 .filter((id) => !lines?.some((line) => line.line_id === id))
-                .map((id) => (
+                .map((id, index) => (
                   <NativeSelectOption key={id} value={id}>
-                    {id}（来源未加载或已不在此场景）
+                    引用台词 {index + 1}（来源未加载或已不在此场景）
                   </NativeSelectOption>
                 ))}
             </NativeSelect>
@@ -254,7 +261,7 @@ export default function ShotDetails({
       ) : (
         <div className="mt-3 flex flex-col gap-2 text-sm">
           <p>构图：{shot.composition || "未填写"}</p>
-          <p>台词引用：{selected.length ? selected.join("、") : "无"}</p>
+          <p>台词引用：{selected.length ? `${selected.length} 句` : "无"}</p>
           {shot.character_details?.map((row) => (
             <p key={row.character}>
               {row.character}：

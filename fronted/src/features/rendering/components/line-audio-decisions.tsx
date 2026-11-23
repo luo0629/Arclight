@@ -32,10 +32,6 @@ export default function LineAudioDecisions({
           句。没有配音的对白和旁白须逐句明确处理方式并填写原因，决定随本次清单固定。
         </p>
       </header>
-      <details className="min-w-0 text-xs">
-        <summary>本次声音来源剧本版本</summary>
-        <p className="mt-2 break-all">{preparation.script_version_id}</p>
-      </details>
       {preparation.lines.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           本时间轴没有需要补充声音决定的台词。
@@ -53,9 +49,6 @@ export default function LineAudioDecisions({
                   <h6>台词 {index + 1}</h6>
                   <p className="mt-1 whitespace-pre-wrap break-words">
                     {line.text}
-                  </p>
-                  <p className="mt-1 break-all text-xs text-muted-foreground">
-                    台词 ID：{line.line_id}
                   </p>
                 </div>
                 <label className="flex min-w-0 flex-col gap-2">

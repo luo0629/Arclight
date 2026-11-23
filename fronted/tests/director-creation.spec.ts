@@ -105,12 +105,12 @@ test("standalone director preserves multi-scene work through refresh, answer and
   await expect(
     working.getByText("按场景目标规划纸船归途的镜头", { exact: true }),
   ).toBeVisible();
-  await working
+  const observationSummary = working
     .locator("summary")
-    .filter({ hasText: "调查与工具反馈（3）" })
-    .click();
+    .filter({ hasText: /^调查与工具反馈（3）$/ });
+  await observationSummary.click();
   await expect(
-    working.getByText("生产能力声明", { exact: true }),
+    observationSummary.locator("..").getByText("生产能力声明", { exact: true }),
   ).toBeVisible();
   await working
     .locator("summary")

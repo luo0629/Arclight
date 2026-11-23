@@ -233,7 +233,7 @@ test("stale matching preserves the choice and refresh exposes the new alias", as
   await expect(
     page.getByRole("button", { name: "确认角色 阿青", exact: true }),
   ).toBeDisabled();
-  await choose(page, "阿青", /^青姐 · /);
+  await choose(page, "阿青", /^青姐$/);
   await page
     .getByRole("button", { name: "确认角色 阿青", exact: true })
     .click();

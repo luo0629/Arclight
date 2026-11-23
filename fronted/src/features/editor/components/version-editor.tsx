@@ -37,7 +37,9 @@ import {
   type NarrativeRequest,
   type NarrativeCapture,
 } from "../script-narrative";
-import type { ContentVersion, Episode } from "@/types/api";
+import type { ContentVersion, Episode, ExactAssetReference } from "@/types/api";
+import ListPagination from "@/components/shared/list-pagination";
+import { useReferenceImages } from "@/features/assets/components/asset-reference-picker";
 
 import Dialog from "@/components/shared/app-dialog";
 import ShotDetails from "@/features/editor/components/shot-details";
@@ -70,7 +72,7 @@ type Script = {
     state_changes?: StateChange[];
     scene_asset?: unknown;
     location_asset?: unknown;
-    props?: unknown[];
+    props?: ExactAssetReference[];
     title: string;
     action: string;
     dialogue: {
@@ -171,6 +173,9 @@ export default function VersionEditor({
 }) {
   const editorId = useId();
   const source = sourceScript?.content_json as Script | undefined;
+  const sourceScenes = new Map(
+    source?.scenes.map((scene) => [scene.scene_no, scene]),
+  );
   function emptyShot(
     shotNo: number,
     performanceMode = false,
@@ -251,6 +256,15 @@ export default function VersionEditor({
   const saving = useRef(false);
   const script = draft as unknown as Script;
   const board = draft as unknown as Board;
+  const showPropReferences =
+    kind === "storyboard" &&
+    editing &&
+    !tableView &&
+    board.shots.some((shot) => shot.performance?.props.length);
+  const propReferences = useReferenceImages(
+    episode.project_id,
+    showPropReferences,
+  );
   function mutate(change: (value: Script & Board) => void) {
     const copy = structuredClone(draft);
     change(copy as unknown as Script & Board);
@@ -690,9 +704,9 @@ export default function VersionEditor({
                         }
                       />
                     </FormLabel>
-                    <small className="break-all text-xs text-muted-foreground">
-                      {line.line_type === "narration" ? "旁白" : "对白"} ·{" "}
-                      {line.line_id ?? "保存时分配标识"}
+                    <small className="text-xs text-muted-foreground">
+                      第 {lineIndex + 1} 句 ·{" "}
+                      {line.line_type === "narration" ? "旁白" : "对白"}
                     </small>
                     <Button
                       variant="outline"
@@ -794,6 +808,16 @@ export default function VersionEditor({
         />
       ) : (
         <div className="document flex min-w-0 flex-col gap-4 break-words">
+          {showPropReferences &&
+            (propReferences.loading ||
+              propReferences.error ||
+              propReferences.hasMore) && (
+              <ListPagination
+                label="接续道具参考"
+                count={propReferences.rows.length}
+                {...propReferences}
+              />
+            )}
           {board.shots.map((shot, index) => (
             <section
               className="scene flex min-w-0 flex-col gap-3 rounded-lg border border-dashed bg-background/70 p-3"
@@ -1032,11 +1056,17 @@ export default function VersionEditor({
               <ShotDetails
                 shot={shot}
                 editing={editing}
-                lines={
-                  source?.scenes.find(
-                    (scene) => scene.scene_no === shot.scene_no,
-                  )?.dialogue
-                }
+                referenceImages={propReferences.rows.filter((row) =>
+                  sourceScenes
+                    .get(shot.scene_no)
+                    ?.props?.some(
+                      (prop) =>
+                        prop.asset_id === row.asset_id &&
+                        prop.asset_version_id === row.id,
+                    ),
+                )}
+                canAddProp={!!sourceScenes.get(shot.scene_no)?.props?.length}
+                lines={sourceScenes.get(shot.scene_no)?.dialogue}
                 update={(patch) =>
                   mutate((value) => {
                     Object.assign(value.shots[index], patch);

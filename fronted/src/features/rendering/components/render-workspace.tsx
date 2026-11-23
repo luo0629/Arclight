@@ -624,10 +624,10 @@ function TimelineManifests({
                 请重新选择精确渲染清单
               </option>
             )}
-            {manifestRows.map((manifest) => (
+            {manifestRows.map((manifest, index) => (
               <option key={manifest.id} value={manifest.id}>
-                {renderLabel(manifest.snapshot.output.name)} ·{" "}
-                {date(manifest.snapshot.created_at)} · {manifest.id.slice(0, 8)}
+                清单 {index + 1} · {renderLabel(manifest.snapshot.output.name)}{" "}
+                · {date(manifest.snapshot.created_at)}
               </option>
             ))}
           </select>

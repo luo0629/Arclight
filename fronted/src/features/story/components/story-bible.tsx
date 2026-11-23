@@ -13,6 +13,9 @@ import type { StoryEntry, StoryKind, StoryRelation } from "@/types/api";
 import Dialog from "@/components/shared/app-dialog";
 import ListPagination from "@/components/shared/list-pagination";
 import usePagedList from "@/hooks/use-paged-list";
+import AssetReferencePicker, {
+  useReferenceImages,
+} from "@/features/assets/components/asset-reference-picker";
 import StoryLedger from "./story-ledger";
 
 const kinds: Record<StoryKind, string> = {
@@ -148,6 +151,7 @@ export default function StoryBible({ projectId, writable, owner }: Props) {
         <StoryEntryEditor
           key={editorKey}
           entry={selected}
+          projectId={projectId}
           entries={list.rows}
           path={path}
           writable={writable}
@@ -209,6 +213,7 @@ export default function StoryBible({ projectId, writable, owner }: Props) {
 }
 function StoryEntryEditor({
   entry,
+  projectId,
   entries,
   path,
   writable,
@@ -217,6 +222,7 @@ function StoryEntryEditor({
   onSaved,
 }: {
   entry: StoryEntry | null;
+  projectId: string;
   entries: StoryEntry[];
   path: string;
   writable: boolean;
@@ -232,10 +238,10 @@ function StoryEntryEditor({
   const [relations, setRelations] = useState<StoryRelation[]>(
     entry?.relations ?? [],
   );
-  const [assetId, setAssetId] = useState(entry?.asset?.asset_id ?? "");
-  const [versionId, setVersionId] = useState(
-    entry?.asset?.asset_version_id ?? "",
-  );
+  const [asset, setAsset] = useState(entry?.asset ?? null);
+  const showAsset =
+    kind === "CHARACTER" || kind === "PROP" || kind === "SCENE" || !!asset;
+  const references = useReferenceImages(projectId, showAsset);
   const [relation, setRelation] = useState<StoryRelation["relation"]>(
     entry && entry.kind !== "WORLD" && entry.kind !== "LOCATION"
       ? "located_in"
@@ -280,10 +286,6 @@ function StoryEntryEditor({
       setError("规则最多 10 条，每条最多 500 字符");
       return;
     }
-    if (!!assetId.trim() !== !!versionId.trim()) {
-      setError("资产 ID 与精确版本 ID 必须同时填写");
-      return;
-    }
     void mutate(
       {
         kind,
@@ -298,9 +300,7 @@ function StoryEntryEditor({
             : [],
         rules: parsedRules,
         relations,
-        asset: assetId.trim()
-          ? { asset_id: assetId.trim(), asset_version_id: versionId.trim() }
-          : null,
+        asset,
         ...(entry ? { expected_revision: entry.revision } : {}),
       },
       entry ? "PUT" : "POST",
@@ -350,8 +350,7 @@ function StoryEntryEditor({
               onValueChange={(value) => {
                 setKind(value as StoryKind);
                 setRelations([]);
-                setAssetId("");
-                setVersionId("");
+                setAsset(null);
                 setRelation(
                   value === "WORLD"
                     ? "governs"
@@ -480,28 +479,31 @@ function StoryEntryEditor({
               选择器只显示目录已加载的设定；可继续加载后再选择。归档被引用项前须先解除关联。
             </p>
           </fieldset>
-          {kind !== "WORLD" && (
+          {showAsset && (
             <fieldset className="studio-form-section grid min-w-0 gap-3">
               <legend>正式资产引用（可选）</legend>
-              <FormLabel>
-                资产 ID
-                <Input
-                  value={assetId}
-                  onChange={(event) => setAssetId(event.target.value)}
-                  maxLength={36}
-                />
-              </FormLabel>
-              <FormLabel>
-                资产精确版本 ID
-                <Input
-                  value={versionId}
-                  onChange={(event) => setVersionId(event.target.value)}
-                  maxLength={36}
-                />
-              </FormLabel>
-              <p className="text-xs text-muted-foreground">
-                仅接受当前项目、类型匹配、已批准或锁定且未失效的精确版本；不会自动创建或选用资产。
-              </p>
+              <AssetReferencePicker
+                label="关联资产版本"
+                kind={kind}
+                rows={references.rows}
+                value={asset}
+                optional
+                disabled={busy || readonly}
+                onChange={(value) => {
+                  setAsset(value);
+                  onDirty(true);
+                }}
+              />
+              {!readonly &&
+                (references.loading ||
+                  references.error ||
+                  references.hasMore) && (
+                  <ListPagination
+                    label="可关联资产"
+                    count={references.rows.length}
+                    {...references}
+                  />
+                )}
             </fieldset>
           )}
           <Button disabled={busy || readonly} type="submit">

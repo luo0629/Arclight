@@ -563,6 +563,13 @@ test("RENDER-05：从既有配音绑定和选用音效装配精确来源", async
   );
   const { editor } = await env.openEditor();
   await editor.getByText("加入配音、音乐与音效", { exact: true }).click();
+  const snapshotChoice = editor.getByLabel("装配配音快照", { exact: true });
+  const snapshotOption = snapshotChoice.locator(
+    `option[value="${snapshotId}"]`,
+  );
+  await expect(snapshotOption).toHaveText(/^快照 1 · 1 句 · \S/);
+  await expect(snapshotOption).not.toContainText(snapshotId.slice(0, 8));
+  await expect(snapshotChoice).toHaveValue(snapshotId);
   await editor
     .getByRole("button", { name: "将此句配音加入草稿", exact: true })
     .click();

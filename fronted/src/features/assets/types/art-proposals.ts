@@ -192,6 +192,12 @@ export function changeLabel(change: ArtChange) {
     metadata: "资料",
     description: "简介",
     profile: "设定",
+    holder: "持有角色",
+    asset_id: "引用资产",
+    asset_version_id: "引用图片版本",
+    default_outfit_id: "默认服装",
+    standard_image_id: "标准参考图",
+    episode_ids: "指定剧集",
     fixed_features: "固定特征",
     variable_features: "可变特征",
     expressions: "表情",
@@ -209,18 +215,22 @@ export function changeLabel(change: ArtChange) {
     .join(" / ");
 }
 
-export function valueText(value: unknown): string {
+export function valueText(value: unknown, path = ""): string {
   if (value === null || value === undefined) return "无";
+  const field = path.split(".").at(-1) ?? "";
+  if (field === "episode_ids" && Array.isArray(value))
+    return `已指定 ${value.length} 集`;
+  if (/(?:^|_)id$/.test(field)) return "已指定";
   if (typeof value !== "object") return String(value) || "空白";
-  if (Array.isArray(value)) return value.map(valueText).join("、") || "无";
+  if (Array.isArray(value))
+    return value.map((item) => valueText(item)).join("、") || "无";
   if ("asset_version_id" in value && "rights_confirmed" in value) {
-    const reference = value as {
-      asset_version_id: string;
-      rights_confirmed: boolean;
-      status: string;
-    };
-    return `精确候选 ${reference.asset_version_id}；${reference.rights_confirmed ? "批准作为正式参考并确认使用授权" : "尚未批准作为正式参考，使用授权待确认"}`;
+    return value.rights_confirmed === true
+      ? "批准作为正式参考并确认使用授权"
+      : "尚未批准作为正式参考，使用授权待确认";
   }
+  if ("asset_id" in value && "asset_version_id" in value)
+    return "已绑定图片版本";
   const labels: Record<string, string> = {
     name: "名称",
     metadata: "资料",
@@ -243,9 +253,10 @@ export function valueText(value: unknown): string {
     ...bibleFields,
   };
   return Object.entries(value)
+    .filter(([key]) => key !== "id")
     .map(
       ([key, item]) =>
-        `${labels[key] ?? key}：${item === "PROJECT" ? "整个项目" : valueText(item)}`,
+        `${labels[key] ?? key}：${item === "PROJECT" ? "整个项目" : valueText(item, key)}`,
     )
     .join("；");
 }

@@ -26,10 +26,8 @@ type Version = {
   version_no: number;
   fields: Values;
   locked_fields: FieldName[];
-  created_by: string | null;
   created_at: string | null;
   change_kind: string;
-  legacy_snapshot: Record<string, unknown>;
 };
 
 export default function VisualBible({
@@ -252,12 +250,6 @@ export default function VisualBible({
             {history ? "收起视觉规范历史" : "查看视觉规范历史"}
           </Button>
           {history && <History path={path} />}
-          <details>
-            <summary>原始旧配置（只读）</summary>
-            <pre className="whitespace-pre-wrap break-all text-xs">
-              {JSON.stringify(current.legacy_snapshot, null, 2)}
-            </pre>
-          </details>
         </>
       )}
     </section>
@@ -283,12 +275,10 @@ function History({ path }: { path: string }) {
           aria-label="精确视觉规范版本"
           className="flex min-w-0 flex-col gap-2 break-all text-sm"
         >
-          <h3>
-            视觉规范 v{selected.version_no} · {selected.id}
-          </h3>
+          <h3>视觉规范 v{selected.version_no}</h3>
           <p>
             {selected.change_kind === "LOCK" ? "字段锁定变更" : "字段编辑"} ·{" "}
-            {selected.created_by} · {selected.created_at}
+            {selected.created_at}
           </p>
           {fields.map(([key, label]) => (
             <p key={key} className="whitespace-pre-wrap">

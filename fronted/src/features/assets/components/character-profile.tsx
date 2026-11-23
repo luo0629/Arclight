@@ -12,6 +12,7 @@ import type {
   ReferenceImage,
 } from "@/types/api";
 import AssetProfileDialog from "@/features/assets/components/asset-profile-dialog";
+import ExactAssetLink from "./exact-asset-link";
 import usePagedList from "@/hooks/use-paged-list";
 import ListPagination from "@/components/shared/list-pagination";
 
@@ -78,7 +79,12 @@ export default function CharacterPanel({
                     {item.label} ·{" "}
                     {item.kind === "INITIAL" ? "初始设定" : item.angle}{" "}
                     {item.id === data.standard_image_id && "· 标准参考"} ·{" "}
-                    {item.source.asset_version_id}
+                    <ExactAssetLink
+                      projectId={asset.project_id}
+                      reference={item.source}
+                    >
+                      查看图片版本
+                    </ExactAssetLink>
                   </p>
                 ))
               : "尚未登记"}
@@ -322,31 +328,41 @@ function CharacterEditor({
           />
         </Field>
         <h3>参考图记录</h3>
-        {data.images.map((item) => (
-          <div key={item.id} className="flex min-w-0 flex-col gap-2 break-all">
-            <p>
-              {item.label} ·{" "}
-              {item.kind === "INITIAL" ? "初始设定图" : item.angle} ·{" "}
-              {item.source.asset_version_id}
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() =>
-                setData({
-                  ...data,
-                  images: data.images.filter((row) => row.id !== item.id),
-                  standard_image_id:
-                    data.standard_image_id === item.id
-                      ? null
-                      : data.standard_image_id,
-                })
-              }
+        {data.images.map((item) => {
+          const version = references.rows.find(
+            (row) => row.id === item.source.asset_version_id,
+          );
+          return (
+            <div
+              key={item.id}
+              className="flex min-w-0 flex-col gap-2 break-words"
             >
-              移除参考图 {item.label}
-            </Button>
-          </div>
-        ))}
+              <p>
+                {item.label} ·{" "}
+                {item.kind === "INITIAL" ? "初始设定图" : item.angle} ·{" "}
+                {version
+                  ? `${version.asset_name} · v${version.version_no}`
+                  : "已绑定图片版本"}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() =>
+                  setData({
+                    ...data,
+                    images: data.images.filter((row) => row.id !== item.id),
+                    standard_image_id:
+                      data.standard_image_id === item.id
+                        ? null
+                        : data.standard_image_id,
+                  })
+                }
+              >
+                移除参考图 {item.label}
+              </Button>
+            </div>
+          );
+        })}
         <Field>
           <FieldLabel htmlFor="reference-source">已有精确图片版本</FieldLabel>
           <ChoiceSelect

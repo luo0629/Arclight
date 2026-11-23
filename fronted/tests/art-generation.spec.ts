@@ -497,9 +497,17 @@ test("AART-03: two actual concept rounds survive refresh and exact images requir
   await expect(
     detail.getByRole("img", { name: "精确资产版本原图" }),
   ).toHaveCount(4);
+  const firstCandidate = after.concept_rounds[0].candidates[0];
+  await expect(detail).not.toContainText(firstCandidate.asset_version_id);
+  await expect(
+    detail.getByRole("link", { name: "查看图片版本", exact: true }),
+  ).toHaveCount(4);
   await expect(
     detail.getByRole("checkbox", { name: /批准精确候选并确认使用授权/ }),
   ).toHaveCount(4);
+  await expect(
+    detail.getByRole("checkbox", { name: /参考图 1 .*批准精确候选/ }),
+  ).toHaveCount(1);
   const approve = detail.getByRole("button", {
     name: "批准并生成正式版本",
     exact: true,

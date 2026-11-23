@@ -235,27 +235,24 @@ export default function EpisodeSeriesEvidence({ projectId, episodeId }: Props) {
             {data.bound_audio_total} 句，完整历史请打开逐句声音版本。
           </p>
           <ul className="grid gap-2 pt-2">
-            {data.bound_audio.map((version) => (
+            {data.bound_audio.map((version, index) => (
               <li key={version.version_id} className="grid gap-1 break-words">
                 <div className="flex flex-wrap items-center gap-2">
                   <Link
                     className="underline"
                     href={`${list}&node=asset-version:${version.version_id}`}
                   >
-                    台词 {version.line_id} · 音频 v{version.version_no}
+                    配音记录 {index + 1} · 音频 v{version.version_no}
                   </Link>
                   <StatusBadge
                     status={version.stale ? "STALE" : version.status}
                   />
                 </div>
                 {version.voice && (
-                  <span
-                    className="text-muted-foreground"
-                    title={version.voice.version_id}
-                  >
+                  <span className="text-muted-foreground">
                     {version.voice.speaker} · 音色 v{version.voice.version_no}
                     {version.voice.profile_version_id && (
-                      <> · 跨集声音档案 {version.voice.profile_version_id}</>
+                      <> · 已关联跨集声音档案</>
                     )}
                   </span>
                 )}

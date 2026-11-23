@@ -1,8 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import { openWorkspacePanels } from "./workspace-helpers";
+import { approvedProp } from "./asset-reference-helpers";
 import type { ShotPerformance } from "../src/features/editor/shot-performance";
 
-async function setup(page: Page, dramatic = true, series = false) {
+async function setup(
+  page: Page,
+  { dramatic = true, series = false, withProp = false } = {},
+) {
   const registered = await page.request.post("/api/v1/auth/register", {
     data: {
       email: `performance-${crypto.randomUUID()}@example.test`,
@@ -29,6 +33,9 @@ async function setup(page: Page, dramatic = true, series = false) {
   });
   expect(projectResponse.status(), await projectResponse.text()).toBe(201);
   const project = await projectResponse.json();
+  const prop = withProp
+    ? await approvedProp(page, headers, project.id, "门口的旧钥匙")
+    : null;
   const episodeResponse = await page.request.post(
     `/api/v1/projects/${project.id}/episodes`,
     {
@@ -53,6 +60,7 @@ async function setup(page: Page, dramatic = true, series = false) {
             scene_id: crypto.randomUUID(),
             scene_no: 1,
             title: "门口",
+            props: prop ? [prop] : [],
             action: dramatic
               ? "林岚挡住去路，周野停步回应。"
               : "门口的静态空镜。",
@@ -103,7 +111,16 @@ async function setup(page: Page, dramatic = true, series = false) {
     await page.getByRole("radio", { name: "版本列表", exact: true }).click();
     await page.locator(`[data-node-id$=":${id}"]`).click();
   }
-  return { session, headers, project, episode, prefix, source, openVersion };
+  return {
+    session,
+    headers,
+    project,
+    episode,
+    prefix,
+    source,
+    openVersion,
+    prop,
+  };
 }
 
 async function approvedNarrativeSource(
@@ -367,7 +384,7 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   page,
 }, info) => {
   page.on("dialog", (dialog) => dialog.accept());
-  const env = await setup(page);
+  const env = await setup(page, { withProp: true });
   const newer = await page.request.post(env.prefix + "/scripts", {
     headers: env.headers,
     data: {
@@ -505,6 +522,29 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   await expect(
     details.nth(0).getByRole("combobox", { name: "动态要求", exact: true }),
   ).toHaveValue("dynamic_required");
+  const firstShot = details.nth(0);
+  await firstShot
+    .getByRole("button", { name: "添加接续道具", exact: true })
+    .click();
+  const propPicker = firstShot.getByRole("combobox", {
+    name: "道具 1 · 资产版本",
+    exact: true,
+  });
+  await expect(propPicker).toBeEnabled();
+  await propPicker.click();
+  await page
+    .getByRole("option", { name: "门口的旧钥匙 · v1", exact: true })
+    .click();
+  for (const [label, value] of [
+    ["起始持有人", "林岚"],
+    ["结束持有人", "林岚"],
+    ["起始位置", "右手"],
+    ["结束位置", "右手"],
+  ]) {
+    await firstShot
+      .getByLabel(`道具 1 · ${label}`, { exact: true })
+      .fill(value);
+  }
   await details
     .nth(0)
     .getByRole("heading", { name: "表演与接续计划", exact: true })
@@ -530,6 +570,8 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   await expect(
     details.nth(1).getByRole("textbox", { name: "台词 1 · 节奏", exact: true }),
   ).toHaveValue("停顿一拍后回应，保留反应时间");
+  await expect(propPicker).toHaveText("门口的旧钥匙 · v1");
+  await expect(firstShot).not.toContainText(env.prop!.asset_version_id);
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
     await page.evaluate(
@@ -559,6 +601,10 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
   expect(versions).toHaveLength(2);
   expect(versions[1].content_json).toEqual(board.content_json);
   expect(versions[0].script_version_id).toBe(env.source.id);
+  expect(versions[0].content_json.shots[0].props).toEqual([env.prop]);
+  expect(versions[0].content_json.shots[0].performance.props[0].asset).toEqual(
+    env.prop,
+  );
   expect(versions[0].content_json.shots[0].performance.narrative_purpose).toBe(
     "保留冲突，明确人物要求",
   );
@@ -652,7 +698,7 @@ test("SERIES-04: preserves conflict, reaction, exact dialogue and capability dec
 test("SERIES-04: explicitly enables an editable static performance draft while retaining the legacy source contract", async ({
   page,
 }, info) => {
-  const env = await setup(page, false);
+  const env = await setup(page, { dramatic: false });
   await page.goto(`/projects/${env.project.id}/episodes/${env.episode.id}`);
   await openWorkspacePanels(page);
   await page.getByRole("button", { name: "自己写分镜", exact: true }).click();
@@ -725,7 +771,7 @@ test("SERIES-04: explicitly enables an editable static performance draft while r
 test("SERIES-04: starts the performance director from an exact approved narrative version and persists its real capability question", async ({
   page,
 }, info) => {
-  const env = await setup(page, true, true);
+  const env = await setup(page, { series: true });
   const source = await approvedNarrativeSource(page, env);
   await env.openVersion(source.id);
   await page
@@ -955,9 +1001,11 @@ test("SERIES-04: explicitly confirms only intent, restores its receipt and keeps
   expect((await stateResponse.json()).issues).toContain(
     "PERFORMANCE_NOT_READY",
   );
-  await page.getByRole("button", { name: /^4[.] 画面/ }).click();
+  await page.getByRole("button", { name: "制作进度", exact: true }).click();
+  const progress = page.getByRole("region", { name: "剧集生产阶段" });
+  await progress.getByRole("button", { name: /^4[.] 画面/ }).click();
   await expect(
-    page.getByRole("list", { name: "阶段待处理条件" }),
+    progress.getByRole("list", { name: "阶段待处理条件" }),
   ).toContainText("表演分镜制作条件尚未满足");
   const production = await page.request.get(
     env.prefix + `/storyboards/${board.id}/production`,

@@ -570,7 +570,9 @@ test("ASSET-09：实际剧集场景镜头引用、失败重试和精确版本导
   await expect(usage).toContainText("第 1 集 · 引用验收");
   await expect(usage).toContainText("场景 1 · 实际街道");
   await expect(usage).toContainText("场景 1 · 镜头 1");
-  await expect(usage).toContainText(version.id);
+  await expect(usage).toContainText(`引用图片 v${version.version_no}`);
+  await expect(usage).toContainText("引用位置：场景资产");
+  await expect(usage).not.toContainText(version.id);
   await usage.screenshot({ path: testInfo.outputPath("asset-usage.png") });
   await usage
     .getByRole("link", { name: "打开此内容版本", exact: true })
@@ -636,6 +638,7 @@ test("ASSET-10：视觉规范字段、历史锁定、并发草稿和旧入口保
     .getByRole("button", { name: "查看视觉规范 v1", exact: true })
     .click();
   const historical = bible.getByLabel("精确视觉规范版本", { exact: true });
+  await expect(historical.getByRole("heading")).toHaveText("视觉规范 v1");
   await expect(historical).toContainText("画风描述：水彩第一版");
   await expect(historical).toContainText("光照原则：未填写");
   await bible
@@ -919,6 +922,12 @@ test("ASSET-03：参考图选择控件绑定精确版本并允许人工标准选
   await page
     .getByRole("button", { name: "添加精确参考图", exact: true })
     .click();
+  await expect(
+    page.getByText("人工标准正面 · 初始设定图 · 已批准参考 · v7", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("dialog")).not.toContainText(versionId);
   await page.getByRole("combobox", { name: "标准参考图", exact: true }).click();
   await page.getByRole("option", { name: "人工标准正面", exact: true }).click();
   let payload: Record<string, any> | null = null;

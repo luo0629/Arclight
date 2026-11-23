@@ -76,12 +76,19 @@ export default function VoiceProfileEditor({
     value: row.id,
     label: `v${row.version_no} · ${String(row.parameters.voice ?? row.model)}`,
   }));
-  const referencedVoices = new Set(
-    [defaultVoice, ...changes.map((change) => change.voice)].filter(Boolean),
-  );
-  for (const id of referencedVoices) {
-    if (!options.some((entry) => entry.value === id))
-      options.push({ value: id, label: `已保存的音色 · ${id.slice(0, 8)}` });
+  const referencedVoices = [
+    { value: defaultVoice, label: "已保存的默认音色" },
+    ...changes.map((change, index) => ({
+      value: change.voice,
+      label: `剧情变声 ${index + 1} 的已保存音色`,
+    })),
+  ];
+  for (const reference of referencedVoices) {
+    if (
+      reference.value &&
+      !options.some((entry) => entry.value === reference.value)
+    )
+      options.push(reference);
   }
   const plan: VoiceProfilePlan = {
     ledger_version_id: currentLedger,

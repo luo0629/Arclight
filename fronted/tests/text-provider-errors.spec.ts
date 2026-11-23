@@ -51,9 +51,10 @@ test("TXT-08：余额耗尽、限流和密钥错误分别提示，保留手动�
   await page.goto("/");
   await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
-  await expect(
-    page.getByRole("alert").filter({ hasText: "余额不足或额度已耗尽" }),
-  ).toBeVisible();
+  const quotaError = page
+    .getByRole("alert")
+    .filter({ hasText: "余额不足或额度已耗尽" });
+  await expect(quotaError).toBeVisible();
   await expect(
     page.getByRole("alert").filter({ hasText: "请求过于频繁" }),
   ).toBeVisible();
@@ -66,14 +67,16 @@ test("TXT-08：余额耗尽、限流和密钥错误分别提示，保留手动�
   await expect(
     page.getByRole("button", { name: "重试任务", exact: true }),
   ).toHaveCount(4);
-  const task = page.locator(".task").filter({ hasText: runs[0].id });
-  await page.route(`**/runs/${runs[0].id}/retry`, (route) =>
+  const task = page.getByRole("article").filter({ has: quotaError });
+  await expect(task).not.toContainText(runs[0].id);
+  const retryPath = `/api/v1/runs/${runs[0].id}/retry`;
+  await page.route(`**${retryPath}`, (route) =>
     route.fulfill({ status: 202, json: {} }),
   );
   const retried = page.waitForRequest(
     (request) =>
       request.method() === "POST" &&
-      request.url().endsWith(`/runs/${runs[0].id}/retry`),
+      new URL(request.url()).pathname === retryPath,
   );
   await task.getByRole("button", { name: "重试任务", exact: true }).click();
   await retried;

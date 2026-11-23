@@ -1,5 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openWorkspacePanels } from "./workspace-helpers";
+import { approvedProp } from "./asset-reference-helpers";
 
 async function setup(page: Page) {
   const response = await page.request.post("/api/v1/auth/register", {
@@ -135,6 +136,42 @@ test("STORY-02：持久化规则、稳定关联、修订、归档依赖及恢复
     ),
   ).toBeTruthy();
   expect(crashes).toEqual([]);
+});
+
+test("故事设定按名称关联资产版本，精确绑定可保存与移除", async ({ page }) => {
+  const { headers, path, project } = await setup(page);
+  const prop = await approvedProp(page, headers, project.id, "旧信封参考图");
+  await page.getByRole("button", { name: "新建设定", exact: true }).click();
+  await kind(page, "物品");
+  await page.getByLabel("设定名称", { exact: true }).fill("信封");
+  const picker = page.getByRole("combobox", {
+    name: "关联资产版本",
+    exact: true,
+  });
+  await picker.click();
+  await page
+    .getByRole("option", { name: "旧信封参考图 · v1", exact: true })
+    .click();
+  const created = page.waitForResponse(
+    (row) =>
+      row.request().method() === "POST" && new URL(row.url()).pathname === path,
+  );
+  await save(page).click();
+  const response = await created;
+  expect(response.status(), await response.text()).toBe(201);
+  const entry = await response.json();
+  expect(entry.asset).toEqual(prop);
+  await expect(picker).toHaveText("旧信封参考图 · v1");
+  const editor = page.getByRole("region", { name: "故事设定编辑" });
+  await expect(editor).not.toContainText(prop.asset_version_id);
+  await picker.click();
+  await page.getByRole("option", { name: "未关联", exact: true }).click();
+  await save(page).click();
+  await expect(
+    editor.getByRole("heading", { name: "信封 · 修订 1" }),
+  ).toBeVisible();
+  const current = await page.request.get(`${path}/${entry.id}`, { headers });
+  expect((await current.json()).asset).toBeNull();
 });
 
 test("STORY-02：失败保留草稿、修订冲突、放弃确认与防重复提交", async ({

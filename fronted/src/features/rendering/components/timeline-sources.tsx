@@ -14,7 +14,7 @@ import useAudioPage from "@/features/audio/use-audio-page";
 import { prepareLineAudioDecisions } from "../api";
 import type { ClipAudio, Timeline, TimelineClip } from "../types";
 import useRenderDetail from "../hooks/use-render-detail";
-import { selectClass } from "./render-format";
+import { date, selectClass } from "./render-format";
 
 const identity = (row: { id: string }) => row.id;
 const lineIdentity = (row: AudioLine) => row.line_id;
@@ -120,9 +120,9 @@ function VoiceSources({
         <option value="" disabled>
           请选择匹配剧本的配音快照
         </option>
-        {options.map((row) => (
+        {options.map((row, index) => (
           <option key={row.id} value={row.id}>
-            {row.line_count} 句 · {row.id.slice(0, 8)}
+            快照 {index + 1} · {row.line_count} 句 · {date(row.created_at)}
           </option>
         ))}
       </select>
