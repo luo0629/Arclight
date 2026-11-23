@@ -52,6 +52,9 @@ def test_offline_art_subset_runs_actual_multimodal_comparison_missing_and_recove
         agent_role = AgentRole.ART_DIRECTOR
 
         async def evaluate_case(self, case):
+            return await asyncio.to_thread(self.execute_case, case)
+
+        def execute_case(self, case):
             current = add_episode(client, episode["project_id"], len(observations) + 10)
             mode = case.input_payload["mode"]
             content = (

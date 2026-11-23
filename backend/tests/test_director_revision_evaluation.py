@@ -50,7 +50,7 @@ def test_director_iteration_offline_subset_uses_real_feedback_and_frozen_repair_
 
         async def evaluate_case(self, case):
             try:
-                return self.execute_case(case)
+                return await asyncio.to_thread(self.execute_case, case)
             except Exception:
                 failures.append(traceback.format_exc())
                 raise

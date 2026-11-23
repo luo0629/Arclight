@@ -81,6 +81,9 @@ def test_offline_reviewer_subset_executes_actual_evidence_comparison_and_recover
         agent_role = AgentRole.CONTINUITY_REVIEWER
 
         async def evaluate_case(self, case):
+            return await asyncio.to_thread(self.execute_case, case)
+
+        def execute_case(self, case):
             started = time.monotonic()
             outcome = run_review(client, settings, reviewer_case)
             if mode == "recovery":

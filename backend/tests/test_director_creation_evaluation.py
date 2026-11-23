@@ -53,7 +53,7 @@ def test_offline_director_creation_observes_complete_scenes_exact_assets_clarifi
 
         async def evaluate_case(self, case):
             try:
-                return self.execute_case(case)
+                return await asyncio.to_thread(self.execute_case, case)
             except Exception:
                 errors.append(traceback.format_exc())
                 raise

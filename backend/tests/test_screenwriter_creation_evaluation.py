@@ -45,6 +45,9 @@ def test_creation_offline_subset_from_real_execution(
         agent_role = AgentRole.SCREENWRITER
 
         async def evaluate_case(self, case):
+            return await asyncio.to_thread(self.execute_case, case)
+
+        def execute_case(self, case):
             mode = case.input_payload["mode"]
             case_episode = add_episode(client, episode["project_id"], len(observations) + 2)
             failed = [False]

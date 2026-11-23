@@ -54,6 +54,9 @@ def test_offline_director_subset_observes_real_investigation_plan_escalation_and
         agent_role = AgentRole.DIRECTOR
 
         async def evaluate_case(self, case):
+            return await asyncio.to_thread(self.execute_case, case)
+
+        def execute_case(self, case):
             current = add_episode(client, episode["project_id"], len(observations) + 2)
             mode = case.input_payload["mode"]
             content = (

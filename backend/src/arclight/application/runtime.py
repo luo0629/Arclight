@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revision: int) -> None:
+    """Execute on a synchronous worker thread, including the run's MCP queries."""
     from arclight.application.gateway_text import runtime_scope
 
     with factory.begin() as db:
