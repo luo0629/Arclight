@@ -8,11 +8,12 @@ import {
   Image,
   Folder,
   Volume2,
+  Trash2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { StatusBadge } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Background,
   Controls,
@@ -27,6 +28,7 @@ import {
 import { api, json, message } from "@/lib/api/client";
 import type { Graph, GraphNode, Layout } from "@/types/api";
 import VersionImage from "@/features/assets/components/version-image";
+import { useAuth } from "@/features/auth/auth-context";
 import { imagePath, nodeGroup, nodeLabel, selectionLabel } from "../nodes";
 
 type Paper = Node<
@@ -34,6 +36,7 @@ type Paper = Node<
     projectId: string;
     unavailable: (cause: unknown) => void;
     selectNode: (node: GraphNode) => void;
+    removeNode?: (node: GraphNode) => void;
   } & Record<string, unknown>,
   "paper"
 >;
@@ -65,7 +68,33 @@ function PaperNode({ data, selected }: NodeProps<Paper>) {
       )}
     >
       <Handle type="target" position={Position.Left} isConnectable={false} />
-      <div className="paper-kicker flex items-center gap-2 text-[11px] text-muted-foreground">
+      {data.removeNode && (
+        <Button
+          type="button"
+          variant="destructive"
+          size="icon"
+          className={cn(
+            "nodrag nopan absolute top-2.5 right-2.5 z-10 motion-reduce:transition-none",
+            !selected &&
+              "pointer-events-none opacity-0 group-hover/canvas-node:pointer-events-auto group-hover/canvas-node:opacity-100 group-focus-within/canvas-node:pointer-events-auto group-focus-within/canvas-node:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+          )}
+          aria-label={`从画布删除：${data.title}${data.version_no ? ` v${data.version_no}` : ""}`}
+          title="从画布删除"
+          onClick={(event) => {
+            event.stopPropagation();
+            data.removeNode?.(data);
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <Trash2 aria-hidden="true" />
+        </Button>
+      )}
+      <div
+        className={cn(
+          "paper-kicker flex items-center gap-2 text-[11px] text-muted-foreground",
+          data.removeNode && "pr-8",
+        )}
+      >
         <span className="flex size-7 items-center justify-center rounded-lg bg-background text-primary">
           <Icon className="size-4" />
         </span>
@@ -108,6 +137,7 @@ function buildNodes(
   projectId: string,
   unavailable: (cause: unknown) => void,
   selectNode: (node: GraphNode) => void,
+  removeNode?: (node: GraphNode) => void,
 ): Paper[] {
   const counts: Record<string, number> = {};
   return graph.nodes.map((data) => {
@@ -130,7 +160,14 @@ function buildNodes(
     return {
       id: data.id,
       type: "paper",
-      data: { ...data, projectId, unavailable, selectNode },
+      className: "group/canvas-node",
+      data: {
+        ...data,
+        projectId,
+        unavailable,
+        selectNode,
+        removeNode: data.kind === "episode" ? undefined : removeNode,
+      },
       ariaLabel: `${nodeLabel(data)}：${data.title}${data.version_no ? ` v${data.version_no}` : ""}`,
       position: graph.layout.positions[data.id] ?? {
         x: 30 + column * 290,
@@ -139,6 +176,18 @@ function buildNodes(
     };
   });
 }
+
+function readRemovedNodes(key: string): string[] {
+  try {
+    const value: unknown = JSON.parse(window.localStorage.getItem(key) ?? "[]");
+    return Array.isArray(value)
+      ? value.filter((id): id is string => typeof id === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export default function Canvas({
   graph,
   episodeId,
@@ -147,6 +196,7 @@ export default function Canvas({
   writable,
   onSelect,
   onOpenShot,
+  onRemove,
   selectedId,
   focusId,
 }: {
@@ -159,38 +209,106 @@ export default function Canvas({
   writable: boolean;
   onSelect: (node: GraphNode) => void;
   onOpenShot: (node: GraphNode) => void;
+  onRemove: (node: GraphNode) => void;
 }) {
+  const { user } = useAuth();
+  const storageKey = `arclight-canvas-removed:${user.id}:${episodeId}`;
+  // The workspace mounts the canvas after loading its graph on the client.
+  const [removedIds, setRemovedIds] = useState(() =>
+    readRemovedNodes(storageKey),
+  );
+  const [notice, setNotice] = useState("");
+  const updateRemovedNodes = useCallback(
+    (next: string[]) => {
+      setRemovedIds(next);
+      setNotice("");
+      try {
+        if (next.length)
+          window.localStorage.setItem(storageKey, JSON.stringify(next));
+        else window.localStorage.removeItem(storageKey);
+      } catch {
+        setNotice("无法保存删除记录，刷新后可能恢复原先的画布。");
+      }
+    },
+    [storageKey],
+  );
+  const removeNode = useCallback(
+    (node: GraphNode) => {
+      updateRemovedNodes([...removedIds, node.id]);
+      onRemove(node);
+    },
+    [onRemove, removedIds, updateRemovedNodes],
+  );
+  const remove = writable ? removeNode : undefined;
   const [nodes, setNodes, onNodesChange] = useNodesState<Paper>(
-    buildNodes(graph, projectId, onUnavailable, onSelect).map((node) => ({
-      ...node,
-      selected: node.id === selectedId,
-    })),
+    buildNodes(graph, projectId, onUnavailable, onSelect, remove).map(
+      (node) => ({
+        ...node,
+        selected: node.id === selectedId,
+      }),
+    ),
   );
   const [instance, setInstance] = useState<ReactFlowInstance<Paper> | null>(
     null,
   );
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState("");
+  const removed = useMemo(() => {
+    const candidates = new Set(
+      graph.nodes
+        .filter((node) => node.kind !== "episode")
+        .map((node) => node.id),
+    );
+    return new Set(removedIds.filter((id) => candidates.has(id)));
+  }, [graph.nodes, removedIds]);
+  const visibleNodes = useMemo(
+    () => nodes.filter((node) => !removed.has(node.id)),
+    [nodes, removed],
+  );
+  const visibleEdges = useMemo(
+    () =>
+      graph.edges
+        .filter(
+          (edge) => !removed.has(edge.source) && !removed.has(edge.target),
+        )
+        .map((edge) => ({
+          ...edge,
+          style: {
+            strokeDasharray: edge.relation === "dependency" ? undefined : "5 5",
+          },
+        })),
+    [graph.edges, removed],
+  );
+  const lastRemoved = Array.from(removed).at(-1);
   const revision = useRef(graph.layout.revision);
   const focused = useRef<string | undefined>(undefined);
   useEffect(() => {
+    const syncRemoved = (event: StorageEvent) => {
+      if (event.key === storageKey || event.key === null)
+        setRemovedIds(readRemovedNodes(storageKey));
+    };
+    window.addEventListener("storage", syncRemoved);
+    return () => window.removeEventListener("storage", syncRemoved);
+  }, [storageKey]);
+  useEffect(() => {
     setNodes((current) =>
-      buildNodes(graph, projectId, onUnavailable, onSelect).map((node) => {
-        const prior = current.find((item) => item.id === node.id);
-        return {
-          ...node,
-          position: prior?.position ?? node.position,
-          selected: node.id === selectedId,
-        };
-      }),
+      buildNodes(graph, projectId, onUnavailable, onSelect, remove).map(
+        (node) => {
+          const prior = current.find((item) => item.id === node.id);
+          return {
+            ...node,
+            position: prior?.position ?? node.position,
+            selected: node.id === selectedId,
+          };
+        },
+      ),
     );
     if (graph.layout.revision > revision.current)
       setNotice("布局已被其他成员更新；保存可能冲突，请先刷新页面。");
-  }, [graph, selectedId, setNodes, projectId, onUnavailable, onSelect]);
+  }, [graph, selectedId, setNodes, projectId, onUnavailable, onSelect, remove]);
   useEffect(() => {
     if (!instance || !focusId || focused.current === focusId) return;
-    const target = nodes.find((node) => node.id === focusId);
+    const target = visibleNodes.find((node) => node.id === focusId);
     if (!target?.measured?.width || !target.measured.height) return;
     focused.current = focusId;
     void instance.fitView({
@@ -199,7 +317,7 @@ export default function Canvas({
       maxZoom: 1,
       duration: 0,
     });
-  }, [instance, focusId, nodes]);
+  }, [instance, focusId, visibleNodes]);
   async function save() {
     if (!instance) return;
     setSaving(true);
@@ -226,21 +344,39 @@ export default function Canvas({
   }
   return (
     <div className="canvas-wrap relative min-w-0 overflow-hidden bg-card">
-      <div
-        className="canvas-note pointer-events-none absolute top-3 left-3 z-10 max-w-[calc(100%-24px)] rounded-lg border bg-card/90 px-3 py-2 text-xs text-muted-foreground"
-        role="status"
-      >
-        {notice ||
-          "文本与媒体精确版本 · 实线标注真实依赖；也可切换版本列表查看和预览。"}
+      <div className="canvas-note pointer-events-none absolute top-3 left-3 z-10 flex max-w-[calc(100%-24px)] flex-wrap items-center gap-x-2 rounded-lg border bg-card/90 px-3 py-2 text-xs text-muted-foreground">
+        <span role="status">
+          {notice ||
+            (lastRemoved
+              ? `已从画布删除 ${removed.size} 个节点`
+              : "文本与媒体精确版本 · 实线标注真实依赖；也可切换版本列表查看和预览。")}
+        </span>
+        {lastRemoved && (
+          <Button
+            variant="link"
+            size="xs"
+            className="pointer-events-auto px-1"
+            onClick={() =>
+              updateRemovedNodes(removedIds.filter((id) => id !== lastRemoved))
+            }
+          >
+            撤销
+          </Button>
+        )}
+        {removed.size > 1 && (
+          <Button
+            variant="link"
+            size="xs"
+            className="pointer-events-auto px-1"
+            onClick={() => updateRemovedNodes([])}
+          >
+            恢复全部
+          </Button>
+        )}
       </div>
       <ReactFlow<Paper>
-        nodes={nodes}
-        edges={graph.edges.map((edge) => ({
-          ...edge,
-          style: {
-            strokeDasharray: edge.relation === "dependency" ? undefined : "5 5",
-          },
-        }))}
+        nodes={visibleNodes}
+        edges={visibleEdges}
         nodeTypes={nodeTypes}
         onNodeDoubleClick={(_, node) => {
           if (node.data.kind === "shot") onOpenShot(node.data);

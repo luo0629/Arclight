@@ -655,6 +655,11 @@ export default function EpisodeWorkspace({
                   onUnavailable={onUnavailable}
                   writable={writable}
                   onOpenShot={(node) => setShotId(node.id)}
+                  onRemove={(node) => {
+                    if (selected?.id !== node.id) return;
+                    navigate({ node: "" }, true);
+                    setInspectorOpen(false);
+                  }}
                   onSelect={(node: GraphNode) => {
                     setSelectedId(node.id);
                     setInspectorOpen(true);

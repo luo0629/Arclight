@@ -354,6 +354,10 @@ test("UI-01：Viewer可使用列表媒体预览且画布没有布局写入口", 
   await expect(
     page.getByRole("button", { name: /保存画布位置|位置已保存/ }),
   ).toHaveCount(0);
+  await expect(page.locator(".react-flow__node").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: /^从画布删除/ })).toHaveCount(
+    0,
+  );
   await panel
     .getByRole("button", { name: "读取画布成片预览", exact: true })
     .click();
@@ -425,6 +429,58 @@ test("UI-01：媒体节点保存布局仍用原ID和CAS且不写业务依赖", a
     Object.keys(env.layoutWrites[1].body.positions as object).sort(),
   ).toEqual(env.nodes.map((n) => n.id).sort());
   expect(env.mutations).toHaveLength(0);
+});
+
+test("画布节点悬停可删除，刷新后仍隐藏并可撤销", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  const env = await canvasMediaFixture(page);
+  const panel = await env.openCanvas(undefined, "canvas");
+  const node = page.locator(`.react-flow__node[data-id="${env.image.id}"]`);
+  const edge = page
+    .locator(".react-flow__edge")
+    .filter({ hasText: "参考依赖" });
+  const remove = node.getByRole("button", {
+    name: `从画布删除：${env.image.title} v${env.image.version_no}`,
+    exact: true,
+  });
+  await page.mouse.move(4, 4);
+  await expect(node).toBeVisible();
+  const position = await node.evaluate((element) => element.style.transform);
+  await expect(edge).toHaveCount(1);
+  await expect(remove).toHaveCSS("opacity", "0");
+  await node.hover();
+  await expect(remove).toHaveCSS("opacity", "1");
+  await node.getByRole("button", { name: /^查看镜头候选图/ }).click();
+  await expect(panel).toBeVisible();
+  await remove.click();
+  await expect(node).toHaveCount(0);
+  await expect(edge).toHaveCount(0);
+  await expect(panel).toHaveCount(0);
+  await expect(page).toHaveURL((url) => !url.searchParams.has("node"));
+
+  await page.reload();
+  await closeDirectory(page);
+  const undo = page.getByRole("button", { name: "撤销", exact: true });
+  await expect(undo).toBeVisible();
+  await expect(node).toHaveCount(0);
+  await expect(edge).toHaveCount(0);
+  await page.getByRole("radio", { name: "版本列表", exact: true }).click();
+  const list = page.getByRole("region", {
+    name: "内容与媒体列表",
+    exact: true,
+  });
+  await expect(
+    list.getByRole("button", { name: /红色箱子 · 镜头候选/ }),
+  ).toBeVisible();
+  await page.getByRole("radio", { name: "创作画布", exact: true }).click();
+  await undo.click();
+  await expect(node).toBeVisible();
+  expect(await node.evaluate((element) => element.style.transform)).toBe(
+    position,
+  );
+  await expect(edge).toHaveCount(1);
+  expect(env.mutations).toHaveLength(0);
+  expect(env.layoutWrites).toHaveLength(0);
 });
 
 for (const size of [
