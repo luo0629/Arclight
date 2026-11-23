@@ -1331,6 +1331,14 @@ test("RENDER-12：读取历史成功任务后请求收敛，成功不冒充正�
       { timeout: 5000 },
     )
     .toBeGreaterThan(500);
-  await expect(current).toContainText(succeeded.id);
+  await expect(current.getByRole("heading", { level: 4 })).toHaveText(
+    "渲染成功 · 100%",
+  );
+  await expect(current).not.toContainText(succeeded.id);
+  expect(
+    env.reads.some((url) =>
+      new URL(url).pathname.endsWith(`/render-jobs/${succeeded.id}/attempts`),
+    ),
+  ).toBe(true);
   expect(env.mutations).toHaveLength(0);
 });

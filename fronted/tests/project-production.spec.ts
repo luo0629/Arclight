@@ -35,7 +35,9 @@ test("UI-07 UI7-04/09：目录页外渲染任务读取精确清单和时间轴�
     name: "当前渲染任务",
     exact: true,
   });
-  await expect(selected).toContainText(`任务 ${job.id} · 修订 1`);
+  const heading = selected.getByRole("heading", { level: 4 });
+  await expect(heading).toHaveText("排队中 · 0%");
+  await expect(selected).not.toContainText(job.id);
   for (const path of [
     `/render-jobs/${job.id}`,
     `/render-manifests/${manifest.id}`,
@@ -47,13 +49,13 @@ test("UI-07 UI7-04/09：目录页外渲染任务读取精确清单和时间轴�
   job.status = "RUNNING";
   job.revision = 4;
   job.progress = 37;
-  await expect(selected).toContainText("修订 4", { timeout: 10000 });
   await expect(selected.getByRole("progressbar")).toHaveAttribute(
     "value",
     "37",
+    { timeout: 10000 },
   );
   await selected.getByRole("button", { name: "取消渲染", exact: true }).click();
-  await expect(selected).toContainText("修订 5");
+  await expect(heading).toHaveText("已取消 · 37%");
   const cancellations = env.mutations.filter((row) =>
     row.path.endsWith(`/render-jobs/${job.id}/cancel`),
   );
