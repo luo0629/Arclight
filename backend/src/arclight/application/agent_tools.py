@@ -56,6 +56,7 @@ class AgentToolContext:
     episode_id: UUID
     actor_id: str
     agent_name: AgentName
+    stage: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,6 +472,7 @@ def execute_agent_tool(
         episode_id=episode.id,
         actor_id=grant.actor_id,
         agent_name=agent_name,
+        stage=running_steps[0],
     )
     try:
         with db.begin_nested():

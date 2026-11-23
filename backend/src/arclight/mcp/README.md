@@ -1,24 +1,21 @@
 # Arclight MCP
 
-在仓库根目录启动 Arclight。MCP 随 API 容器一起运行。
+Arclight 的五类内置 Agent 通过 MCP SDK 的内存传输查找并调用项目工具。任务在哪个进程执行，MCP 服务就随该次运行在该进程内提供。按现有 Compose 命令启动即可。
 
 ```powershell
 docker compose up --build -d
 ```
 
-- 使用支持 Streamable HTTP 的客户端连接 `http://127.0.0.1:8080/api/mcp`。
-- 客户端在每次请求发送 `Authorization: Bearer <访问令牌>`，使用 Arclight 登录会话的访问令牌。服务检查签名、过期时间、会话撤销状态和用户状态。
-- 自定义域名部署从现有 API 网关转发 `/api/mcp`，并在 `ARCLIGHT_AUTH_ALLOWED_ORIGINS` 配置受信来源。该值同时授权来源对应的 Host。
-- 每次查询以令牌所属账号检查项目权限。Arclight 内置 Agent 在进程内调用同一查询服务，并额外受当前角色、阶段和运行授权限制。
+后端将当前运行已授予、且符合角色与活动阶段的工具通过 `tools/list` 提供给模型。模型选中工具后，运行时重新校验授权，再通过 `tools/call` 调用。查询沿用同一个事务，并使用后端确定的账号、项目、剧集和运行范围。MCP 仅在运行进程内部可访问。
 
-| 工具 | 输入范围 |
-| --- | --- |
-| `arclight_read_content` | 指定剧集的已批准剧本版本，可选择场次 |
-| `arclight_query_story_facts` | 指定剧集内冻结了叙事上下文的运行，可筛选场次、故事时间和角色 |
-| `arclight_read_shot_context` | 指定剧集的已批准分镜版本和镜头 |
-| `arclight_read_visual_references` | 指定项目的视觉规范版本和当前可用的项目级已批准参考 |
-| `arclight_read_production_status` | 制片运行的最新计划、任务状态和预算用量 |
-| `arclight_read_review_evidence` | 指定运行和阶段的取证轨迹及已有审查报告，可限制取证轮次 |
-| `arclight_preview_change_impact` | 指定项目中一个精确资产版本变化后受影响的对象 |
+| 工具 | 允许的角色 | 查询范围 |
+| --- | --- | --- |
+| `arclight_read_content` | 编剧、导演、美术指导、连续性审查 | 本剧集已批准的剧本，可选择场次 |
+| `arclight_query_story_facts` | 编剧、导演、连续性审查 | 本次运行的冻结叙事上下文，可筛选场次、故事时间和角色 |
+| `arclight_read_shot_context` | 导演、美术指导、连续性审查 | 本剧集已批准的分镜和镜头 |
+| `arclight_read_visual_references` | 导演、美术指导、连续性审查 | 本项目的视觉规范和已批准参考 |
+| `arclight_read_production_status` | 制片 | 本次制片运行的计划、任务状态与预算 |
+| `arclight_read_review_evidence` | 制片、连续性审查 | 本次运行的证据与审查报告，制片也可查同一账号发起的直属委派审查 |
+| `arclight_preview_change_impact` | 制片、编剧、导演 | 本项目的资产版本变更影响。编剧限写稿和改稿阶段 |
 
-成功调用在 `structuredContent.data` 返回结构化数据。无法读取时，调用结果包含错误码。工具均为只读。
+七项工具均为只读。权限表给出各角色可被授予的工具。每次运行的实际清单还取决于工作流的授权、阶段和数据范围。

@@ -19,13 +19,13 @@ from arclight.application.model_services import (
     text_credential_identity,
 )
 from arclight.application.production_versions import text_settings
+from arclight.application.shared_agent_reads import agent_tool_declarations
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.agent_model import (
     AgentModelRequest,
     AgentModelResponse,
-    AgentToolDeclaration,
 )
 from arclight.domain.model_gateway import (
     GatewayCapabilities,
@@ -101,14 +101,7 @@ def invoke_agent[T: BaseModel](
         definitions = available_agent_tools(
             db, registry, run.id, request.agent_name, actor, request.stage
         )
-        tools = tuple(
-            AgentToolDeclaration(
-                name=tool.name,
-                description=(tool.parameters_model.__doc__ or tool.name)[:1000],
-                parameters=tool.parameters_model.model_json_schema(),
-            )
-            for tool in definitions
-        )
+        tools = agent_tool_declarations(definitions)
         snapshot = run.input_json.get("_text_service")
         settings = run_settings(text_settings(db, episode.project_id, run, settings), snapshot, db)
         transport = agent_transport(settings)

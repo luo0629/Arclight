@@ -1,114 +1,202 @@
-"""Exercise the real MCP endpoint with the SDK and isolated accounts."""
+"""Exercise private MCP discovery, calls and permission checks with the SDK."""
 
 import asyncio
+from dataclasses import replace
+from uuid import UUID, uuid4
 
-import httpx2
-from conftest import serve_asgi
-from mcp import ClientSession, types
-from mcp.client.streamable_http import streamable_http_client
+import pytest
 from sqlalchemy import func, select
-from test_collaboration import create_episode, create_project, register
+from test_collaboration import register
 from test_director_workflow import script
 from test_visual_bible import edit
 
-from arclight.main import create_app
-from arclight.persistence.models import AgentToolInvocation, DependencyManifest, Script
+from arclight.application.agent_runtime_state import scope_for_run
+from arclight.application.agent_tools import (
+    AgentToolContext,
+    AgentToolRegistry,
+    available_agent_tools,
+    grant_agent_tools,
+)
+from arclight.application.shared_agent_reads import (
+    agent_tool_declarations,
+    grant_professional_agent_tools,
+    with_project_reads,
+)
+from arclight.domain.agent_state import initial_agent_state, transition_agent_step
+from arclight.domain.agent_tools import AgentToolGrantRequest
+from arclight.mcp.client import project_read_session
+from arclight.mcp.server import create_project_read_server
+from arclight.persistence.models import (
+    AgentToolInvocation,
+    DependencyManifest,
+    Episode,
+    Project,
+    Script,
+    WorkflowRun,
+)
 
-EXPECTED_TOOLS = {
-    "arclight_read_content",
-    "arclight_query_story_facts",
-    "arclight_read_shot_context",
-    "arclight_read_visual_references",
-    "arclight_read_production_status",
-    "arclight_read_review_evidence",
-    "arclight_preview_change_impact",
-}
+READ_SCRIPT = "arclight_read_content"
+READ_VISUAL = "arclight_read_visual_references"
+PREVIEW_IMPACT = "arclight_preview_change_impact"
 
 
-def test_project_reads_over_mcp_check_current_session_and_project(client, settings):
-    register(client, "outside@example.com")
-    outside = create_project(client)
-    outside_episode = create_episode(client, outside)
-    outside_script = script(client, f"/api/v1/episodes/{outside_episode['id']}")
+def active_run(db, episode, workflow_type, stage):
+    db_episode = db.get(Episode, UUID(episode["id"]))
+    project = db.get(Project, db_episode.project_id)
+    identity = uuid4().hex
+    run = WorkflowRun(
+        episode_id=db_episode.id,
+        workflow_type=workflow_type,
+        status="RUNNING",
+        trace_id=identity,
+        idempotency_key=identity,
+        request_fingerprint=identity,
+        input_json={},
+    )
+    db.add(run)
+    db.flush()
+    scope = scope_for_run(run, db_episode.project_id)
+    run.agent_state_json = transition_agent_step(
+        initial_agent_state(scope), scope, expected_revision=0, step_id=stage, target="RUNNING"
+    ).model_dump(mode="json")
+    return run, db_episode, project.owner_id
 
-    owner = register(client)
-    project = create_project(client)
-    episode = create_episode(client, project)
-    endpoint = f"/api/v1/episodes/{episode['id']}"
-    approved = script(client, endpoint)
-    draft = script(client, endpoint, version=1, approve=False)
-    bible = edit(client, project, art_style="水彩")
+
+def test_mcp_has_no_public_http_route(client):
+    for method in ("GET", "POST"):
+        assert client.request(method, "/api/mcp", headers={"Authorization": ""}).status_code == 404
+    register(client)
+    for method in ("GET", "POST"):
+        assert client.request(method, "/api/mcp").status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("role", "workflow_type", "stage", "expected"),
+    [
+        (
+            "producer",
+            "producer",
+            "producer",
+            {"read_production_status", "read_review_evidence", "preview_change_impact"},
+        ),
+        (
+            "screenwriter",
+            "story_outline",
+            "outline",
+            {"read_content", "query_story_facts"},
+        ),
+        (
+            "screenwriter",
+            "script_storyboard",
+            "script",
+            {"read_content", "query_story_facts", "preview_change_impact"},
+        ),
+        (
+            "screenwriter",
+            "script_rewrite",
+            "rewrite",
+            {"read_content", "query_story_facts", "preview_change_impact"},
+        ),
+        (
+            "director",
+            "storyboard",
+            "storyboard",
+            {
+                "read_content",
+                "query_story_facts",
+                "read_shot_context",
+                "read_visual_references",
+                "preview_change_impact",
+            },
+        ),
+        (
+            "art_director",
+            "art_proposal",
+            "storyboard",
+            {"read_content", "read_shot_context", "read_visual_references"},
+        ),
+        (
+            "continuity_reviewer",
+            "continuity_review",
+            "storyboard",
+            {
+                "read_content",
+                "query_story_facts",
+                "read_shot_context",
+                "read_visual_references",
+                "read_review_evidence",
+            },
+        ),
+    ],
+)
+def test_runtime_discovers_only_mcp_tools_granted_to_role_and_stage(
+    client, episode, role, workflow_type, stage, expected
+):
+    with client.app.state.session_factory.begin() as db:
+        run, _, actor = active_run(db, episode, workflow_type, stage)
+        registry = AgentToolRegistry()
+        grant = AgentToolGrantRequest(run_id=run.id, agent_name=role, allowed_tools=[])
+        grant_professional_agent_tools(db, grant, actor, registry)
+        registry = with_project_reads(registry)
+        definitions = available_agent_tools(db, registry, run.id, role, actor, stage)
+        declarations = agent_tool_declarations(definitions)
+        assert {tool.name for tool in declarations} == {f"arclight_{name}" for name in expected}
+        assert all(tool.parameters["additionalProperties"] is False for tool in declarations)
+
+        kept = declarations[0].name
+        grant_agent_tools(db, grant.model_copy(update={"allowed_tools": [kept]}), actor, registry)
+        definitions = available_agent_tools(db, registry, run.id, role, actor, stage)
+        assert [tool.name for tool in agent_tool_declarations(definitions)] == [kept]
+
+
+def test_private_mcp_checks_agent_scope_and_returns_read_only_evidence(client, episode):
+    episode_id = episode["id"]
+    project_id = episode["project_id"]
+    prefix = f"/api/v1/episodes/{episode_id}"
+    approved = script(client, prefix)
+    draft = script(client, prefix, version=1, approve=False)
+    other_episode = client.post(
+        f"/api/v1/projects/{project_id}/episodes", json={"episode_no": 2, "title": "第二集"}
+    )
+    assert other_episode.status_code == 201, other_episode.text
+    other_episode_id = other_episode.json()["id"]
+    other_script = script(client, f"/api/v1/episodes/{other_episode_id}")
+    bible = edit(client, {"id": project_id}, art_style="水彩")
     assert bible.status_code == 201, bible.text
 
-    def counts():
-        with client.app.state.session_factory() as db:
-            return tuple(
-                db.scalar(select(func.count()).select_from(model))
-                for model in (Script, DependencyManifest, AgentToolInvocation)
-            )
-
-    before = counts()
-    headers = {"Authorization": "Bearer " + owner["access_token"]}
-
-    async def exercise(url):
-        init = {
-            "jsonrpc": "2.0",
-            "method": "initialize",
-            "id": 1,
-            "params": {
-                "protocolVersion": types.LATEST_PROTOCOL_VERSION,
-                "clientInfo": {"name": "Arclight consumer test", "version": "1"},
-                "capabilities": {},
-            },
-        }
-        async with httpx2.AsyncClient(trust_env=False, timeout=15) as http:
-            assert (await http.post(url, json=init)).status_code == 401
-            development = {"Authorization": "Bearer " + settings.api_token.get_secret_value()}
-            assert (await http.post(url, json=init, headers=development)).status_code == 401
-            untrusted = {**headers, "Origin": "https://other.example"}
-            assert (await http.post(url, json=init, headers=untrusted)).status_code == 403
-
-        async with (
-            asyncio.timeout(60),
-            httpx2.AsyncClient(headers=headers, trust_env=False, timeout=15) as http,
-            streamable_http_client(url, http_client=http) as (reader, writer),
-            ClientSession(reader, writer) as session,
-        ):
-            initialized = await session.initialize()
-            assert initialized.server_info.name == "arclight"
-            listed = (await session.list_tools()).tools
-            assert len(listed) == 7 and {tool.name for tool in listed} == EXPECTED_TOOLS
+    async def exercise(context):
+        names = (READ_SCRIPT, READ_VISUAL, PREVIEW_IMPACT)
+        request = {"episode_id": episode_id, "version_id": approved["id"], "scene_no": 1}
+        server = create_project_read_server(names, context=context)
+        async with project_read_session(server) as session:
+            denied = await session.call_tool("arclight_read_production_status", {})
+            assert denied.is_error and denied.content[0].text == "AGENT_NOT_ALLOWED"
+            tools = (await session.list_tools()).tools
+            assert {tool.name for tool in tools} == set(names)
             assert all(
                 tool.annotations
                 and tool.annotations.read_only_hint
                 and tool.input_schema["additionalProperties"] is False
                 and tool.output_schema
-                for tool in listed
+                for tool in tools
             )
-            request = {
-                "episode_id": episode["id"],
-                "version_id": approved["id"],
-                "scene_no": 1,
-            }
-            version = await session.call_tool("arclight_read_content", request)
-            assert not version.is_error
-            data = version.structured_content["data"]
+
+            script_result = await session.call_tool(READ_SCRIPT, request)
+            assert not script_result.is_error
+            data = script_result.structured_content["data"]
             assert data["version_id"] == approved["id"]
-            assert len(data["content"]["scenes"]) == 1
-            assert data["content"]["scenes"][0]["scene_no"] == 1
+            assert [scene["scene_no"] for scene in data["content"]["scenes"]] == [1]
             assert len(data["content_sha256"]) == 64
 
             visual = await session.call_tool(
-                "arclight_read_visual_references",
-                {"project_id": project["id"], "version_id": bible.json()["id"]},
+                READ_VISUAL, {"project_id": project_id, "version_id": bible.json()["id"]}
             )
             assert not visual.is_error
             fields = visual.structured_content["data"]["visual_bible"]["fields"]
             assert fields["art_style"] == "水彩"
 
             impact = await session.call_tool(
-                "arclight_preview_change_impact",
-                {"project_id": project["id"], "version_id": approved["id"]},
+                PREVIEW_IMPACT, {"project_id": project_id, "version_id": approved["id"]}
             )
             assert not impact.is_error
             assert impact.structured_content["data"]["source_asset_version_id"] == approved["id"]
@@ -116,22 +204,39 @@ def test_project_reads_over_mcp_check_current_session_and_project(client, settin
             for query, code in (
                 ({**request, "version_id": draft["id"]}, "CONTENT_NOT_APPROVED"),
                 ({**request, "actor": "service-owner"}, "INVALID_ARGUMENTS"),
-                ({**request, "version_id": outside_script["id"]}, "NOT_FOUND"),
+                ({**request, "version_id": other_script["id"]}, "NOT_FOUND"),
                 (
                     {
-                        "episode_id": outside_episode["id"],
-                        "version_id": outside_script["id"],
+                        "episode_id": other_episode_id,
+                        "version_id": other_script["id"],
                     },
                     "NOT_FOUND",
                 ),
             ):
-                error = await session.call_tool("arclight_read_content", query)
+                error = await session.call_tool(READ_SCRIPT, query)
                 assert error.is_error and error.content[0].text == code
 
-            assert client.post("/api/v1/auth/logout").status_code == 204
-            revoked = await http.post(url, json=init)
-            assert revoked.status_code == 401
+        for denied_context in (
+            None,
+            replace(context, agent_name="producer"),
+            replace(context, stage="script_review"),
+        ):
+            server = create_project_read_server((READ_SCRIPT,), context=denied_context)
+            async with project_read_session(server) as session:
+                denied = await session.call_tool(READ_SCRIPT, request)
+                assert denied.is_error and denied.content[0].text == "AGENT_NOT_ALLOWED"
 
-    with serve_asgi(create_app(settings)) as address:
-        asyncio.run(exercise(address + "/api/mcp"))
-    assert counts() == before
+    def counts(db):
+        return tuple(
+            db.scalar(select(func.count()).select_from(model))
+            for model in (Script, DependencyManifest, AgentToolInvocation)
+        )
+
+    with client.app.state.session_factory.begin() as db:
+        run, db_episode, actor = active_run(db, episode, "storyboard", "storyboard")
+        context = AgentToolContext(
+            db, run.id, db_episode.project_id, db_episode.id, actor, "director", stage="storyboard"
+        )
+        before = counts(db)
+        asyncio.run(exercise(context))
+        assert counts(db) == before

@@ -1,4 +1,4 @@
-"""The same bounded tool contracts for the Agent Runtime and the MCP endpoint."""
+"""Run grants and contracts for internal Agent MCP tools."""
 
 import json
 from dataclasses import dataclass
@@ -15,6 +15,7 @@ from arclight.application.agent_tools import (
     grant_agent_tools,
 )
 from arclight.core.errors import DomainError
+from arclight.domain.agent_model import AgentToolDeclaration
 from arclight.domain.agent_state import AgentStepId
 from arclight.domain.agent_tools import (
     MAX_AGENT_TOOL_RESULT_BYTES,
@@ -104,7 +105,7 @@ def _in_run_scope(context: AgentToolContext, run_id: UUID, *, delegated_review: 
     )
 
 
-def _validate_run_scope(context: AgentToolContext, request: AgentToolContract) -> None:
+def validate_project_read_scope(context: AgentToolContext, request: AgentToolContract) -> None:
     if isinstance(request, EpisodeRead):
         if request.episode_id != context.episode_id:
             raise DomainError("NOT_FOUND", "对象不在本次运行的剧集范围", 404)
@@ -143,9 +144,11 @@ class ProjectReadTool:
 
     def definition(self) -> AgentToolDefinition:
         def read(context: AgentToolContext, request: AgentToolContract) -> ProjectReadResult:
-            from arclight.application.agent_project_reads import ProjectReads
+            from arclight.mcp.client import call_project_read
 
-            return self.read(ProjectReads(context.db, context.actor_id), request)
+            return ProjectReadResult.model_validate(
+                call_project_read(context, self.name, request.model_dump(mode="json"))
+            )
 
         return AgentToolDefinition(
             name=self.name,
@@ -153,7 +156,7 @@ class ProjectReadTool:
             allowed_steps=self.steps,
             parameters_model=self.parameters,
             result_model=ProjectReadResult,
-            scope_validator=_validate_run_scope,
+            scope_validator=lambda context, request: None,
             handler=read,
         )
 
@@ -203,11 +206,41 @@ PROJECT_READ_TOOLS = (
     ),
 )
 
+_MCP_DEFINITIONS = tuple(tool.definition() for tool in PROJECT_READ_TOOLS)
+
 
 def with_project_reads(registry: AgentToolRegistry) -> AgentToolRegistry:
+    # Persistent execution can rebuild the runtime using an already populated registry.
     return registry.with_tools(
-        tool.definition() for tool in PROJECT_READ_TOOLS if registry.get(tool.name) is None
+        tool for tool in _MCP_DEFINITIONS if registry.get(tool.name) is not tool
     )
+
+
+def agent_tool_declarations(
+    definitions: tuple[AgentToolDefinition, ...],
+) -> tuple[AgentToolDeclaration, ...]:
+    from arclight.mcp.client import list_project_reads
+
+    allowed = {definition.name for definition in definitions}
+    names = {tool.name for tool in PROJECT_READ_TOOLS} & allowed
+    mcp_tools = list_project_reads(names) if names else {}
+    declarations = []
+    for definition in definitions:
+        if definition.name in mcp_tools:
+            tool = mcp_tools[definition.name]
+            declaration = AgentToolDeclaration(
+                name=tool.name,
+                description=(tool.description or tool.name)[:1000],
+                parameters=dict(tool.input_schema),
+            )
+        else:
+            declaration = AgentToolDeclaration(
+                name=definition.name,
+                description=(definition.parameters_model.__doc__ or definition.name)[:1000],
+                parameters=definition.parameters_model.model_json_schema(),
+            )
+        declarations.append(declaration)
+    return tuple(declarations)
 
 
 def grant_professional_agent_tools(

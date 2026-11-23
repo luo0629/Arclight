@@ -28,6 +28,7 @@ from arclight.application.agent_tools import (
 )
 from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.generation_leases import DEFAULT_POLICY, LeasePolicy
+from arclight.application.shared_agent_reads import agent_tool_declarations
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
@@ -131,8 +132,8 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
                 db, self.registry, request.run_id, request.agent_name, actor, request.stage
             )
             declarations = []
-            for tool in definitions:
-                schema = tool.parameters_model.model_json_schema()
+            for tool in agent_tool_declarations(definitions):
+                schema = tool.parameters
                 parameters: dict | str = schema
                 try:
                     safe_metadata(schema)
