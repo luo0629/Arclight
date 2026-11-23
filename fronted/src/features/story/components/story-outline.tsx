@@ -608,19 +608,8 @@ export default function StoryOutline({
               <details className="studio-disclosure mb-4">
                 <summary>查看大纲来源与原文快照</summary>
                 <p>来源：{detail.source_snapshot.source_name}</p>
-                {detail.source_snapshot.analysis_id && (
-                  <p className="break-all">
-                    提炼 v{detail.source_snapshot.analysis_version_no}：
-                    {detail.source_snapshot.analysis_id}
-                  </p>
-                )}
-                <p className="break-all text-xs">
-                  文本 SHA-256：{detail.source_snapshot.story_sha256}
-                </p>
-                {detail.source_snapshot.source_sha256 && (
-                  <p className="break-all text-xs">
-                    文件 SHA-256：{detail.source_snapshot.source_sha256}
-                  </p>
+                {detail.source_snapshot.analysis_version_no != null && (
+                  <p>故事提炼 v{detail.source_snapshot.analysis_version_no}</p>
                 )}
                 <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-sans text-sm">
                   {detail.source_snapshot.story}

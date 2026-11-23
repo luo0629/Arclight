@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-import { Notice, FormLabel } from "@/components/ui-kit";
+import { FormLabel } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 
 import { FieldGroup } from "@/components/ui/field";
@@ -83,7 +83,9 @@ export default function ProjectWorkspace({
   const lastEpisode = useRef<Episode | null>(null);
   const [role, setRole] = useState("viewer");
   const [loaded, setLoaded] = useState(false);
-  const [error, setError] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+  const [createError, setCreateError] = useState("");
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState(false);
   const section = useSearchParams().get("section");
@@ -132,15 +134,15 @@ export default function ProjectWorkspace({
       }
     }
     setLoaded(true);
-    setError("");
+    setLoadFailed(false);
   }, [project.id, loadEpisodes]);
   useEffect(() => {
     let live = true;
     void (async () => {
       try {
         await reload();
-      } catch (error) {
-        if (live) setError(message(error));
+      } catch {
+        if (live) setLoadFailed(true);
       }
     })();
     return () => {
@@ -148,7 +150,7 @@ export default function ProjectWorkspace({
     };
   }, [reload, episodeId]);
   useProjectEvents(() => {
-    void reload().catch((cause) => setError(message(cause)));
+    void reload().catch(() => setLoadFailed(true));
   });
   const owner = role === "owner";
   const writable = role !== "viewer" && !project.archived;
@@ -181,10 +183,24 @@ export default function ProjectWorkspace({
     setPinnedEpisode(updated);
     if (lastEpisode.current?.id === updated.id) lastEpisode.current = updated;
   }
+  function addEpisode() {
+    setCreateError("");
+    setAdding(true);
+  }
+  async function retryLoad() {
+    setRetrying(true);
+    try {
+      await reload();
+    } catch {
+      setLoadFailed(true);
+    } finally {
+      setRetrying(false);
+    }
+  }
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
-    setError("");
+    setCreateError("");
     const data = new FormData(event.currentTarget);
     try {
       const row = await api<Episode>(
@@ -195,13 +211,10 @@ export default function ProjectWorkspace({
           target_duration_ms: Math.round(Number(data.get("duration")) * 1000),
         }),
       );
-      await reload();
-      setPinnedEpisode(row);
       setAdding(false);
-      setDirectoryOpen(false);
       openEpisode(row);
     } catch (error) {
-      setError(message(error));
+      setCreateError(message(error));
     } finally {
       setBusy(false);
     }
@@ -218,7 +231,7 @@ export default function ProjectWorkspace({
         writable,
         episodeError,
         openEpisode,
-        addEpisode: () => setAdding(true),
+        addEpisode,
         updateEpisode,
         reload,
       }}
@@ -317,7 +330,7 @@ export default function ProjectWorkspace({
           <div
             className={cn("project-body", directoryOpen && "directory-is-open")}
             aria-busy={
-              !loaded ||
+              (!loaded && !loadFailed) ||
               episodeList.loading ||
               (!episodeId && page === "canvas" && episodes.length > 0)
             }
@@ -399,7 +412,7 @@ export default function ProjectWorkspace({
                   variant="outline"
                   size="lg"
                   className="dashed-button w-full border-dashed"
-                  onClick={() => setAdding(true)}
+                  onClick={addEpisode}
                 >
                   ＋ 添加一集
                 </Button>
@@ -461,9 +474,7 @@ export default function ProjectWorkspace({
                           setPinnedEpisode(copied);
                           openEpisode(copied);
                           // A successful copy stays successful even if the directory refresh fails.
-                          void loadEpisodes().catch((error) =>
-                            setError(message(error)),
-                          );
+                          void loadEpisodes().catch(() => {});
                         }}
                       />
                     </div>
@@ -471,31 +482,24 @@ export default function ProjectWorkspace({
                 </div>
                 <div className="flex min-w-0 flex-wrap items-center gap-3">
                   <ProjectStreamStatus />
-                  <span className="hidden items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs text-accent-foreground min-[901px]:flex">
-                    <Leaf className="size-3.5" />
-                    让灵感慢慢生长
-                  </span>
                 </div>
+                {loadFailed && !loaded && (
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <p role="alert" className="text-destructive">
+                      无法读取项目。
+                    </p>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={retrying}
+                      onClick={() => void retryLoad()}
+                    >
+                      {retrying ? "正在加载…" : "重新加载项目"}
+                    </Button>
+                  </div>
+                )}
               </div>
-              {error && (
-                <Notice
-                  tone="error"
-                  className="error workspace-error mb-4"
-                  role="alert"
-                >
-                  {error}
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    onClick={() =>
-                      void reload().catch((error) => setError(message(error)))
-                    }
-                  >
-                    重试
-                  </Button>
-                </Notice>
-              )}
-              {children}
+              {(!loadFailed || loaded) && children}
             </main>
           </div>
           {adding && (
@@ -548,10 +552,10 @@ export default function ProjectWorkspace({
                       />
                     </FormLabel>
                   </div>
-                  {error && (
-                    <Notice tone="error" className="error" role="alert">
-                      {error}
-                    </Notice>
+                  {createError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {createError}
+                    </p>
                   )}
                   <div className="button-row flex flex-wrap items-center gap-2">
                     <Button

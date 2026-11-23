@@ -552,10 +552,12 @@ export function ScriptNarrativeSummary({
     >
       <h4 className="font-medium">连续剧绑定与状态提案</h4>
       <p className="break-all">
-        规划版本：{String(context?.series_plan_version_id ?? "未绑定")}
+        {context?.series_plan_version_id
+          ? "已绑定连续剧规划"
+          : "尚未绑定连续剧规划"}
       </p>
       <p className="break-all">
-        账本基准：{String(context?.ledger_version_id ?? "尚无批准账本")} · 修订{" "}
+        {context?.ledger_version_id ? "已引用批准账本" : "尚无批准账本"} · 修订{" "}
         {String(context?.expected_ledger_head_revision ?? "未记录")}
       </p>
       {scenes.map((scene) => (
@@ -586,12 +588,6 @@ export function ScriptNarrativeSummary({
           批准此精确剧本时，上述状态提案将与剧本绑定提交。账本基准变化时须重新核对；未批准稿不会成为已确认事实。
         </Notice>
       )}
-      <details>
-        <summary>冻结写作依据</summary>
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">
-          {JSON.stringify(context, null, 2)}
-        </pre>
-      </details>
     </section>
   );
 }
@@ -661,14 +657,6 @@ export function StoryStateReceiptSummary({
       <p role="status">
         剧本与状态提案已一起批准，账本修订 {receipt.revision}。
       </p>
-      <p className="break-all">精确剧本：{receipt.script_version_id}</p>
-      <p className="break-all">批准账本：{receipt.approved_version_id}</p>
-      <details>
-        <summary>批准来源与摘要校验</summary>
-        <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-all text-xs">
-          {JSON.stringify(receipt, null, 2)}
-        </pre>
-      </details>
       <p className="text-xs text-muted-foreground">
         此回执仅显示本次操作结果；历史依据请查看账本版本、批准记录和精确来源。
       </p>

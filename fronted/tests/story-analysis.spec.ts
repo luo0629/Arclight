@@ -65,7 +65,7 @@ test("manual extraction survives refresh and does not generate scripts or boards
   await expect(detail.getByRole("heading", { name: "关键事件" })).toBeVisible();
   await expect(detail.getByRole("heading", { name: "角色表" })).toBeVisible();
   await expect(detail.getByText("未提取到明确角色。")).toBeVisible();
-  await detail.getByText("查看原文快照与来源校验").click();
+  await detail.getByText("查看原文快照", { exact: true }).click();
   expect(await detail.locator("pre").textContent()).toBe(story);
   expect(await page.evaluate(() => "storyExecuted" in window)).toBe(false);
   expect(
@@ -120,7 +120,7 @@ test("selects exact imported source and appends independent versions", async ({
   await page.getByRole("option", { name: "#1 雨夜.md", exact: true }).click();
   await page.getByRole("button", { name: "开始提炼", exact: true }).click();
   await page.getByRole("button", { name: /^提炼 v1/ }).click();
-  await page.getByText("查看原文快照与来源校验").click();
+  await page.getByText("查看原文快照", { exact: true }).click();
   expect(
     await page
       .getByRole("region", { name: "提炼结果详情" })
@@ -319,7 +319,7 @@ test("mobile extraction and character rendering remain within viewport", async (
   await page.getByRole("button", { name: /^提炼 v1/ }).click();
   const detail = page.getByRole("region", { name: "提炼结果详情" });
   await expect(detail.getByText("身份：雨夜拾信者")).toBeVisible();
-  await detail.getByText("查看原文快照与来源校验").click();
+  await detail.getByText("查看原文快照", { exact: true }).click();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

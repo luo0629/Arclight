@@ -211,8 +211,10 @@ test("TXT-07：分镜精确引用、数值与空文本、首版和相同内容�
   await openWorkspacePanels(page);
   await openVersion(page, "分镜版本 2");
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText(`引用剧本：v2 · ${second.id}`);
-  await expect(dialog).toContainText(`引用剧本：v1 · ${first.id}`);
+  await expect(dialog.getByText("引用剧本：v2", { exact: true })).toBeVisible();
+  await expect(dialog.getByText("引用剧本：v1", { exact: true })).toBeVisible();
+  await expect(dialog).not.toContainText(second.id);
+  await expect(dialog).not.toContainText(first.id);
   await expect(dialog).toContainText("1 个镜头");
   await expect(
     dialog.getByRole("region", { name: "镜头 1 / 画面描述", exact: true }),

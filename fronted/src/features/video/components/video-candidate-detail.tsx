@@ -264,15 +264,7 @@ export default function VideoCandidateDetail({
             视频 v{version?.version_no ?? "—"} ·{" "}
             <StatusBadge status={version?.status ?? "DRAFT"} />
           </h4>
-          <dl className="grid min-w-0 gap-1 break-all text-xs">
-            <dt>候选 / 精确版本</dt>
-            <dd>
-              {data.id} / {version?.id ?? "未登记"}
-            </dd>
-            <dt>生成任务 / 尝试</dt>
-            <dd>
-              {data.job_id} / {data.attempt_id}
-            </dd>
+          <dl className="grid min-w-0 gap-1 break-words text-xs">
             <dt>来源</dt>
             <dd>
               {version?.restored_from_version_id
@@ -281,9 +273,7 @@ export default function VideoCandidateDetail({
                   ? "本机口型校正"
                   : data.source === "GENERATED"
                     ? "原生成结果"
-                    : "人工上传替换"}{" "}
-              · 原始结果 {origin?.artifact_id ?? "无独立生成结果"} · 文件{" "}
-              {origin?.source_file_id}
+                    : "人工上传替换"}
             </dd>
             {version?.media && (
               <>
@@ -298,32 +288,18 @@ export default function VideoCandidateDetail({
                 </dd>
               </>
             )}
-            <dt>精确分镜 / 镜头</dt>
+            <dt>选用状态</dt>
             <dd>
-              {origin?.storyboard_id} / {origin?.shot_id}
+              {version && asset?.current_version_id === version.id
+                ? "已选用此版本"
+                : asset?.current_version_id
+                  ? "已选用其他版本"
+                  : "尚未选用"}
             </dd>
-            <dt>生成输入清单 / SHA-256</dt>
-            <dd>
-              {origin?.generation_manifest_id} /{" "}
-              {origin?.generation_manifest_sha256}
-            </dd>
-            <dt>当前选用</dt>
-            <dd>
-              {asset?.current_version_id ?? "尚未选用"} · {asset?.status}
-            </dd>
-            {data.replaces_candidate_id && (
+            {version?.restoration_note && (
               <>
-                <dt>替换来源候选</dt>
-                <dd>{data.replaces_candidate_id}</dd>
-              </>
-            )}
-            {version?.restored_from_version_id && (
-              <>
-                <dt>历史另存来源</dt>
-                <dd>
-                  {version.restored_from_version_id} ·{" "}
-                  {version.restoration_note}
-                </dd>
+                <dt>另存说明</dt>
+                <dd>{version.restoration_note}</dd>
               </>
             )}
           </dl>
@@ -360,17 +336,11 @@ export default function VideoCandidateDetail({
               )}
             </section>
           )}
-          {origin?.video_images.map((reference, index) => (
-            <p className="break-all text-xs" key={index}>
-              首帧／参考 {index + 1}：
-              {String(
-                reference.asset_version_id ??
-                  reference.version_id ??
-                  "精确冻结输入",
-              )}{" "}
-              · {String(reference.checksum ?? reference.sha256 ?? "")}
+          {!!origin?.video_images.length && (
+            <p className="text-xs">
+              已固定 {origin.video_images.length} 张首帧／参考图
             </p>
-          ))}
+          )}
           {data.media_check?.video ? (
             <section aria-label="视频技术检查" className="break-all text-xs">
               <h5 className="font-semibold">
@@ -388,7 +358,6 @@ export default function VideoCandidateDetail({
                 {data.media_check.video.decoded_frames} 帧 ·{" "}
                 {data.media_check.video.has_audio ? "包含原声" : "无原声"}
               </p>
-              <p>SHA-256：{data.media_check.video.checksum}</p>
               <p>
                 完整解码：
                 {data.media_check.video.full_decode_verified
@@ -433,14 +402,6 @@ export default function VideoCandidateDetail({
               。继续沿用原精确输入、说明和提交标识。
             </Notice>
           )}
-          {restorePending?.inputs.map((input) => (
-            <p
-              key={input.source_asset_version_id}
-              className="break-all text-xs"
-            >
-              历史精确输入：{input.source_asset_version_id} · {input.checksum}
-            </p>
-          ))}
           <div className="flex flex-wrap gap-2">
             <Button
               disabled={disabled || !data.actions?.can_submit}

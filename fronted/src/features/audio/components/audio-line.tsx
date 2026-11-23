@@ -409,43 +409,6 @@ export default function AudioLinePanel({
               fileId={selected.binding.file_id}
               unavailable={unavailable}
             />
-            <details className="text-xs text-muted-foreground">
-              <summary>查看本句精确来源</summary>
-              <dl className="mt-2 grid gap-2 break-all">
-                <div>
-                  <dt>台词 ID</dt>
-                  <dd>{line.line_id}</dd>
-                </div>
-                <div>
-                  <dt>当前台词剧本版本</dt>
-                  <dd>{snapshot.script_version_id}</dd>
-                </div>
-                {reusing && (
-                  <div>
-                    <dt>原始配音来源</dt>
-                    <dd>{selected.binding.snapshot_id}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt>音频版本</dt>
-                  <dd>{selected.version.id}</dd>
-                </div>
-                <div>
-                  <dt>音频文件</dt>
-                  <dd>{selected.binding.file_id}</dd>
-                </div>
-                <div>
-                  <dt>依赖清单</dt>
-                  <dd>{selected.binding.dependency_manifest_id}</dd>
-                </div>
-                {selected.source_audio_version_id && (
-                  <div>
-                    <dt>重生成来源音频</dt>
-                    <dd>{selected.source_audio_version_id}</dd>
-                  </div>
-                )}
-              </dl>
-            </details>
             {reusing && (
               <Notice>该台词及表演要求保持一致，可直接复用已批准录音。</Notice>
             )}

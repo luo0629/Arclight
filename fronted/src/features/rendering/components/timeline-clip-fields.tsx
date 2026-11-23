@@ -286,35 +286,6 @@ export default function TimelineClipFields({
           编辑台词与配音来源
         </Button>
       )}
-      <details>
-        <summary>片段精确来源</summary>
-        <dl className="mt-2 grid gap-1 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-          <dt>素材版本</dt>
-          <dd>{clip.source_asset_version_id}</dd>
-          <dt>素材 SHA256</dt>
-          <dd>{clip.source_sha256}</dd>
-          {clip.shot_id && (
-            <>
-              <dt>镜头</dt>
-              <dd>{clip.shot_id}</dd>
-            </>
-          )}
-          {clip.line_id && (
-            <>
-              <dt>台词</dt>
-              <dd>{clip.line_id}</dd>
-              <dt>剧本版本</dt>
-              <dd>{clip.script_version_id}</dd>
-            </>
-          )}
-          {clip.audio_version_id && (
-            <>
-              <dt>字幕来源音频</dt>
-              <dd>{clip.audio_version_id}</dd>
-            </>
-          )}
-        </dl>
-      </details>
     </div>
   );
 }

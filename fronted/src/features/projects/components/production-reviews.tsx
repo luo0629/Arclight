@@ -99,14 +99,6 @@ export default function ProductionReviews() {
                       : "版本审核与确认"}
                   </Badge>
                 </div>
-                <p className="break-all text-xs text-muted-foreground">
-                  精确对象：{row.object_id}
-                </p>
-                {row.version_id && (
-                  <p className="break-all text-xs text-muted-foreground">
-                    精确版本：{row.version_id}
-                  </p>
-                )}
                 <time
                   className="text-xs text-muted-foreground"
                   dateTime={row.created_at}

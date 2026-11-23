@@ -21,10 +21,6 @@ export default function RenderReport({
         <Notice>
           此版本没有正式机器报告。历史手工回执不代表正式交付通过。
         </Notice>
-        <details>
-          <summary>查看历史回执内容</summary>
-          <pre>{JSON.stringify(report.report, null, 2)}</pre>
-        </details>
       </section>
     );
   const checks = [
@@ -95,76 +91,15 @@ export default function RenderReport({
                   <p className="mt-1 whitespace-pre-wrap break-words">
                     {warning.reason}
                   </p>
-                  <dl className="mt-2 grid gap-1 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-                    <dt>精确来源版本</dt>
-                    <dd>{warning.source_version_id}</dd>
-                    {warning.line_id && (
-                      <>
-                        <dt>台词</dt>
-                        <dd>{warning.line_id}</dd>
-                      </>
-                    )}
-                  </dl>
                 </li>
               ))}
             </ul>
           </>
         )}
       </section>
-      <details className="min-w-0">
-        <summary>精确输入与成片追溯</summary>
-        <dl className="mt-3 grid gap-2 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-          <dt>报告 ID</dt>
-          <dd>{report.report_id}</dd>
-          <dt>报告 SHA256</dt>
-          <dd>{report.report_sha256}</dd>
-          <dt>时间轴版本</dt>
-          <dd>
-            {machine.timeline_id} / v{machine.timeline_version}
-          </dd>
-          <dt>时间轴 SHA256</dt>
-          <dd>{machine.timeline_sha256}</dd>
-          <dt>清单 ID</dt>
-          <dd>{machine.manifest_id}</dd>
-          <dt>清单 SHA256</dt>
-          <dd>{machine.manifest_sha256}</dd>
-          <dt>机器检查</dt>
-          <dd>{machine.inspection_id}</dd>
-          <dt>输入 SHA256</dt>
-          <dd>{machine.input_sha256}</dd>
-          <dt>成片 SHA256</dt>
-          <dd>{machine.output_sha256}</dd>
-          <dt>成片版本</dt>
-          <dd>{machine.asset_version_id}</dd>
-          <dt>渲染任务／尝试</dt>
-          <dd>
-            {machine.job_id} / {machine.attempt_id}
-          </dd>
-        </dl>
-      </details>
-      <details className="min-w-0">
-        <summary>技术检查明细</summary>
-        <pre>{JSON.stringify(machine.checks.technical, null, 2)}</pre>
-      </details>
-      <details className="min-w-0">
-        <summary>素材、字体与渲染软件来源</summary>
-        <pre>
-          {JSON.stringify(
-            {
-              sources: machine.sources,
-              font: machine.font,
-              software: machine.software,
-              output: machine.output,
-            },
-            null,
-            2,
-          )}
-        </pre>
-      </details>
-      <details className="min-w-0">
-        <summary>完整机器报告 JSON</summary>
-        <pre>{JSON.stringify(machine, null, 2)}</pre>
-      </details>
+      <p className="border-t pt-3 text-sm text-muted-foreground">
+        时间轴 v{machine.timeline_version} · {machine.sources.length} 项输入素材
+      </p>
     </section>
   );
 }

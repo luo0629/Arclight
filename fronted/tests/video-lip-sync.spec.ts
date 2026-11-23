@@ -116,7 +116,7 @@ test("VIDEO-04：校正表单提交精确配音和参考帧，原候选不自动
     source_rights_note: "原创动画，允许局部校正。",
     cues: [cue],
   });
-  await expect(detail).toContainText(env.first.id);
+  await expect(detail.getByRole("heading", { name: /视频 v1/ })).toBeVisible();
   await expect(
     detail.getByRole("button", { name: "提交视频版本审核", exact: true }),
   ).toBeDisabled();

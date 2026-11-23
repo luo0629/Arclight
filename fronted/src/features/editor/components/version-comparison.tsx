@@ -49,7 +49,12 @@ type Snapshot = Reference & {
   rewrite?: {
     source_sha256: string;
     target: { scope: string };
-    instructions: Record<string, unknown>;
+    instructions: {
+      instruction?: string;
+      tone?: string;
+      dialogue_max_chars?: number | null;
+      narration_max_percent?: number | null;
+    };
   } | null;
   run_id: string | null;
   impact: {
@@ -194,15 +199,8 @@ function Metadata({
       <CardContent className="flex min-w-0 flex-col gap-2 px-4 text-xs leading-relaxed [overflow-wrap:anywhere]">
         <p>
           {generated ? "生成：系统工作流；发起人" : "修改人"}：
-          {row.author
-            ? `${row.author.display_name ?? row.author.actor_id}`
-            : "历史记录未提供"}
+          {row.author?.display_name ?? "历史记录未提供"}
         </p>
-        {row.author && (
-          <p className="text-muted-foreground">
-            操作者 ID：{row.author.actor_id}
-          </p>
-        )}
         <p>
           版本创建时间：
           <time dateTime={row.created_at}>
@@ -211,11 +209,10 @@ function Metadata({
             })}
           </time>
         </p>
-        <p>版本 ID：{row.id}</p>
         <p>
           编辑来源：
           {row.base_version
-            ? `同类 v${row.base_version.version_no} · ${row.base_version.id}`
+            ? `同类 v${row.base_version.version_no}`
             : generated
               ? "系统生成，并非人工另存"
               : "新建或历史来源未记录（不推断为上一版）"}
@@ -224,17 +221,16 @@ function Metadata({
           <p>
             引用剧本：
             {row.script_version
-              ? `v${row.script_version.version_no} · ${row.script_version.id}`
+              ? `v${row.script_version.version_no}`
               : "未记录"}
           </p>
         )}
         {row.outline_version && (
           <p>
             引用大纲：v{row.outline_version.version_no}，第
-            {row.outline_version.episode_no}集 · {row.outline_version.id}
+            {row.outline_version.episode_no} 集
           </p>
         )}
-        {row.run_id && <p>生成任务：{row.run_id}</p>}
         {kind === "script" && (
           <ScriptNarrativeSummary content={row.content_json} />
         )}
@@ -249,10 +245,24 @@ function Metadata({
                   ? "单个场景"
                   : "选定段落"}
             </p>
-            <p>来源 SHA-256：{row.rewrite.source_sha256}</p>
-            <pre className="whitespace-pre-wrap break-all">
-              {JSON.stringify(row.rewrite, null, 2)}
-            </pre>
+            {row.rewrite.instructions.instruction && (
+              <p className="whitespace-pre-wrap">
+                {row.rewrite.instructions.instruction}
+              </p>
+            )}
+            {row.rewrite.instructions.tone && (
+              <p>语气：{row.rewrite.instructions.tone}</p>
+            )}
+            {row.rewrite.instructions.dialogue_max_chars != null && (
+              <p>
+                每句对白最多 {row.rewrite.instructions.dialogue_max_chars} 字
+              </p>
+            )}
+            {row.rewrite.instructions.narration_max_percent != null && (
+              <p>
+                旁白占比最多 {row.rewrite.instructions.narration_max_percent}%
+              </p>
+            )}
           </details>
         )}
         <div

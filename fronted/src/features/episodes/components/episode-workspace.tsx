@@ -81,13 +81,15 @@ export default function EpisodeWorkspace({
   const [draftId, setDraftId] = useState<string>();
   useEffect(() => {
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setFocused(false);
+      if (event.key === "Escape" && !event.defaultPrevented) setFocused(false);
     };
     window.addEventListener("keydown", escape);
     return () => window.removeEventListener("keydown", escape);
   }, []);
   const [inspectorOpen, setInspectorOpen] = useState(!!selectedId);
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [refreshRevision, setRefreshRevision] = useState(0);
   const [denied, setDenied] = useState("");
   const onUnavailable = useCallback((cause: unknown) => {
     if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) {
@@ -101,43 +103,49 @@ export default function EpisodeWorkspace({
   const mounted = useRef(true);
   const sequence = useRef(0);
   const graphRequest = useRef<AbortController | null>(null);
-  const reload = useCallback(async () => {
-    const ticket = ++sequence.current;
-    const prefix = `/episodes/${episode.id}`;
-    graphRequest.current?.abort();
-    const controller = new AbortController();
-    graphRequest.current = controller;
-    try {
-      const [, , , graph] = await Promise.all([
-        loadScripts(),
-        loadBoards(),
-        loadRuns(),
-        api<Graph>(prefix + "/canvas", { signal: controller.signal }),
-      ]);
-      if (
-        mounted.current &&
-        ticket === sequence.current &&
-        !controller.signal.aborted
-      )
-        setData({ graph });
-    } catch (cause) {
-      if (controller.signal.aborted || ticket !== sequence.current) return;
-      onUnavailable(cause);
-      throw cause;
-    }
-  }, [
-    episode.id,
-    episode.title,
-    episode.target_duration_ms,
-    loadScripts,
-    loadBoards,
-    loadRuns,
-    onUnavailable,
-  ]);
+  const reload = useCallback(
+    async (refreshStages = true) => {
+      const ticket = ++sequence.current;
+      const prefix = `/episodes/${episode.id}`;
+      graphRequest.current?.abort();
+      const controller = new AbortController();
+      graphRequest.current = controller;
+      try {
+        const [, , , graph] = await Promise.all([
+          loadScripts(),
+          loadBoards(),
+          loadRuns(),
+          api<Graph>(prefix + "/canvas", { signal: controller.signal }),
+        ]);
+        if (
+          mounted.current &&
+          ticket === sequence.current &&
+          !controller.signal.aborted
+        ) {
+          setData({ graph });
+          setLoadError("");
+          if (refreshStages) setRefreshRevision((revision) => revision + 1);
+        }
+      } catch (cause) {
+        if (controller.signal.aborted || ticket !== sequence.current) return;
+        onUnavailable(cause);
+        throw cause;
+      }
+    },
+    [
+      episode.id,
+      episode.title,
+      episode.target_duration_ms,
+      loadScripts,
+      loadBoards,
+      loadRuns,
+      onUnavailable,
+    ],
+  );
   useEffect(() => {
     mounted.current = true;
-    void reload().catch((error) => {
-      if (mounted.current) setError(message(error));
+    void reload(false).catch((error) => {
+      if (mounted.current) setLoadError(message(error));
     });
     return () => {
       mounted.current = false;
@@ -146,8 +154,8 @@ export default function EpisodeWorkspace({
     };
   }, [reload]);
   useProjectEvents(() => {
-    void reload().catch((cause) => {
-      if (mounted.current) setError(message(cause));
+    void reload(false).catch((cause) => {
+      if (mounted.current) setLoadError(message(cause));
     });
   });
   const active = runs.rows.some((run) =>
@@ -159,9 +167,9 @@ export default function EpisodeWorkspace({
     const timer = window.setInterval(() => {
       if (polling || document.hidden) return;
       polling = true;
-      void reload()
+      void reload(false)
         .catch((error) => {
-          if (mounted.current) setError(message(error));
+          if (mounted.current) setLoadError(message(error));
         })
         .finally(() => {
           polling = false;
@@ -183,10 +191,19 @@ export default function EpisodeWorkspace({
       setBusy(false);
     }
   }
-  async function refresh() {
+  async function refresh(savedVersion = false) {
     setRefreshing(true);
-    if (await act(reload)) setSavedRefreshError("");
-    setRefreshing(false);
+    setError("");
+    try {
+      await reload();
+      setSavedRefreshError("");
+    } catch (cause) {
+      if (savedVersion) setSavedRefreshError(message(cause));
+      else if (data) setError(message(cause));
+      else setLoadError(message(cause));
+    } finally {
+      setRefreshing(false);
+    }
   }
   const onCreated: VersionCreated = async (version, kind) => {
     if (!mounted.current) return;
@@ -316,20 +333,8 @@ export default function EpisodeWorkspace({
         focused && view === "canvas" && "canvas-focused",
       )}
       aria-label="剧集工作区"
-      aria-busy={!data && !error}
+      aria-busy={!data && !loadError}
     >
-      <ProductionStageNavigation
-        key={`${episode.id}:${owner}:${writable}`}
-        episodeId={episode.id}
-        projectId={episode.project_id}
-        writable={writable}
-        revision={data?.graph}
-        onOpen={(nextView, node) => {
-          navigate({ view: nextView, ...(node !== undefined ? { node } : {}) });
-          if (nextView === "list") setInspectorOpen(true);
-          setFocused(false);
-        }}
-      />
       <div className="workspace-toolbar mb-4 flex flex-wrap items-center justify-between gap-3">
         <ToggleGroup
           type="single"
@@ -367,6 +372,21 @@ export default function EpisodeWorkspace({
           ))}
         </ToggleGroup>
         <div className="flex flex-wrap items-center gap-2">
+          <ProductionStageNavigation
+            key={`${episode.id}:${owner}:${writable}`}
+            episodeId={episode.id}
+            projectId={episode.project_id}
+            writable={writable}
+            refreshRevision={refreshRevision}
+            onOpen={(nextView, node) => {
+              navigate({
+                view: nextView,
+                ...(node !== undefined ? { node } : {}),
+              });
+              if (nextView === "list") setInspectorOpen(true);
+              setFocused(false);
+            }}
+          />
           {writable && (
             <Button
               onClick={() => {
@@ -389,7 +409,9 @@ export default function EpisodeWorkspace({
               }}
             >
               {focused ? <Minimize2 /> : <Maximize2 />}
-              {focused ? "退出专注" : "全屏画布"}
+              <span className="max-sm:sr-only">
+                {focused ? "退出专注" : "全屏画布"}
+              </span>
             </Button>
           )}
           {view === "canvas" && (
@@ -400,7 +422,9 @@ export default function EpisodeWorkspace({
               onClick={() => setInspectorOpen(!inspectorOpen)}
             >
               <PanelRightOpen />
-              {inspectorOpen ? "收起内容面板" : "展开内容面板"}
+              <span className="max-sm:sr-only">
+                {inspectorOpen ? "收起内容面板" : "展开内容面板"}
+              </span>
             </Button>
           )}
           <Button
@@ -409,74 +433,83 @@ export default function EpisodeWorkspace({
             onClick={() => void refresh()}
           >
             <RefreshCw className="size-4" />
-            {refreshing ? "刷新中…" : "刷新内容"}
+            <span className="max-sm:sr-only">
+              {refreshing ? "刷新中…" : "刷新内容"}
+            </span>
           </Button>
+          {error && (
+            <div className="workspace-feedback" role="alert">
+              <span>{error}</span>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="关闭操作提示"
+                onClick={() => setError("")}
+              >
+                <X />
+              </Button>
+            </div>
+          )}
+          {!error && saved && showSavedNotice && (
+            <div
+              className="workspace-feedback saved-version-notice"
+              role="status"
+            >
+              <div>
+                <strong>
+                  人工{saved.kind === "script" ? "剧本" : "分镜"}已保存为新版本
+                  v{saved.version.version_no} ·{" "}
+                  {statusText[savedVersion?.status ?? saved.version.status]}
+                </strong>
+                {savedRefreshError && (
+                  <p className="mt-1 text-muted-foreground">
+                    内容刷新失败，无需再次保存。
+                    <Button
+                      variant="link"
+                      size="sm"
+                      disabled={busy || refreshing}
+                      onClick={() => void refresh(true)}
+                    >
+                      重试刷新已保存版本
+                    </Button>
+                  </p>
+                )}
+              </div>
+              {!savedRefreshError && (
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  aria-label="收起保存提示"
+                  onClick={() => setShowSavedNotice(false)}
+                >
+                  <X />
+                </Button>
+              )}
+            </div>
+          )}
         </div>
       </div>
-      {error && (
-        <Notice
-          tone="error"
-          className="error workspace-error mb-4"
-          role="alert"
-        >
-          {error}
-          <Button variant="outline" size="lg" onClick={() => setError("")}>
-            收起提示
-          </Button>
-        </Notice>
-      )}
-      {saved && showSavedNotice && (
-        <Notice
-          tone="success"
-          className="success saved-version-notice mb-4"
-          role="status"
-        >
-          <strong>
-            人工{saved.kind === "script" ? "剧本" : "分镜"}已保存为新版本 v
-            {saved.version.version_no} ·{" "}
-            {statusText[savedVersion?.status ?? saved.version.status]}
-          </strong>
-          <p>
-            已自动打开该版本；原版本保持不变，未自动批准。
-            {savedVersion?.status === "READY_FOR_REVIEW"
-              ? owner
-                ? "请在内容与属性中审核。"
-                : "请等待项目拥有者审核。"
-              : "审核状态已更新。"}
-          </p>
-          {savedRefreshError && (
-            <p>
-              新版本已保存，但列表／画布刷新失败：{savedRefreshError}
-              。无需再次保存。
-              <Button
-                variant="outline"
-                size="lg"
-                disabled={busy || refreshing}
-                onClick={() => void refresh()}
-              >
-                重试刷新已保存版本
-              </Button>
-            </p>
-          )}
-          <Button
-            variant="outline"
-            size="lg"
-            onClick={() => setShowSavedNotice(false)}
-            disabled={busy || !!savedRefreshError}
-          >
-            收起保存提示
-          </Button>
-        </Notice>
-      )}
       {!writable && (
         <Notice tone="info" className="read-only mb-4" role="status">
           当前为只读模式：项目／剧集已归档，或你的角色是查看者。
         </Notice>
       )}
       {!data ? (
-        <EmptyState className="empty" role="status">
-          <h2>正在整理这一集的便签…</h2>
-          <p>如果载入失败，请检查 API 服务并点击刷新内容。</p>
+        <EmptyState className="empty" role={loadError ? "alert" : "status"}>
+          <h2>{loadError ? "无法打开创作工作区" : "正在整理这一集的便签…"}</h2>
+          {loadError && (
+            <>
+              <p>{loadError}</p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={refreshing}
+                onClick={() => void refresh()}
+              >
+                重新打开工作区
+              </Button>
+            </>
+          )}
         </EmptyState>
       ) : view === "library" ? (
         <AssetLibrary

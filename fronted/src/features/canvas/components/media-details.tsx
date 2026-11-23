@@ -182,7 +182,7 @@ export default function MediaDetails({
             <div key={track.id} className="min-w-0 border-b pb-2 text-sm">
               <strong>{trackNames[track.kind]}</strong> · {track.clips.length}{" "}
               个片段{track.enabled === false ? " · 已关闭" : ""}
-              {track.clips.slice(0, 3).map((clip) => (
+              {track.clips.slice(0, 3).map((clip, index) => (
                 <button
                   key={clip.id}
                   type="button"
@@ -194,8 +194,8 @@ export default function MediaDetails({
                     }))
                   }
                 >
-                  {duration(clip.start_ms)} · {duration(clip.duration_ms)} ·{" "}
-                  {clip.source_asset_version_id}
+                  片段 {index + 1} · {duration(clip.start_ms)} 起 · 时长{" "}
+                  {duration(clip.duration_ms)}
                 </button>
               ))}
               {track.clips.length > 3 && (

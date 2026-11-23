@@ -224,8 +224,8 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
     "已加载 105 条 · 已全部加载",
   );
   await mediaList
-    .getByLabel("搜索名称或版本 ID", { exact: true })
-    .fill(source.id);
+    .getByLabel("搜索名称或版本", { exact: true })
+    .fill("历史剧本1");
   await page
     .locator(".version-row")
     .filter({ has: page.getByText("历史剧本1", { exact: true }) })
@@ -236,9 +236,7 @@ test("TXT-04：真实剧本与分镜分页、旧稿详情与审核、刷新保�
   await expect(
     page.getByRole("button", { name: "从此版本生成分镜", exact: true }),
   ).toBeEnabled();
-  await mediaList
-    .getByLabel("搜索名称或版本 ID", { exact: true })
-    .fill("版本 1");
+  await mediaList.getByLabel("搜索名称或版本", { exact: true }).fill("版本 1");
   await page
     .locator(".version-row")
     .filter({ has: page.locator(".kind-dot.storyboard") })

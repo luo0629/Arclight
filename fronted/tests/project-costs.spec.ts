@@ -71,7 +71,7 @@ async function media(
   return response.json();
 }
 
-test("shows empty coverage, actual and estimated costs, four dimensions and exact trace references", async ({
+test("shows actual and estimated costs and keeps exact filters without exposing internal IDs", async ({
   page,
 }, info) => {
   const env = await setup(page);
@@ -113,28 +113,58 @@ test("shows empty coverage, actual and estimated costs, four dimensions and exac
     surface(page).getByText("项目级任务（未指定剧集）", { exact: true }),
   ).toBeVisible();
   // The unassigned group must not leak another episode's records.
+  const unassignedRead = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).searchParams.get("unassigned_episode") === "true",
+  );
   await surface(page)
     .getByText("项目级任务（未指定剧集）", { exact: true })
     .locator("../../..")
     .getByRole("button", { name: "查看该组明细", exact: true })
     .click();
   const details = page.getByLabel("费用明细", { exact: true });
-  await expect(details.getByText(unassigned.id, { exact: true })).toBeVisible();
-  await expect(details.getByText(job.id, { exact: true })).toHaveCount(0);
+  const unassignedRows = await (await unassignedRead).json();
+  expect(
+    unassignedRows.items.map((entry: { task_id: string }) => entry.task_id),
+  ).toEqual([unassigned.id]);
+  await expect(
+    details.getByText("mock / mock-image-v1", { exact: true }),
+  ).toBeVisible();
+  await expect(details.getByText(unassigned.id, { exact: true })).toHaveCount(
+    0,
+  );
   await surface(page).getByText("按模型", { exact: true }).click();
   await expect(
     surface(page).getByText("mock/mock-image-v1", { exact: true }),
   ).toBeVisible();
+  const groupedRead = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).searchParams.get("group_by") === "task",
+  );
   await surface(page).getByText("按任务", { exact: true }).click();
-  await expect(surface(page).getByText(job.id, { exact: true })).toBeVisible();
+  const grouped = await (await groupedRead).json();
+  const jobIndex = grouped.groups.findIndex(
+    (group: { task_id: string }) => group.task_id === job.id,
+  );
+  expect(jobIndex).toBeGreaterThanOrEqual(0);
+  const jobRead = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).searchParams.get("task_id") === job.id,
+  );
   await surface(page)
-    .getByText(job.id, { exact: true })
+    .getByRole("heading", {
+      name: `媒体任务 · 第 ${jobIndex + 1} 条`,
+      exact: true,
+    })
     .locator("../../..")
     .getByRole("button", { name: "查看该组明细", exact: true })
     .click();
+  const jobRows = await (await jobRead).json();
+  expect(jobRows.items[0].input_manifest_id).toBe(job.input_manifest_id);
+  await expect(details.getByText(job.id, { exact: true })).toHaveCount(0);
   await expect(
     details.getByText(job.input_manifest_id, { exact: true }),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(
     details.getByText("估算 · 待核账", { exact: true }),
   ).toBeVisible();

@@ -296,8 +296,8 @@ function ProductionBody({
                               onUnavailable={unavailable}
                             />
                             <StatusBadge status={candidate.status} />
-                            <p className="break-all text-xs text-muted-foreground">
-                              精确版本：{candidate.version_id}
+                            <p className="text-xs text-muted-foreground">
+                              候选版本 v{candidate.version_no}
                             </p>
                             {candidate.blocker && (
                               <p className="text-destructive">

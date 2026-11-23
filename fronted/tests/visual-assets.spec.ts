@@ -837,7 +837,7 @@ test("ASSET-06：人工选用精确版本、历史另存与重新审核", async 
   expect(row.current_version_id).toBeNull();
   await page.getByRole("button", { name: "选用此版本", exact: true }).click();
   await expect(
-    page.getByText("当前选用：" + first.id, { exact: true }),
+    page.getByText(`当前选用：v${first.version_no}`, { exact: true }),
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "归档此版本", exact: true }),
@@ -851,9 +851,9 @@ test("ASSET-06：人工选用精确版本、历史另存与重新审核", async 
   await expect(details.getByRole("heading", { name: /^版本 v/ })).toContainText(
     "版本 v2 · 候选草稿",
   );
-  await expect(details).toContainText("恢复来源版本：" + first.id);
+  await expect(details).toContainText("由历史版本另存 · 恢复构图并重新审核");
   await expect(
-    page.getByText("当前选用：" + first.id, { exact: true }),
+    page.getByText(`当前选用：v${first.version_no}`, { exact: true }),
   ).toBeVisible();
   await expect(
     details.getByRole("button", { name: "选用此版本", exact: true }),
@@ -868,7 +868,7 @@ test("ASSET-06：人工选用精确版本、历史另存与重新审核", async 
     .getByRole("button", { name: "场景 · 选用与恢复", exact: true })
     .click();
   await expect(
-    page.getByText("当前选用：" + first.id, { exact: true }),
+    page.getByText(`当前选用：v${first.version_no}`, { exact: true }),
   ).toBeVisible();
 });
 

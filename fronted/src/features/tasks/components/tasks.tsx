@@ -198,7 +198,7 @@ export default function Tasks({
                 key={run.id}
                 id={`run-${run.id}`}
                 aria-label={
-                  requestedRun === run.id ? `所选创作任务 ${run.id}` : undefined
+                  requestedRun === run.id ? "所选创作任务" : undefined
                 }
               >
                 <div className="task-heading flex flex-wrap items-center justify-between gap-2">
@@ -222,10 +222,8 @@ export default function Tasks({
                   <StatusBadge status={run.status} />
                 </div>
                 <p className="muted text-sm text-muted-foreground">
-                  {new Date(run.created_at).toLocaleString("zh-CN")} · 修订{" "}
-                  {run.revision}
+                  {new Date(run.created_at).toLocaleString("zh-CN")}
                 </p>
-                <code className="task-id text-muted-foreground">{run.id}</code>
                 {run.workflow_type === "producer" && (
                   <ProducerProgress
                     projectId={projectId}
@@ -303,7 +301,7 @@ export default function Tasks({
                       {run.pending_review.resource_type === "script"
                         ? "剧本"
                         : "分镜"}
-                      版本 <code>{run.pending_review.version_id}</code>
+                      版本
                     </p>
                   )}
                 {owner &&

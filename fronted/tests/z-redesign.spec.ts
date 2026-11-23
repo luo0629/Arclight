@@ -143,6 +143,9 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
     name: "刷新阶段状态",
     exact: true,
   });
+  const progress = page.getByRole("button", { name: "制作进度", exact: true });
+  await expect(stages).toHaveCount(0);
+  await progress.click();
   await expect(refreshStages).toBeEnabled();
   async function ready(index: number) {
     // Project reconciliation can supersede a read after its headers arrive.
@@ -161,6 +164,9 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
   }
   // Measure after the ready notification has reconciled authoritative state.
   await ready(0);
+  await page.keyboard.press("Escape");
+  await expect(stages).toHaveCount(0);
+  await expect(progress).toBeFocused();
   await expect(page.locator(".paper-node.script").first()).toBeVisible();
   await expect(page.locator(".canvas-wrap")).toBeVisible();
   await expect(page.getByLabel("内容与属性", { exact: true })).toHaveCount(0);
@@ -168,6 +174,11 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
   expect(before!.width).toBeGreaterThan(1100);
   expect(before!.height).toBeGreaterThan(600);
   expect(before!.y + before!.height).toBeLessThanOrEqual(1000);
+  await progress.click();
+  await expect(stages).toBeVisible();
+  expect(await page.locator(".canvas-wrap").boundingBox()).toEqual(before);
+  await page.getByRole("heading", { name: /寄往春天的信/ }).click();
+  await expect(stages).toHaveCount(0);
   await page.screenshot({
     path: info.outputPath("canvas-connected-desktop.png"),
     fullPage: true,
@@ -191,7 +202,9 @@ test("新版：画布为核心，目录与内容面板独立开关，创作及�
   });
 
   await streams.count(2);
+  await progress.click();
   await ready(1);
+  await page.keyboard.press("Escape");
   expect(await page.locator(".canvas-wrap").boundingBox()).toEqual(before);
   await expect(page.getByLabel("剧集列表", { exact: true })).not.toBeVisible();
   await page.getByRole("button", { name: "展开目录", exact: true }).click();

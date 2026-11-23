@@ -73,6 +73,10 @@ export default function AssetVersions({
   const sequence = useRef(0);
   const submitting = useRef(false);
   const editable = writable && !["LOCKED", "ARCHIVED"].includes(asset.status);
+  const current =
+    selected?.id === asset.current_version_id
+      ? selected
+      : list.rows.find((row) => row.id === asset.current_version_id);
   useEffect(() => {
     live.current = true;
     void list.reload().catch(() => {});
@@ -240,10 +244,13 @@ export default function AssetVersions({
       <p className="text-sm text-muted-foreground">
         人工导入原图，每次另建候选版本。批准后可人工选用；历史图片可另存为新候选并重新审核。支持PNG/JPEG，最多400万像素、最长边4096。
       </p>
-      <p className="break-all text-sm" role="status">
-        当前选用：{asset.current_version_id ?? "尚未选用"}
+      <p className="text-sm" role="status">
+        {current
+          ? `当前选用：v${current.version_no}`
+          : asset.current_version_id
+            ? "已选用图片"
+            : "尚未选用"}
       </p>
-      <p className="text-sm">选用锁修订：{asset.lock_version}</p>
       {owner &&
         writable &&
         asset.current_version_id &&
@@ -301,13 +308,14 @@ export default function AssetVersions({
           aria-label="精确资产版本详情"
         >
           <h4>
-            版本 v{selected.version_no} · {label(selected.status)} · 状态修订{" "}
-            {selected.revision}
+            版本 v{selected.version_no} · {label(selected.status)}
           </h4>
           {selected.restored_from_version_id && (
             <p className="break-all text-sm">
-              恢复来源版本：{selected.restored_from_version_id} ·{" "}
-              {selected.restoration_note}
+              由历史版本另存
+              {selected.restoration_note
+                ? ` · ${selected.restoration_note}`
+                : ""}
             </p>
           )}
           <section
@@ -359,8 +367,7 @@ export default function AssetVersions({
                 )}
                 {selected.provenance.references.map((ref) => (
                   <p key={ref.asset_version_id}>
-                    参考：{ref.asset_name} · v{ref.version_no} ·{" "}
-                    {ref.asset_version_id} · {ref.checksum}
+                    参考：{ref.asset_name} · v{ref.version_no}
                   </p>
                 ))}
               </>
@@ -384,18 +391,8 @@ export default function AssetVersions({
           )}
           <dl className="grid gap-2 break-all text-sm">
             <div>
-              <dt>版本 ID</dt>
-              <dd>{selected.id}</dd>
-            </div>
-            <div>
-              <dt>创建者 / 创建时间（UTC）</dt>
-              <dd>
-                {selected.created_by} / {selected.created_at}
-              </dd>
-            </div>
-            <div>
-              <dt>SHA-256</dt>
-              <dd>{selected.checksum}</dd>
+              <dt>创建时间（UTC）</dt>
+              <dd>{selected.created_at}</dd>
             </div>
             {selected.media && (
               <>

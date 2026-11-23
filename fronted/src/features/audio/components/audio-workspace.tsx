@@ -224,6 +224,7 @@ function AudioWorkspaceBody({
         <SnapshotLines
           key={`${scope}:${selected.id}:${writable}:${owner}`}
           snapshot={selected}
+          script={scripts.find((row) => row.id === selected.script_version_id)}
           projectId={episode.project_id}
           scope={`${scope}:${selected.id}`}
           owner={owner}
@@ -247,6 +248,7 @@ function AudioWorkspaceBody({
 
 function SnapshotLines({
   snapshot,
+  script,
   projectId,
   scope,
   owner,
@@ -255,6 +257,7 @@ function SnapshotLines({
   onOpenRender,
 }: {
   snapshot: AudioSnapshot;
+  script?: ContentVersion;
   projectId: string;
   scope: string;
   owner: boolean;
@@ -273,11 +276,11 @@ function SnapshotLines({
     lines.rows.find((row) => row.line_id === selectedId) ?? lines.rows[0];
   return (
     <>
-      <details className="min-w-0 text-xs text-muted-foreground">
-        <summary>查看配音来源版本</summary>
-        <p className="mt-2 break-all">剧本：{snapshot.script_version_id}</p>
-        <p className="mt-1 break-all">内容哈希：{snapshot.script_sha256}</p>
-      </details>
+      <p className="text-sm text-muted-foreground">
+        {script
+          ? `配音来源：剧本 v${script.version_no}`
+          : "配音来源：已保存的剧本快照"}
+      </p>
       <div className="grid min-w-0 items-start gap-6 lg:grid-cols-[minmax(12rem,19rem)_minmax(0,1fr)]">
         <aside
           aria-label="配音台词目录"

@@ -449,10 +449,6 @@ export default function StorySources({
                   : "未单独声明"}
                 ）：{detail.rights_note}
               </p>
-              <p className="text-sm break-all">导入者：{detail.created_by}</p>
-              <p className="text-xs break-all text-muted-foreground">
-                SHA-256：{detail.sha256}
-              </p>
               <pre
                 className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words text-sm [overflow-wrap:anywhere]"
                 aria-label="原始故事文本"
@@ -468,22 +464,6 @@ export default function StorySources({
                   此文本随创作任务保存，未补录授权声明。确认权利后可另存来源修订；历史声明保持原样。
                 </Notice>
               )}
-              <details className="text-xs text-muted-foreground">
-                <summary>查看精确来源标识</summary>
-                <p className="mt-2 break-all">来源：{detail.id}</p>
-                <p className="break-all">
-                  根来源：{detail.provenance.root_source_id}
-                </p>
-                {detail.provenance.parent_source_id && (
-                  <p className="break-all">
-                    上一版本：{detail.provenance.parent_source_id}
-                  </p>
-                )}
-                <p className="break-all">
-                  原稿引用：{detail.provenance.object_ref.key}
-                </p>
-                <p>原稿保存在应用内，读取仍需项目权限。</p>
-              </details>
               {writable && (
                 <div className="flex flex-wrap gap-2">
                   <SourceRevisionEditor

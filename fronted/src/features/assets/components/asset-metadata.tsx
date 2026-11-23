@@ -72,20 +72,16 @@ export default function AssetMetadataPanel({
           </dd>
         </div>
         <div>
-          <dt>创建者 ID</dt>
-          <dd>{asset.created_by ?? "历史创建者未记录"}</dd>
-        </div>
-        <div>
           <dt>声明使用范围</dt>
           <dd>
             {data.usage_scope.kind === "PROJECT"
               ? "项目共用"
-              : data.usage_scope.episode_ids.join("、")}
+              : `已指定 ${data.usage_scope.episode_ids.length} 集`}
           </dd>
         </div>
       </dl>
       <p className="text-sm text-muted-foreground">
-        使用范围是人工声明；实际引用查询另行提供。创建来源说明由人工登记，创建者由服务器记录。
+        具体在哪些剧本和分镜中使用，可查看实际引用记录。
       </p>
       {writable && (
         <Button

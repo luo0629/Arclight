@@ -51,6 +51,51 @@ async function open(page: Page) {
 const surface = (page: Page) =>
   page.getByLabel("项目总览数据", { exact: true });
 
+test("初次读取项目失败可在页头重试，后台刷新失败不挡住画布", async ({
+  page,
+}) => {
+  const env = await setup(page);
+  const streams = await controlledStreams(page);
+  const access = `/api/v1/projects/${env.project.id}/access`;
+  let fail = true;
+  await page.route(`**${access}`, (route) =>
+    fail
+      ? route.fulfill({
+          status: 503,
+          json: {
+            error: {
+              message: "测试连接故障",
+              request_id: "internal-access-123",
+            },
+          },
+        })
+      : route.continue(),
+  );
+  await page.goto(`/projects/${env.project.id}/episodes/${env.episodes[0].id}`);
+  await closeDirectory(page);
+  await expect(
+    page.getByRole("alert").filter({ hasText: "无法读取项目。" }),
+  ).toBeVisible();
+  const retry = page.getByRole("button", { name: "重新加载项目", exact: true });
+  fail = false;
+  await retry.click();
+  const canvas = page.locator(".canvas-wrap");
+  await expect(canvas).toBeVisible();
+  const before = await canvas.boundingBox();
+  fail = true;
+  const background = page.waitForResponse(
+    (response) => response.url().endsWith(access) && response.status() === 503,
+  );
+  await streams.count(1);
+  await streams.push(0, [frame(env.project.id)]);
+  await background;
+  await expect(retry).toHaveCount(0);
+  await expect(
+    page.getByText("internal-access-123", { exact: false }),
+  ).toHaveCount(0);
+  expect(await canvas.boundingBox()).toEqual(before);
+});
+
 test("aggregates actual versions and tasks, refreshes reviews, opens tasks, and fits mobile", async ({
   page,
 }, info) => {
@@ -410,6 +455,7 @@ test("SERIES-08 ignores a late episode projection and opens the selected exact s
         `/episodes/${second.id}\\?view=list&node=script%3A${script.id}|/episodes/${second.id}\\?view=list&node=script:${script.id}`,
       ),
     );
+    await page.getByRole("button", { name: "制作进度", exact: true }).click();
     await expect(
       page.getByRole("button", { name: "本集连续剧来源", exact: true }),
     ).toBeVisible();

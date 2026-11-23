@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
 import type { ContentVersion, Graph, Run } from "../src/types/api";
 import { deferred } from "./media-tasks-helpers";
 import { continuityFixture } from "./continuity-helpers";
@@ -11,6 +11,12 @@ import {
 import { chooseProject, closeDirectory } from "./workspace-helpers";
 
 test.use({ timezoneId: "Asia/Shanghai" });
+
+function taskLink(panel: Locator, id: string) {
+  return panel
+    .getByRole("link", { name: "查看任务详情", exact: true })
+    .and(panel.locator(`a[href$="=${id}"]`));
+}
 
 test("UI-07 UI7-04/09：目录页外渲染任务读取精确清单和时间轴，轮询后按最新修订取消", async ({
   page,
@@ -81,12 +87,7 @@ test("UI-07 UI7-04/06：三类生产任务使用服务端20项分页及精确原
     [1, `view=tasks&generation_job=${env.tasks[1].id}`],
     [2, `view=render&render_job=${env.tasks[2].id}`],
   ] as const)
-    await expect(
-      panel.getByRole("link", {
-        name: `查看任务详情 ${env.tasks[index].id}`,
-        exact: true,
-      }),
-    ).toHaveAttribute(
+    await expect(taskLink(panel, env.tasks[index].id)).toHaveAttribute(
       "href",
       `/projects/${env.project.id}/episodes/${env.episodes[0].id}?${query}`,
     );
@@ -97,12 +98,12 @@ test("UI-07 UI7-04/06：三类生产任务使用服务端20项分页及精确原
     path: info.outputPath("ui07-production-desktop.png"),
   });
   await panel.getByRole("button", { name: "下一页", exact: true }).click();
-  await expect(panel).toContainText(`任务 ${env.tasks[20].id}`);
-  await expect(panel).not.toContainText(`任务 ${env.tasks[0].id}`);
+  await expect(taskLink(panel, env.tasks[20].id)).toBeVisible();
+  await expect(taskLink(panel, env.tasks[0].id)).toHaveCount(0);
   await expect(panel).toContainText("共 41 项；第 2 页");
   await panel.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(panel.getByRole("article")).toHaveCount(1);
-  await expect(panel).toContainText(`任务 ${env.tasks[40].id}`);
+  await expect(taskLink(panel, env.tasks[40].id)).toBeVisible();
   await expect(
     panel.getByRole("button", { name: "下一页", exact: true }),
   ).toBeDisabled();
@@ -229,13 +230,13 @@ test("UI-07 UI7-08：筛选变更隔离迟到旧页，旧任务和旧总数不�
   try {
     await chooseProductionFilter(page, "任务类型", "文字创作");
     await panel.getByRole("button", { name: "应用筛选", exact: true }).click();
-    await expect(panel).toContainText(`任务 ${text.id}`);
+    await expect(taskLink(panel, text.id)).toBeVisible();
     await expect(panel).toContainText("共 1 项；第 1 页");
   } finally {
     gate.release();
   }
   await finished.promise;
-  await expect(panel).not.toContainText(`任务 ${image.id}`);
+  await expect(taskLink(panel, image.id)).toHaveCount(0);
   await expect(panel).toContainText("共 1 项；第 1 页");
 });
 
@@ -262,12 +263,12 @@ test("UI-07 UI7-08：切换项目隔离旧项目迟到响应", async ({ page }) 
     await chooseProject(page, env.otherProject);
     await page.getByRole("button", { name: "项目任务", exact: true }).click();
     await expect(panel).toContainText(env.otherProject.name);
-    await expect(panel).toContainText(`任务 ${env.otherTasks[0].id}`);
+    await expect(taskLink(panel, env.otherTasks[0].id)).toBeVisible();
   } finally {
     gate.release();
   }
   await finished.promise;
-  await expect(panel).not.toContainText(`任务 ${env.tasks[0].id}`);
+  await expect(taskLink(panel, env.tasks[0].id)).toHaveCount(0);
   await expect(panel).toContainText("共 1 项；第 1 页");
 });
 
@@ -286,9 +287,7 @@ test("UI-07 UI7-07：白名单摘要隐藏内部快照并从资源身份重建�
   const panel = await env.openProduction();
   await expect(panel).toContainText("错误摘要：内部故障");
   await expect(page.locator("body")).not.toContainText(productionSecret);
-  await expect(
-    panel.getByRole("link", { name: /^查看任务详情 / }),
-  ).toHaveAttribute(
+  await expect(taskLink(panel, env.tasks[0].id)).toHaveAttribute(
     "href",
     `/projects/${env.project.id}/episodes/${env.episodes[0].id}?view=tasks&generation_job=${env.tasks[0].id}`,
   );
@@ -367,7 +366,7 @@ test("UI-07 UI7-04/08：未分集generation_job入口精确读取UI-05详情并�
     episode_title: null,
   });
   const panel = await env.openProduction();
-  await panel.getByRole("link", { name: `查看任务详情 ${job.id}` }).click();
+  await taskLink(panel, job.id).click();
   await expect(page).toHaveURL(
     new RegExp(`section=tasks&generation_job=${job.id}$`),
   );
@@ -683,10 +682,7 @@ test("UI-07 UI7-04：不同family的同编号任务保留独立条目及精确�
   );
   const panel = await env.openProduction();
   await expect(panel.getByRole("article")).toHaveCount(3);
-  const links = panel.getByRole("link", {
-    name: `查看任务详情 ${id}`,
-    exact: true,
-  });
+  const links = taskLink(panel, id);
   await expect(links).toHaveCount(3);
   for (const [index, query] of [
     `view=tasks&run=${id}`,
@@ -789,11 +785,13 @@ test("UI-07 UI7-02/09：精确文字版本前往原审核run，原run不在当�
     .click();
   await expect(page).toHaveURL(new RegExp(`view=tasks.*run=${runId}`));
   const selected = page.getByRole("article", {
-    name: `所选创作任务 ${runId}`,
+    name: "所选创作任务",
     exact: true,
   });
-  await expect(selected).toContainText(version.id);
-  await expect(selected).toContainText("修订 7");
+  await expect(selected).toHaveAttribute("id", `run-${runId}`);
+  await expect(selected).toContainText("等待审核：剧本版本");
+  await expect(selected).not.toContainText(version.id);
+  await expect(selected).not.toContainText(runId);
   expect(exactReads).toContain(`/api/v1/runs/${runId}`);
   expect(firstPageRuns.some((row) => row.id === runId)).toBe(false);
 });

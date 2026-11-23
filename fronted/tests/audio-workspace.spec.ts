@@ -36,10 +36,12 @@ test("AUDIO-07：剧集入口与逐句来源、缺配音不默认静音", async 
   ).toContainText(env.lines[0].text);
   await expect(panel.getByText(/本句尚无已登记音频/)).toBeVisible();
   await expect(panel.getByText(/没有配音不会自动视为已静音/)).toBeVisible();
-  await panel.getByText("查看配音来源版本", { exact: true }).click();
   await expect(
-    panel.getByText(`剧本：${env.scripts[0].id}`, { exact: true }),
+    panel.getByText(`配音来源：剧本 v${env.scripts[0].version_no}`, {
+      exact: true,
+    }),
   ).toBeVisible();
+  await expect(panel).not.toContainText(env.scripts[0].id);
   await panel
     .getByRole("button", { name: "打开渲染清单逐句确认", exact: true })
     .click();

@@ -139,7 +139,7 @@ test("TXT-01：选择旧的精确已批准剧本，空白起稿、镜头增删�
   await expect(selector).toBeFocused();
   await page.getByRole("button", { name: "使用此剧本起稿" }).click();
   await expect(
-    page.getByText("精确版本：" + source.id, { exact: false }),
+    page.getByText("引用剧本 v1 · 旧稿星光（已批准）", { exact: true }),
   ).toBeVisible();
   const save = page.getByRole("button", { name: "保存人工分镜", exact: true });
   await expect(save).toBeDisabled();

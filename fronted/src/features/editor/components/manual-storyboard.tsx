@@ -89,9 +89,8 @@ export default function ManualStoryboard(props: Props) {
           引用剧本 v{source.version_no} · {String(source.content_json.title)}
           （已批准）
         </p>
-        <p className="hint text-xs leading-relaxed text-muted-foreground source-version break-all">
-          精确版本：{source.id}
-          。保存后为独立待审核版本，不会启动导演或覆盖旧稿。
+        <p className="hint text-xs leading-relaxed text-muted-foreground source-version">
+          保存后生成一份独立的待审核分镜。
         </p>
         <FieldSet
           className="draft-fields flex min-w-0 flex-col gap-4"

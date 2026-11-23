@@ -92,6 +92,15 @@ const scopes: Record<string, string> = {
   ADJACENT_EPISODES: "相邻集",
   SERIES: "全剧",
 };
+const evidenceLabels: Record<string, string> = {
+  PLAN: "连续剧规划",
+  SCENE: "场景剧本",
+  AUTHOR_STATE: "故事事实",
+  CHARACTER_STATE: "角色知情",
+  STORYBOARD: "分镜",
+  VIDEO: "视频",
+  AUDIO: "声音",
+};
 const initial = JSON.stringify(
   {
     scope: "SCENE",
@@ -267,14 +276,15 @@ export default function NarrativeReviews() {
       </div>
       {error && <Notice tone="error">{error}</Notice>}
       <ul className="flex flex-col gap-2" aria-label="叙事审查历史">
-        {history.map((row) => (
+        {history.map((row, index) => (
           <li key={row.run_id}>
             <Button
               variant="ghost"
               aria-pressed={selected === row.run_id}
               onClick={() => setSelected(row.run_id)}
             >
-              {scopes[row.scope] ?? row.scope} · {row.status} · {row.run_id}
+              {scopes[row.scope] ?? row.scope} · {row.status} · 第 {index + 1}{" "}
+              条
             </Button>
           </li>
         ))}
@@ -310,11 +320,7 @@ export default function NarrativeReviews() {
                         {issue.summary}
                       </p>
                       <p>
-                        第 {issue.location.episode_no} 集 · 场景{" "}
-                        {issue.location.scene_id}
-                        {issue.location.line_id
-                          ? ` · 台词 ${issue.location.line_id}`
-                          : ""}
+                        第 {issue.location.episode_no} 集
                         {issue.location.time_ms !== null
                           ? ` · 采样 ${issue.location.time_ms} ms`
                           : ""}
@@ -325,9 +331,6 @@ export default function NarrativeReviews() {
                       >
                         查看精确剧本
                       </Link>
-                      <p className="break-all">
-                        事实证据：{issue.evidence_ids.join("、")}
-                      </p>
                     </div>
                   ))}
                 </section>
@@ -420,9 +423,29 @@ export default function NarrativeReviews() {
             <summary className="cursor-pointer">
               精确输入、事实来源与覆盖范围
             </summary>
-            <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all text-xs">
-              {JSON.stringify(value.work, null, 2)}
-            </pre>
+            <ul className="mt-2 space-y-1 text-sm">
+              {value.work.evidence.map((evidence) => {
+                const location = evidence.location;
+                return (
+                  <li key={evidence.id}>
+                    {evidenceLabels[evidence.kind] ?? "审查证据"}
+                    {location && (
+                      <>
+                        {" · "}
+                        <Link
+                          className="underline"
+                          href={`${episodePath(project.id, location.episode_id, "list")}&node=script:${location.script_version_id}`}
+                        >
+                          第 {location.episode_no} 集剧本
+                        </Link>
+                        {location.time_ms !== null &&
+                          ` · ${location.time_ms} ms`}
+                      </>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           </details>
           {value.report && writable && (
             <Button

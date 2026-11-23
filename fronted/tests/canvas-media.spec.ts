@@ -46,12 +46,12 @@ test("UI-01：候选原图、正式选用和历史失效状态来自同一精确
   expect(
     await image.evaluate((img: HTMLImageElement) => img.naturalWidth),
   ).toBeGreaterThan(1);
-  await expect(panel).toContainText(env.image.checksum!);
+  await expect(panel).not.toContainText(env.image.checksum!);
   await env.selectNode(env.history);
   await expect(panel).toContainText("红色箱子 · 历史选用");
   await expect(panel).toContainText("正式选用");
   await expect(panel).toContainText("需更新");
-  await expect(panel).toContainText(env.history.resource_id!);
+  await expect(panel).not.toContainText(env.history.resource_id!);
   expect(env.mediaReads).toContain("/api/v1" + env.history.preview_path);
 });
 
@@ -62,7 +62,9 @@ test("UI-01：精确依赖可跳转五轨时间轴且不产生业务写入", asy
     name: "精确版本依赖",
     exact: true,
   });
-  await expect(dependencies).toContainText(env.original.dependency_manifest_id);
+  await expect(dependencies).not.toContainText(
+    env.original.dependency_manifest_id,
+  );
   await dependencies
     .getByRole("button", { name: /雨后街角 · 五轨剪辑/ })
     .click();
@@ -72,8 +74,11 @@ test("UI-01：精确依赖可跳转五轨时间轴且不产生业务写入", asy
   });
   for (const track of ["画面", "配音", "音乐", "音效", "字幕"])
     await expect(media).toContainText(track);
-  await expect(panel).toContainText(env.original.id);
-  await expect(dependencies).toContainText(env.original.dependency_manifest_id);
+  await expect(panel).not.toContainText(env.original.id);
+  await expect(dependencies).not.toContainText(
+    env.original.dependency_manifest_id,
+  );
+  await expect(page).toHaveURL(new RegExp(encodeURIComponent(env.timeline.id)));
   expect(env.mutations).toHaveLength(0);
   expect(env.layoutWrites).toHaveLength(0);
 });
@@ -100,19 +105,16 @@ test("UI-01：列表筛选搜索分页与键盘选择覆盖全部媒体节点", 
   await expect(list.getByRole("button", { name: /原句配音/ })).toBeVisible();
   await list.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(list).toContainText("第 2 / 2 页");
-  await list
-    .getByLabel("搜索名称或版本 ID", { exact: true })
-    .fill(extra[33].resource_id!);
+  await list.getByLabel("搜索名称或版本", { exact: true }).fill("附加声音 34");
   const row = list.getByRole("button", { name: /附加声音 34/ });
   await row.focus();
   await page.keyboard.press("Enter");
   await expect(
     page.getByRole("region", { name: "画布资产详情", exact: true }),
-  ).toContainText(extra[33].resource_id!);
+  ).toContainText("附加声音 34");
+  await expect(row).not.toContainText(extra[33].resource_id!);
   await expect(list).toContainText("共 1 项");
-  await list
-    .getByLabel("搜索名称或版本 ID", { exact: true })
-    .fill("不存在的素材");
+  await list.getByLabel("搜索名称或版本", { exact: true }).fill("不存在的素材");
   await expect(list).toContainText("没有匹配的内容");
 });
 

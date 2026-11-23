@@ -117,8 +117,7 @@ export const json = (method: string, body?: unknown): RequestInit => ({
   ...(body === undefined ? {} : { body: JSON.stringify(body) }),
 });
 export function message(error: unknown) {
-  if (error instanceof ApiError)
-    return `${error.message}${error.requestId ? ` · 请求 ${error.requestId}` : ""}`;
+  if (error instanceof ApiError) return error.message;
   return error instanceof TypeError
     ? "网络连接失败，请检查网络后重试"
     : error instanceof Error

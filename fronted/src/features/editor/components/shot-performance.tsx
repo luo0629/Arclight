@@ -384,7 +384,6 @@ export default function ShotPerformanceDetails({
                   台词 {index + 1} · {line.speaker}
                 </h6>
                 <p>{line.text}</p>
-                <small className="break-all">精确台词：{line.line_id}</small>
                 <Field>
                   <FormLabel htmlFor={`${id}-dialogue-${index}`}>
                     {`台词 ${index + 1} · 呈现方式`}

@@ -350,37 +350,10 @@ function DeliveryDetail({
             delivery={row}
             onUnavailable={unavailable}
           />
-          <details className="min-w-0">
-            <summary>成片与输入版本</summary>
-            <dl className="mt-3 grid gap-2 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-              <dt>成片版本 ID</dt>
-              <dd>{row.asset_version_id}</dd>
-              <dt>成片 SHA256</dt>
-              <dd>{row.sha256}</dd>
-              <dt>时间轴版本</dt>
-              <dd>{row.timeline_id}</dd>
-              <dt>时间轴 SHA256</dt>
-              <dd>{row.timeline_sha256}</dd>
-              <dt>渲染清单</dt>
-              <dd>{row.manifest_id}</dd>
-              <dt>清单 SHA256</dt>
-              <dd>{row.manifest_sha256}</dd>
-              <dt>依赖清单</dt>
-              <dd>{row.dependency_manifest_id}</dd>
-              <dt>精确素材来源</dt>
-              <dd>
-                <ul className="flex flex-col gap-2">
-                  {row.sources.map((source) => (
-                    <li key={source.asset_version_id}>
-                      {source.asset_type} / {source.asset_version_id}
-                      <br />
-                      {source.sha256}
-                    </li>
-                  ))}
-                </ul>
-              </dd>
-            </dl>
-          </details>
+          <p className="text-sm text-muted-foreground">
+            {row.sources.length} 项输入素材 · {row.output.width} ×{" "}
+            {row.output.height} · {row.output.fps} fps
+          </p>
           <Button
             className="self-start"
             variant="outline"

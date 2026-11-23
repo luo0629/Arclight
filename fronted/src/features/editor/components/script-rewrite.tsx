@@ -314,9 +314,6 @@ export default function ScriptRewrite({
           <p className="text-sm text-muted-foreground">
             选择要修改的范围。结果另存为待审核剧本，批准后可从新版本生成分镜。
           </p>
-          <p className="text-xs text-muted-foreground break-all">
-            来源版本：{version.id}
-          </p>
           {local.recovered && <Notice>已恢复此精确版本的本机改写草稿。</Notice>}
           {local.invalid && (
             <Notice tone="error">
@@ -335,7 +332,6 @@ export default function ScriptRewrite({
           {accepted ? (
             <div className="flex flex-col gap-3">
               <Notice>改写任务已提交，结果将保存为独立待审核版本。</Notice>
-              <p className="text-xs break-all">任务：{accepted}</p>
               {refreshError && (
                 <Notice tone="error">
                   任务已提交；工作区刷新失败：{refreshError}

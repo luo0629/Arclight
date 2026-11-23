@@ -409,17 +409,7 @@ export default function StoryAnalysis({
                 </article>
               ))}
               <details className="studio-disclosure">
-                <summary className="cursor-pointer">
-                  查看原文快照与来源校验
-                </summary>
-                <p className="break-all text-xs text-muted-foreground">
-                  文本 SHA-256：{detail.story_sha256}
-                </p>
-                {detail.source_sha256 && (
-                  <p className="break-all text-xs text-muted-foreground">
-                    文件 SHA-256：{detail.source_sha256}
-                  </p>
-                )}
+                <summary className="cursor-pointer">查看原文快照</summary>
                 <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words rounded-lg bg-muted p-3 font-sans text-sm">
                   {detail.source_text}
                 </pre>

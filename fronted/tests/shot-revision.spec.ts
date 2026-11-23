@@ -30,7 +30,7 @@ for (const [operation, label] of Object.entries(revisionOperations)) {
     const env = await shotRevisionFixture(page);
     const dialog = await env.open();
     await expect(dialog).toContainText("当前不提供遮罩编辑或像素保持");
-    await expect(dialog).toContainText(env.candidate.version_id);
+    await expect(dialog).toContainText(`来源 v${env.candidate.version_no}`);
     await dialog.getByLabel(label, { exact: true }).click();
     const instruction = `调整${label}，保留人物身份与动作接续。`;
     await dialog

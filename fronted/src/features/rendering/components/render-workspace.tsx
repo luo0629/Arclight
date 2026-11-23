@@ -489,34 +489,6 @@ function TimelineManifests({
           此时间轴引用的素材已失效。请核对并创建新时间轴；旧清单和历史成片仍可查看。
         </Notice>
       )}
-      <details className="min-w-0">
-        <summary>时间轴精确版本与镜头来源</summary>
-        <dl className="mt-3 grid gap-2 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-          <dt>时间轴 ID</dt>
-          <dd>{timeline.id}</dd>
-          <dt>时间轴 SHA256</dt>
-          <dd>{timeline.content_sha256}</dd>
-          <dt>分镜版本</dt>
-          <dd>{timeline.snapshot.storyboard_id}</dd>
-          <dt>镜头素材版本</dt>
-          <dd>
-            <ul className="flex flex-col gap-2">
-              {timeline.snapshot.tracks
-                .filter((track) => track.kind === "VIDEO")
-                .flatMap((track) => track.clips)
-                .map((clip) => (
-                  <li key={clip.id}>
-                    {clip.shot_id}
-                    <br />
-                    {clip.source_asset_version_id}
-                    <br />
-                    {clip.source_sha256}
-                  </li>
-                ))}
-            </ul>
-          </dd>
-        </dl>
-      </details>
       {writable && (
         <>
           {audio.loading && (
@@ -695,43 +667,10 @@ function TimelineManifests({
               fps，{selected.snapshot.output.video_codec} /{" "}
               {selected.snapshot.output.audio_codec}
             </p>
-            <details className="min-w-0">
-              <summary>清单和全部精确输入</summary>
-              <dl className="mt-3 grid gap-2 text-xs [&_dd]:break-all [&_dt]:text-muted-foreground">
-                <dt>清单 ID</dt>
-                <dd>{selected.id}</dd>
-                <dt>清单 SHA256</dt>
-                <dd>{selected.content_sha256}</dd>
-                <dt>时间轴 ID</dt>
-                <dd>{selected.snapshot.timeline_id}</dd>
-                <dt>时间轴 SHA256</dt>
-                <dd>{selected.snapshot.timeline_sha256}</dd>
-                <dt>渲染器版本</dt>
-                <dd>{selected.snapshot.software.renderer_version}</dd>
-              </dl>
-              <ul className="mt-3 flex min-w-0 flex-col gap-2 text-xs">
-                {selected.snapshot.sources.map((source) => (
-                  <li key={source.asset_version_id} className="break-all">
-                    {source.asset_type} / {source.asset_version_id}
-                    <br />
-                    {source.sha256}
-                  </li>
-                ))}
-              </ul>
-              <pre>
-                {JSON.stringify(
-                  {
-                    font: selected.snapshot.font,
-                    output: selected.snapshot.output,
-                    software: selected.snapshot.software,
-                    line_audio_decisions:
-                      selected.snapshot.line_audio_decisions,
-                  },
-                  null,
-                  2,
-                )}
-              </pre>
-            </details>
+            <p className="text-sm text-muted-foreground">
+              {selected.snapshot.sources.length} 项输入素材 ·{" "}
+              {selected.snapshot.font ? "已配置授权字体" : "未配置字体"}
+            </p>
           </section>
           <RenderJobs
             key={selected.id}

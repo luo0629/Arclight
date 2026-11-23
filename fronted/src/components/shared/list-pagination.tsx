@@ -5,7 +5,6 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { Spinner } from "@/components/ui/spinner";
-import { Notice } from "@/components/ui-kit";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -58,11 +57,6 @@ export default function ListPagination({
           : "尚未加载"}
         {loading && " · 加载中…"}
       </p>
-      {error && (
-        <Notice tone="error" className="error" role="alert">
-          {error}
-        </Notice>
-      )}
       <div className="pagination-actions flex min-w-0 flex-wrap items-center gap-2 [&>[data-slot=select-trigger]]:min-w-0 [&>[data-slot=select-trigger]]:max-w-full">
         {hasMore && (
           <>
@@ -123,6 +117,11 @@ export default function ListPagination({
           </TooltipTrigger>
           <TooltipContent side="bottom">重新获取{label}列表</TooltipContent>
         </Tooltip>
+        {error && (
+          <p role="alert" className="text-xs text-destructive">
+            {error}
+          </p>
+        )}
       </div>
     </section>
   );

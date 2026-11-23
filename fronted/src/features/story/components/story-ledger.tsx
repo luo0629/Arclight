@@ -535,16 +535,10 @@ export default function StoryLedger({
                 账本版本 {version.version_no}
                 {version.approval ? "（已批准）" : "（未批准）"}
               </h3>
-              <p className="break-all text-xs text-muted-foreground">
-                版本：{version.id}
-                <br />
-                内容校验：{version.content_sha256}
-                <br />
-                基于版本：{version.base_version_id ?? "初始版本"}
-              </p>
+
               {version.approval && (
                 <p className="break-all text-xs text-muted-foreground">
-                  批准凭证：{version.approval.id}；批准时间：
+                  批准时间：
                   {version.approval.approved_at}
                 </p>
               )}
@@ -552,12 +546,6 @@ export default function StoryLedger({
                 {version.content.scene_times.length} 项时序映射，
                 {version.content.entries.length} 条记录
               </p>
-              <details className="studio-disclosure">
-                <summary>冻结来源与精确批准依据</summary>
-                <pre className="max-h-72 min-w-0 overflow-auto whitespace-pre-wrap break-all text-xs">
-                  {JSON.stringify(version.source_manifest, null, 2)}
-                </pre>
-              </details>
               <details className="studio-disclosure">
                 <summary>查看此版本的映射与记录</summary>
                 <div className="grid min-w-0 gap-3 py-3">
@@ -951,8 +939,9 @@ export function LedgerQueryPanel({
             {result.perspective === "CHARACTER" ? "角色所知" : "作者视角"}
           </p>
           <p className="break-all text-xs text-muted-foreground">
-            批准凭证：{result.approval_id ?? "无，当前版本不能提供批准事实"}
-            ；内容校验：{result.content_sha256}
+            {result.approval_id
+              ? "此结果来自已批准账本"
+              : "当前版本不能提供批准事实"}
           </p>
           {(
             [

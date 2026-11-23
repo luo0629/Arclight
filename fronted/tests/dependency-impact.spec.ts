@@ -517,7 +517,7 @@ test("DAG-06：画布展示候选图片与精确依赖，历史失效仍可读�
     exact: true,
   });
   await expect(details).toContainText("候选版本");
-  await expect(details).toContainText(f.child.version.id);
+  await expect(details).not.toContainText(f.child.version.id);
   await expect(details.getByAltText("精确资产版本原图")).toBeVisible();
   await expect(details.getByAltText("精确资产版本原图")).toHaveJSProperty(
     "naturalWidth",
@@ -528,8 +528,8 @@ test("DAG-06：画布展示候选图片与精确依赖，历史失效仍可读�
     exact: true,
   });
   await expect(dependencies).toContainText("输入来源 · 参考依赖");
-  await expect(dependencies).toContainText(f.first.id);
-  await expect(dependencies).toContainText(f.child.manifest.id);
+  await expect(dependencies).not.toContainText(f.first.id);
+  await expect(dependencies).not.toContainText(f.child.manifest.id);
   const graphNode = page.locator(
     `.react-flow__node[data-id="asset-version:${f.child.version.id}"]`,
   );
@@ -550,9 +550,11 @@ test("DAG-06：画布展示候选图片与精确依赖，历史失效仍可读�
     .getByRole("button", { name: "上游角色 · v1", exact: true })
     .click();
   await expect(details).toContainText("正式选用");
-  await expect(details).toContainText(f.first.id);
+  await expect(details).toContainText("上游角色");
+  await expect(page).toHaveURL(new RegExp(f.first.id));
   await page.reload();
-  await expect(details).toContainText(f.first.id);
+  await expect(details).toContainText("上游角色");
+  await expect(details).not.toContainText(f.first.id);
   const changed = await page.request.patch(
     f.root + `/assets/${f.source.id}/versions/${f.first.id}/state`,
     {

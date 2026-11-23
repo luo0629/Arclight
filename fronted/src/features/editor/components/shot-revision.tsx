@@ -73,9 +73,6 @@ function RevisionBody(props: RevisionProps & { onDismiss: () => void }) {
             alt={`修订来源镜头 ${props.shotNo} 原图`}
             onUnavailable={state.unavailable}
           />
-          <p className="break-all text-xs text-muted-foreground">
-            来源精确版本：{props.candidate.version_id}
-          </p>
           <StatusBadge status={props.candidate.status} />
           <p className="text-sm text-muted-foreground">
             锁定规范与已批准参考继续生效；替换受保护场景或服装时，请先另存并批准参考及分镜。

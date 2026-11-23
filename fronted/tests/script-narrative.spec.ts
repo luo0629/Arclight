@@ -441,7 +441,7 @@ test("explicitly upgrades a manual draft and atomically approves its exact narra
     exact: true,
   });
   await expect(receipt).toContainText("账本修订 1");
-  await expect(receipt).toContainText(saved.id);
+  await expect(receipt).not.toContainText(saved.id);
   const head = await (
     await page.request.get(env.ledger, { headers: env.headers })
   ).json();
@@ -625,16 +625,12 @@ test("previews distant approved causality with separate character knowledge and 
     exact: true,
   });
   await expect(preview).toContainText("第 1 集因果摘要");
-  const firstKnowledge = preview
-    .locator("details")
-    .filter({
-      has: page.locator("summary").filter({ hasText: /^角色所知 · 阿青$/ }),
-    });
-  const secondKnowledge = preview
-    .locator("details")
-    .filter({
-      has: page.locator("summary").filter({ hasText: /^角色所知 · 石岚$/ }),
-    });
+  const firstKnowledge = preview.locator("details").filter({
+    has: page.locator("summary").filter({ hasText: /^角色所知 · 阿青$/ }),
+  });
+  const secondKnowledge = preview.locator("details").filter({
+    has: page.locator("summary").filter({ hasText: /^角色所知 · 石岚$/ }),
+  });
   await firstKnowledge.locator("summary").first().click();
   await expect(firstKnowledge).toContainText("阿青接过红信");
   await secondKnowledge.locator("summary").first().click();

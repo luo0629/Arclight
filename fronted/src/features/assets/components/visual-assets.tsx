@@ -305,15 +305,12 @@ export default function VisualAssets({
                   <dt className="text-muted-foreground">资产类型</dt>
                   <dd>{kinds[selected.asset_type]}</dd>
                 </div>
-                <div>
-                  <dt className="text-muted-foreground">稳定 ID</dt>
-                  <dd>{selected.id}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">当前版本 ID</dt>
-                  <dd>{selected.current_version_id ?? "尚未选用媒体版本"}</dd>
-                </div>
               </dl>
+              {!selected.current_version_id && (
+                <p className="text-sm text-muted-foreground">
+                  尚未选用媒体版本
+                </p>
+              )}
               <AssetMetadataPanel
                 key={selected.id}
                 asset={selected}

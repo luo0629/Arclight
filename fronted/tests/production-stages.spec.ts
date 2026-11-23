@@ -3,7 +3,7 @@ import { closeDirectory, openDirectory } from "./workspace-helpers";
 import { deferred } from "./media-tasks-helpers";
 import { controlledStreams, frame, pauseClock } from "./event-stream-helpers";
 import type { ProductionState } from "../src/features/episodes/production-stages";
-import type { Episode } from "../src/types/api";
+import type { Episode, Graph } from "../src/types/api";
 
 const secret = "UI09_PRIVATE_PROMPT_CREDENTIAL_STACK";
 async function fixture(page: Page, controlled = true) {
@@ -66,16 +66,22 @@ async function fixture(page: Page, controlled = true) {
   const panel = page.getByRole("region", { name: "剧集生产阶段", exact: true });
   const href = (index = 0, query = "view=list") =>
     `/projects/${project.id}/episodes/${episodes[index].id}?${query}`;
+  const openProgress = async () => {
+    if (!(await panel.isVisible()))
+      await page.getByRole("button", { name: "制作进度", exact: true }).click();
+    await expect(panel).toBeVisible();
+  };
   const open = async (query = "view=list") => {
     await page.goto(href(0, query));
     await closeDirectory(page);
-    await expect(panel).toBeVisible();
+    await openProgress();
     await expect(
       panel.getByRole("button", { name: "刷新阶段状态", exact: true }),
     ).toBeEnabled();
     return panel;
   };
   const select = async (index: number) => {
+    await openProgress();
     const button = panel
       .getByRole("navigation", { name: "制作阶段" })
       .getByRole("button")
@@ -84,6 +90,7 @@ async function fixture(page: Page, controlled = true) {
     await expect(button).toHaveAttribute("aria-current", "step");
   };
   const refresh = async () => {
+    await openProgress();
     await panel
       .getByRole("button", { name: "刷新阶段状态", exact: true })
       .click();
@@ -100,6 +107,7 @@ async function fixture(page: Page, controlled = true) {
     panel,
     href,
     open,
+    openProgress,
     select,
     refresh,
   };
@@ -159,6 +167,7 @@ test("UI-09：真实剧本保存待审，批准后刷新读取新的权威阶段
     .getByRole("button", { name: "查看剧本版本", exact: true })
     .click();
   await expect(page).toHaveURL(new RegExp(`node=script%3A${script.id}`));
+  await expect(env.panel).toBeHidden();
   expect(
     (
       await page.request.post(`${prefix}/scripts/${script.id}/review`, {
@@ -219,6 +228,67 @@ test("UI-09：失败保留阻塞阶段，未知错误与内部内容不泄漏", 
   await expect(env.panel).not.toContainText(secret);
 });
 
+test("UI-09：后台刷新保留阶段，项目事件和画布回读只查询一次", async ({
+  page,
+}) => {
+  const streams = await controlledStreams(page);
+  const env = await fixture(page);
+  await page.clock.install();
+  await env.open("view=canvas");
+  await streams.count(1);
+  await expect(env.panel).toContainText("尚未起稿");
+  await expect(page.getByRole("button", { name: "开始创作" })).toBeVisible();
+  await expect(page.locator(".paper-node.episode")).toBeVisible();
+  await env.select(0);
+  await pauseClock(page);
+
+  const gate = deferred();
+  const count = env.control.requests;
+  env.states[0].phase = "COMPLETED";
+  env.control.gate = gate.promise;
+  await page.route(
+    `**/api/v1/episodes/${env.episodes[0].id}/canvas`,
+    async (route) => {
+      const response = await route.fetch();
+      const graph: Graph = await response.json();
+      const episode = graph.nodes.find((node) => node.kind === "episode")!;
+      episode.title = "已刷新画布";
+      await route.fulfill({ response, json: graph });
+    },
+  );
+  try {
+    await streams.push(0, [frame(env.project.id)]);
+    await expect(
+      page.getByLabel("实时更新连接", { exact: true }),
+    ).toContainText("已连接");
+    await page.clock.runFor(150);
+    await expect(page.locator(".paper-node.episode")).toContainText(
+      "已刷新画布",
+    );
+    await expect.poll(() => env.control.requests).toBe(count + 1);
+    await expect(
+      env.panel.getByRole("button", { name: "刷新阶段状态", exact: true }),
+    ).toBeDisabled();
+    await expect(env.panel).toContainText("尚未起稿");
+    await expect(
+      env.panel.locator('button[aria-current="step"]'),
+    ).toContainText("待完成条件");
+    await expect(env.panel).not.toContainText("正在核对生产状态");
+    await expect(env.panel.getByText("待核对", { exact: true })).toHaveCount(0);
+    await expect(
+      env.panel.getByRole("button", { name: "查看剧本版本", exact: true }),
+    ).toBeVisible();
+  } finally {
+    env.control.gate = undefined;
+    gate.release();
+  }
+  await expect(env.panel).toContainText("正式成片已完成");
+  await expect(
+    env.panel.getByRole("button", { name: "刷新阶段状态", exact: true }),
+  ).toBeEnabled();
+  expect(env.control.requests).toBe(count + 1);
+});
+
 for (const code of [403, 404, 500])
   test(`UI-09：${code} 清空旧状态及入口，安全提示后可重新读取`, async ({
     page,
@@ -231,7 +301,9 @@ for (const code of [403, 404, 500])
     ).toBeVisible();
     env.control.status = code;
     await env.refresh();
-    await expect(env.panel.getByRole("alert")).toContainText("旧状态已清空");
+    await expect(env.panel.getByRole("alert")).toContainText(
+      "无法读取制作进度，请刷新后重试。",
+    );
     await expect(env.panel).not.toContainText(secret);
     await expect(env.panel).not.toContainText("必需镜头已批准");
     await expect(
@@ -317,6 +389,7 @@ test("UI-09：切集后旧请求迟到不覆盖新集状态", async ({ page }) =
       .click();
     await closeDirectory(page);
     await expect(page).toHaveURL(new RegExp(env.episodes[1].id));
+    await env.openProgress();
     await expect(env.panel).toContainText("尚未起稿");
   } finally {
     env.control.gate = undefined;
@@ -352,8 +425,7 @@ test("UI-09：实际时间轴装配数、来源与失效提示，不假称音频
   await expect(audio).toContainText("时间轴 v3：配音片段 2，字幕片段 3");
   await expect(audio).toContainText("已失效或来源分镜已变化");
   await expect(audio).toContainText("不代表所有台词已配音或字幕已批准");
-  await audio.getByText("查看来源时间轴", { exact: true }).click();
-  await expect(audio).toContainText(timelineId);
+  await expect(audio).not.toContainText(timelineId);
 });
 
 test("UI-09：声音查询失败独立重试，空时间轴保持待核对", async ({ page }) => {
@@ -373,8 +445,8 @@ test("UI-09：声音查询失败独立重试，空时间轴保持待核对", asy
   await streams.count(1);
   await pauseClock(page);
 
-  // Finish ready reconciliation before opening audio. Keep periodic refresh
-  // paused so it cannot remount the failed audio query before manual retry.
+  // Finish ready reconciliation before opening audio. Hold periodic work
+  // so the explicit retry is the only source of another audio read.
   const readyRead = page.waitForEvent(
     "requestfinished",
     (request) =>

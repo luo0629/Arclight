@@ -230,25 +230,8 @@ function CostDetails({
                 {money(entry.actual_cost)}
               </p>
               <dl className="grid min-w-0 gap-x-3 gap-y-1 text-xs text-muted-foreground sm:grid-cols-[auto_minmax(0,1fr)]">
-                <dt>任务</dt>
-                <dd className="break-all">{entry.task_id}</dd>
                 <dt>{entry.source === "MEDIA" ? "尝试" : "调用"}</dt>
-                <dd className="break-all">
-                  第 {entry.attempt_no} 次 ·{" "}
-                  {entry.attempt_id ?? entry.call_id ?? "尚未提交"}
-                </dd>
-                {entry.input_manifest_id && (
-                  <>
-                    <dt>输入清单</dt>
-                    <dd className="break-all">{entry.input_manifest_id}</dd>
-                  </>
-                )}
-                {entry.trace_id && (
-                  <>
-                    <dt>Trace</dt>
-                    <dd className="break-all">{entry.trace_id}</dd>
-                  </>
-                )}
+                <dd>第 {entry.attempt_no} 次</dd>
               </dl>
             </article>
           ))}
@@ -342,19 +325,18 @@ export default function ProjectCosts({ projectId }: { projectId: string }) {
               </EmptyState>
             )}
             <div className="flex flex-col gap-4">
-              {data.groups.map((group) => (
+              {data.groups.map((group, index) => (
                 <div
                   key={group.key}
                   className="flex min-w-0 flex-col gap-3 border-t pt-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <h3 className="break-words font-medium">{group.label}</h3>
-                      {group.task_id && (
-                        <p className="mt-1 break-all text-xs text-muted-foreground">
-                          {group.task_id}
-                        </p>
-                      )}
+                      <h3 className="break-words font-medium">
+                        {group.label}
+                        {dimension === "task" &&
+                          ` · 第 ${offset + index + 1} 条`}
+                      </h3>
                     </div>
                     <Badge variant="outline">
                       {group.entry_count} 条 ·{" "}

@@ -50,14 +50,9 @@ export function ExactDependencies({
               className="h-auto justify-start whitespace-normal p-0 text-left"
               onClick={() => onSelect(related)}
             >
-              {related.title} · v{related.version_no}
+              {related.title}
+              {related.version_no ? ` · v${related.version_no}` : ""}
             </Button>
-            <code className="break-all text-xs">{related.resource_id}</code>
-            {edge.dependency_manifest_id && (
-              <span className="break-all text-xs text-muted-foreground">
-                输入清单：{edge.dependency_manifest_id}
-              </span>
-            )}
           </div>
         );
       })}
@@ -125,24 +120,6 @@ export default function AssetDetails({
           onChanged={onChanged}
         />
       )}
-      <dl className="grid min-w-0 grid-cols-1 gap-2 [&_dt]:text-xs [&_dt]:text-muted-foreground [&_dd]:break-all">
-        <dt>资产 ID</dt>
-        <dd>{node.asset_id}</dd>
-        {node.kind === "asset_version" && (
-          <>
-            <dt>精确版本 ID</dt>
-            <dd>{node.resource_id}</dd>
-            <dt>内容校验值</dt>
-            <dd>{node.checksum}</dd>
-          </>
-        )}
-        {node.dependency_manifest_id && (
-          <>
-            <dt>原始输入清单</dt>
-            <dd>{node.dependency_manifest_id}</dd>
-          </>
-        )}
-      </dl>
       {node.kind === "asset" && (
         <div
           className="flex flex-col items-start gap-2"

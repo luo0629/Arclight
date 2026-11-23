@@ -102,9 +102,7 @@ export default function VideoTemporalReview({
     >
       <h5 className="font-semibold">视频时序审查</h5>
       {admission?.status === "ADMITTED" ? (
-        <p>
-          精确审查已准入 · {admission.conclusion} · {admission.report_id}
-        </p>
+        <p>审查已通过准入 · {admission.conclusion}</p>
       ) : (
         <Notice>
           视频时序审查尚未满足，不能提交批准、正式选用或锁定。
@@ -156,9 +154,6 @@ export default function VideoTemporalReview({
           </Button>
         )}
       {admission?.summary && <p>{admission.summary}</p>}
-      {admission?.report_sha256 && (
-        <p className="break-all">报告 SHA-256：{admission.report_sha256}</p>
-      )}
       {admission?.sampled_frame_count != null && (
         <p>
           采样 {admission.sampled_frame_count} 帧 · 覆盖{" "}
@@ -186,7 +181,6 @@ export default function VideoTemporalReview({
                 <p>
                   {sample.time_ms} ms · {sample.observation}
                 </p>
-                <p className="text-muted-foreground">{sample.frame_sha256}</p>
               </li>
             ))}
           </ul>
@@ -214,7 +208,7 @@ export default function VideoTemporalReview({
         <p>
           {admission.revision_status === "NEEDS_REVIEW"
             ? "已达到返修上限，需人工处理。"
-            : `返修任务 · ${admission.revision_job_id}`}
+            : "已提交视频返修任务"}
         </p>
       )}
       {actions?.can_revise && (

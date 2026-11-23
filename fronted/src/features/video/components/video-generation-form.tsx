@@ -85,7 +85,7 @@ function Fields(props: Props) {
           )
           .map((row) => (
             <NativeSelectOption key={row.id} value={row.id}>
-              {row.asset_name} · v{row.version_no} · {row.id}
+              {row.asset_name} · v{row.version_no}
             </NativeSelectOption>
           ))}
       </NativeSelect>

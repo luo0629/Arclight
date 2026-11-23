@@ -47,7 +47,7 @@ test("VIDEO-01模拟回执：替换身份不匹配时保留原提交记录且不
     name: "精确视频候选详情",
     exact: true,
   });
-  await expect(detail).toContainText(env.first.id);
+  await expect(detail.getByRole("heading", { name: /视频 v1/ })).toBeVisible();
   await detail.getByLabel("替换 MP4 文件", { exact: true }).setInputFiles({
     name: "mismatch.mp4",
     mimeType: "video/mp4",
@@ -68,8 +68,8 @@ test("VIDEO-01模拟回执：替换身份不匹配时保留原提交记录且不
   await expect(detail.getByRole("alert")).toContainText(
     "替换视频回执与原候选或上传文件不一致",
   );
-  await expect(detail).toContainText(env.first.id);
-  await expect(detail).not.toContainText(env.second.id);
+  await expect(detail.getByRole("heading", { name: /视频 v1/ })).toBeVisible();
+  await expect(detail.getByRole("heading", { name: /视频 v2/ })).toHaveCount(0);
   await expect(
     detail.getByRole("button", { name: "核验原视频替换提交", exact: true }),
   ).toBeDisabled();
@@ -134,9 +134,10 @@ test("VIDEO-01：真实候选API、完整H264规格、私有播放下载、替�
     name: "精确视频候选详情",
     exact: true,
   });
-  await expect(detail).toContainText(env.job.id);
-  await expect(detail).toContainText(env.board.id);
-  await expect(detail).toContainText(env.frame.id);
+  await expect(detail).toContainText(
+    `已固定 ${original.video_source!.video_images.length} 张首帧／参考图`,
+  );
+  await expect(detail).not.toContainText(env.frame.id);
   await expect(detail).toContainText("doubao-seedance-1-0-pro-250528");
   await expect(detail).toContainText("女孩提灯走过小桥并回头。");
   await expect(
@@ -475,7 +476,7 @@ test("VIDEO-01模拟故障：哈希损坏拒绝播放下载，撤权后清除旧
     name: "精确视频候选详情",
     exact: true,
   });
-  await expect(detail).toContainText(env.first.id);
+  await expect(detail.getByRole("heading", { name: /视频 v1/ })).toBeVisible();
   env.controlVideo.corrupt = true;
   await detail
     .getByRole("button", { name: "读取视频候选预览", exact: true })
@@ -519,12 +520,12 @@ test("VIDEO-01模拟迟到：切换精确候选丢弃旧详情和媒体，跨项
     name: "精确视频候选详情",
     exact: true,
   });
-  await expect(detail).toContainText(env.second.id);
+  await expect(detail.getByRole("heading", { name: /视频 v2/ })).toBeVisible();
   lateDetail.release();
-  await expect(detail).not.toContainText(env.first.id);
+  await expect(detail.getByRole("heading", { name: /视频 v1/ })).toHaveCount(0);
   env.controlVideo.detailGate = undefined;
   await env.selectNode(env.videoNodes[0]);
-  await expect(detail).toContainText(env.first.id);
+  await expect(detail.getByRole("heading", { name: /视频 v1/ })).toBeVisible();
   const lateMedia = deferred();
   env.controlVideo.mediaGate = lateMedia.promise;
   await detail
@@ -536,7 +537,7 @@ test("VIDEO-01模拟迟到：切换精确候选丢弃旧详情和媒体，跨项
     )
     .toBe(1);
   await env.selectNode(env.videoNodes[1]);
-  await expect(detail).toContainText(env.second.id);
+  await expect(detail.getByRole("heading", { name: /视频 v2/ })).toBeVisible();
   lateMedia.release();
   await expect(detail.locator("video")).toHaveCount(0);
   env.controlVideo.mediaGate = undefined;
@@ -611,7 +612,7 @@ async function admitVideoInWorkspace(
     queue.getByRole("button", { name: "恢复原执行", exact: true }),
   ).toBeEnabled();
   await queue.getByRole("button", { name: "恢复原执行", exact: true }).click();
-  await expect(panel).toContainText("精确审查已准入 · HUMAN_REVIEW");
+  await expect(panel).toContainText("审查已通过准入 · HUMAN_REVIEW");
   await expect(
     shot.getByRole("button", { name: "视频 v1 · DRAFT", exact: true }),
   ).toBeVisible();

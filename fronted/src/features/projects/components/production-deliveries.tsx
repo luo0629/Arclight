@@ -77,9 +77,6 @@ export default function ProductionDeliveries() {
                   </Badge>
                   {row.stale && <Badge variant="outline">素材已失效</Badge>}
                 </div>
-                <p className="break-all text-xs text-muted-foreground">
-                  精确成片：{row.id}
-                </p>
                 <p className="text-xs text-muted-foreground">
                   创建于 {date(row.created_at)}
                 </p>

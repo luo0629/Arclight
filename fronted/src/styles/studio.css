@@ -116,6 +116,8 @@
   overflow-y: auto;
 }
 .episode-studio > .workspace-toolbar {
+  position: relative;
+  z-index: 25;
   flex-shrink: 0;
   margin: 0;
   gap: 8px 16px;
@@ -150,13 +152,59 @@
 .episode-studio.is-canvas {
   overflow: hidden;
 }
-.episode-studio > .workspace-error,
-.episode-studio > .saved-version-notice,
 .episode-studio > .read-only {
   flex-shrink: 0;
   margin: 8px 16px;
   max-height: 28dvh;
   overflow-y: auto;
+}
+.workspace-feedback {
+  position: absolute;
+  z-index: 1;
+  inset-inline-end: 12px;
+  top: calc(100% + 8px);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: max-content;
+  max-width: min(26rem, calc(100% - 24px));
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--foreground) 9%, transparent);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.workspace-feedback[role="alert"] {
+  color: var(--destructive);
+}
+.workspace-feedback > span {
+  align-self: center;
+}
+.studio-progress-popover {
+  z-index: 45;
+  width: min(36rem, var(--radix-popover-content-available-width));
+  max-height: var(--radix-popover-content-available-height);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  box-shadow: 0 12px 32px color-mix(in srgb, var(--foreground) 12%, transparent);
+  outline: none;
+}
+.studio-progress-stages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+@media (max-width: 480px) {
+  .studio-progress-stages {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 .canvas-layout {
   flex: 1;

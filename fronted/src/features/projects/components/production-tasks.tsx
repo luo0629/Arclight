@@ -276,7 +276,6 @@ export default function ProductionTasks() {
                 return (
                   <article
                     key={`${task.family}:${task.id}`}
-                    aria-label={`生产任务 ${task.id}`}
                     className="flex min-w-0 flex-col gap-3 py-5 first:pt-0"
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -294,9 +293,6 @@ export default function ProductionTasks() {
                         ? `第 ${task.episode_no ?? "?"} 集 ${task.episode_title ?? ""}`
                         : "未分集任务"}
                     </p>
-                    <p className="break-all text-xs text-muted-foreground">
-                      任务 {task.id}
-                    </p>
                     <p className="text-xs leading-relaxed text-muted-foreground">
                       创建于 {mediaTime(task.created_at)}；更新于{" "}
                       {mediaTime(task.updated_at)}
@@ -308,12 +304,7 @@ export default function ProductionTasks() {
                     )}
                     {path ? (
                       <Button asChild variant="outline" className="self-start">
-                        <Link
-                          href={path}
-                          aria-label={`查看任务详情 ${task.id}`}
-                        >
-                          查看任务详情
-                        </Link>
+                        <Link href={path}>查看任务详情</Link>
                       </Button>
                     ) : (
                       <Notice>此历史任务缺少可访问的剧集入口。</Notice>

@@ -26,7 +26,6 @@ export default function CanvasNodeList({
       [
         node.title,
         nodeLabel(node),
-        node.resource_id ?? "",
         node.description ?? "",
         node.version_no ? `版本 ${node.version_no}` : "",
       ].some((value) =>
@@ -46,7 +45,7 @@ export default function CanvasNodeList({
       </p>
       <div className="flex flex-wrap gap-3">
         <label className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
-          搜索名称或版本 ID
+          搜索名称或版本
           <input
             className="h-10 min-w-0 rounded-lg border bg-background px-3"
             value={query}
@@ -112,11 +111,6 @@ export default function CanvasNodeList({
               {nodeLabel(node)}
               {selectionLabel(node) ? ` · ${selectionLabel(node)}` : ""}
             </small>
-            {node.resource_id && (
-              <small className="mt-1 block break-all text-xs text-muted-foreground">
-                {node.resource_id}
-              </small>
-            )}
           </span>
           <span className="flex shrink-0 flex-col gap-1">
             <StatusBadge status={node.status} />
