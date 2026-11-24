@@ -63,6 +63,17 @@ test("剧情场景展开显示精确镜头照片，并定位对应剧本场景",
       ],
     }),
   );
+  await page.route(
+    `**/api/v1/episodes/${episodeId}/short-drama/preflight?script_version_id=${scriptId}`,
+    (route) =>
+      route.fulfill({
+        json: {
+          project_budget_limit: "0.00",
+          needed_voices: [],
+          blocked_voices: [],
+        },
+      }),
+  );
   env.graph.nodes.push(
     {
       id: `script:${scriptId}`,
@@ -108,6 +119,9 @@ test("剧情场景展开显示精确镜头照片，并定位对应剧本场景",
   const detail = page.getByRole("region", { name: "剧情场景详情" });
   await expect(detail).toContainText(scene.action);
   await detail.getByRole("button", { name: "在剧本中打开场景" }).click();
+  await expect(page.getByRole("region", { name: "短剧制作" })).toContainText(
+    "项目预算上限（USD）0.00",
+  );
   await expect(
     page.locator(`[data-script-scene="${scene.scene_id}"]`),
   ).toBeFocused();
