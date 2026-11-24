@@ -155,6 +155,7 @@ def generated_references(
         ]
     )
     body["target_type"] = target_type
+    body["episode_id"] = episode["id"]
     body["spec"]["output_spec"] = {"width": 8, "height": 12, "format": "png"}
     job = capture_ok(client, episode["project_id"], body)
     assert deliver(client, job, MockMediaSubmissionProvider()) == "SUCCEEDED"
@@ -880,7 +881,7 @@ def test_local_review_reuses_exact_script_character_bindings_and_names_missing_r
     content["character_assets"] = [{"character": "主角", "asset": reference}]
     source = save_script(client, other, content)
     board, shots = approved_board(client, other, source)
-    case = deepcopy(research_case)
+    case = generated_references(client, other, research_case, [])
     case["target"].update(storyboard_id=board["id"], shot_id=shots[0]["id"])
     case["source"] = source
     case = start_case(client, other, settings, case)
