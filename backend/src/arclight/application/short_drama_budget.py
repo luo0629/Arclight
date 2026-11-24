@@ -24,7 +24,21 @@ MEDIA_SCOPE = "SHORT_DRAMA_MEDIA_JOB"
 
 
 def root_for_workflow(db: Session, workflow_id: UUID | None) -> WorkflowRun | None:
-    control = db.get(AgentRunLimit, workflow_id) if workflow_id is not None else None
+    if workflow_id is None:
+        return None
+    workflow = db.get(WorkflowRun, workflow_id)
+    if workflow is None:
+        return None
+    if workflow.input_json.get("short_drama"):
+        return workflow
+    if workflow.workflow_type not in {
+        "script_storyboard",
+        "storyboard",
+        "art_proposal",
+        "continuity_review",
+    } or not workflow.input_json.get("created_by"):
+        return None
+    control = db.get(AgentRunLimit, workflow_id)
     root = db.get(WorkflowRun, control.root_run_id) if control else None
     return root if root and root.input_json.get("short_drama") else None
 
