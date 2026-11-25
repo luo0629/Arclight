@@ -579,6 +579,67 @@ test("画布节点悬停可删除，刷新后仍隐藏并可撤销", async ({ pa
   expect(env.layoutWrites).toHaveLength(0);
 });
 
+test("故事起点可从画布删除、刷新后仍隐藏并可撤销", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 1050 });
+  const env = await canvasMediaFixture(page);
+  const episode = env.episodes[0];
+  const anchorId = `episode:${episode.id}`;
+  const scriptId = crypto.randomUUID();
+  const scriptNodeId = `script:${scriptId}`;
+  const connectionId = `input:${scriptId}`;
+  env.graph.nodes.unshift(
+    {
+      id: anchorId,
+      kind: "episode",
+      title: episode.title,
+      status: episode.status,
+    },
+    {
+      id: scriptNodeId,
+      kind: "script",
+      resource_id: scriptId,
+      title: "故事初稿",
+      status: "READY_FOR_REVIEW",
+    },
+  );
+  env.graph.layout.positions[anchorId] = { x: 840, y: 20 };
+  env.graph.layout.positions[scriptNodeId] = { x: 1140, y: 20 };
+  env.graph.edges.push({
+    id: connectionId,
+    source: anchorId,
+    target: scriptNodeId,
+  });
+
+  await env.openCanvas(undefined, "canvas");
+  const anchor = page.locator(`.react-flow__node[data-id="${anchorId}"]`);
+  const connection = page.locator(
+    `.react-flow__edge[data-id="${connectionId}"]`,
+  );
+  await expect(connection).toHaveCount(1);
+  await anchor.hover();
+  await anchor
+    .getByRole("button", { name: `从画布删除：${episode.title}`, exact: true })
+    .click();
+  const undo = page.getByRole("button", { name: "撤销", exact: true });
+  await expect(undo).toBeVisible();
+  await expect(anchor).toHaveCount(0);
+  await expect(connection).toHaveCount(0);
+  await page.getByRole("button", { name: "开始创作", exact: true }).click();
+  await expect(page.getByLabel("故事灵感", { exact: true })).toBeVisible();
+  await page.getByRole("radio", { name: "创作画布", exact: true }).click();
+
+  await page.reload();
+  await closeDirectory(page);
+  await expect(undo).toBeVisible();
+  await expect(anchor).toHaveCount(0);
+  await expect(connection).toHaveCount(0);
+  await undo.click();
+  await expect(anchor).toBeVisible();
+  await expect(connection).toHaveCount(1);
+  expect(env.mutations).toHaveLength(0);
+  expect(env.layoutWrites).toHaveLength(0);
+});
+
 for (const size of [
   { width: 1440, height: 1050 },
   { width: 390, height: 844 },

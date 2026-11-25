@@ -202,7 +202,7 @@ function buildNodes(
         selectNode,
         openShot,
         nodeIndex,
-        removeNode: data.kind === "episode" ? undefined : removeNode,
+        removeNode,
       },
       ariaLabel: `${nodeLabel(data)}：${data.title}${data.version_no ? ` v${data.version_no}` : ""}`,
       position:
@@ -299,11 +299,7 @@ export default function Canvas({
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const removed = useMemo(() => {
-    const candidates = new Set(
-      graph.nodes
-        .filter((node) => node.kind !== "episode")
-        .map((node) => node.id),
-    );
+    const candidates = new Set(graph.nodes.map((node) => node.id));
     return new Set(removedIds.filter((id) => candidates.has(id)));
   }, [graph.nodes, removedIds]);
   const visibleNodes = useMemo(
