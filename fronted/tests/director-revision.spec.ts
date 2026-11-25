@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { openWorkspacePanels } from "./workspace-helpers";
 
-async function setup(page: Page, manual = true) {
+async function setup(page: Page, manual = true, unresolved = false) {
   const auth = await page.request.post("/api/v1/auth/register", {
     data: {
       email: `director-check-${crypto.randomUUID()}@example.test`,
@@ -41,7 +41,12 @@ async function setup(page: Page, manual = true) {
             scene_no: number,
             title: `河岸${number}`,
             action: "主角沿河岸送信。",
-            notes: number < 3 ? "导演检查遗漏" : "",
+            notes:
+              number < 3
+                ? unresolved
+                  ? "导演检查遗漏，导演检查持续遗漏"
+                  : "导演检查遗漏"
+                : "",
             dialogue: [
               {
                 line_id: crypto.randomUUID(),
@@ -73,7 +78,7 @@ async function setup(page: Page, manual = true) {
   return { prefix, headers };
 }
 
-async function standalone(page: Page, rounds: number) {
+async function standalone(page: Page) {
   await page.getByRole("radio", { name: "版本列表", exact: true }).click();
   await page
     .locator(".version-row")
@@ -82,9 +87,9 @@ async function standalone(page: Page, rounds: number) {
   await page
     .getByRole("radio", { name: "拆镜、检查与局部修订", exact: true })
     .click();
-  await page
-    .getByLabel("最多导演自动修订轮数", { exact: true })
-    .fill(String(rounds));
+  await expect(
+    page.getByLabel("最多导演自动修订轮数", { exact: true }),
+  ).toHaveCount(0);
   await page
     .getByRole("button", { name: "从此版本生成分镜", exact: true })
     .click();
@@ -94,7 +99,7 @@ test("checked director repairs two local ranges and shows actual checks across r
   page,
 }, testInfo) => {
   const { prefix, headers } = await setup(page);
-  await standalone(page, 2);
+  await standalone(page);
   await expect(
     page.getByText("等待审核：分镜版本", { exact: false }),
   ).toBeVisible({ timeout: 25000 });
@@ -107,7 +112,7 @@ test("checked director repairs two local ranges and shows actual checks across r
     name: "导演检查第 1 轮",
     exact: true,
   });
-  await expect(round.getByText("剩余导演自动修订：2 轮")).toBeVisible();
+  await expect(round.getByText("剩余导演自动修订：3 轮")).toBeVisible();
   await expect(
     round.getByText("原剧本对白尚未被镜头覆盖").first(),
   ).toBeVisible();
@@ -177,13 +182,22 @@ test("checked director repairs two local ranges and shows actual checks across r
 test("exhausted director preserves located issues and answers cannot reset rounds", async ({
   page,
 }, testInfo) => {
-  const { prefix, headers } = await setup(page);
-  await standalone(page, 0);
+  const { prefix, headers } = await setup(page, true, true);
+  await standalone(page);
   const working = page.getByRole("region", { name: "导演计划与镜头工作稿" });
   await expect(
     working.getByText("导演需要你的决定：", { exact: false }),
   ).toBeVisible({ timeout: 25000 });
   await expect(working.getByText("剩余导演自动修订：0 轮")).toBeVisible();
+  const runs = await (await page.request.get(prefix + "/runs", { headers })).json();
+  const progress = await (
+    await page.request.get(`/api/v1/runs/${runs[0].id}/director`, { headers })
+  ).json();
+  expect(
+    progress.operations.filter(
+      (op: { result?: { decision: string } }) => op.result?.decision === "REVISE",
+    ),
+  ).toHaveLength(3);
   await page.reload();
   await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
@@ -226,7 +240,6 @@ test("combined checked director shares creation controls and keeps both reviews"
   await page
     .getByRole("radio", { name: "拆镜、检查与局部修订", exact: true })
     .click();
-  await page.getByLabel("最多导演自动修订轮数", { exact: true }).fill("2");
   await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await expect(
     page.getByText("等待审核：剧本版本", { exact: false }),

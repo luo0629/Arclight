@@ -143,11 +143,6 @@ def consume_dispatch(
                 permit_epoch=permit_epoch,
                 event_id=event.id,
             ):
-                if job.status == Status.FAILED:
-                    event.status = "SKIPPED"
-                    event.finished_at = utcnow()
-                    event.receipt_json = {"error_code": "TIME_OR_ATTEMPT_LIMIT"}
-                    queues.revoke(db, event.id, "TIME_OR_ATTEMPT_LIMIT")
                 return job.status
             if provider.name != job.provider:
                 raise DomainError("GENERATION_PROVIDER_MISMATCH", "供应商不匹配冻结输入", 409)
@@ -156,11 +151,15 @@ def consume_dispatch(
                     "PROVIDER_CAPABILITY_CONFLICT", "Adapter idempotency declaration conflicts", 409
                 )
             image_inputs: tuple[MediaImageInput, ...] = ()
-            if job.task_type == "VIDEO":
+            validate_input = getattr(provider, "validate_input", None)
+            if validate_input is not None or job.task_type == "VIDEO":
                 manifest = db.get(DependencyManifest, job.input_manifest_id)
                 if manifest is None:
                     raise DomainError("INVALID_GENERATION_INPUT", "媒体输入清单不匹配", 409)
-                image_inputs = load_video_images(db, job, manifest.snapshot_json)
+                if validate_input is not None:
+                    validate_input(manifest.snapshot_json)
+                if job.task_type == "VIDEO":
+                    image_inputs = load_video_images(db, job, manifest.snapshot_json)
             attempt = start_attempt(
                 db, job.id, event.expected_revision, capabilities=provider.capabilities
             )
@@ -174,7 +173,7 @@ def consume_dispatch(
                 Status.RETRY_WAIT,
             }:
                 transition(db, job.id, Status.FAILED, job.revision)
-                category = "BUDGET_EXCEEDED" if exc.code.startswith("BUDGET_") else "INPUT_INVALID"
+                category = "INPUT_INVALID"
                 scheduling.diagnose(db, job, "NOT_RETRYABLE", category)
             return job.status
         event.status = "CLAIMED"
@@ -194,12 +193,7 @@ def consume_dispatch(
             permit.state = "CONSUMED"
             queues.record(db, permit, "CONSUMED")
         call_id = call.id
-        frozen_policy = scheduling.policy_for(db, job)
-        schedule = scheduling.schedule_for(db, job)
-        timeout = min(
-            frozen_policy.call_timeout_seconds,
-            (leases.utc(schedule.deadline_at) - leases.clock(db)).total_seconds(),
-        )
+        timeout = scheduling.policy_for(db, job).call_timeout_seconds
         request = MediaSubmission(
             job.id,
             attempt.id,

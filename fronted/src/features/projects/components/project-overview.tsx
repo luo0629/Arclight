@@ -40,7 +40,6 @@ type Overview = {
     total: number;
   };
   cost: CostTotals & {
-    budget_limit: string;
     currency: "USD";
     status: "AVAILABLE";
   };
@@ -307,17 +306,9 @@ export default function ProjectOverview({
             <PagePanel
               title="成本与成片"
               drawing="film"
-              description="如实区分已配置预算、实际账单和交付记录。"
+              description="查看调用费用与成片交付记录。"
             >
               <dl className="flex flex-col gap-3 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">
-                    已配置预算上限（USD）
-                  </dt>
-                  <dd className="mt-1 text-xl font-semibold tabular-nums">
-                    {data.cost.budget_limit}
-                  </dd>
-                </div>
                 <div>
                   <dt className="mb-2 font-medium">调用成本</dt>
                   <dd>

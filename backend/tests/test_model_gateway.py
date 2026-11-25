@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
+from test_generation_accounting import usage as project_costs
 
 from arclight.application.model_gateway import admit, finish, invoke, route_id
 from arclight.application.runtime import execute_run
@@ -22,6 +23,7 @@ from arclight.domain.model_gateway import (
 from arclight.domain.versions import digest
 from arclight.persistence.base import utcnow
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
+from arclight.persistence.models import Project
 
 
 def route(**patch):
@@ -81,9 +83,7 @@ def test_existing_text_entry_uses_gateway(client, episode, settings):
 
 
 def test_gateway_success_and_idempotent_refusal(client, episode):
-    from test_generation_budget import set_policy
 
-    set_policy(client, episode["project_id"], "10")
     selected = route()
     call = request(episode, selected)
     factory = client.app.state.session_factory
@@ -102,14 +102,11 @@ def test_gateway_success_and_idempotent_refusal(client, episode):
         invoke(
             factory, call, selected, lambda: pytest.fail("duplicate billed"), policy=GatewayPolicy()
         )
-    budget = client.get(f"/api/v1/projects/{episode['project_id']}/budget").json()
-    assert Decimal(budget["actual_cost"]) == 1
+    assert project_costs(client, episode["project_id"]) == (1, 0)
 
 
 def test_unknown_call_retains_budget_and_cannot_fallback(client, episode):
-    from test_generation_budget import set_policy
 
-    set_policy(client, episode["project_id"], "10")
     selected = route()
     call = request(episode, selected)
     called = []
@@ -124,8 +121,7 @@ def test_unknown_call_retains_budget_and_cannot_fallback(client, episode):
             call,
             selected,
             broken,
-            policy=GatewayPolicy(max_attempts=3),
-            fallback=(selected, lambda: pytest.fail("unsafe fallback")),
+            policy=GatewayPolicy(),
         )
     assert caught.value.code == "GATEWAY_RECONCILIATION_REQUIRED" and called == [1]
     with client.app.state.session_factory() as db:
@@ -133,8 +129,7 @@ def test_unknown_call_retains_budget_and_cannot_fallback(client, episode):
         receipt = db.scalar(select(GatewayReceipt).where(GatewayReceipt.call_id == row.id))
         assert receipt.status == "RESULT_UNKNOWN" and receipt.actual_cost is None
         assert "secret" not in str(receipt.usage_json)
-    budget = client.get(f"/api/v1/projects/{episode['project_id']}/budget").json()
-    assert Decimal(budget["pending_estimate"]) == 2
+    assert project_costs(client, episode["project_id"]) == (0, 2)
 
 
 def api(episode):
@@ -165,101 +160,71 @@ def test_rejection_happens_before_network_or_budget(client, episode, change, cod
     assert client.get(api(episode) + "/calls").json() == []
 
 
-@pytest.mark.parametrize(
-    "limits,code",
-    [
-        ({"limit": "1"}, "BUDGET_EXCEEDED"),
-        ({"episode_limit": "1"}, "BUDGET_EPISODE_EXCEEDED"),
-        ({"task_limit": "1"}, "BUDGET_TASK_EXCEEDED"),
-    ],
-)
-def test_text_budget_scopes_reject_before_network(client, episode, limits, code):
-    from test_generation_budget import set_policy
+@pytest.mark.parametrize("scope", ["project", "episode", "task"])
+def test_historical_budget_scopes_allow_new_model_calls(client, episode, scope):
+    from arclight.persistence.generation_budget import GenerationBudgetPolicy
 
-    set_policy(client, episode["project_id"], **limits)
+    factory = client.app.state.session_factory
+    with factory.begin() as db:
+        project = db.get(Project, UUID(episode["project_id"]))
+        if scope == "project":
+            project.budget_limit = Decimal(1)
+        else:
+            db.add(GenerationBudgetPolicy(project_id=project.id, **{f"{scope}_limit": Decimal(1)}))
     selected = route()
-    with pytest.raises(DomainError) as caught:
+    assert (
         invoke(
-            client.app.state.session_factory,
+            factory,
             request(episode, selected),
             selected,
-            lambda: pytest.fail("over budget"),
+            lambda: "result",
             policy=GatewayPolicy(),
         )
-    assert caught.value.code == code
-
-
-@pytest.mark.parametrize(
-    "fallback_kind,code",
-    [
-        ("compatible", None),
-        ("unauthorized", "GATEWAY_ROUTE_FORBIDDEN"),
-        ("incompatible", "GATEWAY_CAPABILITY_REJECTED"),
-        ("expensive", "BUDGET_EXCEEDED"),
-    ],
-)
-def test_fallback_requires_nonacceptance_capability_authorization_and_budget(
-    client, episode, fallback_kind, code
-):
-    from test_generation_budget import set_policy
-
-    set_policy(client, episode["project_id"], "3")
-    primary = route()
-    alternate = route(
-        provider="alternate",
-        maximum_cost=Decimal("4") if fallback_kind == "expensive" else Decimal("2"),
+        == "result"
     )
-    if fallback_kind == "incompatible":
-        alternate = alternate.model_copy(
-            update={
-                "capabilities": GatewayCapabilities(version="audio:1", tasks=frozenset({"AUDIO"}))
-            }
-        )
-    authorized = {route_id(primary)}
-    if fallback_kind != "unauthorized":
-        authorized.add(route_id(alternate))
-    current = request(episode, primary, authorized_routes=frozenset(authorized))
-    seen = []
+    assert project_costs(client, episode["project_id"]) == (0, 2)
+
+
+def test_unaccepted_call_cannot_be_rebound_to_another_route(client, episode):
+    primary = route()
+    alternate = route(provider="alternate")
+    current = request(
+        episode, primary, authorized_routes=frozenset({route_id(primary), route_id(alternate)})
+    )
+    factory = client.app.state.session_factory
+    policy = GatewayPolicy()
+    sent = []
 
     def rejected():
-        seen.append("primary")
-        raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True, transient=True)
+        sent.append("primary")
+        raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True)
 
-    def backup():
-        seen.append("backup")
-        return "ok"
-
-    def run():
-        return invoke(
-            client.app.state.session_factory,
+    with pytest.raises(DomainError) as rejected_call:
+        invoke(factory, current, primary, rejected, policy=policy)
+    assert rejected_call.value.code == "GATEWAY_NOT_ACCEPTED"
+    assert sent == ["primary"]
+    with pytest.raises(DomainError) as changed_route:
+        invoke(
+            factory,
             current,
-            primary,
-            rejected,
-            policy=GatewayPolicy(max_attempts=2),
-            fallback=(alternate, backup),
-            usage=lambda _: GatewayUsage(actual_cost=Decimal("1")),
+            alternate,
+            lambda: pytest.fail("Retry changed the frozen route"),
+            policy=policy,
         )
-
-    if code:
-        with pytest.raises(DomainError) as caught:
-            run()
-        assert caught.value.code == code
-        assert seen == ["primary"]
-    else:
-        assert run() == "ok" and seen == ["primary", "backup"]
-        rows = client.get(api(episode) + "/calls").json()
-        assert [row["status"] for row in rows] == ["NOT_ACCEPTED", "SUCCEEDED"]
-        assert rows[1]["route"]["provider"] == "alternate"
+    assert changed_route.value.code == "GATEWAY_IDEMPOTENCY_CONFLICT"
+    rows = client.get(api(episode) + "/calls").json()
+    assert len(rows) == 1 and rows[0]["status"] == "NOT_ACCEPTED"
+    assert rows[0]["route"]["provider"] == "fake"
 
 
-def test_retry_is_bounded_and_durable_across_invocations(client, episode):
+def test_safe_nonacceptance_can_retry_in_another_invocation(client, episode):
     selected = route(maximum_cost=Decimal("0"))
     current = request(episode, selected)
     seen = []
 
     def reject():
         seen.append(1)
-        raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True, transient=True)
+        raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True)
 
     with pytest.raises(DomainError):
         invoke(
@@ -267,53 +232,45 @@ def test_retry_is_bounded_and_durable_across_invocations(client, episode):
             current,
             selected,
             reject,
-            policy=GatewayPolicy(max_attempts=2),
+            policy=GatewayPolicy(),
         )
-    with pytest.raises(DomainError) as caught:
+    assert (
         invoke(
             client.app.state.session_factory,
             current,
             selected,
-            reject,
-            policy=GatewayPolicy(max_attempts=2),
+            lambda: "result",
+            policy=GatewayPolicy(),
         )
-    assert caught.value.code == "GATEWAY_ATTEMPT_LIMIT" and seen == [1, 1]
+        == "result"
+    )
+    assert seen == [1]
+    assert [row["status"] for row in client.get(api(episode) + "/calls").json()] == [
+        "NOT_ACCEPTED",
+        "SUCCEEDED",
+    ]
 
 
 @pytest.mark.parametrize("scope", ["global", "user"])
-def test_rate_limit_persists_across_sessions_and_expires(client, episode, monkeypatch, scope):
-    from arclight.application import model_gateway
+def test_gateway_rejects_obsolete_rate_settings_and_accepts_successive_calls(
+    client, episode, scope
+):
+    from pydantic import ValidationError
 
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        GatewayPolicy(**{f"{scope}_per_minute": 1})
     selected = route(maximum_cost=Decimal("0"))
-    policy = GatewayPolicy(**{f"{scope}_per_minute": 1})
-    invoke(
-        client.app.state.session_factory,
-        request(episode, selected),
-        selected,
-        lambda: 1,
-        policy=policy,
-    )
-    with pytest.raises(DomainError) as caught:
-        invoke(
-            client.app.state.session_factory,
-            request(episode, selected),
-            selected,
-            lambda: pytest.fail("rate limited"),
-            policy=policy,
+    for operation in ("first", "next"):
+        assert (
+            invoke(
+                client.app.state.session_factory,
+                request(episode, selected),
+                selected,
+                lambda result=operation: result,
+                policy=GatewayPolicy(),
+            )
+            == operation
         )
-    assert caught.value.code == "GATEWAY_RATE_LIMITED"
-    later = utcnow() + timedelta(seconds=61)
-    monkeypatch.setattr(model_gateway, "utcnow", lambda: later)
-    assert (
-        invoke(
-            client.app.state.session_factory,
-            request(episode, selected),
-            selected,
-            lambda: 2,
-            policy=policy,
-        )
-        == 2
-    )
 
 
 def test_circuit_open_single_probe_recovery_pause_and_cas(client, episode, monkeypatch):
@@ -392,9 +349,7 @@ def test_circuit_open_single_probe_recovery_pause_and_cas(client, episode, monke
 
 
 def test_reconcile_is_evidence_based_append_only_and_idempotent(client, episode):
-    from test_generation_budget import set_policy
 
-    set_policy(client, episode["project_id"], "2")
     selected = route()
     current = request(episode, selected)
     with pytest.raises(DomainError):
@@ -433,26 +388,24 @@ def test_reconcile_is_evidence_based_append_only_and_idempotent(client, episode)
             current,
             selected,
             lambda: "retry",
-            policy=GatewayPolicy(max_attempts=2),
+            policy=GatewayPolicy(),
             usage=lambda _: GatewayUsage(actual_cost=Decimal("3")),
         )
         == "retry"
     )
-    budget = client.get(f"/api/v1/projects/{episode['project_id']}/budget").json()
-    assert Decimal(budget["actual_cost"]) == 3 and Decimal(budget["pending_estimate"]) == 0
+    assert project_costs(client, episode["project_id"]) == (3, 0)
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(GatewayReceipt)) == 3
 
 
 def test_fake_media_enters_same_gateway_without_double_reservation(client, episode, monkeypatch):
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
     from test_generation_delivery import Provider, deliver
     from test_generation_jobs import capture, capture_ok
 
     from arclight.domain.generation_requests import GenerationResult
     from arclight.providers.media_submission import SubmissionReceipt
 
-    set_policy(client, episode["project_id"], "3")
     priced(monkeypatch, "2")
     selected = route(maximum_cost=Decimal("1"))
     invoke(
@@ -472,12 +425,11 @@ def test_fake_media_enters_same_gateway_without_double_reservation(client, episo
         )
     )
     assert deliver(client, job, provider) == "SUCCEEDED" and len(provider.requests) == 1
-    assert capture(client, episode["project_id"]).json()["error"]["code"] == "BUDGET_EXCEEDED"
+    assert capture(client, episode["project_id"]).status_code == 201
     rows = client.get(api(episode) + "/calls").json()
     assert len(rows) == 2 and rows[1]["generation_attempt_id"]
     assert rows[1]["route"]["capabilities"]["media"]["execution_mode"] == "BOTH"
-    budget = client.get(f"/api/v1/projects/{episode['project_id']}/budget").json()
-    assert Decimal(budget["actual_cost"]) == 3 and Decimal(budget["pending_estimate"]) == 0
+    assert project_costs(client, episode["project_id"]) == (3, 2)
 
 
 @pytest.mark.parametrize("action", ["update", "delete", "replace", "truncate"])
@@ -536,7 +488,6 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
     import httpx
     from cryptography.fernet import Fernet
     from pydantic import SecretStr
-    from test_generation_budget import set_policy
     from test_model_services import account, profile
 
     from arclight.providers.text import MockTextProvider
@@ -555,7 +506,6 @@ def test_real_text_transport_uses_frozen_connection_and_records_sanitized_usage(
     episode = client.post(
         f"/api/v1/projects/{project['id']}/episodes", json={"episode_no": 1, "title": "test"}
     ).json()
-    set_policy(client, project["id"], "10")
     started = client.post(
         f"/api/v1/episodes/{episode['id']}/script-runs",
         json={"story": "quiet forest"},
@@ -682,63 +632,55 @@ def test_viewer_cannot_pause_or_reconcile_and_cross_project_is_hidden(client, ep
     )
 
 
-@pytest.mark.parametrize("case", ["budget", "duplicate", "rate"])
-def test_postgres_concurrent_admission_is_serialized(client, episode, settings, case):
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_postgres_concurrent_admission_prevents_double_dispatch(
+    client, episode, settings, duplicate
+):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
     from test_concurrency import require_postgres
-    from test_generation_budget import set_policy
 
     require_postgres(settings)
-    set_policy(client, episode["project_id"], "2")
     selected = route()
     first = request(episode, selected)
-    second = first if case == "duplicate" else request(episode, selected)
-    policy = GatewayPolicy(global_per_minute=1) if case == "rate" else GatewayPolicy()
-    if case != "budget":
-        set_policy(client, episode["project_id"], "10")
+    second = first if duplicate else request(episode, selected)
     barrier = Barrier(2)
 
     def run(current):
         barrier.wait(timeout=5)
         try:
             with client.app.state.session_factory.begin() as db:
-                admit(db, current, selected, policy)
+                admit(db, current, selected, GatewayPolicy())
             return "admitted"
         except DomainError as exc:
             return exc.code
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         outcomes = list(executor.map(run, (first, second)))
-    assert sorted(outcomes) == sorted(
-        [
-            "admitted",
-            {
-                "budget": "BUDGET_EXCEEDED",
-                "duplicate": "GATEWAY_RECONCILIATION_REQUIRED",
-                "rate": "GATEWAY_RATE_LIMITED",
-            }[case],
-        ]
-    )
+    assert sorted(outcomes) == [
+        "GATEWAY_RECONCILIATION_REQUIRED" if duplicate else "admitted",
+        "admitted",
+    ]
 
 
-def test_postgres_text_and_media_compete_for_the_same_budget(
+def test_postgres_text_and_media_admit_concurrently_despite_a_historical_budget(
     client, episode, settings, monkeypatch
 ):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Barrier
 
     from test_concurrency import require_postgres
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
     from test_generation_jobs import payload
 
     from arclight.application.generation_jobs import create_job
     from arclight.domain.generation_requests import GenerationCreate
 
     require_postgres(settings)
-    set_policy(client, episode["project_id"], "2")
     priced(monkeypatch, "2")
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, UUID(episode["project_id"])).budget_limit = Decimal(1)
     selected = route()
     barrier = Barrier(2)
 
@@ -762,7 +704,8 @@ def test_postgres_text_and_media_compete_for_the_same_budget(
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         outcomes = list(executor.map(run, ("text", "media")))
-    assert sorted(outcomes) == ["BUDGET_EXCEEDED", "admitted"]
+    assert outcomes == ["admitted", "admitted"]
+    assert project_costs(client, episode["project_id"]) == (0, 4)
 
 
 def test_real_deadline_preserves_uncertainty_and_disallows_fallback(client, episode):
@@ -784,10 +727,7 @@ def test_real_deadline_preserves_uncertainty_and_disallows_fallback(client, epis
                 request(episode, selected),
                 selected,
                 slow,
-                # Admission also consumes the deadline; leave room for real DB I/O
-                # so this test reaches the deliberately blocked provider on slow CI.
-                policy=GatewayPolicy(timeout_seconds=1, max_attempts=2),
-                fallback=(selected, lambda: pytest.fail("unknown cannot fallback")),
+                policy=GatewayPolicy(timeout_seconds=1),
             )
         assert entered.is_set() and caught.value.code == "GATEWAY_RECONCILIATION_REQUIRED"
         rows = client.get(api(episode) + "/calls").json()

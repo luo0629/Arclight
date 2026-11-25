@@ -36,7 +36,7 @@ def test_browser_http_fixture_uses_actual_collaboration_contract(
         json={
             "script_version_id": source["id"],
             "professional": True,
-            "director_revision_rounds": 2,
+            "director_revision_rounds": 3,
             "director_art_collaboration": True,
         },
     )

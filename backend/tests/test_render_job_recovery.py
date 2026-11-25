@@ -75,27 +75,26 @@ def test_expired_claim_preserves_interruption_history_and_fences_old_worker(clie
     assert read(client, value)["attempt_count"] == 2
 
 
-@pytest.mark.parametrize("limit", ["attempts", "elapsed"])
-def test_recovery_is_bounded_and_does_not_reset_initial_deadline(client, job_case, limit):
+@pytest.mark.parametrize("elapsed", [False, True])
+def test_recovery_is_bounded_by_attempts_even_after_a_long_render(client, job_case, elapsed):
     _, value, _ = job_case
     factory, run_id = client.app.state.session_factory, UUID(value["id"])
     assert claim(factory, run_id)
-    with factory() as db:
-        start = utc(db.get(RenderJob, run_id).started_at)
-    if limit == "attempts":
-        for _ in range(2):
-            expire(client, value)
-            assert claim(factory, run_id)
-            with factory() as db:
-                assert utc(db.get(RenderJob, run_id).started_at) == start
-    else:
-        with factory.begin() as db:
-            db.get(RenderJob, run_id).started_at = clock(db) - timedelta(seconds=1801)
+    with factory.begin() as db:
+        job = db.get(RenderJob, run_id)
+        if elapsed:
+            job.started_at = clock(db) - timedelta(seconds=1801)
+        start = utc(job.started_at)
+    for _ in range(2):
+        expire(client, value)
+        assert claim(factory, run_id)
+        with factory() as db:
+            assert utc(db.get(RenderJob, run_id).started_at) == start
     expire(client, value)
     assert claim(factory, run_id) is None
     final = read(client, value)
     assert final["status"] == "FAILED" and final["error_code"] == "RENDER_RECOVERY_EXHAUSTED"
-    assert final["attempt_count"] == (3 if limit == "attempts" else 1)
+    assert final["attempt_count"] == 3
     assert final["finished_at"]
 
 

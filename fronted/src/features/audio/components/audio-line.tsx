@@ -147,10 +147,6 @@ export default function AudioLinePanel({
   const unknown = tasks.rows.some((row) =>
     ["RESULT_UNKNOWN", "RECONCILING", "MANUAL_REVIEW"].includes(row.status),
   );
-  const voicePriced =
-    voice?.provider_configuration.maximum_cost_per_output !== null &&
-    typeof voice?.provider_configuration.pricing_version === "string" &&
-    !!voice.provider_configuration.pricing_version;
   const reloadHistory = useCallback(() => {
     setVersionId("");
     void history.load();
@@ -166,7 +162,6 @@ export default function AudioLinePanel({
       lockedSource ||
       lineagePending ||
       unknown ||
-      !voicePriced ||
       history.loading ||
       history.error ||
       tasks.error
@@ -293,7 +288,7 @@ export default function AudioLinePanel({
       {writable && (
         <div className="flex flex-col gap-3">
           <p className="text-sm text-muted-foreground">
-            生成只作用于本句，可能产生供应商费用，沿用项目现有报价与预算。重生成另存候选，旧配音、字幕来源和已冻结成片保留。
+            生成只作用于本句，可能产生供应商费用。重生成另存候选，旧配音、字幕来源和已冻结成片保留。
           </p>
           {ready?.selection && speedRange && (
             <Field>
@@ -331,11 +326,6 @@ export default function AudioLinePanel({
               />
             </Field>
           )}
-          {voice && !voicePriced && (
-            <Notice>
-              此音色的保存配置缺少可信报价，请更新语音服务报价后另存音色版本。
-            </Notice>
-          )}
           {unknown && (
             <Notice>
               本句仍有结果待核清的任务，请先在任务中心完成对账，再决定是否重新生成。
@@ -347,7 +337,6 @@ export default function AudioLinePanel({
               !voice ||
               !ready ||
               !!performanceUnavailable ||
-              !voicePriced ||
               invalidSpeed ||
               lockedSource ||
               lineagePending ||

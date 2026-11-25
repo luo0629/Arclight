@@ -14,7 +14,7 @@ class GenerationBudgetReservation(Entity, Base):
     job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), index=True)
     attempt_no: Mapped[int]
     sequence: Mapped[int]
-    amount: Mapped[Decimal] = mapped_column(Numeric(18, 6))
+    amount: Mapped[Decimal | None] = mapped_column(Numeric(18, 6))
     currency: Mapped[str] = mapped_column(String(3), default="USD")
     source: Mapped[str] = mapped_column(String(20))
     __table_args__ = (

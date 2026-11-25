@@ -10,7 +10,7 @@ from arclight.agents.contracts import CharacterAsset, Identifier, Scene, ScriptC
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.director_planning import DirectorEvidence, DirectorPlan
 from arclight.domain.generation_requests import safe_metadata
-from arclight.domain.screenwriter_creation import ScreenwriterOptions
+from arclight.domain.screenwriter_creation import AutomaticRevisionRounds, ScreenwriterOptions
 
 WORKING_VERSION: Literal["director-working/1"] = "director-working/1"
 REVISION_VERSION: Literal["director-revision/1"] = "director-revision/1"
@@ -38,7 +38,7 @@ COMPLETE只提出检查决定；完整候选仍由原领域服务保存并交原
 
 
 class DirectorRevisionOptions(ScreenwriterOptions):
-    director_revision_rounds: int | None = Field(default=None, strict=True, ge=0, le=8)
+    director_revision_rounds: AutomaticRevisionRounds | None = None
     director_art_collaboration: bool = Field(default=False, strict=True)
 
     @model_validator(mode="after")

@@ -381,51 +381,42 @@ def test_plan_constraint_change_is_rejected_before_creating(
         )
 
 
-def test_original_model_limit_applies_across_all_scene_loops_and_retry(
+def test_each_screenwriter_operation_gets_its_own_bounded_loop(
     client, episode, settings, model_service, monkeypatch
 ):
-    sent, _ = install(model_service, monkeypatch, settings)
-    run_id = start(client, episode, agent_limits={"max_model_calls": 3})
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
+    sent, errors = install(model_service, monkeypatch, settings)
+    run_id = start(client, episode)
     run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "AGENT_MODEL_CALL_LIMIT"
-    assert len(sent) == 3 and progress(client, run_id)[1]["status"] == "COMPLETED"
-    assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
-    run = run_once(client, settings, run_id)
-    assert run["error_code"] == "AGENT_MODEL_CALL_LIMIT" and len(sent) == 3
+    assert run["status"] == "WAITING_REVIEW" and len(sent) == 4, (run, errors)
+    assert all(item["status"] == "COMPLETED" for item in progress(client, run_id))
+    assert run_once(client, settings, run_id) == run
+    assert len(sent) == 4
 
 
-def test_director_after_approval_shares_original_call_limit_and_keeps_candidate(
+def test_director_after_approval_keeps_candidate_and_original_execution_scope(
     client, episode, settings, model_service, monkeypatch
 ):
     sent, errors = install(model_service, monkeypatch, settings)
-    run_id = start(client, episode, agent_limits={"max_model_calls": 4})
+    run_id = start(client, episode)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW" and len(sent) == 4, errors
     candidate_id = UUID(run["pending_review"]["version_id"])
     with client.app.state.session_factory() as db:
         content = copy.deepcopy(db.get(Script, candidate_id).content_json)
-        deadline = db.get(AgentRunLimit, run_id).deadline_at
+        control = db.get(AgentRunLimit, run_id)
+        scope = (control.root_run_id, control.actor_id, control.input_sha256)
     approve(client, run)
     run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "AGENT_MODEL_CALL_LIMIT"
-    assert len(sent) == 4
+    assert run["status"] == "WAITING_REVIEW" and len(sent) == 5, (run, errors)
+    assert run["pending_review"]["resource_type"] == "storyboard"
+    assert run_once(client, settings, run_id) == run
+    assert len(sent) == 5
     with client.app.state.session_factory() as db:
-        saved = db.get(WorkflowRun, run_id)
-        assert saved.agent_state_json["status"] == "FAILED"
-        assert (
-            next(
-                step for step in saved.agent_state_json["steps"] if step["step_id"] == "storyboard"
-            )["status"]
-            == "FAILED"
-        )
         candidate = db.get(Script, candidate_id)
         assert candidate.content_json == content and candidate.status == "APPROVED"
-    assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
-    run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "AGENT_MODEL_CALL_LIMIT"
-    assert len(sent) == 4
-    with client.app.state.session_factory() as db:
-        assert db.get(AgentRunLimit, run_id).deadline_at == deadline
+        control = db.get(AgentRunLimit, run_id)
+        assert (control.root_run_id, control.actor_id, control.input_sha256) == scope
         assert (
             db.scalar(select(func.count()).select_from(Script).where(Script.run_id == run_id)) == 1
         )

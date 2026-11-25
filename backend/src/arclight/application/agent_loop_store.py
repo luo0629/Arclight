@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_limits import action_usage, validate_agent_execution
+from arclight.application.agent_limits import validate_agent_execution
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
@@ -23,7 +23,6 @@ from arclight.domain.agent_model import AgentModelRequest
 from arclight.domain.agent_runtime import AgentHumanDecision, HumanDecisionRequest
 from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.versions import digest
-from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import (
     AgentLoop,
     AgentLoopAction,
@@ -62,15 +61,7 @@ def checked_loop(db: Session, loop_id: UUID, *, actor: str | None = None) -> Age
     seed = AgentModelRequest.model_validate(loop.seed_json)
     if seed.run_id != loop.run_id or digest(loop.seed_json) != loop.request_sha256:
         raise DomainError("AGENT_LOOP_INVALID", "持久运行合同无效", 409)
-    limits = validate_agent_execution(db, run.id, seed.stage)
-    control = db.get(AgentRunLimit, run.id)
-    assert control is not None
-    usage = action_usage(db, control.root_run_id)
-    if limits.maximum_cost is not None and (
-        usage["unknown_cost"]
-        or usage["actual_cost"] + usage["pending_estimate"] > limits.maximum_cost
-    ):
-        raise DomainError("AGENT_COST_LIMIT", "恢复时已有用量超过运行总预算", 409)
+    validate_agent_execution(db, run.id, seed.stage)
     return loop
 
 
@@ -175,7 +166,7 @@ class AgentLoopStore:
                 raise DomainError("AGENT_ACTION_CONFLICT", "逻辑行动不能更换输入或合同", 409)
             if action.gateway_call_id is not None and action.result_json is None:
                 receipt = latest_receipt(db, action.gateway_call_id)
-                if receipt is None or receipt.status != "NOT_ACCEPTED":
+                if receipt is None or receipt.status != "NOT_ACCEPTED" or receipt.actual_cost != 0:
                     raise DomainError(
                         "GATEWAY_RECONCILIATION_REQUIRED", "原模型行动结果未知，须沿网关对账", 409
                     )
@@ -187,7 +178,7 @@ class AgentLoopStore:
         assert action is not None and action.loop_id == self.loop_id and action.kind == "MODEL"
         if action.gateway_call_id is not None and action.gateway_call_id != call_id:
             receipt = latest_receipt(db, action.gateway_call_id)
-            if receipt is None or receipt.status != "NOT_ACCEPTED":
+            if receipt is None or receipt.status != "NOT_ACCEPTED" or receipt.actual_cost != 0:
                 raise DomainError(
                     "GATEWAY_RECONCILIATION_REQUIRED", "原调用未确认未接收，禁止重发", 409
                 )

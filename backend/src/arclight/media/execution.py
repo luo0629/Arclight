@@ -87,7 +87,7 @@ def _exchange(
     process: subprocess.Popen,
     data: bytes,
     limit: int | None,
-    timeout: float,
+    timeout: float | None,
     observer: MediaObserver | None = None,
 ) -> bytes:
     """Drain media output continuously and keep diagnostic output bounded."""
@@ -122,7 +122,7 @@ def _exchange(
         Thread(target=write),
     ]
     started_threads: list[Thread] = []
-    deadline = time.monotonic() + timeout
+    deadline = None if timeout is None else time.monotonic() + timeout
     reason = None
     next_observation = 0.0
     try:
@@ -137,11 +137,12 @@ def _exchange(
                 progress = _progress(bytes(diagnostic))
                 observer(progress)
                 next_observation = time.monotonic() + 0.25
-            if exceeded.wait(min(0.01, max(0, deadline - time.monotonic()))):
-                reason = "OUTPUT_LIMIT"
-                break
-            if time.monotonic() >= deadline:
+            remaining = 0.01 if deadline is None else deadline - time.monotonic()
+            if remaining <= 0:
                 reason = "TIME_LIMIT"
+                break
+            if exceeded.wait(min(0.01, remaining)):
+                reason = "OUTPUT_LIMIT"
                 break
     finally:
         _stop(process)
@@ -181,7 +182,7 @@ def execute_media(
     argument: str,
     data: bytes,
     *,
-    timeout: float = 20,
+    timeout: float | None = 20,
     observer: MediaObserver | None = None,
 ) -> bytes:
     """Only fixed operations and bytes cross the boundary; filenames and secrets never do."""
@@ -190,7 +191,8 @@ def execute_media(
         not isinstance(data, bytes)
         or not data
         or (command.input_limit is not None and len(data) > command.input_limit)
-        or not 0 < timeout <= 600
+        or (timeout is not None and not 0 < timeout <= 600)
+        or (timeout is None and (operation not in {"render", "inspect"} or observer is None))
     ):
         raise MediaExecutionError("INVALID_INPUT")
     if not _slots.acquire(timeout=3):

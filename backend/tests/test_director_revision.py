@@ -149,6 +149,13 @@ def checks(client, run_id):
     return [op for op in progress(client, run_id)["operations"] if op["kind"] == "director_check"]
 
 
+def revise_visual_description_without_fixing_missing_dialogue(seed, patch):
+    shot = patch["shots"][0]
+    shot["dialogue_line_ids"] = []
+    shot["visual_description"] += f" (composition pass {seed['round'] + 1})"
+    return patch
+
+
 def answer_body(operation, *, decision="ANSWER"):
     return {
         "question_id": operation["question_id"],
@@ -182,7 +189,7 @@ def test_checked_candidate_uses_original_reviews_and_shared_limits(
                 "professional": True,
                 "professional_director": True,
                 "director_revision_rounds": 3,
-                **({"revision_rounds": 1} if revised else {}),
+                **({"revision_rounds": 3} if revised else {}),
             },
         )
         assert response.status_code == 202, response.text
@@ -255,7 +262,7 @@ def test_actual_feedback_selects_patch_and_rechecks_before_publication(
     sent, errors, base_errors = install_revision(
         model_service, monkeypatch, settings, mutate=mutate
     )
-    run_id, _ = start(client, episode, director_revision_rounds=2)
+    run_id, _ = start(client, episode, director_revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, base_errors)
     reports = checks(client, run_id)
@@ -264,7 +271,7 @@ def test_actual_feedback_selects_patch_and_rechecks_before_publication(
     assert code in {issue["code"] for issue in feedback["issues"]}
     assert any(code in str(item["messages"]) for item in sent)
     assert reports[0]["director_revision"]["patches"][-1]["selected"] is True
-    assert reports[1]["director_revision"]["remaining_patches"] == 1
+    assert reports[1]["director_revision"]["remaining_patches"] == 2
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(Review)) == 0
         assert db.scalar(select(func.count()).select_from(Storyboard)) == 1
@@ -301,3 +308,37 @@ def test_multiround_partial_patches_protect_other_scenes(
             if scene_before["scene_id"] != patch["patch"]["scene_id"]:
                 assert scene_before == scene_after
     assert reports[-1]["director_revision"]["initial_check"]["valid"]
+
+
+def test_third_patch_leaves_unresolved_draft_for_human_review(
+    client, episode, settings, model_service, monkeypatch
+):
+    def omit_dialogue(result, _seed):
+        result["shots"][0]["dialogue_line_ids"] = []
+
+    sent, errors, base_errors = install_revision(
+        model_service,
+        monkeypatch,
+        settings,
+        mutate=omit_dialogue,
+        make_patch=revise_visual_description_without_fixing_missing_dialogue,
+    )
+    run_id, _ = start(client, episode, director_revision_rounds=3)
+    run = run_once(client, settings, run_id)
+    assert run["status"] == "RUNNING", (run, errors, base_errors)
+    reports = checks(client, run_id)
+    assert [row["result"]["decision"] for row in reports[:3]] == ["REVISE"] * 3
+    assert len(reports) == 4
+    waiting = reports[-1]
+    assert waiting["status"] == "WAITING_HUMAN" and waiting["question_id"]
+    saved = waiting["director_revision"]
+    assert saved["remaining_patches"] == 0
+    assert "DIRECTOR_DIALOGUE_MISSING" in {
+        item["code"] for item in saved["initial_check"]["issues"]
+    }
+    assert saved["working_storyboard"]["scenes"]
+    calls = len(sent)
+    assert run_once(client, settings, run_id)["status"] == "RUNNING"
+    assert checks(client, run_id) == reports and len(sent) == calls
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(Storyboard)) == 0

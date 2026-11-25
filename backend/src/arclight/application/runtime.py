@@ -131,7 +131,10 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                     step.step_id == active_agent_step and step.status == "SUCCEEDED"
                     for step in agent_state.steps
                 )
-                if not step_succeeded:
+                if not step_succeeded and not any(
+                    step.step_id == active_agent_step and step.status == "RUNNING"
+                    for step in agent_state.steps
+                ):
                     agent_state = transition_agent_step(
                         agent_state,
                         agent_scope,
@@ -344,7 +347,10 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 exc.code if isinstance(exc, DomainError) else "EXECUTION_FAILED",
                 str(exc) if isinstance(exc, AgentStateError) else None,
             )
-            if agent_state is not None and agent_scope is not None:
+            balance_error = (
+                isinstance(exc, DomainError) and exc.code == "ACCOUNT_BALANCE_INSUFFICIENT"
+            )
+            if not balance_error and agent_state is not None and agent_scope is not None:
                 try:
                     agent_state = terminate_agent_state(
                         agent_state,
@@ -360,7 +366,8 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 exc.code
                 if isinstance(exc, DomainError)
                 and (
-                    exc.code.startswith(("GATEWAY_", "BUDGET_", "SERVICE_", "KEY_STORAGE_"))
+                    exc.code == "ACCOUNT_BALANCE_INSUFFICIENT"
+                    or exc.code.startswith(("GATEWAY_", "BUDGET_", "SERVICE_", "KEY_STORAGE_"))
                     or exc.code
                     in {
                         "PRODUCTION_VERSION_INCOMPATIBLE",
@@ -375,5 +382,6 @@ def _execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisi
                 )
                 else "WORKFLOW_EXECUTION_FAILED"
             )
-            run.revision += 1
+            if not balance_error:
+                run.revision += 1
             emit(db, run, "workflow.failed", {"code": run.error_code})

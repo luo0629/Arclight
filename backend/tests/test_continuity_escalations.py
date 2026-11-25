@@ -22,7 +22,6 @@ from arclight.application.continuity_escalations import request_escalation
 from arclight.application.continuity_review_store import REVIEW_RESOURCE
 from arclight.application.human_reviews import resume_review, submit_decision
 from arclight.application.production_events import consume_stage_event
-from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.continuity_escalations import ESCALATION_RESOURCE, ContinuityEscalation
 from arclight.domain.continuity_reviews import ReviewTarget
@@ -176,8 +175,9 @@ def test_owner_decision_and_resume_preserve_review_and_explicit_asset_controls(
 
 @pytest.mark.parametrize("reviewer_case", [AgentRunLimits(max_model_calls=1)], indirect=True)
 def test_real_exhaustion_is_durable_cannot_be_approved_and_never_resets_limits(
-    client, settings, model_service, reviewer_case
+    client, settings, model_service, reviewer_case, monkeypatch
 ):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
     sent, errors, _ = install_reviewer_model(model_service)
     outcome = run_review(client, settings, reviewer_case)
     assert outcome.status == "STOPPED" and outcome.stop_code == "AGENT_MODEL_CALL_LIMIT"
@@ -201,9 +201,7 @@ def test_real_exhaustion_is_durable_cannot_be_approved_and_never_resets_limits(
     assert run_review(client, settings, reviewer_case) == outcome
     assert pending(client, reviewer_case)["status"] == "RESUMED"
     assert len(sent) == 1 and count(client, HumanReviewRequest) == 1
-    with pytest.raises(DomainError) as changed:
-        run_review(client, settings, reviewer_case, limits=AgentRunLimits(max_model_calls=100))
-    assert changed.value.code == "AGENT_LIMITS_CONFLICT"
+    assert outcome.model_turns == 1
     asset, version = target_rows(client, reviewer_case)
     blocked = state(client, asset, version, "READY_FOR_REVIEW")
     assert blocked.status_code == 409, blocked.text
@@ -211,11 +209,10 @@ def test_real_exhaustion_is_durable_cannot_be_approved_and_never_resets_limits(
     assert choose(client, asset, version).status_code == 409
 
 
-def test_real_budget_refusal_persists_human_wait_without_sending_or_minting_review(
+def test_quoted_review_can_complete_and_preserves_the_original_usage_scope(
     client, episode, settings, model_service, reviewer_case
 ):
     from test_director_planning import activate
-    from test_generation_budget import set_policy
 
     from arclight.application.agent_limits import configure_agent_run
     from arclight.application.agent_tools import build_agent_tool_registry, grant_agent_tools
@@ -223,7 +220,6 @@ def test_real_budget_refusal_persists_human_wait_without_sending_or_minting_revi
     from arclight.domain.model_gateway import GatewayPolicy
     from arclight.persistence.agent_limits import AgentRunLimit
 
-    set_policy(client, reviewer_case["project_id"], "100")
     with client.app.state.session_factory.begin() as db:
         db.get(WorkflowRun, reviewer_case["run_id"]).status = "SUCCEEDED"
     # Pricing is frozen at run creation; changing current settings must not alter it.
@@ -240,7 +236,11 @@ def test_real_budget_refusal_persists_human_wait_without_sending_or_minting_revi
     actor = activate(client, episode, settings, run_id)
     case = reviewer_case | {"run_id": run_id, "actor": actor}
     with client.app.state.session_factory.begin() as db:
-        configure_agent_run(db, run_id, actor, AgentRunLimits())
+        configure_agent_run(
+            db,
+            run_id,
+            actor,
+        )
         grant_agent_tools(
             db,
             AgentToolGrantRequest(
@@ -255,26 +255,22 @@ def test_real_budget_refusal_persists_human_wait_without_sending_or_minting_revi
         original = (deepcopy(control.limits_json), control.deadline_at)
     sent, errors, _ = install_reviewer_model(model_service)
     outcome = run_review(client, settings, case)
-    assert outcome.status == "STOPPED" and outcome.stop_code == "AGENT_BUDGET_EXCEEDED"
-    assert sent == [] and not errors
-    row = pending(client, case)
-    assert decide(client, row).json()["error"]["code"] == "REVIEW_NOT_COMPLETED"
-    saved = decide(client, row, "REJECT")
-    assert saved.status_code == 200, saved.text
-    assert resume(client, row, saved.json()).status_code == 200
+    assert outcome.status == "COMPLETED" and outcome.stop_code is None
+    assert len(sent) == outcome.model_turns and not errors
     with client.app.state.session_factory() as db:
         control = db.get(AgentRunLimit, run_id)
         assert (control.limits_json, control.deadline_at) == original
-        assert db.get(AgentLoop, outcome.loop_id).status == "STOPPED"
+        assert db.get(AgentLoop, outcome.loop_id).status == "COMPLETED"
         assert (
             db.scalar(
                 select(func.count())
                 .select_from(VersionBinding)
-                .where(VersionBinding.resource_type.in_([REVIEW_RESOURCE, ADMISSION_RESOURCE]))
+                .where(VersionBinding.resource_type == ADMISSION_RESOURCE)
             )
             == 0
         )
-    assert sent == []
+    assert run_review(client, settings, case) == outcome
+    assert len(sent) == outcome.model_turns
 
 
 @pytest.mark.parametrize("field", ["version_id", "request_sha256"])

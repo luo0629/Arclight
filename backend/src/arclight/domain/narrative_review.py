@@ -5,7 +5,6 @@ from uuid import UUID
 
 from pydantic import AwareDatetime, Field, model_validator
 
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.production_state import ProductionContract
 from arclight.domain.workflow_contracts import Checksum
 
@@ -82,7 +81,6 @@ class NarrativeReviewCreate(ProductionContract):
     baseline: NarrativeReviewBaseline
     targets: list[NarrativeReviewTarget] = Field(min_length=1, max_length=100)
     previous_report_id: UUID | None = None
-    agent_limits: AgentRunLimits = Field(default_factory=AgentRunLimits)
 
     @model_validator(mode="after")
     def explicit_scope(self):

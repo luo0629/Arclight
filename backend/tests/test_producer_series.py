@@ -26,14 +26,19 @@ from arclight.application.agent_limits import action_usage, validate_agent_execu
 from arclight.application.agent_project_reads import ProjectReads
 from arclight.application.producer_series_delivery import control_series, paused
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.producer_series import SeriesControl, SeriesProducerScope
 from arclight.main import create_app
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.base import utcnow
-from arclight.persistence.models import DependencyManifest, Project, Script, WorkflowRun
+from arclight.persistence.models import (
+    DependencyManifest,
+    OutboxEvent,
+    Project,
+    Script,
+    WorkflowRun,
+)
 
 
 @pytest.fixture
@@ -60,7 +65,7 @@ def series_transport(series_case, request):
     return request.getfixturevalue("model_service")
 
 
-def begin(client, settings, case, *, scope=None, limits=None, key=None, quote="0"):
+def begin(client, settings, case, *, scope=None, key=None, quote="0"):
     settings.model_gateway_policy = GatewayPolicy(text_maximum_cost=quote, pricing_version="s07:1")
     with client.app.state.session_factory.begin() as db:
         actor = db.get(Project, UUID(case["episode"]["project_id"])).owner_id
@@ -73,15 +78,6 @@ def begin(client, settings, case, *, scope=None, limits=None, key=None, quote="0
             key or uuid4().hex,
             "series-test",
             series=SeriesProducerScope.model_validate(scope or case["scope"]),
-            limits=limits
-            or AgentRunLimits(
-                maximum_cost=None,
-                max_calls=100,
-                max_model_calls=80,
-                max_tool_calls=80,
-                max_agent_calls=80,
-                max_duration_seconds=3600,
-            ),
         )
         return run.id, actor
 
@@ -160,8 +156,8 @@ def install_plan(transport, case, *, tasks=None, inputs=None, patch=None, replan
     return sent, errors
 
 
-def completed(client, settings, case, transport, *, limits=None, quote="0", **options):
-    run_id, actor = begin(client, settings, case, limits=limits, quote=quote)
+def completed(client, settings, case, transport, *, quote="0", **options):
+    run_id, actor = begin(client, settings, case, quote=quote)
     sent, errors = install_plan(transport, case, **options)
     outcome = planning.plan_producer(client.app.state.session_factory, settings, run_id, actor)
     assert outcome.status == "COMPLETED", (outcome.model_dump_json(), errors)
@@ -269,7 +265,7 @@ def test_real_writer_approval_does_not_invalidate_frozen_delegation(
         )
 
 
-def test_pause_resume_is_same_run_and_deadline_and_blocks_child(
+def test_pause_resume_republishes_the_original_interrupted_child_delivery(
     client, settings, series_case, series_transport
 ):
     run_id, actor, reference, _ = completed(client, settings, series_case, series_transport)
@@ -296,8 +292,13 @@ def test_pause_resume_is_same_run_and_deadline_and_blocks_child(
 
     with pytest.raises(WorkflowExecutionDeferred):
         run_once(client, settings, child_id)
-    with factory() as db:
-        assert db.get(WorkflowRun, child_id).status == "QUEUED"
+    with factory.begin() as db:
+        child = db.get(WorkflowRun, child_id)
+        assert child.status == "QUEUED"
+        child.status = "RUNNING"
+        delivery = db.scalar(select(OutboxEvent).where(OutboxEvent.run_id == child_id))
+        delivery.published_at = utcnow()
+        delivery_id, child_revision = delivery.id, child.revision
     with factory.begin() as db:
         run = db.get(WorkflowRun, run_id)
         control_series(
@@ -310,9 +311,12 @@ def test_pause_resume_is_same_run_and_deadline_and_blocks_child(
         assert not paused(db, run)
         assert db.get(AgentRunLimit, run_id).deadline_at == original
         assert db.get(AgentRunLimit, child_id).deadline_at == original
+        assert db.get(WorkflowRun, child_id).status == "QUEUED"
+        assert db.get(WorkflowRun, child_id).revision == child_revision
+        assert db.get(OutboxEvent, delivery_id).published_at is None
 
 
-def test_pause_rejects_live_model_lease_and_expired_resume_rolls_back(
+def test_pause_rejects_live_model_lease_and_can_resume_after_a_long_wait(
     client, settings, series_case, series_transport, monkeypatch
 ):
     run_id, actor, _, _ = completed(client, settings, series_case, series_transport)
@@ -341,19 +345,18 @@ def test_pause_rejects_live_model_lease_and_expired_resume_rolls_back(
             "paused",
         )
     future = utcnow() + timedelta(hours=2)
-    monkeypatch.setattr("arclight.application.agent_limits.utcnow", lambda: future)
-    with factory.begin() as db, pytest.raises(DomainError) as failure:
+    monkeypatch.setattr("arclight.application.producer_series_delivery.utcnow", lambda: future)
+    with factory.begin() as db:
         run = db.get(WorkflowRun, run_id)
         control_series(
             db,
             run_id,
             actor,
             SeriesControl(action="RESUME", expected_revision=run.revision, reason="恢复"),
-            "expired",
+            "resume",
         )
-    assert failure.value.code == "AGENT_DEADLINE_EXCEEDED"
     with factory() as db:
-        assert paused(db, db.get(WorkflowRun, run_id))
+        assert not paused(db, db.get(WorkflowRun, run_id))
 
 
 def test_declared_previous_episode_blocks_before_any_new_child(

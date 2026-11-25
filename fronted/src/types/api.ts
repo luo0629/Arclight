@@ -157,7 +157,6 @@ export type Project = {
   name: string;
   owner_id: string;
   archived: boolean;
-  budget_limit: string;
   style_guide: Record<string, unknown>;
   output_profile: Record<string, unknown>;
 };

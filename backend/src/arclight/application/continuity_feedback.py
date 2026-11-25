@@ -41,6 +41,7 @@ from arclight.domain.continuity_feedback import (
     FEEDBACK_PROMPT,
     FEEDBACK_RESOURCE,
     FEEDBACK_VERSION,
+    MAX_AUTOMATIC_REVISION_ROUNDS,
     MAX_FEEDBACK_DECISIONS,
     FeedbackAction,
     FeedbackDecision,
@@ -211,29 +212,17 @@ def seal_feedback(
             require_review_actor(db, revision.project_id, child.created_by, owner=False)
             if child.request != decision.revision_request:
                 status, stop_code = "HUMAN_REVIEW", "REVISION_ALREADY_REQUESTED"
+        elif revision.round >= MAX_AUTOMATIC_REVISION_ROUNDS:
+            status, stop_code = "HUMAN_REVIEW", "REVISION_ROUND_LIMIT"
         else:
-            try:
-                # A refused reservation must leave no partial job or manifest.
-                with db.begin_nested():
-                    child, _ = request_revision(
-                        db,
-                        settings,
-                        revision.project_id,
-                        actor,
-                        "continuity-feedback:" + str(identity),
-                        decision.revision_request,
-                    )
-            except DomainError as exc:
-                if exc.code not in {
-                    "BUDGET_EXCEEDED",
-                    "BUDGET_EPISODE_EXCEEDED",
-                    "BUDGET_TASK_EXCEEDED",
-                    "BUDGET_BATCH_EXCEEDED",
-                    "BUDGET_CANDIDATE_LIMIT",
-                    "BUDGET_QUOTE_UNAVAILABLE",
-                }:
-                    raise
-                status, stop_code = "HUMAN_REVIEW", exc.code
+            child, _ = request_revision(
+                db,
+                settings,
+                revision.project_id,
+                actor,
+                "continuity-feedback:" + str(identity),
+                decision.revision_request,
+            )
         if child is not None and child.status == "NEEDS_REVIEW":
             status, stop_code = "HUMAN_REVIEW", "REVISION_ROUND_LIMIT"
     if reviewed.review.conclusion == "HUMAN_REVIEW":
@@ -366,7 +355,6 @@ def prepare_feedback(
         prompt_version=FEEDBACK_VERSION,
         result_schema_version=FEEDBACK_VERSION,
         system_instruction=FEEDBACK_PROMPT,
-        max_tokens=8000,
         messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
     ), seed
 

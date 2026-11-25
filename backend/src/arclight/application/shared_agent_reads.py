@@ -23,7 +23,6 @@ from arclight.domain.agent_tools import (
     AgentToolContract,
     AgentToolGrantRequest,
 )
-from arclight.domain.context_trace import MAX_EVIDENCE_ROUNDS
 from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.script_narrative import FrozenWritingQuery
 from arclight.persistence.agent_limits import AgentRunLimit
@@ -78,7 +77,7 @@ class ReadReviewEvidence(RunRead):
     """Read recorded evidence from an authorized run and stage."""
 
     stage: Annotated[str, Field(min_length=1, max_length=40, pattern=r"^[a-z_]+$")]
-    through_round: Annotated[int | None, Field(ge=0, le=MAX_EVIDENCE_ROUNDS)] = None
+    through_round: Annotated[int | None, Field(ge=0)] = None
 
 
 class PreviewChangeImpact(ProjectRead):

@@ -9,7 +9,12 @@ from pathlib import Path
 from sqlalchemy import select
 from test_agent_model import model_service as model_service
 from test_director_creation import approved_script, progress, start
-from test_director_revision import answer_body, checks, install_revision
+from test_director_revision import (
+    answer_body,
+    checks,
+    install_revision,
+    revise_visual_description_without_fixing_missing_dialogue,
+)
 from test_screenwriter_creation import run_once
 from test_screenwriter_research import add_episode
 
@@ -76,12 +81,17 @@ def test_director_iteration_offline_subset_uses_real_feedback_and_frozen_repair_
                     shot["dialogue_line_ids"] = []
 
             sent, errors, base_errors = install_revision(
-                model_service, monkeypatch, settings, mutate=mutate, escalate=mode == "recovery"
+                model_service,
+                monkeypatch,
+                settings,
+                mutate=mutate,
+                escalate=mode == "recovery",
+                make_patch=revise_visual_description_without_fixing_missing_dialogue
+                if mode == "exhaustion"
+                else None,
             )
             source = approved_script(client, current, configure=configure)
-            run_id, _ = start(
-                client, current, source, director_revision_rounds=1 if mode == "exhaustion" else 3
-            )
+            run_id, _ = start(client, current, source, director_revision_rounds=3)
             stamp = time.monotonic()
             run = run_once(client, settings, run_id)
             if mode == "recovery":

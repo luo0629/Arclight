@@ -73,7 +73,7 @@ def test_text_run_and_both_artifacts_bind_actual_templates_schemas_and_parameter
     run_id = start(client, episode).json()["run_id"]
     initial = bindings(client, episode, run_id)[0]["snapshot_json"]
     assert initial["workflow_type"] == "script_storyboard"
-    assert initial["parameters"]["max_tokens"] == 6000
+    assert "max_tokens" not in initial["parameters"]
     assert initial["model"]["provider"] == "mock"
     prompts = client.get(url(episode), params={"kind": "PROMPT"}).json()
     assert {row["definition_json"]["system_template"] for row in prompts} == {
@@ -281,10 +281,11 @@ def test_database_guards_preserve_version_definitions_and_bindings(client, episo
         assert db.get(table, identity) is not None
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_version_history_blocks_destructive_downgrade(client, episode, migrated):
     capture_ok(client, episode["project_id"])
     # GEN-13's later migration now preserves the captured quote before reaching 0035.
-    with pytest.raises(RuntimeError, match="history"):
+    with pytest.raises(RuntimeError, match="Generation history exists"):
         command.downgrade(migrated, "0034")
     command.check(migrated)
 

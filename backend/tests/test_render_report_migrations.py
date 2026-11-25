@@ -319,6 +319,7 @@ def test_media_warning_binds_real_exact_human_request_and_decision(
             insert_report(client, fields)
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_empty_report_migration_roundtrip_preserves_legacy_files_and_guards(
     client, report_case, migrated
 ):
@@ -536,6 +537,7 @@ def test_postgres_truncate_cannot_remove_machine_report(client, formal_report_ca
 
 
 @pytest.mark.parametrize("target", ["0060", "0058"])
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_machine_history_refuses_downgrade_without_changing_schema(
     client, formal_report_case, migrated, target
 ):
@@ -555,6 +557,7 @@ def test_machine_history_refuses_downgrade_without_changing_schema(
     command.check(migrated)
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_upgrade_retains_legacy_success_without_fabricating_machine_acceptance(
     client, formal_report_case, migrated
 ):

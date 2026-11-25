@@ -335,7 +335,6 @@ def read_costs(
         result.append(CostGroup(key=key, label=label, **identity, **_totals(row).model_dump()))
     return CostReport(
         project_id=project_id,
-        budget_limit=project.budget_limit,
         generated_at=utcnow(),
         group_by=group_by,
         summary=_totals(rows[0], "total_"),

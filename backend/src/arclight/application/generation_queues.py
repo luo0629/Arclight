@@ -34,7 +34,7 @@ def classify(
     if row is None:
         lane, origin = "BATCH", "LEGACY_UNCLASSIFIED"
         if payload is not None:
-            batch = payload.batch_id is not None or payload.spec.batch_size > 1
+            batch = payload.spec.batch_size > 1
             lane = "BATCH" if batch else payload.scheduling_mode
             origin = "BULK_REQUEST" if batch else "SINGLE_REQUEST"
         row = GenerationLane(job_id=job.id, lane=lane, origin=origin, actor=job.created_by)
@@ -170,38 +170,6 @@ def capacity_block(
             batch_pending.where(GenerationPermit.project_id == job.project_id)
         ) >= max(1, project_limit - reserve):
             return "INTERACTIVE_PROJECT_RESERVE"
-    recent = (
-        select(func.count())
-        .select_from(GenerationCall)
-        .where(GenerationCall.started_at > stamp - timedelta(seconds=60))
-    )
-    for total, scope, call_filter, permit_filter in (
-        (live.global_per_minute, "GLOBAL", None, None),
-        (
-            live.user_per_minute,
-            "USER",
-            GenerationCall.actor == job.created_by,
-            GenerationPermit.actor == job.created_by,
-        ),
-    ):
-        calls = recent.where(call_filter) if call_filter is not None else recent
-        tickets = pending.where(permit_filter) if permit_filter is not None else pending
-        usage = count(calls) + count(tickets)
-        if usage >= total:
-            return f"{scope}_RATE"
-        if kind == "SUBMIT":
-            submit_ceiling = max(1, total - live.recovery_rate_reserve)
-            if usage >= submit_ceiling:
-                return f"{scope}_RECOVERY_RESERVE"
-            if lane == "BATCH":
-                batch_calls = calls.join(
-                    GenerationLane, GenerationLane.job_id == GenerationCall.job_id
-                ).where(GenerationCall.kind == "SUBMIT", GenerationLane.lane == "BATCH")
-                batch_usage = count(batch_calls) + count(
-                    tickets.where(GenerationPermit.lane == "BATCH")
-                )
-                if batch_usage >= max(1, submit_ceiling - live.interactive_rate_reserve):
-                    return f"{scope}_INTERACTIVE_RESERVE"
     return None
 
 
@@ -302,7 +270,6 @@ def eligibility_block(db: Session, job: GenerationJob) -> str | None:
 
     from arclight.application.commands import require_project
     from arclight.application.generation_attempts import require_writable_target
-    from arclight.application.generation_budget import check_execution
     from arclight.core.errors import DomainError
     from arclight.domain.generation_requests import GenerationSpec
     from arclight.persistence.models import DependencyManifest, ProjectMember, User
@@ -329,8 +296,7 @@ def eligibility_block(db: Session, job: GenerationJob) -> str | None:
         manifest = db.get(DependencyManifest, job.input_manifest_id)
         if manifest is None:
             return "INVALID_GENERATION_INPUT"
-        spec = GenerationSpec.model_validate(manifest.snapshot_json["context"]["generation"])
-        check_execution(db, job, spec, lock=False)
+        GenerationSpec.model_validate(manifest.snapshot_json["context"]["generation"])
     except DomainError as exc:
         return exc.code
     except (KeyError, TypeError, ValidationError):
@@ -341,7 +307,6 @@ def eligibility_block(db: Session, job: GenerationJob) -> str | None:
 def issue_permits(
     factory: sessionmaker[Session], live: ExecutionPolicy = DEFAULT_EXECUTION_POLICY
 ) -> int:
-    expire_waiting(factory)
     # Commit reclamation before reissuing the same permit. A second UPDATE in one
     # PostgreSQL transaction rechecks its business-row foreign keys, which can wait
     # on a consumer holding those rows while waiting for this scheduling gate.
@@ -422,31 +387,6 @@ def issue_permits(
             if not selected:
                 break
     return issued
-
-
-def expire_waiting(factory: sessionmaker[Session]) -> None:
-    """Deadline cleanup acquires business locks BEFORE gate, including paused queues."""
-    from arclight.application.generation_scheduling import within_limits
-    from arclight.application.generation_state import find_job
-
-    with factory() as db:
-        ids = list(
-            db.scalars(
-                select(GenerationJob.id)
-                .join(GenerationSchedule, GenerationSchedule.job_id == GenerationJob.id)
-                .where(
-                    GenerationJob.status.in_(["CREATED", "RETRY_WAIT"]),
-                    GenerationSchedule.deadline_at <= leases.clock(db),
-                )
-                .order_by(GenerationSchedule.deadline_at, GenerationJob.id)
-                .limit(100)
-            )
-        )
-    for job_id in ids:
-        with factory.begin() as db:
-            job = find_job(db, job_id, lock=True)
-            if job.status in {"CREATED", "RETRY_WAIT"}:
-                within_limits(db, job, submitting=True)
 
 
 def claim_recovery_scan(factory: sessionmaker[Session]) -> bool:

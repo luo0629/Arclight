@@ -12,6 +12,7 @@ from arclight.domain.versions import digest
 __all__ = ["render_case", "review_case", "timeline_case"]
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_still_timeline_and_manifest_from_0069_survive_0070_roundtrip(
     client, render_case, migrated
 ):

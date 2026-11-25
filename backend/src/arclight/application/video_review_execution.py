@@ -32,7 +32,6 @@ from arclight.application.video_review_routing import record_temporal_review, te
 from arclight.application.video_review_work import review_inputs
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage, ContextImage
 from arclight.domain.agent_state import AgentStateError, restore_agent_state, transition_agent_step
 from arclight.domain.versions import digest
@@ -56,7 +55,6 @@ def assess_video(
     run_id: UUID,
     work: TemporalWork,
     evidence: VideoEvidence,
-    limits: AgentRunLimits,
 ) -> tuple[TemporalAssessment | None, str | None]:
     if len(evidence.samples) < 3 or not evidence.end_covered:
         return None, "有效样本缺少起点、中段或末段，请人工查看完整视频。"
@@ -114,7 +112,6 @@ def assess_video(
             request,
             AgentToolRegistry(),
             TemporalAssessment,
-            limits=limits,
             validate_result=valid_assessment,
         )
     except DomainError as error:
@@ -123,6 +120,8 @@ def assess_video(
         return None, "模型未能引用全部精确样本，请人工观看。"
     finally:
         TEMPORAL_IMAGES.reset(scope)
+    if result.stop_code == "ACCOUNT_BALANCE_INSUFFICIENT":
+        raise DomainError("ACCOUNT_BALANCE_INSUFFICIENT", "账户余额不足", 402)
     if result.status != "COMPLETED" or result.result is None:
         return None, f"未取得完整模型结论（{result.stop_code or result.status}），请人工观看。"
     return result.result, None
@@ -161,9 +160,6 @@ def execute_video_review(
             if run.status == "QUEUED":
                 emit(db, run, "workflow.started", {"revision": revision})
             run.status, run.pending_review = "RUNNING", None
-            limits = AgentRunLimits.model_validate(
-                run.input_json["video_temporal_review"]["agent_limits"]
-            )
             items = [
                 TemporalWork.model_validate(checked_snapshot(db, row)["temporal_work"])
                 for row in db.scalars(
@@ -193,7 +189,7 @@ def execute_video_review(
                         "VIDEO_REVIEW_TARGET_INVALID", "待审视频与精确送审记录不匹配", 409
                     )
                 evidence = collect_evidence(db, settings, inputs)
-            assessment, gap = assess_video(factory, settings, run_id, item, evidence, limits)
+            assessment, gap = assess_video(factory, settings, run_id, item, evidence)
             with factory.begin() as db:
                 run = active_workflow(db, run_id, revision)
                 lock_dependency_graph(db, project_id)

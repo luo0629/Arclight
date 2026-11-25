@@ -439,6 +439,7 @@ def test_upload_replacement_is_explicit_immutable_and_requires_new_review(client
     )
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_history_database_guards_and_downgrade_refusal(client, episode, migrated):
     job, attempt = generate(client, episode["project_id"])
     assert ingest(client, attempt) == 1

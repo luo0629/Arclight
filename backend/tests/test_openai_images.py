@@ -19,7 +19,7 @@ from test_asset_selection import approved, current
 from test_asset_versions import image_bytes, private_objects  # noqa: F401
 from test_assets import create
 from test_concurrency import require_postgres
-from test_generation_budget import budget, set_policy
+from test_generation_budget import budget
 from test_generation_candidates import candidates
 from test_generation_delivery import deliver, event_for
 from test_generation_jobs import base, capture, capture_ok, payload
@@ -27,7 +27,7 @@ from test_generation_queues import messages
 from test_generation_reconciliation import QueryFake, query
 from test_openai_image_sdk import sdk_calls as sdk_calls
 
-from arclight.application import generation_budget, media_services
+from arclight.application import media_services
 from arclight.application.generation_candidates import import_attempt
 from arclight.application.generation_jobs import create_job
 from arclight.core.errors import DomainError
@@ -78,17 +78,17 @@ def image_request(settings, target=None, count=1):
 def historical_image_admission(settings):
     """Seed pre-retirement media jobs without changing the production admission path."""
     select_for_spec = media_services.select_for_spec
-    provider_quote = generation_budget.provider_quote
+    provider_quote = media_pricing.quote
 
     def historical_selection(db, actor, spec, task_type, frozen=None):
         if spec.provider == "openai":
             return None
         return select_for_spec(db, actor, spec, task_type, frozen)
 
-    def historical_quote(db, spec, task_type, **kwargs):
+    def historical_quote(spec, task_type):
         if spec.provider == "openai":
-            return media_pricing.quote(spec, task_type, settings.image_service)
-        return provider_quote(db, spec, task_type, **kwargs)
+            return provider_quote(spec, task_type, settings.image_service)
+        return provider_quote(spec, task_type)
 
     def freeze_configuration(_mapper, _connection, manifest):
         context = manifest.snapshot_json.get("context", {})
@@ -99,7 +99,7 @@ def historical_image_admission(settings):
     try:
         with (
             patch.object(media_services, "select_for_spec", historical_selection),
-            patch.object(generation_budget, "provider_quote", historical_quote),
+            patch.object(media_pricing, "quote", historical_quote),
         ):
             yield
     finally:
@@ -180,7 +180,6 @@ def test_http_adapter_through_gateway_ledger_and_real_candidate_import(
     configured, client, episode, monkeypatch, sdk_calls
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "20")
     target = create(client, project_id)
     body = image_request(configured, target, count=2)
     key = str(uuid4())
@@ -269,7 +268,6 @@ def test_http_adapter_through_gateway_ledger_and_real_candidate_import(
 def test_unsupported_capabilities_and_configuration_are_rejected_before_work(
     configured, client, episode, changes
 ):
-    set_policy(client, episode["project_id"], "20")
     body = image_request(configured)
     body["spec"].update(changes)
     assert capture_historical_image(client, episode["project_id"], body).status_code in {409, 422}
@@ -278,10 +276,11 @@ def test_unsupported_capabilities_and_configuration_are_rejected_before_work(
         assert db.scalar(select(func.count()).select_from(GatewayCall)) == 0
 
 
-def test_disabled_missing_quote_or_secret_never_create_billable_work(configured, client, episode):
+def test_disabled_or_missing_secret_blocks_work_but_missing_quote_does_not(
+    configured, client, episode
+):
     for changes in (
         {"enabled": False},
-        {"maximum_cost_per_image": None},
         {"api_key": SecretStr("")},
         {"api_key": SecretStr(""), "api_key_file": Path("does-not-exist-secret")},
     ):
@@ -294,6 +293,15 @@ def test_disabled_missing_quote_or_secret_never_create_billable_work(configured,
         configured.image_service = original
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(GenerationJob)) == 0
+    configured.image_service = configured.image_service.model_copy(
+        update={"maximum_cost_per_image": None}
+    )
+    response = capture_historical_image(client, episode["project_id"], image_request(configured))
+    assert response.status_code == 201, response.text
+    job_id = response.json()["id"]
+    detail = client.get(f"/api/v1/projects/{episode['project_id']}/generation-costs/jobs/{job_id}")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["estimate"] is None
 
 
 @pytest.mark.parametrize(
@@ -305,7 +313,6 @@ def test_disabled_missing_quote_or_secret_never_create_billable_work(configured,
     ],
 )
 def test_historical_server_config_change_fails_before_attempt(configured, client, episode, changes):
-    set_policy(client, episode["project_id"], "20")
     job = historical_image_job(client, episode["project_id"], image_request(configured))
     before = configured.image_service.public_configuration()
     configured.image_service = configured.image_service.model_copy(update=changes)
@@ -335,7 +342,6 @@ class UnreadableErrorBody(httpx.SyncByteStream):
 def test_definite_http_rejection_releases_reservation_and_never_retries_inline(
     configured, client, episode, status
 ):
-    set_policy(client, episode["project_id"], "20")
     job = historical_image_job(client, episode["project_id"], image_request(configured))
     requests = []
     error_body = UnreadableErrorBody()
@@ -372,7 +378,6 @@ def test_uncertain_response_holds_budget_and_goes_to_manual_without_resubmit(
     configured, client, episode, failure
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "20")
     job = historical_image_job(client, project_id, image_request(configured))
     requests = []
 
@@ -421,7 +426,6 @@ def test_key_file_and_output_handles_are_private_and_bound_to_the_attempt(
     configured.image_service = configured.image_service.model_copy(
         update={"api_key": SecretStr(""), "api_key_file": secret_file}
     )
-    set_policy(client, episode["project_id"], "20")
     job = historical_image_job(client, episode["project_id"], image_request(configured))
     provider = OpenAIImageProvider(
         configured, transport=httpx.MockTransport(lambda req: response(success()))
@@ -470,7 +474,6 @@ def test_supported_outputs_use_worker_selection_and_candidate_validation(
 ):
     from arclight.workers import tasks
 
-    set_policy(client, episode["project_id"], "20")
     body = image_request(configured)
     body["spec"].update(
         output_spec={"width": width, "height": height, "format": kind},
@@ -512,7 +515,6 @@ def test_supported_outputs_use_worker_selection_and_candidate_validation(
 
 
 def test_reference_images_are_rejected_before_a_billable_attempt(configured, client, episode):
-    set_policy(client, episode["project_id"], "20")
     source = approved(client, create(client, episode["project_id"]))
     body = image_request(configured)
     body["inputs"] = [
@@ -528,7 +530,6 @@ def test_reference_images_are_rejected_before_a_billable_attempt(configured, cli
 def test_storage_unavailable_releases_only_before_acceptance(
     configured, client, episode, monkeypatch, phase
 ):
-    set_policy(client, episode["project_id"], "20")
     job = historical_image_job(client, episode["project_id"], image_request(configured))
     requests = []
 
@@ -551,7 +552,6 @@ def test_storage_unavailable_releases_only_before_acceptance(
 
 
 def test_corrupt_private_result_is_rejected_on_download(configured, client, episode):
-    set_policy(client, episode["project_id"], "20")
     job = historical_image_job(client, episode["project_id"], image_request(configured))
     provider = OpenAIImageProvider(
         configured, transport=httpx.MockTransport(lambda req: response(success()))
@@ -575,7 +575,6 @@ def test_image_network_fails_closed_without_following_or_retrying(
 ):
     from arclight.providers import network
 
-    set_policy(client, episode["project_id"], "20")
     job = historical_image_job(client, episode["project_id"], image_request(configured))
     requests = []
 
@@ -600,7 +599,7 @@ def test_image_network_fails_closed_without_following_or_retrying(
         assert receipt.actual_cost == (Decimal("0") if blocked_before_send else None)
 
 
-def test_postgres_real_provider_quotes_compete_for_one_budget(settings, client):
+def test_postgres_real_provider_quotes_can_reserve_concurrently(settings, client):
     from test_model_services import account
     from test_native_media_integration import body_for, configure, project
 
@@ -608,7 +607,6 @@ def test_postgres_real_provider_quotes_compete_for_one_budget(settings, client):
     actor = account(client)
     configure(client, settings)
     project_id = UUID(project(client))
-    set_policy(client, project_id, "1.000000")
     body = GenerationCreate.model_validate(body_for(client, project_id))
     barrier = Barrier(2)
 
@@ -622,9 +620,9 @@ def test_postgres_real_provider_quotes_compete_for_one_budget(settings, client):
             return exc.code
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(create_one, range(2))) == ["BUDGET_EXCEEDED", "CREATED"]
+        assert list(pool.map(create_one, range(2))) == ["CREATED", "CREATED"]
     costs = client.get(f"/api/v1/projects/{project_id}/costs").json()["summary"]
-    assert costs["pending_estimate"] == "1.000000" and costs["entry_count"] == 1
+    assert costs["pending_estimate"] == "2.000000" and costs["entry_count"] == 2
 
 
 def test_live_acceptance_harness_with_mock_http_only(
@@ -715,7 +713,6 @@ def test_provider_output_variants_keep_actual_metadata_and_cost_evidence(
     configured, client, episode, kind, size, error
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "20")
     configured.image_service = configured.image_service.model_copy(
         update={
             "base_url": "https://image-provider.example/api/v1",

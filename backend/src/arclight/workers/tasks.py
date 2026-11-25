@@ -5,7 +5,8 @@ from sqlalchemy import String, cast, func, select
 from sqlalchemy.orm import Session, aliased
 
 from arclight.application import generation_artifacts
-from arclight.application.agent_workflows import WorkflowExecutionDeferred
+from arclight.application.agent_workflows import WorkflowExecutionDeferred, WorkflowRecoveryFailed
+from arclight.application.commands import emit
 from arclight.application.generation_candidates import import_attempt, pending_attempts
 from arclight.application.generation_delivery import consume_dispatch
 from arclight.application.generation_events import publish_dispatches
@@ -13,6 +14,7 @@ from arclight.application.generation_leases import LeasePolicy
 from arclight.application.generation_queues import QUEUES, claim_recovery_scan
 from arclight.application.generation_recovery import recover_job, recovery_candidates
 from arclight.application.media_services import connection_for_job
+from arclight.application.model_gateway import lock_gate
 from arclight.application.production_events import consume_stage_event, publish_stage_events
 from arclight.application.render_dispatch import candidates as render_candidates
 from arclight.application.render_execution import execute_render
@@ -29,6 +31,7 @@ from arclight.persistence.models import (
     OutboxEvent,
     RenderExecution,
     RenderJob,
+    WorkflowRecoveryCounter,
     WorkflowRun,
 )
 from arclight.persistence.session import build_engine, session_factory
@@ -39,18 +42,58 @@ from arclight.providers.media_query import get_media_query_provider
 from arclight.providers.media_submission import get_media_submission_provider
 from arclight.workers.celery_app import celery_app
 
+MAX_WORKFLOW_RECOVERY_FAILURES = 7
+
+
+def _record_recovery_failure(db: Session, run_id: UUID, revision: int) -> bool:
+    lock_gate(db)
+    run = db.get(WorkflowRun, run_id, populate_existing=True, with_for_update=True)
+    if (
+        run is None
+        or run.revision != revision
+        or run.status != RunStatus.RUNNING
+        or run.error_code is not None
+    ):
+        return False
+    event = db.scalar(
+        select(OutboxEvent)
+        .where(OutboxEvent.run_id == run_id, OutboxEvent.revision == revision)
+        .with_for_update()
+    )
+    if event is None:
+        return False
+    counter = db.get(WorkflowRecoveryCounter, event.id)
+    if counter is None:
+        counter = WorkflowRecoveryCounter(event_id=event.id, failure_count=1)
+        db.add(counter)
+    else:
+        counter.failure_count += 1
+    if counter.failure_count < MAX_WORKFLOW_RECOVERY_FAILURES:
+        return True
+    run.error_code = "WORKFLOW_RECOVERY_LIMIT"
+    emit(db, run, "workflow.recovery_paused", {"code": run.error_code})
+    return False
+
 
 @celery_app.task(
     name="arclight.execute_workflow",
     autoretry_for=(WorkflowExecutionDeferred,),
-    max_retries=None,
+    # Allow a crashed worker's 60-second Agent lease to expire before giving up a delivery.
+    max_retries=MAX_WORKFLOW_RECOVERY_FAILURES,
     retry_kwargs={"countdown": 10},
 )
 def execute_workflow(run_id: str, revision: int) -> None:
     settings = get_settings()
     engine = build_engine(settings)
+    identity = UUID(run_id)
+    factory = session_factory(engine, settings)
     try:
-        execute_run(session_factory(engine, settings), settings, UUID(run_id), revision)
+        execute_run(factory, settings, identity, revision)
+    except WorkflowRecoveryFailed:
+        with factory.begin() as db:
+            retry = _record_recovery_failure(db, identity, revision)
+        if retry:
+            raise
     finally:
         engine.dispose()
 
@@ -273,6 +316,8 @@ def pending_workflow_events(db: Session) -> list[OutboxEvent]:
                     )
                 ),
                 OutboxEvent.revision == WorkflowRun.revision,
+                WorkflowRun.error_code.is_distinct_from("ACCOUNT_BALANCE_INSUFFICIENT"),
+                WorkflowRun.error_code.is_distinct_from("WORKFLOW_RECOVERY_LIMIT"),
             )
             .order_by(OutboxEvent.created_at)
             .limit(100)

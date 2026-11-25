@@ -60,7 +60,7 @@ test("UI-03：关闭工作区后停止后续项，重新打开只继续原批次
     .getByRole("checkbox", { name: "选择生产镜头 2", exact: true })
     .check();
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   await dialog
     .getByRole("button", { name: "确认逐项提交", exact: true })
@@ -112,7 +112,7 @@ test("UI-03：真实列表多选、提交前报价、逐项生成与成功镜头
     .getByRole("checkbox", { name: "选择生产镜头 3", exact: true })
     .check();
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   const preview = dialog.getByRole("region", { name: "批量提交预览与结果" });
   await expect(preview).toContainText("生成新镜头 · 2 个镜头");
@@ -139,7 +139,7 @@ test("UI-03：真实列表多选、提交前报价、逐项生成与成功镜头
     .getByRole("checkbox", { name: "选择本页全部生产镜头", exact: true })
     .check();
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   await expect(preview).toContainText("本次可提交 1 项 · 未提交 2 项");
   await preview
@@ -162,7 +162,12 @@ test("UI-03：部分提交失败只补失败项，沿用原幂等键且不重提
     calls.push({ shot, key: route.request().headers()["idempotency-key"] });
     if (shot === states.shots[1].id && !rejected) {
       rejected = true;
-      return apiFailure(route, "BUDGET_EXCEEDED", "本项预算暂不足");
+      return apiFailure(
+        route,
+        "ACCOUNT_BALANCE_INSUFFICIENT",
+        "账户余额不足",
+        402,
+      );
     }
     return route.continue();
   });
@@ -171,7 +176,7 @@ test("UI-03：部分提交失败只补失败项，沿用原幂等键且不重提
     .getByRole("checkbox", { name: "选择本页全部生产镜头", exact: true })
     .check();
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   const preview = dialog.getByRole("region", { name: "批量提交预览与结果" });
   await preview
@@ -228,7 +233,7 @@ test("UI-03：服务端已接受但响应丢失，刷新后重放原请求不重
     .getByRole("checkbox", { name: "选择生产镜头 1", exact: true })
     .check();
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   await dialog
     .getByRole("button", { name: "确认逐项提交", exact: true })
@@ -303,7 +308,7 @@ test("UI-03：失败重试保留成功项，未知任务不重提，丢失的重
     .getByRole("combobox", { name: "生产操作", exact: true })
     .selectOption("retry");
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   const preview = dialog.getByRole("region", { name: "批量提交预览与结果" });
   await expect(preview).toContainText("本次可提交 1 项 · 未提交 2 项");
@@ -395,13 +400,13 @@ test("UI-03：精确候选多选批准、必填意见及逐项CAS冲突", async 
     .getByRole("combobox", { name: "生产操作", exact: true })
     .selectOption("approve");
   await expect(
-    dialog.getByRole("button", { name: "预览数量与预算", exact: true }),
+    dialog.getByRole("button", { name: "预览数量与费用", exact: true }),
   ).toBeDisabled();
   await dialog
     .getByRole("textbox", { name: "批量审核意见（必填）", exact: true })
     .fill("已逐图查看，接受各镜头的精确候选。");
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   const preview = dialog.getByRole("region", { name: "批量提交预览与结果" });
   await preview
@@ -427,11 +432,11 @@ test("UI-03：精确候选多选批准、必填意见及逐项CAS冲突", async 
   expect(patches.map((row) => row.index)).toEqual([0, 1, 2, 1]);
 });
 
-test("UI-03：无可信报价的镜头阻断且预算小数合计精确", async ({ page }) => {
+test("UI-03：无报价的镜头仍可提交且已知报价保留精度", async ({ page }) => {
   const env = await shotProductionFixture(page);
   const model = await env.state();
   await page.route(
-    `**/api/v1/projects/${env.project.id}/budget/estimate`,
+    `**/api/v1/projects/${env.project.id}/generation-costs/estimate`,
     async (route) => {
       const shotId = route.request().postDataJSON().review_target.shot_id;
       const index = model.shots.findIndex((shot) => shot.id === shotId);
@@ -439,13 +444,10 @@ test("UI-03：无可信报价的镜头阻断且预算小数合计精确", async 
         return route.fulfill({
           json: {
             estimate: null,
-            allowed: false,
-            message: "无法准确估算，收费任务暂不能提交",
           },
         });
       await route.fulfill({
         json: {
-          allowed: true,
           estimate: {
             maximum_cost: index === 0 ? "0.100001" : "0.200002",
             currency: "USD",
@@ -459,14 +461,16 @@ test("UI-03：无可信报价的镜头阻断且预算小数合计精确", async 
     .getByRole("checkbox", { name: "选择本页全部生产镜头", exact: true })
     .check();
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   const preview = dialog.getByRole("region", { name: "批量提交预览与结果" });
-  await expect(preview).toContainText("预算上限估算：0.300003 USD");
-  await expect(preview).toContainText("本次可提交 2 项 · 未提交 1 项");
+  await expect(preview).toContainText("预计费用：部分项目暂无报价");
+  await expect(preview).toContainText("0.100001 USD");
+  await expect(preview).toContainText("0.200002 USD");
+  await expect(preview).toContainText("本次可提交 3 项 · 未提交 0 项");
   await expect(
     preview.locator(`[data-batch-shot="${model.shots[2].id}"]`),
-  ).toContainText("无法准确估算，收费任务暂不能提交");
+  ).toContainText("无可用报价");
   expect(await env.jobs()).toHaveLength(0);
 });
 
@@ -486,7 +490,7 @@ test("UI-03：撤权后清空旧镜头、候选和批次，Viewer仍可只读打
   const dialog = await env.open();
   await expect(dialog).toContainText("当前项目角色或归档状态只允许查看");
   await expect(
-    dialog.getByRole("button", { name: "预览数量与预算", exact: true }),
+    dialog.getByRole("button", { name: "预览数量与费用", exact: true }),
   ).toBeDisabled();
   denied = true;
   await dialog
@@ -515,7 +519,7 @@ test("UI-03：手机列表键盘多选与预算预览，横向滚动局限于列
   await page.keyboard.press("Space");
   await expect(check).toBeChecked();
   await dialog
-    .getByRole("button", { name: "预览数量与预算", exact: true })
+    .getByRole("button", { name: "预览数量与费用", exact: true })
     .click();
   const preview = dialog.getByRole("region", { name: "批量提交预览与结果" });
   await expect(preview).toContainText("生成新镜头 · 1 个镜头");

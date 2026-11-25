@@ -19,7 +19,6 @@ from arclight.application.model_gateway import lock_gate
 from arclight.application.short_drama_director import director_model_input
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.agent_state import AgentRunState, state_for_scope
@@ -178,7 +177,6 @@ def plan_director(
     run_id: UUID,
     actor: str,
     *,
-    limits: AgentRunLimits | None = None,
     attempt: int = 0,
 ) -> AgentLoopResult[DirectorPlan]:
     """Plan an active director step; the caller must grant read-only investigation first."""
@@ -227,7 +225,6 @@ def plan_director(
                 prompt_version=contracts.plan_version,
                 result_schema_version=contracts.plan_version,
                 system_instruction=prompt,
-                max_tokens=16000,
                 messages=messages,
             )
     result = run_persistent_agent_loop(
@@ -236,7 +233,6 @@ def plan_director(
         request,
         _registry(settings),
         contracts.plan,
-        limits=limits,
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings, attempt),
     )
     _remember(factory, result)

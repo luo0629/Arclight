@@ -196,7 +196,6 @@ def prepare_shot_revision(
     payload = GenerationCreate.model_validate(
         {
             "episode_id": found.job.episode_id,
-            "batch_id": context.get("budget_batch_id"),
             "target_type": "SHOT_IMAGE",
             "target_asset_id": asset.id,
             "expected_asset": {
@@ -222,13 +221,13 @@ def prepare_shot_revision(
     )
     service = selection_for_job(db, found.job)
     frozen_service = service.private_snapshot() if service else None
-    quote = quote_job(db, project_id, payload, actor=actor, frozen_service=frozen_service)
+    quote = quote_job(db, payload, actor=actor, frozen_service=frozen_service)
     confirmation = digest(
         {
             "intent": intent.model_dump(mode="json"),
             "source": found.source.model_dump(mode="json"),
             "payload": payload.model_dump(mode="json"),
-            "quote": quote.model_dump(mode="json"),
+            "quote": quote.model_dump(mode="json") if quote is not None else None,
             "capability": capability.model_dump(mode="json"),
         }
     )

@@ -64,13 +64,8 @@ def _critique(seed, payload):
         "decision": "ACCEPT",
     }
     answered = any("human_decision" in str(item.get("content")) for item in payload["messages"])
-    needs_patch = seed["round"] == 0
-    if not answered and (
-        needs_patch
-        and seed["remaining_patches"] == 0
-        or "修订耗尽" in seed["objective"]
-        and seed["round"] >= 1
-    ):
+    needs_patch = seed["round"] == 0 or "修订耗尽" in seed["objective"]
+    if not answered and needs_patch and seed["remaining_patches"] == 0:
         result |= {"decision": "ESCALATE", "issues": [issue]}
     elif needs_patch and not answered:
         feedback = [

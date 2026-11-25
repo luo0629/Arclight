@@ -1,7 +1,5 @@
 """Exact system templates used by the text adapter and persisted version registry."""
 
-TEXT_MAX_TOKENS = 6000
-
 TEXT_PROMPTS = {
     "rewrite": (
         "你是局部剧本编辑。仅按instructions改写target指定的范"

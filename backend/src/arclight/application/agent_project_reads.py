@@ -43,7 +43,6 @@ from arclight.domain.video_temporal_reviewer import (
     TemporalWork,
 )
 from arclight.domain.visual_bible import FIELD_NAMES, VisualFields
-from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.models import (
     AssetVersion,
     Script,
@@ -233,7 +232,6 @@ class ProjectReads:
             .order_by(VersionBinding.snapshot_json["version_no"].as_integer().desc())
             .limit(1)
         )
-        control = self.db.get(AgentRunLimit, run.id)
         usage = action_usage(self.db, run.id)
         latest = self._production_plan(run, binding) if binding is not None else None
         result = {
@@ -244,8 +242,6 @@ class ProjectReads:
             "revision": run.revision,
             "latest_plan": latest,
             "budget": {
-                "limits": control.limits_json if control else {},
-                "deadline_at": control.deadline_at.isoformat() if control else None,
                 "actual_cost": str(usage["actual_cost"]),
                 "pending_estimate": str(usage["pending_estimate"]),
                 "unknown_cost": usage["unknown_cost"],

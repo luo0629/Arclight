@@ -20,7 +20,13 @@ from arclight.application.producer_plan_history import (
 )
 from arclight.application.producer_planning import producer_registry
 from arclight.application.producer_series import has_series_scope, task_context
-from arclight.application.production_versions import bind, component, find_binding, text_settings
+from arclight.application.production_versions import (
+    bind,
+    component,
+    find_binding,
+    prompt_instruction,
+    text_settings,
+)
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
@@ -83,7 +89,7 @@ def _definitions(version: str = "producer/1") -> list[tuple[str, dict]]:
 
 def _versions(
     db: Session, root: WorkflowRun, observation: ProducerObservation, *, capture: bool = False
-) -> None:
+) -> str:
     version = replan_version(root.workflow_version)
     name = "producer-series-replan" if has_series_scope(root) else "producer-replan"
     identity = uuid5(root.id, "producer-replan-spec:" + str(observation.id))
@@ -127,6 +133,7 @@ def _versions(
             or len(value["components"]) != len(_definitions(root.workflow_version))
         ):
             raise ValueError("Replan component scope changed")
+        instruction = None
         for entry, (kind, definition) in zip(
             value["components"], _definitions(root.workflow_version), strict=True
         ):
@@ -138,8 +145,8 @@ def _versions(
                 or row.kind != kind
                 or row.name != name
                 or row.version != version
-                or row.definition_json != definition
-                or row.digest != digest(definition)
+                or (kind != "PROMPT" and row.definition_json != definition)
+                or row.digest != digest(row.definition_json)
                 or entry
                 != {
                     "id": str(row.id),
@@ -151,6 +158,11 @@ def _versions(
                 }
             ):
                 raise ValueError("Replan definitions changed")
+            if kind == "PROMPT":
+                instruction = prompt_instruction(row.definition_json)
+        if instruction is None:
+            raise ValueError("Replan prompt is missing")
+        return instruction
     except (KeyError, ValueError, TypeError) as exc:
         raise DomainError("PRODUCER_REPLAN_INVALID", "重规划须使用原冻结提示词和合同", 409) from exc
 
@@ -218,7 +230,7 @@ def carry_tasks(
 
 
 def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObservation:
-    from arclight.application.producer_observation import read_observation
+    from arclight.application.producer_observation import read_frozen_observation
 
     try:
         request = AgentModelRequest.model_validate(loop.seed_json)
@@ -229,12 +241,21 @@ def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObser
         assert root is not None
         version = replan_version(root.workflow_version)
         seed_model = SeriesProducerReplanSeed if has_series_scope(root) else ProducerReplanSeed
-        frozen = seed_model.model_validate(first.data)
-        observation = read_observation(db, loop.run_id, frozen.observation.id, actor)
+        frozen_observation = first.data["observation"]
+        if not isinstance(frozen_observation, dict):
+            raise ValueError("Replan seed is missing its frozen observation")
+        observation_id = frozen_observation.get("id")
+        if not isinstance(observation_id, str):
+            raise ValueError("Frozen observation identity is invalid")
+        saved = read_frozen_observation(db, loop.run_id, UUID(observation_id), actor)
+        observation = saved.observation
+        frozen = seed_model.model_validate(
+            first.data | {"observation": observation.model_dump(mode="json")}
+        )
         base = frozen.base_plan
         binding = find_binding(db, loop.project_id, "PRODUCER_PLAN", base.plan_id)
         if (
-            frozen.observation != observation
+            frozen_observation != saved.observation_json
             or frozen.project_id != loop.project_id
             or frozen.episode_id != observation.episode_id
             or base.plan_id != observation.base_plan_id
@@ -250,7 +271,7 @@ def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObser
             or request.operation_key != operation_key(observation.id)
             or request.prompt_version != version
             or request.result_schema_version != version
-            or request.system_instruction != replanning_instruction(root.workflow_version)
+            or request.system_instruction != _versions(db, root, observation)
             or loop.operation_sha256 != _operation(loop.run_id, observation.id)
             or loop.result_schema_sha256
             != digest(replan_model(root.workflow_version).model_json_schema())
@@ -263,7 +284,6 @@ def _seed_observation(db: Session, loop: AgentLoop, actor: str) -> ProducerObser
             or frozen.goal_sha256 != root.input_json["goal_sha256"]
         ):
             raise ValueError("Replan goal changed")
-        _versions(db, root, observation)
     except (KeyError, ValidationError, ValueError, TypeError, AttributeError) as exc:
         raise DomainError("PRODUCER_REPLAN_INVALID", "重规划循环作用范围无效", 409) from exc
     return observation
@@ -499,7 +519,7 @@ def replan_producer(
         base = read_plan_record(
             db, observation.project_id, observation.base_plan_id, actor, require_current=True
         )
-        _versions(db, root, observation, capture=True)
+        instruction = _versions(db, root, observation, capture=True)
         request = (
             AgentModelRequest.model_validate(previous.seed_json)
             if previous
@@ -511,8 +531,7 @@ def replan_producer(
                 agent_version=replan_version(root.workflow_version),
                 prompt_version=replan_version(root.workflow_version),
                 result_schema_version=replan_version(root.workflow_version),
-                system_instruction=replanning_instruction(root.workflow_version),
-                max_tokens=16000,
+                system_instruction=instruction,
                 messages=[
                     AgentUserMessage(
                         data={

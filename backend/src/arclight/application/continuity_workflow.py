@@ -213,10 +213,6 @@ def start_candidate_review(
                 raise DomainError(
                     "PRODUCER_DELEGATION_CONFLICT", "已有审查不能绑定另一生产运行", 409
                 )
-        if previous.revision_id is None and run.input_json["continuity_review"][
-            "agent_limits"
-        ] != payload.agent_limits.model_dump(mode="json"):
-            raise DomainError("AGENT_LIMITS_CONFLICT", "送审不能重置原运行限制", 409)
         return run
     latest = db.scalar(
         select(VersionBinding)
@@ -289,7 +285,6 @@ def start_candidate_review(
                 "continuity_review": {
                     "target": target.model_dump(mode="json"),
                     "rerun": rerun.model_dump(mode="json") if rerun else None,
-                    "agent_limits": payload.agent_limits.model_dump(mode="json"),
                 },
             },
         )
@@ -304,9 +299,7 @@ def start_candidate_review(
         if producer_parent_run_id is not None:
             from arclight.application.agent_limits import configure_agent_run
 
-            configure_agent_run(
-                db, run.id, actor, payload.agent_limits, parent_run_id=producer_parent_run_id
-            )
+            configure_agent_run(db, run.id, actor, parent_run_id=producer_parent_run_id)
         capture_text(db, project_id, run, settings, actor=actor)
         grant_professional_agent_tools(
             db,

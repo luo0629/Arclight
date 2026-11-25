@@ -18,7 +18,6 @@ from arclight.application.continuity_revision_store import (
 )
 from arclight.application.continuity_routing import read_routed_review
 from arclight.application.generation_jobs import create_job
-from arclight.application.generation_scheduling import policy_for as source_policy_for
 from arclight.application.human_reviews import require_review_actor
 from arclight.application.media_services import selection_for_job
 from arclight.application.production_events import begin_serialized
@@ -27,7 +26,6 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.continuity_reviews import ReviewTarget
 from arclight.domain.continuity_revisions import (
-    MAX_REVISION_ROUNDS,
     REVISION_RESOURCE,
     RevisionOrigin,
     RevisionRecord,
@@ -145,7 +143,6 @@ def request_revision(
     check_media(db, project_id, source.id, manifest.id)
     parent = job_revision(db, source)
     round_no = parent.round + 1 if parent else 1
-    stopped = round_no > MAX_REVISION_ROUNDS
     origin = RevisionOrigin(
         revision_id=identity,
         project_id=project_id,
@@ -159,100 +156,84 @@ def request_revision(
         root_candidate_id=parent.root_candidate_id if parent else target.candidate_id,
         parent_revision_id=parent.revision_id if parent else None,
         round=round_no,
-        status="NEEDS_REVIEW" if stopped else "QUEUED",
+        status="QUEUED",
         created_by=actor,
         created_at=datetime.now(UTC),
     )
-    job = None
-    if not stopped:
-        from arclight.application.continuity_workflow import (
-            frozen_review_binding,
-            generation_spec_for_new_job,
-        )
+    from arclight.application.continuity_workflow import (
+        frozen_review_binding,
+        generation_spec_for_new_job,
+    )
 
-        context = manifest.snapshot_json["context"]
-        original = generation_spec_for_new_job(context)
-        if video_review:
-            spec, amended = amend_video_spec(original, request), None
-        else:
-            composition = context.get("prompt_composition")
-            if not isinstance(composition, dict):
-                raise DomainError(
-                    "REVISION_SOURCE_INVALID", "原任务缺少可追溯的提示词组合清单", 409
-                )
-            spec, amended = amend_prompt(original, composition, request)
-        asset = db.get(VisualAsset, target.asset_id, populate_existing=True)
-        assert asset is not None
-        inputs = [
-            {key: item[key] for key in ("source_asset_version_id", "dependency_type", "selectors")}
-            for item in manifest.snapshot_json["inputs"]
-        ]
-        if not any(
-            item["source_asset_version_id"] == str(target.storyboard_id)
-            and item["dependency_type"] == "CONTENT_DEPENDENCY"
-            for item in inputs
-        ):
-            inputs.append(
-                {
-                    "source_asset_version_id": str(target.storyboard_id),
-                    "dependency_type": "CONTENT_DEPENDENCY",
-                    "selectors": ["shot:" + str(target.shot_id)],
-                }
-            )
-        payload = GenerationCreate.model_validate(
+    context = manifest.snapshot_json["context"]
+    original = generation_spec_for_new_job(context)
+    if video_review:
+        spec, amended = amend_video_spec(original, request), None
+    else:
+        composition = context.get("prompt_composition")
+        if not isinstance(composition, dict):
+            raise DomainError("REVISION_SOURCE_INVALID", "原任务缺少可追溯的提示词组合清单", 409)
+        spec, amended = amend_prompt(original, composition, request)
+    asset = db.get(VisualAsset, target.asset_id, populate_existing=True)
+    assert asset is not None
+    inputs = [
+        {key: item[key] for key in ("source_asset_version_id", "dependency_type", "selectors")}
+        for item in manifest.snapshot_json["inputs"]
+    ]
+    if not any(
+        item["source_asset_version_id"] == str(target.storyboard_id)
+        and item["dependency_type"] == "CONTENT_DEPENDENCY"
+        for item in inputs
+    ):
+        inputs.append(
             {
-                "episode_id": episode_id,
-                "batch_id": context.get("budget_batch_id"),
-                "target_type": source.target_type,
-                "target_asset_id": asset.id,
-                "expected_asset": {
-                    "revision": asset.revision,
-                    "lock_version": asset.lock_version,
-                    "current_version_id": asset.current_version_id,
-                },
-                "task_type": source.task_type,
-                **(
-                    {
-                        "review_target": {
-                            "storyboard_id": target.storyboard_id,
-                            "shot_id": target.shot_id,
-                        }
+                "source_asset_version_id": str(target.storyboard_id),
+                "dependency_type": "CONTENT_DEPENDENCY",
+                "selectors": ["shot:" + str(target.shot_id)],
+            }
+        )
+    payload = GenerationCreate.model_validate(
+        {
+            "episode_id": episode_id,
+            "target_type": source.target_type,
+            "target_asset_id": asset.id,
+            "expected_asset": {
+                "revision": asset.revision,
+                "lock_version": asset.lock_version,
+                "current_version_id": asset.current_version_id,
+            },
+            "task_type": source.task_type,
+            **(
+                {
+                    "review_target": {
+                        "storyboard_id": target.storyboard_id,
+                        "shot_id": target.shot_id,
                     }
-                    if video_review or frozen_review_binding(context) is not None
-                    else {}
-                ),
-                "inputs": inputs,
-                "spec": spec.model_dump(mode="json"),
-            }
-        )
-        service = selection_for_job(db, source)
-        original_policy = source_policy_for(db, source)
-        policy = settings.media_execution_policy.model_copy(
-            update={
-                "max_attempts": min(
-                    original_policy.max_attempts, settings.media_execution_policy.max_attempts
-                ),
-                "max_elapsed_seconds": min(
-                    original_policy.max_elapsed_seconds,
-                    settings.media_execution_policy.max_elapsed_seconds,
-                ),
-            }
-        )
-        job = create_job(
-            db,
-            project_id,
-            actor,
-            "continuity-revision:" + str(identity),
-            payload,
-            execution_policy=policy,
-            frozen_prompt_composition=amended,
-            frozen_service=service.private_snapshot() if service else None,
-            continuity_revision_origin=origin.model_dump(mode="json"),
-        )
+                }
+                if video_review or frozen_review_binding(context) is not None
+                else {}
+            ),
+            "inputs": inputs,
+            "spec": spec.model_dump(mode="json"),
+        }
+    )
+    service = selection_for_job(db, source)
+    job = create_job(
+        db,
+        project_id,
+        actor,
+        "continuity-revision:" + str(identity),
+        payload,
+        execution_policy=settings.media_execution_policy,
+        frozen_prompt_composition=amended,
+        frozen_service=service.private_snapshot() if service else None,
+        continuity_revision_origin=origin.model_dump(mode="json"),
+    )
+
     revision = RevisionRecord(
         **origin.model_dump(),
-        job_id=job.id if job else None,
-        input_manifest_id=job.input_manifest_id if job else None,
+        job_id=job.id,
+        input_manifest_id=job.input_manifest_id,
     )
     entries = [item.model_dump(mode="json") for item in versions]
     entries.extend(
@@ -264,7 +245,7 @@ def request_revision(
                 "AGENT",
                 "continuity-revision-service",
                 "1",
-                {"max_rounds": MAX_REVISION_ROUNDS},
+                {"operation": "repair"},
             ),
             component(
                 db,
@@ -295,7 +276,7 @@ def request_revision(
         db,
         project_id,
         actor,
-        "continuity_revision.exhausted" if stopped else "continuity_revision.requested",
+        "continuity_revision.requested",
         identity,
         revision.model_dump(mode="json"),
     )
@@ -383,25 +364,13 @@ def request_shot_revision(
     ).model_dump(mode="json")
     if len(json.dumps(composition, ensure_ascii=False).encode("utf-8")) > 65536:
         raise DomainError("PROMPT_COMPOSITION_TOO_LARGE", "修订后的提示词组合清单超限", 422)
-    original_policy = source_policy_for(db, prepared.source_job)
-    policy = settings.media_execution_policy.model_copy(
-        update={
-            "max_attempts": min(
-                original_policy.max_attempts, settings.media_execution_policy.max_attempts
-            ),
-            "max_elapsed_seconds": min(
-                original_policy.max_elapsed_seconds,
-                settings.media_execution_policy.max_elapsed_seconds,
-            ),
-        }
-    )
     job = create_job(
         db,
         project_id,
         actor,
         job_key,
         prepared.payload,
-        execution_policy=policy,
+        execution_policy=settings.media_execution_policy,
         frozen_prompt_composition=composition,
         frozen_service=prepared.frozen_service,
     )

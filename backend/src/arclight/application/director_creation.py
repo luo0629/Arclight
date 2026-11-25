@@ -20,7 +20,6 @@ from arclight.application.screenwriter_creation import creation_loops, operation
 from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.agent_tools import AgentToolGrantRequest
@@ -108,8 +107,7 @@ def create_plan(
             )
             if selected.status != "STOPPED" or saved == attempt:
                 attempt = saved
-        limits = AgentRunLimits.model_validate(run.input_json["director"]["agent_limits"])
-    return planning.plan_director(factory, settings, run_id, actor, limits=limits, attempt=attempt)
+    return planning.plan_director(factory, settings, run_id, actor, attempt=attempt)
 
 
 def _validate_fragment(
@@ -186,7 +184,6 @@ def create_fragment(
                 prompt_version=FRAGMENT_VERSION,
                 result_schema_version=FRAGMENT_VERSION,
                 system_instruction=FRAGMENT_PROMPT,
-                max_tokens=8000,
                 messages=[
                     AgentUserMessage(
                         data=DirectorFragmentSeed(

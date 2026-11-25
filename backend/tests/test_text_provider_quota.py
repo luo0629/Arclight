@@ -12,14 +12,12 @@ from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from test_api_workflow import advance, review, start
 from test_costs import report
-from test_generation_budget import set_policy
 from test_model_gateway import api, request, route
 from text_service_support import use_test_text_service
 
 from arclight.agents.contracts import ScriptContent
 from arclight.application.gateway_accounting import reconcile
 from arclight.application.model_gateway import invoke
-from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayPolicy, GatewayUsage
 from arclight.domain.model_suppliers import supplier_by_id
 from arclight.persistence.model_gateway import GatewayCall
@@ -45,6 +43,7 @@ def text_service(settings, stub_llm, monkeypatch):
 def script_response(req):
     body = json.loads(req.content)
     assert body["response_format"] == {"type": "json_object"}
+    assert "max_tokens" not in body and "max_completion_tokens" not in body
     assert body["thinking"] == {"type": "disabled"}
     content = MockTextProvider().script("虚构的森林故事", {}, 30000)
     return httpx.Response(
@@ -140,10 +139,20 @@ def test_pre_stage_schema_still_protects_unpriced_text_history(
 @pytest.mark.parametrize(
     "status,body,expected",
     [
-        (402, {"error": {"message": "private-text-test-key"}}, "GATEWAY_QUOTA_EXHAUSTED"),
+        (402, {"error": {"message": "private-text-test-key"}}, "ACCOUNT_BALANCE_INSUFFICIENT"),
+        (
+            429,
+            {"error": {"code": "credit_balance_exhausted", "type": "insufficient_quota"}},
+            "ACCOUNT_BALANCE_INSUFFICIENT",
+        ),
+        (
+            429,
+            {"error": {"code": "project_spend_limit_exceeded", "type": "insufficient_quota"}},
+            "GATEWAY_QUOTA_EXHAUSTED",
+        ),
         (429, {"error": {"code": "insufficient_quota"}}, "GATEWAY_QUOTA_EXHAUSTED"),
         (429, {"error": {"type": "insufficient_quota"}}, "GATEWAY_QUOTA_EXHAUSTED"),
-        (400, {"error": {"code": "1113"}}, "GATEWAY_QUOTA_EXHAUSTED"),
+        (400, {"error": {"code": "1113"}}, "ACCOUNT_BALANCE_INSUFFICIENT"),
         (429, {"error": {"code": "rate_limit_exceeded"}}, "GATEWAY_PROVIDER_RATE_LIMITED"),
         (429, {"error": {"message": "insufficient_quota"}}, "GATEWAY_PROVIDER_RATE_LIMITED"),
         (
@@ -166,7 +175,6 @@ def test_provider_rejections_are_distinct_private_and_never_retried_automaticall
         return httpx.Response(status, json=body)
 
     text_service(failure)
-    settings.model_gateway_policy = GatewayPolicy(max_attempts=3)
     run_id = start(client, episode).json()["run_id"]
     state = advance(client, settings, run_id)
     assert state["status"] == "FAILED" and state["error_code"] == expected
@@ -186,12 +194,12 @@ def test_provider_rejections_are_distinct_private_and_never_retried_automaticall
         assert len(requests) == 1
 
 
-def test_quota_rejection_can_recover_explicitly_with_the_same_input(
+def test_balance_rejection_can_recover_explicitly_with_the_same_input(
     client, episode, settings, text_service
 ):
     text_service(lambda req: httpx.Response(402, json={"error": {"type": "insufficient_balance"}}))
     run_id = start(client, episode).json()["run_id"]
-    assert advance(client, settings, run_id)["error_code"] == "GATEWAY_QUOTA_EXHAUSTED"
+    assert advance(client, settings, run_id)["error_code"] == "ACCOUNT_BALANCE_INSUFFICIENT"
     text_service(script_response)
     assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
     assert advance(client, settings, run_id)["status"] == "WAITING_REVIEW"
@@ -200,24 +208,25 @@ def test_quota_rejection_can_recover_explicitly_with_the_same_input(
     assert rows[0]["input_sha256"] == rows[1]["input_sha256"]
 
 
-def test_enabling_a_cap_requires_resolving_unpriced_text_history(
+def test_unpriced_text_history_allows_new_calls_and_accepts_later_invoice(
     client, episode, settings, text_service
 ):
     text_service(script_response)
     run_id = start(client, episode).json()["run_id"]
     assert advance(client, settings, run_id)["status"] == "WAITING_REVIEW"
-    set_policy(client, episode["project_id"], "10")
     selected = route(maximum_cost=Decimal("1"))
-    current = request(episode, selected)
-    with pytest.raises(DomainError) as caught:
+    assert (
         invoke(
             client.app.state.session_factory,
-            current,
+            request(episode, selected),
             selected,
-            lambda: pytest.fail("unpriced history cannot be treated as zero"),
+            lambda: "ok",
             policy=GatewayPolicy(),
+            usage=lambda _: GatewayUsage(actual_cost=Decimal("2")),
         )
-    assert caught.value.code == "BUDGET_UNPRICED_HISTORY"
+        == "ok"
+    )
+    assert report(client, episode)["summary"]["unpriced_count"] == 1
     with client.app.state.session_factory.begin() as db:
         call = db.scalar(select(GatewayCall).where(GatewayCall.workflow_id == UUID(run_id)))
         reconcile(
@@ -228,29 +237,25 @@ def test_enabling_a_cap_requires_resolving_unpriced_text_history(
             GatewayUsage(actual_cost=Decimal("1")),
             "Supplier invoice confirmed one USD",
         )
+    summary = report(client, episode)["summary"]
+    assert summary["unpriced_count"] == 0 and Decimal(summary["actual_cost"]) == 3
+
+
+def test_unpriced_gateway_call_records_unknown_usage(client, episode):
+    selected = route(maximum_cost=None)
     assert (
         invoke(
             client.app.state.session_factory,
-            current,
+            request(episode, selected),
             selected,
             lambda: "ok",
             policy=GatewayPolicy(),
         )
         == "ok"
     )
-
-
-def test_media_cannot_use_the_optional_text_quote_path(client, episode):
-    selected = route(maximum_cost=None)
-    with pytest.raises(DomainError) as caught:
-        invoke(
-            client.app.state.session_factory,
-            request(episode, selected),
-            selected,
-            lambda: pytest.fail("media still requires a quote"),
-            policy=GatewayPolicy(),
-        )
-    assert caught.value.code == "BUDGET_QUOTE_UNAVAILABLE"
+    [call] = client.get(api(episode) + "/calls").json()
+    assert call["maximum_cost"] is None
+    assert call["usage"]["actual_cost"] is None
 
 
 def test_quote_migration_preserves_existing_calls_receipts_and_guards(client, episode, migrated):
@@ -303,7 +308,7 @@ def test_text_adapter_dual_review_and_storyboard_quota_recovery(
     assert script["pending_review"]["resource_type"] == "script"
     assert review(client, script).status_code == 202
     failed = advance(client, settings, run_id)
-    assert failed["error_code"] == "GATEWAY_QUOTA_EXHAUSTED"
+    assert failed["error_code"] == "ACCOUNT_BALANCE_INSUFFICIENT"
     reject_board = False
     assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
     board = advance(client, settings, run_id)

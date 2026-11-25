@@ -18,7 +18,6 @@ from arclight.application.gateway_text import execution_actor, validate_publicat
 from arclight.application.model_gateway import lock_gate
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.art_direction import ArtDirectionDraft, ArtDirectionResult, ArtDirectionTask
 from arclight.domain.art_generation import (
@@ -212,8 +211,6 @@ def generate_art_proposal(
     run_id: UUID,
     actor: str,
     task: ArtDirectionTask,
-    *,
-    limits: AgentRunLimits | None = None,
 ) -> ArtGenerationResult:
     """Reuse autonomous investigation; publish only its fully validated complete outcome."""
     task = ArtDirectionTask.model_validate(task.model_dump(mode="json"))
@@ -245,7 +242,7 @@ def generate_art_proposal(
                 raise DomainError("ART_TASK_CONFLICT", "同一美术交付不能更换操作者或冻结目标", 409)
             direction = AgentLoopResult[ArtDirectionResult].model_validate(loop.outcome_json)
             return ArtGenerationResult(direction=direction, delivery=replayed)
-    direction = propose_art(factory, settings, run_id, actor, task, limits=limits)
+    direction = propose_art(factory, settings, run_id, actor, task)
     delivery = None
     if direction.status == "COMPLETED":
         assert direction.loop_id is not None

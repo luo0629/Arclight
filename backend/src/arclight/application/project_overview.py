@@ -1,7 +1,6 @@
 """Read-only project aggregates over persisted metadata, without loading story payloads."""
 
 from datetime import UTC, datetime
-from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -33,7 +32,6 @@ class ReviewCounts(BaseModel):
 
 class CostCoverage(CostTotals):
     status: Literal["AVAILABLE"] = "AVAILABLE"
-    budget_limit: Decimal
     currency: Literal["USD"] = "USD"
 
 
@@ -250,7 +248,6 @@ def project_overview(
             total=workflows + manual_scripts + manual_boards + outlines,
         ),
         cost=CostCoverage(
-            budget_limit=project.budget_limit,
             **read_costs(db, project_id, actor).summary.model_dump(),
         ),
         deliveries=DeliveryCoverage(),

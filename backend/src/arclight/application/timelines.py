@@ -339,10 +339,8 @@ def create_timeline(
         return replay
     board, shots = approved_board(db, episode, payload.storyboard_id)
     selections = {item.shot_id: item for item in payload.selected_shots}
-    if len(shots) > 63 or set(selections) != {shot.id for shot in shots}:
-        raise DomainError(
-            "TIMELINE_SHOTS_INCOMPLETE", "须提供本分镜全部镜头的精确选用，最多63镜头", 422
-        )
+    if set(selections) != {shot.id for shot in shots}:
+        raise DomainError("TIMELINE_SHOTS_INCOMPLETE", "须提供本分镜全部镜头的精确选用", 422)
     clips = []
     cursor = 0
     for index, shot in enumerate(shots):
@@ -495,11 +493,9 @@ def validate_snapshot_facts(
         raise DomainError("TIMELINE_SCOPE_INVALID", "时间轴内容必须属于当前剧集", 422)
     board, shots = approved_board(db, episode, value.storyboard_id)
     video = next(track for track in value.tracks if track.kind == "VIDEO")
-    if (
-        len(shots) > 63
-        or len(video.clips) != len(shots)
-        or {clip.shot_id for clip in video.clips} != {shot.id for shot in shots}
-    ):
+    if len(video.clips) != len(shots) or {clip.shot_id for clip in video.clips} != {
+        shot.id for shot in shots
+    }:
         raise DomainError(
             "TIMELINE_SHOTS_INCOMPLETE", "时间轴必须保留本分镜全部镜头的精确选用", 422
         )

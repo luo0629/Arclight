@@ -1,7 +1,6 @@
 """Planning-specific recovery through the real journal, authorization and database."""
 
 import json
-from datetime import timedelta
 from uuid import UUID
 
 import httpx
@@ -20,11 +19,8 @@ from test_screenwriter_planning import install_model, plan_value, prepare
 from arclight.application import screenwriter_planning as planning
 from arclight.application.agent_loop_recovery import run_persistent_agent_loop
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.screenwriter_planning import ScreenwriterPlan
-from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision
-from arclight.persistence.base import utcnow
 from arclight.persistence.models import (
     AgentToolGrant,
     AgentToolInvocation,
@@ -173,11 +169,10 @@ def test_owner_cannot_resume_planning_with_revoked_original_initiator(
         ("archive", "PROJECT_ARCHIVED"),
         ("cancel", "AGENT_CANCELLED"),
         ("state", "RUN_STATE_INVALID"),
-        ("deadline", "AGENT_DEADLINE_EXCEEDED"),
     ],
 )
-def test_planning_resume_rechecks_scope_and_original_deadline_before_model_io(
-    client, episode, settings, model_service, monkeypatch, mutation, expected
+def test_planning_resume_rechecks_scope_before_model_io(
+    client, episode, settings, model_service, mutation, expected
 ):
     run_id, actor = prepare(client, episode, settings)
     sent, errors = install_model(model_service, human_reason="USER_DECISION")
@@ -189,15 +184,9 @@ def test_planning_resume_rechecks_scope_and_original_deadline_before_model_io(
             db.get(Project, UUID(episode["project_id"])).archived = True
         elif mutation == "cancel":
             db.get(WorkflowRun, run_id).status = "CANCELLED"
-        elif mutation == "state":
+        else:
             run = db.get(WorkflowRun, run_id)
             run.agent_state_json = run.agent_state_json | {"input_sha256": "f" * 64}
-        else:
-            deadline = db.get(AgentRunLimit, run_id).deadline_at
-            monkeypatch.setattr(
-                "arclight.application.agent_limits.utcnow",
-                lambda: deadline.replace(tzinfo=utcnow().tzinfo) + timedelta(seconds=1),
-            )
     with pytest.raises(DomainError) as caught:
         planning.resume_screenwriter_plan(
             factory, settings, waiting.loop_id, actor, decision=answer(waiting)
@@ -244,20 +233,25 @@ def test_revoked_investigation_grant_blocks_further_research_without_appending_e
 
 
 def test_planning_resume_does_not_reset_original_model_allowance(
-    client, episode, settings, model_service
+    client, episode, settings, model_service, monkeypatch
 ):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
     run_id, actor = prepare(client, episode, settings)
     sent, errors = install_model(model_service, human_reason="USER_DECISION")
     factory = client.app.state.session_factory
     waiting = planning.plan_screenwriter(
-        factory, settings, run_id, actor, limits=AgentRunLimits(max_model_calls=2)
+        factory,
+        settings,
+        run_id,
+        actor,
     )
     assert waiting.status == "HUMAN_REVIEW", errors
     result = planning.resume_screenwriter_plan(
         factory, settings, waiting.loop_id, actor, decision=answer(waiting)
     )
     assert result.status == "STOPPED" and result.stop_code == "AGENT_MODEL_CALL_LIMIT"
-    assert len(sent) == 2
+    assert result.loop_id == waiting.loop_id and result.model_turns == waiting.model_turns == 2
+    assert len(sent) == 2 and not errors
 
 
 def test_planning_cannot_cite_successful_investigation_from_another_operation(

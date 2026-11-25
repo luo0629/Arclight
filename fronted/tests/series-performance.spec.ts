@@ -787,9 +787,8 @@ test("SERIES-04: starts the performance director from an exact approved narrativ
     name: "从此版本生成分镜",
     exact: true,
   });
-  await page.getByLabel("最多模型调用次数", { exact: true }).fill("0");
-  await expect(start).toBeDisabled();
-  await page.getByLabel("最多模型调用次数", { exact: true }).fill("32");
+  await expect(page.getByLabel("最多模型调用次数", { exact: true })).toHaveCount(0);
+  await expect(start).toBeEnabled();
   const response = page.waitForResponse(
     (result) =>
       result.url().endsWith("/storyboard-runs") &&
@@ -798,11 +797,14 @@ test("SERIES-04: starts the performance director from an exact approved narrativ
   await start.click();
   const queued = await response;
   expect(queued.status(), await queued.text()).toBe(202);
-  expect(queued.request().postDataJSON()).toMatchObject({
+  const request = queued.request().postDataJSON();
+  expect(request).toMatchObject({
     script_version_id: source.id,
     performance: true,
     professional: true,
+    director_revision_rounds: 3,
   });
+  expect(request).not.toHaveProperty("agent_limits");
   const working = page.getByRole("region", {
     name: "导演计划与镜头工作稿",
     exact: true,

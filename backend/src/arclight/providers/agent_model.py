@@ -164,7 +164,6 @@ class OpenAICompatibleAgentProvider:
         result = self.service.invoke(
             self.settings,
             agent_messages(request, images, suffix),
-            max_tokens=request.max_tokens,
             response_format=response_format,
             tools=[{"type": "function", "function": tool.model_dump()} for tool in tools],
         )

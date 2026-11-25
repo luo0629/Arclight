@@ -5,7 +5,6 @@ from uuid import UUID
 
 from pydantic import Field, field_validator
 
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.producer_observation import ProducerObservationRequest
 from arclight.domain.producer_planning import DelegationRequest
@@ -13,9 +12,6 @@ from arclight.domain.producer_planning import DelegationRequest
 
 class ProducerRunCreate(AgentToolContract):
     goal: str = Field(min_length=1, max_length=4000)
-    limits: AgentRunLimits = Field(
-        default_factory=lambda: AgentRunLimits(max_duration_seconds=3600, maximum_cost=None)
-    )
 
     @field_validator("goal")
     @classmethod

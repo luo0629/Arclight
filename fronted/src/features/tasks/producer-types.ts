@@ -1,17 +1,4 @@
-export type ProducerLimits = {
-  schema_version?: 1;
-  max_steps?: number;
-  max_calls?: number;
-  max_model_calls?: number;
-  max_tool_calls?: number;
-  max_agent_calls?: number;
-  max_duration_seconds?: number;
-  max_delegations?: number;
-  max_delegation_depth?: number;
-  maximum_cost?: string | null;
-};
-
-export type ProducerStartPayload = { goal: string; limits?: ProducerLimits };
+export type ProducerStartPayload = { goal: string };
 export type SeriesEpisode = {
   episode_id: string;
   requires_episode_ids: string[];
@@ -65,7 +52,7 @@ export type ProducerCommandPayload =
       observation: {
         base_plan_id: string;
         base_plan_sha256: string;
-        trigger: "FAILURE" | "STALE" | "BUDGET_CHANGED" | "RECHECK";
+        trigger: "FAILURE" | "STALE" | "RECHECK";
         reason: string;
       };
     }
@@ -136,8 +123,6 @@ export type ProducerProgress = {
   plans: ProducerPlan[];
   operations: ProducerOperation[];
   budget: {
-    limits: ProducerLimits;
-    deadline_at: string | null;
     actual_cost: string;
     pending_estimate: string;
     unknown_cost: boolean;

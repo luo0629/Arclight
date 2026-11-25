@@ -22,7 +22,6 @@ import pytest
 from cryptography.fernet import Fernet
 from pydantic import SecretStr
 from sqlalchemy import select
-from test_generation_budget import set_policy
 from test_generation_delivery import event_for
 from test_model_services import account
 from test_text_contract_v2 import save_script
@@ -125,13 +124,11 @@ def settings(tmp_path):
         object_storage_backend="local",
         service_encryption_key=SecretStr(Fernet.generate_key().decode()),
         media_execution_policy=ExecutionPolicy(
-            max_attempts=1,
             retry_errors=frozenset(),
             automatic_retry_errors=frozenset(),
             call_timeout_seconds=180,
-            max_elapsed_seconds=600,
         ),
-        model_gateway_policy=GatewayPolicy(max_attempts=1, timeout_seconds=180),
+        model_gateway_policy=GatewayPolicy(timeout_seconds=180),
     )
 
 
@@ -337,9 +334,6 @@ def test_three_authorized_original_tts_lines(settings, client):
             response = client.post("/api/v1/projects", json={"name": "原创逐句TTS验收"})
             assert response.status_code == 201
             report["project_id"] = response.json()["id"]
-            set_policy(
-                client, report["project_id"], str(inputs.quote * 3), task_limit=str(inputs.quote)
-            )
             response = client.post(
                 f"/api/v1/projects/{report['project_id']}/episodes",
                 json={"episode_no": 1, "title": "清晨出发", "target_duration_ms": 30000},

@@ -22,7 +22,7 @@ from arclight.domain.context import check_call
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.project_settings import ProjectStorySettings
 from arclight.providers.llm import LLMService, llm_service, response_contract
-from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
+from arclight.providers.prompts import TEXT_PROMPTS
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -189,7 +189,6 @@ class OpenAICompatibleTextProvider:
         result = self.service.invoke(
             self.settings,
             [SystemMessage(instruction), HumanMessage(json.dumps(data, ensure_ascii=False))],
-            max_tokens=TEXT_MAX_TOKENS,
             response_format=response_format,
             strict_finish=self.settings.llm_protocol != "openai_chat",
         )

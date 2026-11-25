@@ -605,7 +605,6 @@ class SchedulingRead(Resource):
 class ScheduleRead(SchedulingRead):
     job_id: UUID
     policy_json: dict
-    deadline_at: datetime
     next_attempt_at: datetime
     blocked_code: str | None
 

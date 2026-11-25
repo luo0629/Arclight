@@ -22,7 +22,7 @@ Arclight 先把文本创作与审核链路做实，再逐步向完整的漫剧�
 
 ### 图像任务
 
-新图像任务从账号模型配置读取连接和凭证，支持 OpenAI Images 兼容及其他已注册协议。任务创建前校验精确模型能力与可信报价，执行后登记候选、来源和费用证据。
+新图像任务从账号模型配置读取连接和凭证，支持 OpenAI Images 兼容及其他已注册协议。任务创建前校验精确模型能力，有可信报价时记录费用估算。执行后登记候选、来源和费用证据。
 
 历史部署图像任务按已冻结的配置恢复。存在此类未结任务时，API 和 Worker 继续提供与原配置匹配的 `ARCLIGHT_IMAGE_SERVICE` 及原密钥；生产镜像或仓库不存放该密钥。
 
@@ -40,7 +40,7 @@ React + TypeScript 前端统一使用 **shadcn/ui（Radix）组件与 Tailwind C
 
 项目导航中的“项目总览”汇总全项目已保存的文本生产记录，包括剧集阶段、待审核与确认数量、任务状态及最近任务。剧集目录独立分页，可直接进入对应画布或任务与审核页面；页面支持手动刷新，并在可见时每 15 秒刷新。
 
-阶段根据最新文本版本和精确来源关系计算，工作流审核与产物不重复计数。预算上限与实际费用分别展示；成本账本、视觉资产审核和成片交付尚未接入，会明确显示能力缺失，不以零费用或分镜完成代替实际结果。
+阶段根据最新文本版本和精确来源关系计算，工作流审核与产物不重复计数。费用账本记录估算、实际费用和待核账金额。供应商确认余额不足时，任务显示「账户余额不足」。充值后，供应商明确确认原调用未受理且没有费用时，可以在任务中心重试同一任务。
 
 ### 管理项目视觉资产目录
 
@@ -257,7 +257,7 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 
 文字支持 OpenAI Chat Completions、Gemini 和 DashScope 原生文字／多模态。图片支持 OpenAI、CogView、Seedream、SiliconFlow、Gemini；视频支持 Seedance、CogVideo、Wan、Gemini Omni、xAI；语音支持 Qwen、SiliconFlow、OpenAI TTS。自定义还可选择 Veo。目录与协议合同经过离线验收，真实收费服务及具体模型仍须按实际账号权限和模型文档验证；当前媒体适配器单次生成一张／条，不支持参考图、seed 或远程取消，不把供应商名称视作全部模型能力的保证。
 
-部署侧通过 `ARCLIGHT_SERVICE_MODEL_POLICIES` 按精确 `(kind, supplier, base_url, model, protocol)` 登记 Agent 能力与媒体 `maximum_cost_per_output`／`pricing_version`，示例见 `.env.example`，API 与全部 Worker 使用相同配置。基础文字不强制应用费用报价；专业工具／多图需要匹配的 Agent 能力声明，收费媒体缺少可信报价时拒绝创建任务。
+部署侧通过 `ARCLIGHT_SERVICE_MODEL_POLICIES` 按精确 `(kind, supplier, base_url, model, protocol)` 登记 Agent 能力和可选的媒体费用估算，示例见 `.env.example`。API 与全部 Worker 使用相同配置。专业工具和多图调用需要匹配的 Agent 能力声明。缺少报价的任务按供应商账单结算。
 
 新媒体任务和概念图沿账号凭证快照执行，可通过 `GET /api/v1/projects/{project_id}/generation-jobs/services/{image|video|speech}/configuration` 读取当前脱敏配置。后续轮次、查询和授权重放保留原 Key；更改账号配置仅影响新任务。媒体结果保存在私有存储，图片继续经过连续性与人工选用门禁，音频／视频经完整解码后通过任务的 `/artifacts` 列表和鉴权下载读取，不自动确认使用权。
 
@@ -288,19 +288,19 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 
 ## 媒体执行调度
 
-媒体任务由持久化 Outbox、执行租约和心跳驱动；外部提交、查询与取消不持有业务行锁。`ARCLIGHT_MEDIA_EXECUTION_POLICY` 接受 JSON，控制 Provider／项目并发（含 `provider_limits`／`project_limits` 覆盖）、全局／用户每分钟调用数、`paused_providers`、调用超时、总耗时、尝试上限和指数退避。并发／速率／暂停采用当前服务配置，重试和耗时边界随新任务冻结；API 与 Worker 应使用相同配置。
+媒体任务由持久化 Outbox、执行租约和心跳驱动。外部提交、查询与取消在业务事务外执行。`ARCLIGHT_MEDIA_EXECUTION_POLICY` 接受 JSON，支持供应商和项目的并发设置、暂停指定供应商、单次请求超时和指数退避。并发和暂停读取当前服务配置，重试策略随任务冻结。API 与 Worker 使用相同配置。
 
-服务明确失败后仅对白名单错误重试；默认自动重试 `PROVIDER_UNAVAILABLE`，`PROVIDER_FAILED` 需显式重试。所有重试均遵守次数、截止时间和退避。超时保留未知结果及并发占用，先按 GEN-04 对账；明确未接收才可受限重试。取消是尽力请求，只有明确终态才能释放并发占用，成功结果可能在取消请求后返回。适配器等待使用有界线程容量，超时不表示外部执行或线程已经停止。
+默认自动重试供应商确认未受理且没有费用的 `PROVIDER_UNAVAILABLE`。`PROVIDER_FAILED` 需显式重试。媒体和正式渲染最多自动尝试 3 次，含首次。超时先保留不确定结果和并发占用，待对账。供应商确认终态后释放并发占用，成功结果可能在取消请求后返回。适配器使用有界线程池等待供应商响应。
 
-任务的 `schedule`、`calls`、`dead-letter` 和 `replays` 只读子接口沿用项目权限；死信保留安全错误分类和边界。Owner 可对已诊断的明确失败使用 `POST .../generation-jobs/{job_id}/replay`，提交 `expected_revision`、`reason` 和新 `Idempotency-Key`，另建关联原任务／死信的新任务并复验原精确输入和目标 CAS。未知执行不得直接重放。迁移 `0034` 保护调度策略、调用事实、死信及重放关联，有历史时拒绝降级。目前仅有 Mock 媒体 Provider；预算沿用已有项目／剧集／任务／批次限额、不可变预留及结算账本，真实付费服务另行接入。
+任务的 `schedule`、`calls`、`dead-letter` 和 `replays` 只读子接口沿用项目权限。死信保留错误分类。Owner 可对已诊断的明确失败使用 `POST .../generation-jobs/{job_id}/replay`，提交 `expected_revision`、`reason` 和新 `Idempotency-Key`，另建关联原任务和死信的新任务并复验原精确输入和目标 CAS。结果未知的执行先对账。迁移 `0034` 保护调度策略、调用事实、死信及重放关联。费用账本继续记录每次调用和结算事实。
 
-生成请求可声明 `scheduling_mode: "BATCH"`；缺省为交互任务。服务端将预算批次或多候选请求强制归为批量，显式重试及死信重放继承原分类；客户端不能设置数字优先级。分类与幂等指纹一起冻结，旧请求的指纹仍可重放。默认按交互 3、批量 1 的成功许可份额轮转，同类按项目轮转、项目内按就绪时间 FIFO。`interactive_weight`／`batch_weight` 可调整权重，公平游标持久化；权重不承诺完成时长比例。
+生成请求可声明 `scheduling_mode: "BATCH"`，默认进入交互队列。多候选请求进入批量队列，显式重试及死信重放继承原分类。分类与幂等指纹一起冻结。默认按交互 3、批量 1 的成功许可份额轮转，同类按项目轮转，项目内按就绪时间先进先出。`interactive_weight` 和 `batch_weight` 可调整权重，公平游标持久化。
 
 Compose 使用独立资源的 `worker-interactive`、`worker-batch`、`worker-scheduler`、`worker-recovery`，分别只消费 `generation.interactive`、`generation.batch`、`scheduler.control`、`generation.recovery`。原 `worker` 只消费 `workflow`。本机启动也必须使用五个独立 Worker 进程，分别传入 `--queues=<队列>` 和唯一 `--hostname=<角色>@%h`；Windows 使用 `--pool=solo`。只启动旧的默认 Worker 无法消费媒体及调度队列。
 
-供应商／项目并发大于 1 时，默认保留 1 个交互槽位，批量不能借用；这会降低纯批量时的利用率。单并发退化为不抢占的加权顺序。全局／用户速率同样在总额度内各保留交互和恢复份额；极小额度不能同时保证各类即时可用。对应配置为 `interactive_concurrency_reserve`、`interactive_rate_reserve`、`recovery_rate_reserve`。尚未消费的有效许可与实际调用共用上述限额，异步／未知调用不会因为 Celery 函数返回而释放。
+供应商或项目并发大于 1 时，`interactive_concurrency_reserve` 默认保留 1 个交互槽位。单并发按加权顺序排队。有效许可和实际供应商调用都占用并发槽位，异步调用或结果未知的调用在供应商确认终态后释放。
 
-派发器先在数据库发放短期许可，再发布含 job、事件、许可 ID 和 epoch 的消息。默认许可 30 秒、发布冷却 5 秒、每轮最多 64 条（`permit_seconds`、`publish_cooldown_seconds`、`dispatch_window`）；冷却必须短于许可。Worker 复验许可、权限、精确输入、预算及实时配额，事务内转换为实际调用。Broker 丢消息或发布失败后按同一许可重投；未消费许可过期后递增 epoch，迟到旧消息不能创建 attempt。已消费许可不因到期而释放实际占用或未知费用；恢复队列沿原 attempt 查询。没有许可的旧消息不能直接提交供应商。
+派发器先在数据库发放短期许可，再发布含任务、事件、许可 ID 和 epoch 的消息。默认许可 30 秒、发布冷却 5 秒、每轮最多 64 条，可用 `permit_seconds`、`publish_cooldown_seconds` 和 `dispatch_window` 配置。Worker 复验许可、权限、精确输入和可用并发，在事务内登记实际调用。Broker 丢消息或发布失败后按同一许可重投。未消费许可过期后递增 epoch，Worker 只接受当前许可。恢复队列使用原调用记录查询结果。
 
 项目积压读取为 `GET .../generation-jobs/queue`：按类别区分就绪、退避、待消费许可、执行、未知结果、终态和死信，包含阻塞原因、最老等待及等待分位数、调度心跳。`/{job_id}/queue`、`/{job_id}/permits` 和 `/{job_id}/permits/{permit_id}/events` 提供分类与调度历史，均沿用项目权限与分页。这里的数量是业务任务数；Broker 消息可能重复。运维可用 `docker compose exec redis redis-cli LLEN generation.interactive`（及其他队列名）检查待消费消息，用 `docker compose exec worker-scheduler /app/.venv/bin/celery -A arclight.workers.celery_app:celery_app inspect active_queues` 检查实际 Worker 路由；许可历史可核对过期及重复发布。
 
@@ -315,15 +315,15 @@ Compose 使用独立资源的 `worker-interactive`、`worker-batch`、`worker-sc
 
 导演／美术任务必须给出 `script_version_id`，改写还需 `rewrite_target`；图片任务需 `shot_id`，审查任务另需 `candidate_version_id` 指定精确待审图片。局部任务仅加载同一精确分镜中的当前／相邻镜头及相关场景，常规参考必须已批准且有效，待审候选可为未批准版本。`asset_version_ids`、`story_entry_ids` 可显式选择相关输入；禁止传入不属于任务合同的范围。
 
-`ARCLIGHT_CONTEXT_LIMITS` 为 JSON：默认 UTF-8 JSON 总量 262144 bytes、64 个资产版本、100 条故事设定、前后各 1 个邻镜、5 条相关历史；硬上限分别为 524288、64、100、2、10。预览请求中的 `limits` 只能调低服务端上限。必需规范、锁定字段及预算完整保留，超限原子拒绝；不截断这些约束。真正调用 Provider 前再次检查上下文与实际任务输入的合计大小。
+`ARCLIGHT_CONTEXT_LIMITS` 为 JSON：默认 UTF-8 JSON 总量 262144 bytes、64 个资产版本、100 条故事设定、前后各 1 个邻镜、5 条相关历史；硬上限分别为 524288、64、100、2、10。预览请求中的 `limits` 只能调低服务端上限。必需规范及锁定字段完整保留，超限原子拒绝；不截断这些约束。调用供应商前会校验上下文与实际输入的数据安全性。模型的输入和输出容量由供应商决定。
 
-五个现有文本入口在启动事务中冻结 `context/1` 上下文，复用不可变 DependencyManifest，由 GEN-11 的 VersionBinding 保存逐阶段引用；`GET /api/v1/runs/{run_id}/contexts` 读取这些快照。运行中修改风格、资产、预算或限额不会改写旧输入，重试沿用原清单。编剧→导演串联任务在启动时明确声明本运行后续批准的精确剧本输出，不预造尚不存在的版本。旧运行未保存上下文时返回 `legacy_without_context: true`，不会补读当前事实。专业 Agent 与媒体实际入口由各自任务接入；本功能不代表这些生产器已实现。
+五个现有文本入口在启动事务中冻结 `context/1` 上下文，复用不可变 DependencyManifest，由 GEN-11 的 VersionBinding 保存逐阶段引用；`GET /api/v1/runs/{run_id}/contexts` 读取这些快照。任务和重试沿用启动时的风格、资产与清单。编剧→导演串联任务在启动时明确声明本运行后续批准的精确剧本输出，不预造尚不存在的版本。旧运行未保存上下文时返回 `legacy_without_context: true`，不会补读当前事实。专业 Agent 与媒体实际入口由各自任务接入；本功能不代表这些生产器已实现。
 
 启动追溯 `context-trace/1` 另存安全的公开启动输入及摘要、组装版本、故事来源修订、设定修订、视觉规范和精确资产的原始依赖清单摘要。私有对象路径、供应商凭证和图片二进制不会进入这份记录。`GET /api/v1/runs/{run_id}/contexts/{stage}/trace` 返回启动清单、检索轮次和实际消费回执；`through_round=0` 读取启动视图，指定已有轮次可重现该证据前缀。
 
-Owner／Editor 可向 `POST /api/v1/runs/{run_id}/contexts/{stage}/evidence` 提交 `creation_key`（UUID）、`expected_round`（从 0 开始）以及非空的 `asset_version_ids`、`story_entry_ids` 或 `source_ids`。服务端按任务合同鉴权并解析实际内容，顺序追加新清单，关联启动清单和上一轮，不接受客户端自报的证据正文。相同键、相同请求返回原回执（200），新建返回 201；键复用冲突或轮次竞争返回 409。每阶段最多 32 轮，累计独立资产／设定仍受启动时的限额约束，故事来源最多 16 个，累计 JSON 超限拒绝。运行中调高配置不会扩大已有清单的预算。
+Owner／Editor 可向 `POST /api/v1/runs/{run_id}/contexts/{stage}/evidence` 提交 `creation_key`（UUID）、`expected_round`（从 0 开始）以及非空的 `asset_version_ids`、`story_entry_ids` 或 `source_ids`。服务端按任务合同鉴权并解析实际内容，顺序追加新清单，关联启动清单和上一轮，不接受客户端自报的证据正文。相同键、相同请求返回原回执（200），新建返回 201；键复用冲突或轮次竞争返回 409。人工追加的证据按轮次持续保存。Agent 的自动决策循环每次操作最多 32 轮，恢复时沿用已有轮次。
 
-每个现有文本阶段在首次调用前固定实际消费的证据前缀；图工作流先独立保存不可变消费回执，重试沿用它。单次提炼／大纲在项目锁内将回执与产物一并提交。编剧审核通过后，导演阶段单独选择当时已追加的证据，并将实际批准剧本的精确版本、内容摘要与资产来源记入消费回执，纳入同一累计预算；checkpoint 保存逐阶段引用。后续证据可以继续追加，旧消费回执保持原值。旧版仅有 CTX-01 快照的记录显示 `trace_available: false`，不能补造启动追溯；更早的无上下文记录保持原兼容行为。
+每个现有文本阶段在首次调用前固定实际消费的证据前缀；图工作流先独立保存不可变消费回执，重试沿用它。单次提炼／大纲在项目锁内将回执与产物一并提交。编剧审核通过后，导演阶段单独选择当时已追加的证据，并将实际批准剧本的精确版本、内容摘要与资产来源记入消费回执。检查点保存逐阶段引用。后续证据可以继续追加，旧消费回执保持原值。旧版仅有 CTX-01 快照的记录显示 `trace_available: false`，不能补造启动追溯；更早的无上下文记录保持原兼容行为。
 
 图片证据仅保存文件 ID、精确资产版本、checksum、大小和媒体类型。通过 `GET /api/v1/runs/{run_id}/contexts/{stage}/images/{file_id}` 读取实际图片，必须是该阶段清单已包含的图片且当前账号具有项目读取权限；每次校验对象完整性，缺失／损坏拒绝。接口返回 `private, no-store`，不暴露对象存储地址或临时签名。接入实际多图模型协议及专业 Agent 工具循环仍由各自任务负责。
 

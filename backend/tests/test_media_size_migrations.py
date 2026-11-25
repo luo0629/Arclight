@@ -215,6 +215,7 @@ def assert_types(engine, expected):
     assert str(source["type"]).upper() == "INTEGER"
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_nonempty_roundtrip_keeps_receipts_guards_and_table_identity(
     client, migrated, seed_receipts
 ):
@@ -244,6 +245,7 @@ def test_nonempty_roundtrip_keeps_receipts_guards_and_table_identity(
 
 
 @pytest.mark.parametrize("table", TABLES)
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_large_receipt_refuses_narrowing_before_any_schema_mutation(
     client, migrated, seed_receipts, table
 ):
@@ -276,6 +278,7 @@ def test_large_receipt_refuses_narrowing_before_any_schema_mutation(
     assert schema(engine) == before_schema
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_inspection_old_check_refuses_downgrade_before_any_schema_mutation(
     client, migrated, seed_receipts
 ):
@@ -291,6 +294,7 @@ def test_inspection_old_check_refuses_downgrade_before_any_schema_mutation(
 
 
 @pytest.mark.parametrize("direction", ["upgrade", "downgrade"])
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_sqlite_schema_edit_failure_rolls_back_and_can_retry(
     client, migrated, seed_receipts, direction
 ):

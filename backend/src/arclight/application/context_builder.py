@@ -13,7 +13,6 @@ from arclight.application.agent_preferences import snapshot_preferences
 from arclight.application.commands import require_project
 from arclight.application.content_dependencies import reference_ids
 from arclight.application.dependencies import exact_version
-from arclight.application.generation_budget import usage
 from arclight.application.rewrite_content import provider_context, selected_scenes
 from arclight.application.story_context import build_story_context
 from arclight.application.visual_bible import snapshot as visual_snapshot
@@ -41,7 +40,6 @@ from arclight.persistence.models import (
     StoryEntry,
     WorkflowRun,
 )
-from arclight.providers.prompts import TEXT_MAX_TOKENS
 
 
 def missing(message: str) -> None:
@@ -423,7 +421,6 @@ def build_context(
             request.script_version_id if request.task == "rewrite" else None,
             request.candidate_version_id,
         )
-    budget = usage(db, project_id)
     required["constraints"] = {
         "allowed_fields": list(contract.editable),
         "locked_visual_fields": {name: visual["fields"][name] for name in visual["locked_fields"]}
@@ -432,20 +429,6 @@ def build_context(
         "locked_assets": [
             row["asset_version_id"] for row in required.get("assets", []) if row["locked"]
         ],
-        "budget": {
-            name: str(value) if value is not None else None
-            for name, value in budget.items()
-            if name
-            in {
-                "project_limit",
-                "task_limit",
-                "episode_limit",
-                "projected_cost",
-                "policy_revision",
-                "currency",
-            }
-        },
-        "max_output_tokens": TEXT_MAX_TOKENS,
     }
     if request.rewrite_target is not None:
         required["constraints"]["rewrite_target"] = request.rewrite_target.model_dump(mode="json")

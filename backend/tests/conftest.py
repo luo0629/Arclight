@@ -389,6 +389,30 @@ def client(settings, migrated):
 
 
 @pytest.fixture
+def legacy_execution_deadlines(client):
+    """Seed deadlines representable in 0071 for tests of earlier migrations."""
+    from datetime import timedelta
+
+    from sqlalchemy import event
+
+    from arclight.persistence.agent_limits import AgentRunLimit
+    from arclight.persistence.base import utcnow
+    from arclight.persistence.generation_scheduling import GenerationSchedule
+
+    def add_legacy_deadlines(session, *_):
+        for row in session.new:
+            if isinstance(row, (AgentRunLimit, GenerationSchedule)) and row.deadline_at is None:
+                row.deadline_at = utcnow() + timedelta(minutes=15)
+
+    factory = client.app.state.session_factory
+    event.listen(factory, "before_flush", add_legacy_deadlines)
+    try:
+        yield
+    finally:
+        event.remove(factory, "before_flush", add_legacy_deadlines)
+
+
+@pytest.fixture
 def episode(client):
     project = client.post("/api/v1/projects", json={"name": "测试漫剧"})
     assert project.status_code == 201, project.text

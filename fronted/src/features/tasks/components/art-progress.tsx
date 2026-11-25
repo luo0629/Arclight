@@ -31,11 +31,7 @@ type Operation = HumanOperation & {
 type Progress = {
   project_id: string;
   concept_plan?: {
-    plan: {
-      maximum_rounds: number;
-      maximum_candidates: number;
-      maximum_cost: string;
-    };
+    plan: {};
   } | null;
   concept_rounds?: ConceptRound[];
   operations: Operation[];
@@ -166,11 +162,6 @@ export default function ArtProgress({
       ))}
       {data?.concept_plan && (
         <>
-          <p className="text-sm text-muted-foreground">
-            冻结计划：最多 {data.concept_plan.plan.maximum_rounds} 轮 /{" "}
-            {data.concept_plan.plan.maximum_candidates} 张 · 总预算 USD{" "}
-            {data.concept_plan.plan.maximum_cost}
-          </p>
           <ArtConceptRounds
             projectId={data.project_id}
             rounds={data.concept_rounds ?? []}

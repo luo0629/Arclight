@@ -45,7 +45,6 @@ class CostGroup(CostTotals):
 class CostReport(BaseModel):
     project_id: UUID
     currency: Literal["USD"] = "USD"
-    budget_limit: Decimal
     generated_at: datetime
     group_by: CostDimension
     summary: CostTotals
@@ -53,10 +52,6 @@ class CostReport(BaseModel):
     total_groups: int
     limit: int
     offset: int
-
-    @field_serializer("budget_limit")
-    def budget_money(self, value: Decimal) -> str:
-        return format(value, ".6f")
 
 
 class CostEntry(CostAmounts):

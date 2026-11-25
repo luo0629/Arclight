@@ -425,7 +425,9 @@ def test_evidence_request_contract_rejects_fabricated_or_invalid_inputs(client, 
     assert trace(client, run_id)["evidence"] == []
 
 
-def test_cumulative_entry_asset_byte_and_round_limits_are_frozen(client, episode, settings):
+def test_cumulative_evidence_preserves_exact_sources_beyond_startup_limits(
+    client, episode, settings
+):
     settings.context_limits = ContextLimits(max_bytes=16000, max_assets=1, max_story_entries=1)
     first_entry = entry(client, episode)
     second_entry = entry(client, episode, "CHARACTER")
@@ -441,43 +443,45 @@ def test_cumulative_entry_asset_byte_and_round_limits_are_frozen(client, episode
         db.get(StoryEntry, UUID(second_entry["id"])).archived = False
         first_asset = make_asset(db, episode["project_id"], "SCENE")
         second_asset = make_asset(db, episode["project_id"], "PROP")
-    assert (
-        evidence(
-            client,
-            run_id,
-            story_entry_ids=[first_entry["id"]],
-            asset_version_ids=[first_asset["asset_version_id"]],
-        ).status_code
-        == 201
-    )
-    settings.context_limits = ContextLimits()
-    assert (
-        evidence(client, run_id, expected_round=1, story_entry_ids=[second_entry["id"]]).status_code
-        == 422
-    )
-    assert (
-        evidence(
-            client, run_id, expected_round=1, asset_version_ids=[second_asset["asset_version_id"]]
-        ).status_code
-        == 422
-    )
-    source = save_text(
+
+    first = evidence(
         client,
-        episode,
-        {**revise(client, episode, save_text(client, episode)), "text": "大" * 6000},
+        run_id,
+        story_entry_ids=[first_entry["id"]],
+        asset_version_ids=[first_asset["asset_version_id"]],
     )
-    assert evidence(client, run_id, expected_round=1, source_ids=[source["id"]]).status_code == 422
-    assert len(trace(client, run_id)["evidence"]) == 1
-    # A separate stage can reuse one identity but can never accumulate round 33.
-    for number in range(32):
-        response = evidence(
-            client, run_id, "storyboard", expected_round=number, story_entry_ids=[first_entry["id"]]
-        )
-        if response.status_code == 422:
-            assert response.json()["error"]["code"] == "CONTEXT_TOO_LARGE"
-            break  # This stage's frozen byte limit can reject before 32 rounds.
-        assert response.status_code == 201, response.text
-    assert len(trace(client, run_id, "storyboard")["evidence"]) <= 32
+    assert first.status_code == 201, first.text
+    settings.context_limits = ContextLimits()
+    second = evidence(
+        client,
+        run_id,
+        expected_round=1,
+        story_entry_ids=[second_entry["id"]],
+        asset_version_ids=[second_asset["asset_version_id"]],
+    )
+    assert second.status_code == 201, second.text
+
+    story = "大" * 6000
+    source = save_text(
+        client, episode, {**revise(client, episode, save_text(client, episode)), "text": story}
+    )
+    third = evidence(client, run_id, expected_round=2, source_ids=[source["id"]])
+    assert third.status_code == 201, third.text
+
+    records = trace(client, run_id)["evidence"]
+    assert [record["manifest_id"] for record in records] == [
+        response.json()["manifest_id"] for response in (first, second, third)
+    ]
+    assert [record["round"] for record in records] == [1, 2, 3]
+    assert [record["story_entries"][0]["id"] for record in records[:2]] == [
+        first_entry["id"],
+        second_entry["id"],
+    ]
+    assert [record["assets"][0]["asset_version_id"] for record in records[:2]] == [
+        first_asset["asset_version_id"],
+        second_asset["asset_version_id"],
+    ]
+    assert records[-1]["stories"] == [{"source_id": source["id"], "text": story}]
 
 
 def test_missing_or_mismatched_origin_is_refused_before_execution(
@@ -519,16 +523,24 @@ def test_legacy_trace_is_explicit_and_cannot_be_backfilled(client, episode, sett
     assert advance(client, settings, run_id)["status"] == "WAITING_REVIEW"
 
 
-def test_round_32_is_the_final_round_even_when_identity_is_reused(client, episode):
+def test_manual_evidence_can_pass_round_32_without_losing_the_chain(client, episode):
     item = entry(client, episode)
     run_id = run(client, episode)
-    for number in range(32):
+    manifest_ids = []
+    for number in range(33):
         result = evidence(client, run_id, expected_round=number, story_entry_ids=[item["id"]])
         assert result.status_code == 201, result.text
-    assert len(trace(client, run_id)["evidence"]) == 32
-    assert (
-        evidence(client, run_id, expected_round=32, story_entry_ids=[item["id"]]).status_code == 422
+        manifest_ids.append(result.json()["manifest_id"])
+
+    records = trace(client, run_id)["evidence"]
+    assert [record["manifest_id"] for record in records] == manifest_ids
+    assert [record["parent_manifest_id"] for record in records[1:]] == manifest_ids[:-1]
+    assert [record["manifest_id"] for record in trace(client, run_id, through=32)["evidence"]] == (
+        manifest_ids[:32]
     )
+    stale = evidence(client, run_id, expected_round=32, story_entry_ids=[item["id"]])
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "CONTEXT_ROUND_CONFLICT"
 
 
 @pytest.mark.parametrize("unsafe", ["Bearer test-private-credential", "data:image/png;base64,YQ=="])

@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy import func, select, update
 from sqlalchemy.exc import DBAPIError
+from test_agent_limits import configure_with_historical_limits
 from test_agent_tools import activate_run, create_run
 from test_art_research import add_image, contents, prepare_art, query, trace
 from test_art_review_workflow import decide, save, submit
@@ -18,11 +19,9 @@ from test_concurrency import require_postgres
 from test_director_workflow import script
 from test_text_contract_v2 import make_asset
 
-from arclight.application.agent_limits import configure_agent_run
 from arclight.application.agent_memory import read_agent_memory
 from arclight.application.agent_tools import build_agent_tool_registry, grant_agent_tools
 from arclight.application.art_proposal_store import asset_content
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_tools import AgentToolGrantRequest
 from arclight.domain.versions import digest
 from arclight.persistence.art_proposals import ArtApprovedVersion, ArtProposalVersion
@@ -212,7 +211,7 @@ def test_episode_usage_scope_is_checked_for_images_and_visible_in_directory_feed
         assert feedback.result["image_file_ids"] == []
 
 
-def test_investigation_uses_original_tool_limit_and_has_no_formal_write_authority(
+def test_investigation_ignores_retired_call_limit_and_has_no_formal_write_authority(
     client, episode, settings
 ):
     asset = create_asset(client, episode["project_id"])
@@ -231,10 +230,15 @@ def test_investigation_uses_original_tool_limit_and_has_no_formal_write_authorit
             model.__tablename__: db.scalar(select(func.count()).select_from(model))
             for model in models
         }
-        configure_agent_run(db, run_id, actor, AgentRunLimits(max_tool_calls=0))
-    denied = query(client, settings, run_id, {"path": "visual"})
-    assert denied.status == "FAILED" and denied.error.code == "AGENT_TOOL_CALL_LIMIT"
+        control = configure_with_historical_limits(db, run_id, actor, {"max_tool_calls": 0})
+        assert control.limits_json["max_tool_calls"] == 0
+    denied = query(client, settings, run_id, {"path": "visual", "approve": True})
+    assert denied.status == "FAILED" and denied.error.code == "INVALID_ARGUMENTS"
     assert trace(client, run_id, actor)["evidence"] == []
+    read = query(client, settings, run_id, {"path": "visual"})
+    assert read.status == "SUCCEEDED" and len(contents(read)) == 1
+    evidence = trace(client, run_id, actor)["evidence"]
+    assert len(evidence) == 1 and evidence[0]["art_investigation"]["result"] == read.result
     with client.app.state.session_factory() as db:
         assert before == {
             model.__tablename__: db.scalar(select(func.count()).select_from(model))

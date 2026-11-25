@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from starlette.testclient import TestClient
 from test_agent_model import model_service as model_service  # noqa: F401
 from test_concurrency import require_postgres
-from test_producer_delegation import delegation_call, dispatch, dispatched
+from test_producer_delegation import delegation_call, dispatched
 from test_producer_planning import writer_task
 from test_producer_replanning import accounting, observation
 from test_producer_series import begin, completed, contexts, install_plan
@@ -28,7 +28,6 @@ from arclight.application.agent_limits import action_usage
 from arclight.application.gateway_accounting import reconcile
 from arclight.application.producer_replanning import replan_producer
 from arclight.application.producer_series_delivery import CONTROL_KIND, control_series
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.model_gateway import GatewayPolicy, GatewayUsage
 from arclight.domain.producer_series import SeriesControl
 from arclight.main import create_app
@@ -173,53 +172,47 @@ def test_rejection_replans_only_rejected_episode_and_preserves_success_across_re
         )
 
 
-def test_unknown_project_cost_blocks_even_unlimited_root_without_duplicate_charge(
+def test_unrelated_unknown_invoice_does_not_block_or_duplicate_a_delegation(
     client, settings, series_case, series_transport
 ):
-    run_id, actor, reference, _ = completed(client, settings, series_case, series_transport)
+    run_id, _, reference, _ = completed(client, settings, series_case, series_transport)
     with client.app.state.session_factory.begin() as db:
         original = db.scalar(select(GatewayCall).where(GatewayCall.workflow_id == run_id))
         values = {
             column.name: getattr(original, column.name) for column in GatewayCall.__table__.columns
         }
-        # Imported pre-pricing call, not a fabricated zero settlement or an edited receipt.
+        unknown = uuid4()
         values.update(
-            id=uuid4(),
+            id=unknown,
             workflow_id=None,
             operation_key="imported-unknown-series",
             sequence=1,
             maximum_cost=None,
         )
         db.add(GatewayCall(**values))
-    feedback = dispatch(client, settings, delegation_call(run_id, reference, task_key="second"))
-    assert feedback.status == "FAILED" and feedback.error.code == "PRODUCER_COST_UNKNOWN"
+    call = delegation_call(run_id, reference, task_key="second")
+    receipt = dispatched(client, settings, call)
+    assert dispatched(client, settings, call) == receipt
     with client.app.state.session_factory() as db:
+        child = db.get(AgentRunLimit, UUID(receipt["child_run_id"]))
+        assert child.root_run_id == run_id
+        assert db.get(GatewayCall, unknown).maximum_cost is None
         assert (
             db.scalar(
                 select(func.count())
                 .select_from(AgentRunLimit)
                 .where(AgentRunLimit.root_run_id == run_id)
             )
-            == 1
+            == 2
         )
 
 
-@pytest.mark.parametrize(
-    "quote,code", [("0.02", "AGENT_BUDGET_EXCEEDED"), (None, "BUDGET_QUOTE_UNAVAILABLE")]
-)
-def test_second_episode_inherits_spent_global_budget_and_requires_known_quote(
-    client, settings, series_case, series_transport, quote, code
+@pytest.mark.parametrize("quote", ["0.02", None])
+def test_second_episode_preserves_settled_cost_and_can_use_an_unquoted_route(
+    client, settings, series_case, series_transport, quote
 ):
-    from test_generation_budget import set_policy
-
-    set_policy(client, series_case["episode"]["project_id"], "100")
     run_id, actor, reference, _ = completed(
-        client,
-        settings,
-        series_case,
-        series_transport,
-        quote="0.01",
-        limits=AgentRunLimits(maximum_cost=Decimal("0.03"), max_duration_seconds=3600),
+        client, settings, series_case, series_transport, quote="0.01"
     )
     with client.app.state.session_factory.begin() as db:
         usage = action_usage(db, run_id)
@@ -240,13 +233,13 @@ def test_second_episode_inherits_spent_global_budget_and_requires_known_quote(
     receipt = dispatched(client, settings, delegation_call(run_id, reference, task_key="second"))
     sent, errors = install_series(series_transport, settings)
     settings.model_gateway_policy = policy
-    failed = run_once(client, settings, UUID(receipt["child_run_id"]))
-    assert failed["status"] == "FAILED" and failed["error_code"] == code, failed
-    assert not sent and not errors
+    child = run_once(client, settings, UUID(receipt["child_run_id"]))
+    assert child["status"] == "WAITING_REVIEW" and sent and not errors, (child, errors)
     with client.app.state.session_factory() as db:
         usage = action_usage(db, run_id)
-        assert usage["actual_cost"] == Decimal("0.02") and not usage["pending_estimate"]
+        assert usage["actual_cost"] == Decimal("0.02")
         assert db.get(WorkflowRun, run_id).status == "RUNNING"
+        assert bool(usage["unknown_cost"]) == (quote is None)
 
 
 def test_standalone_work_cannot_enter_reserved_non_anchor_episode(client, settings, series_case):

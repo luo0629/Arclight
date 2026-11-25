@@ -7,7 +7,6 @@ from uuid import UUID
 
 from pydantic import Field, field_serializer, field_validator
 
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.costs import CostTotals
 from arclight.domain.production_state import (
@@ -115,11 +114,9 @@ class ProducerProductionSummary(AgentToolContract):
 
 
 class ProducerRuntimeBudget(AgentToolContract):
-    """Root-family limits; observed usage is intentionally outside the business hash."""
+    """Recorded usage across the producer run and its children."""
 
     root_run_id: UUID
-    limits: AgentRunLimits
-    deadline_at: datetime
     calls: int
     model_calls: int
     tool_calls: int
@@ -133,19 +130,8 @@ class ProducerRuntimeBudget(AgentToolContract):
 
 
 class ProducerBudget(AgentToolContract):
-    project_limit: Decimal
-    policy_revision: int
-    task_limit: Decimal | None
-    episode_limit: Decimal | None
-    batch_limit: Decimal | None
-    warning_percent: int
-    max_candidates_per_target: int
     project_costs: CostTotals
     episode_costs: CostTotals
-
-    @field_serializer("project_limit", "task_limit", "episode_limit", "batch_limit")
-    def money(self, value: Decimal | None) -> str | None:
-        return format(value, ".6f") if value is not None else None
 
 
 class ProducerVersion(AgentToolContract):

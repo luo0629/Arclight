@@ -98,6 +98,7 @@ def registered_film(client, job_case):
     return manifest, read(client, value)
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_empty_version_migration_roundtrip_preserves_manifest_and_job(client, job_case, migrated):
     manifest, value, _ = job_case
     before = read(client, value)
@@ -113,6 +114,7 @@ def test_empty_version_migration_roundtrip_preserves_manifest_and_job(client, jo
     command.check(migrated)
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_upgrade_and_downgrade_preserve_legacy_manual_receipt(client, result_case, migrated):
     manifest, artifact, _ = result_case
     endpoint = f"/api/v1/render-manifests/{manifest['id']}/results"
@@ -131,6 +133,7 @@ def test_upgrade_and_downgrade_preserve_legacy_manual_receipt(client, result_cas
 
 
 @pytest.mark.parametrize("target", ["0059", "0056"])
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_registered_history_refuses_downgrade_atomically(client, registered_film, migrated, target):
     manifest, value = registered_film
     tables = set(inspect(client.app.state.engine).get_table_names())

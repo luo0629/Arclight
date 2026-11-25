@@ -10,7 +10,6 @@ from test_agent_preferences import confirm
 from test_agent_tools import activate_run, create_run
 from test_context_trace import trace
 from test_dependency_validation import registry_version
-from test_generation_budget import set_policy
 from test_model_gateway import request, route
 from test_production_state import finish_text, read
 
@@ -256,7 +255,6 @@ def test_overview_reuses_real_state_and_does_not_mutate_business_or_frozen_input
 def test_snapshot_token_is_stable_across_new_keys_and_rejects_changed_business(
     client, episode, settings
 ):
-    set_policy(client, episode["project_id"], "100")
     registry, run_id, _ = prepare_producer(client, episode, settings)
     first_call = producer_call(run_id, key="first")
     first = observed(client, registry, first_call)
@@ -269,7 +267,7 @@ def test_snapshot_token_is_stable_across_new_keys_and_rejects_changed_business(
     )
     assert fresh["evidence_sha256"] == first["evidence_sha256"]
     assert fresh["read_versions"] == first["read_versions"]
-    set_policy(client, episode["project_id"], "50")
+    quoted_gateway_call(client, episode)
     expired = execute_producer(
         client,
         registry,
@@ -281,7 +279,7 @@ def test_snapshot_token_is_stable_across_new_keys_and_rejects_changed_business(
     assert observed(client, registry, first_call) == first
     current = observed(client, registry, producer_call(run_id, key="current"))
     assert current["evidence_sha256"] != first["evidence_sha256"]
-    assert current["budget"]["project_limit"] == "50.000000"
+    assert current["budget"]["project_costs"]["pending_estimate"] == "2.000000"
     conflict = execute_producer(
         client,
         registry,
@@ -293,27 +291,11 @@ def test_snapshot_token_is_stable_across_new_keys_and_rejects_changed_business(
 def test_budget_retains_pending_unknown_and_exact_zero_without_duplicate_bill(
     client, episode, settings
 ):
-    policy = set_policy(
-        client,
-        episode["project_id"],
-        "100",
-        task_limit="20",
-        episode_limit="80",
-        batch_limit="90",
-        warning_percent=70,
-        max_candidates_per_target=8,
-    )
     call_id = quoted_gateway_call(client, episode)
     registry, run_id, _ = prepare_producer(client, episode, settings)
     query = {"path": "budget"}
     pending = observed(client, registry, producer_call(run_id, query=query))["budget"]
-    assert pending["policy_revision"] == policy["policy_revision"]
-    assert pending["project_limit"] == "100.000000"
-    assert pending["task_limit"] == "20.000000"
-    assert pending["episode_limit"] == "80.000000"
-    assert pending["batch_limit"] == "90.000000"
-    assert pending["warning_percent"] == 70
-    assert pending["max_candidates_per_target"] == 8
+    assert "policy_revision" not in pending and "project_limit" not in pending
     for name in ("project_costs", "episode_costs"):
         assert pending[name]["entry_count"] == 1
         assert pending[name]["actual_cost"] is None
@@ -331,7 +313,7 @@ def test_budget_retains_pending_unknown_and_exact_zero_without_duplicate_bill(
     assert "private-invoice-do-not-expose" not in str(zero)
 
 
-def test_producer_observation_shares_root_limits_and_replay_does_not_spend_another_call(
+def test_producer_observation_shares_root_usage_and_replay_does_not_repeat_the_call(
     client, episode, settings
 ):
     root, actor = bounded_run(client, episode, max_tool_calls=3, max_calls=10)
@@ -344,9 +326,8 @@ def test_producer_observation_shares_root_limits_and_replay_does_not_spend_anoth
     first = observed(client, registry, root_call)
     runtime = first["runtime_budget"]
     assert runtime["root_run_id"] == str(root)
-    assert runtime["limits"]["max_tool_calls"] == 3
-    assert runtime["limits"]["max_calls"] == 10
-    assert datetime.fromisoformat(runtime["deadline_at"]).tzinfo is not None
+    assert "limits" not in runtime
+    assert "deadline_at" not in runtime
     assert runtime["calls"] == runtime["tool_calls"] == 1
     assert runtime["model_calls"] == 0
     assert runtime["actual_cost"] == runtime["pending_estimate"] == "0.000000"
@@ -368,9 +349,9 @@ def test_producer_observation_shares_root_limits_and_replay_does_not_spend_anoth
     )
     assert child_next["runtime_budget"]["tool_calls"] == 3
     assert child_next["evidence_sha256"] == child_first["evidence_sha256"]
-    stopped = execute_producer(client, registry, producer_call(root, key="exhausted"))
-    assert stopped.status == "FAILED" and stopped.error.code == "AGENT_TOOL_CALL_LIMIT"
-    assert len(usage_for(client, root)["actions"]) == 3
+    continued = observed(client, registry, producer_call(root, key="continued"))
+    assert continued["runtime_budget"]["tool_calls"] == 4
+    assert len(usage_for(client, root)["actions"]) == 4
     assert observed(client, registry, root_call) == first
 
 

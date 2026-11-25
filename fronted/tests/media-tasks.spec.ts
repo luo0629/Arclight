@@ -14,7 +14,7 @@ const status = (detail: Locator) =>
 const revision = (detail: Locator) =>
   detail.getByLabel("媒体任务修订", { exact: true });
 const confirmResolve = "我已核实证据及供应商结果，并确认提交此回执";
-const confirmReplay = "我确认创建新任务，并接受重新校验预算";
+const confirmReplay = "我确认使用原输入创建新任务";
 const chooseResult = async (page: Page, detail: Locator, name: string) => {
   await detail.getByRole("combobox", { name: "确认结果", exact: true }).click();
   await page.getByRole("option", { name, exact: true }).click();
@@ -71,7 +71,7 @@ test("UI-05 UI5-01/02/03/04/08：项目列表保留文字入口，历史尝试�
   });
   await expect(costs).toContainText("0.250000 USD");
   await expect(costs).toContainText("未知");
-  await expect(costs).toContainText("预留代表预算占用");
+  await expect(costs).toContainText("最终费用以供应商账单为准");
   await expect(detail).toContainText("ATTEMPT_LIMIT");
   await expect(page.locator("body")).not.toContainText(secret);
   await page.setViewportSize({ width: 1440, height: 1100 });

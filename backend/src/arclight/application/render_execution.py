@@ -18,7 +18,6 @@ from arclight.application.render_versions import register_render_version
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.media.execution import MediaExecutionError, execute_media
-from arclight.media.render_plan import RENDER_TIMEOUT
 from arclight.persistence.models import (
     RenderAttempt,
     RenderExecution,
@@ -74,7 +73,7 @@ def execute_render(factory: sessionmaker[Session], settings: Settings, run_id: U
                 "render",
                 "timeline",
                 plan,
-                timeout=RENDER_TIMEOUT,
+                timeout=None,
                 observer=observer,
             )
             observe(factory, run_id, token, phase="REVALIDATING")

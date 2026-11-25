@@ -148,7 +148,7 @@ def start_outline(
     if service:
         inputs["_text_service"] = service
     if payload.get("professional"):
-        inputs["screenwriter"] = {"agent_limits": payload["agent_limits"]}
+        inputs["screenwriter"] = {}
     run = WorkflowRun(
         episode_id=episode_id,
         trace_id=request_id,

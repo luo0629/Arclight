@@ -25,6 +25,7 @@ def snapshot(factory):
         }
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_0053_roundtrip_preserves_old_events_receipts_outbox_and_guards(client, episode, migrated):
     _, identity = media(client, episode)
     consume(client, identity)
@@ -51,6 +52,7 @@ def test_0053_roundtrip_preserves_old_events_receipts_outbox_and_guards(client, 
             )
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_0053_refuses_downgrade_with_review_event_and_keeps_entire_schema(
     client, episode, migrated
 ):

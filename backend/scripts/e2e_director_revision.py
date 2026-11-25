@@ -54,7 +54,10 @@ def respond(seed, payload):
         scene for scene in seed["script"]["scenes"] if scene["scene_id"] == location["scene_id"]
     )
     shot = copy.deepcopy(scene["shots"][0])
-    shot["dialogue_line_ids"] = [line["line_id"] for line in script["dialogue"]]
+    if "导演检查持续遗漏" in script.get("notes", ""):
+        shot["visual_description"] += f" 修订构图第 {seed['round'] + 1} 次。"
+    else:
+        shot["dialogue_line_ids"] = [line["line_id"] for line in script["dialogue"]]
     return _tool(
         "repair-dialogue",
         parameters

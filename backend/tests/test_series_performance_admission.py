@@ -207,7 +207,7 @@ def test_performance_run_rejects_legacy_source_before_queuing(client, episode):
         json={
             "script_version_id": script["id"],
             "professional": True,
-            "director_revision_rounds": 2,
+            "director_revision_rounds": 3,
             "performance": True,
         },
     )

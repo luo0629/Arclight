@@ -4,7 +4,6 @@ import base64
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -13,13 +12,13 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
+from test_agent_limits import configure_with_historical_limits
 from test_agent_model import FinalResult, add_image, call_response, model_request
 from test_agent_model import model_service as model_service
 from test_agent_tools import activate_run, create_entry, create_run, grant
 from test_asset_versions import image_bytes
 from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
-from test_generation_budget import set_policy
 
 from arclight.application.agent_limits import action_usage
 from arclight.application.agent_runtime import run_agent_loop
@@ -32,7 +31,6 @@ from arclight.domain.agent_runtime import AgentDecision, AgentLoopResult, HumanD
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
-from arclight.persistence.base import utcnow
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import AgentToolGrant, AgentToolInvocation, User, WorkflowRun
 
@@ -67,11 +65,10 @@ def final(decision="COMPLETE", **patch):
     }
 
 
-def setup_loop(client, episode, settings, *, quote="0", allowed=None, attempts=1):
+def setup_loop(client, episode, settings, *, quote="0", allowed=None):
     settings.model_gateway_policy = GatewayPolicy(
         text_maximum_cost=Decimal(quote) if quote is not None else None,
         pricing_version="runtime-test:1" if quote is not None else "unconfigured",
-        max_attempts=attempts,
     )
     run_id = create_run(client, episode, key=uuid4().hex)
     actor = activate_run(client, run_id, episode["id"])
@@ -93,15 +90,22 @@ def setup_loop(client, episode, settings, *, quote="0", allowed=None, attempts=1
 
 
 def run_loop(client, settings, run_id, registry, *, limits=None, seed=None, **kwargs):
+    if limits is not None:
+        seed_historical_control(client, run_id, limits)
     return run_agent_loop(
         client.app.state.session_factory,
         settings,
         seed or model_request(run_id),
         registry,
         FinalResult,
-        limits=limits,
         **kwargs,
     )
+
+
+def seed_historical_control(client, run_id, limits):
+    with client.app.state.session_factory.begin() as db:
+        actor = execution_actor(db, db.get(WorkflowRun, run_id))
+        configure_with_historical_limits(db, run_id, actor, limits.model_dump(mode="json"))
 
 
 def tool_feedback(payload):
@@ -292,25 +296,23 @@ def test_human_escalation_returns_validated_question_and_stops(
 
 
 @pytest.mark.parametrize(
-    "patch, code, tool_count",
+    "patch",
     [
-        ({"max_steps": 1}, "AGENT_STEP_LIMIT", 1),
-        ({"max_calls": 1}, "AGENT_CALL_LIMIT", 0),
-        ({"max_model_calls": 1}, "AGENT_MODEL_CALL_LIMIT", 1),
-        ({"max_tool_calls": 0}, "AGENT_TOOL_CALL_LIMIT", 0),
-        ({"max_agent_calls": 1}, "AGENT_AGENT_CALL_LIMIT", 0),
-        ({"max_steps": 0}, "AGENT_STEP_LIMIT", 0),
-        ({"max_model_calls": 0}, "AGENT_MODEL_CALL_LIMIT", 0),
+        {"max_steps": 1},
+        {"max_calls": 1},
+        {"max_model_calls": 1},
+        {"max_tool_calls": 0},
+        {"max_agent_calls": 1},
+        {"max_steps": 0},
+        {"max_model_calls": 0},
     ],
 )
-def test_loop_uses_real_shared_limits_and_stops_without_more_io(
+def test_loop_can_deliver_after_crossing_historical_action_limits(
     client,
     episode,
     settings,
     model_service,
     patch,
-    code,
-    tool_count,
 ):
     run_id, _, registry = setup_loop(client, episode, settings)
     entry = create_entry(client, episode["project_id"])
@@ -318,6 +320,8 @@ def test_loop_uses_real_shared_limits_and_stops_without_more_io(
 
     def respond(request):
         sent.append(request)
+        if len(sent) == 3:
+            return httpx.Response(200, json=final())
         return httpx.Response(
             200,
             json=call_response(
@@ -331,9 +335,8 @@ def test_loop_uses_real_shared_limits_and_stops_without_more_io(
 
     model_service(respond)
     result = run_loop(client, settings, run_id, registry, limits=AgentRunLimits(**patch))
-    assert result.status == "STOPPED" and result.stop_code == code
-    assert len(sent) == (0 if 0 in (patch.get("max_steps"), patch.get("max_model_calls")) else 1)
-    assert len(rows_for(client, run_id)["invocations"]) == tool_count
+    assert result.status == "COMPLETED" and len(sent) == 3
+    assert len(rows_for(client, run_id)["invocations"]) == 2
 
 
 @pytest.mark.parametrize(
@@ -342,7 +345,6 @@ def test_loop_uses_real_shared_limits_and_stops_without_more_io(
         ("cancel", "AGENT_CANCELLED"),
         ("disabled", "FORBIDDEN"),
         ("frozen", "AGENT_INPUT_CHANGED"),
-        ("deadline", "AGENT_DEADLINE_EXCEEDED"),
         ("grant", "USER_NOT_AUTHORIZED"),
     ],
 )
@@ -387,12 +389,6 @@ def test_mutation_during_model_io_is_rechecked_before_tools(
             elif kind == "grant":
                 row = db.scalar(select(AgentToolGrant).where(AgentToolGrant.run_id == run_id))
                 row.allowed_tools_json = []
-            else:
-                deadline = db.get(AgentRunLimit, run_id).deadline_at
-                monkeypatch.setattr(
-                    "arclight.application.agent_limits.utcnow",
-                    lambda: deadline.replace(tzinfo=utcnow().tzinfo) + timedelta(seconds=1),
-                )
         return httpx.Response(
             200,
             json=call_response(
@@ -457,23 +453,21 @@ def test_domain_final_validation_runs_before_delivery(client, episode, settings,
 
 
 @pytest.mark.parametrize(
-    "quote, unknown, code",
+    "quote, unknown",
     [
-        (None, False, "BUDGET_QUOTE_UNAVAILABLE"),
-        ("1", False, "AGENT_BUDGET_EXCEEDED"),
-        ("1", True, "GATEWAY_RECONCILIATION_REQUIRED"),
+        (None, False),
+        ("1", False),
+        ("1", True),
     ],
 )
-def test_missing_quote_budget_exhaustion_and_unknown_result_preserve_accounting(
+def test_missing_quote_and_unknown_result_preserve_accounting(
     client,
     episode,
     settings,
     model_service,
     quote,
     unknown,
-    code,
 ):
-    set_policy(client, episode["project_id"], "100")
     run_id, _, registry = setup_loop(client, episode, settings, quote=quote)
     entry = create_entry(client, episode["project_id"])
     sent = []
@@ -482,6 +476,8 @@ def test_missing_quote_budget_exhaustion_and_unknown_result_preserve_accounting(
         sent.append(request)
         if unknown:
             raise httpx.ReadError("private network diagnostic")
+        if len(sent) == 2:
+            return httpx.Response(200, json=final())
         return httpx.Response(
             200,
             json=call_response(
@@ -496,29 +492,41 @@ def test_missing_quote_budget_exhaustion_and_unknown_result_preserve_accounting(
     model_service(respond)
     limits = AgentRunLimits(maximum_cost="1")
     result = run_loop(client, settings, run_id, registry, limits=limits)
-    assert result.status == "STOPPED" and result.stop_code == code
-    assert len(sent) == (0 if quote is None else 1)
     rows = rows_for(client, run_id)
-    assert rows["actual"] == 0 and rows["pending"] == (0 if quote is None else 1)
+    assert rows["actual"] == 0
     if unknown:
+        assert result.status == "STOPPED" and result.stop_code == "GATEWAY_RECONCILIATION_REQUIRED"
+        assert len(sent) == rows["pending"] == 1
         assert rows["receipts"] == [("RESULT_UNKNOWN", None, "PROVIDER_UNAVAILABLE")]
+    else:
+        assert result.status == "COMPLETED" and len(sent) == 2
+        assert rows["pending"] == (0 if quote is None else 2)
 
 
-def test_completion_is_allowed_at_the_exact_call_limit(client, episode, settings, model_service):
+@pytest.mark.parametrize("deliver", [True, False])
+def test_agent_loop_enforces_the_turn_limit_without_losing_tool_receipts(
+    client, episode, settings, model_service, monkeypatch, deliver
+):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
     run_id, _, registry = setup_loop(client, episode, settings)
-    model_service(lambda request: httpx.Response(200, json=final()))
-    result = run_loop(
-        client,
-        settings,
-        run_id,
-        registry,
-        limits=AgentRunLimits(
-            max_calls=1,
-            max_model_calls=1,
-            max_steps=1,
-        ),
-    )
-    assert result.status == "COMPLETED" and len(rows_for(client, run_id)["actions"]) == 1
+    entry = create_entry(client, episode["project_id"])
+    sent = []
+
+    def respond(request):
+        sent.append(request)
+        if deliver and len(sent) == 2:
+            return httpx.Response(200, json=final())
+        return httpx.Response(
+            200,
+            json=call_response((f"read-{len(sent)}", "read_story_entry", {"entry_id": str(entry)})),
+        )
+
+    model_service(respond)
+    result = run_loop(client, settings, run_id, registry)
+    assert result.model_turns == len(sent) == 2
+    assert result.status == ("COMPLETED" if deliver else "STOPPED")
+    assert result.stop_code == (None if deliver else "AGENT_MODEL_CALL_LIMIT")
+    assert len(rows_for(client, run_id)["invocations"]) == (1 if deliver else 2)
 
 
 def test_human_and_outcome_contracts_reject_conflicts_and_unbounded_options():
@@ -594,7 +602,7 @@ def test_batch_rechecks_grant_after_each_tool_and_stops_remaining_actions(
     assert len(rows_for(client, run_id)["invocations"]) == 1
 
 
-def test_context_overflow_stops_without_truncating_required_input(
+def test_large_context_reaches_provider_without_truncating_required_input(
     client,
     episode,
     settings,
@@ -602,13 +610,22 @@ def test_context_overflow_stops_without_truncating_required_input(
 ):
     run_id, _, registry = setup_loop(client, episode, settings)
     seen = []
-    model_service(lambda request: seen.append(request))
-    seed = model_request(
-        run_id, messages=[{"role": "user", "data": {"part": n}} for n in range(128)]
+    model_service(
+        lambda request: (
+            seen.append(json.loads(request.content)) or httpx.Response(200, json=final())
+        )
     )
+    messages = [{"role": "user", "data": {"part": n}} for n in range(128)]
+    seed = model_request(run_id, messages=messages)
     outcome = run_loop(client, settings, run_id, registry, seed=seed)
-    assert outcome.status == "STOPPED" and outcome.stop_code == "AGENT_CONTEXT_LIMIT"
-    assert seen == [] and rows_for(client, run_id)["actions"] == []
+    assert outcome.status == "COMPLETED" and outcome.model_turns == 1
+    assert len(seen) == len(rows_for(client, run_id)["actions"]) == 1
+    sent = [
+        json.loads(message["content"])["data"]
+        for message in seen[0]["messages"]
+        if message["role"] == "user"
+    ]
+    assert [message for message in sent if "part" in message] == [row["data"] for row in messages]
 
 
 def test_new_loop_rejects_forged_model_and_tool_history_before_admission(
@@ -821,20 +838,19 @@ def test_new_image_evidence_is_consumed_by_the_next_turn_through_controlled_read
 
 
 @pytest.mark.parametrize(
-    "limits, code",
+    "limits",
     [
-        ({"max_calls": 2}, "AGENT_CALL_LIMIT"),
-        ({"max_agent_calls": 2}, "AGENT_AGENT_CALL_LIMIT"),
-        ({"max_steps": 2}, "AGENT_STEP_LIMIT"),
+        {"max_calls": 2},
+        {"max_agent_calls": 2},
+        {"max_steps": 2},
     ],
 )
-def test_postgres_parallel_child_loops_share_root_admission_limits(
+def test_postgres_parallel_child_loops_complete_past_historical_limits(
     client,
     episode,
     settings,
     model_service,
     limits,
-    code,
 ):
     require_postgres(settings)
     root_id, _, root_registry = setup_loop(client, episode, settings)
@@ -867,7 +883,6 @@ def test_postgres_parallel_child_loops_share_root_admission_limits(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(run_child, children))
-    assert sorted(item.status for item in results) == ["COMPLETED", "STOPPED"]
-    assert next(item for item in results if item.status == "STOPPED").stop_code == code
-    assert len(sent) == 2
-    assert len(rows_for(client, root_id)["actions"]) == 2
+    assert [item.status for item in results] == ["COMPLETED", "COMPLETED"]
+    assert len(sent) == 3
+    assert len(rows_for(client, root_id)["actions"]) == 3

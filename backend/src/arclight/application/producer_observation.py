@@ -1,6 +1,7 @@
 """Observe current Producer facts without granting model-controlled state authority."""
 
 from contextlib import suppress
+from dataclasses import dataclass
 from uuid import UUID, uuid5
 
 from pydantic import TypeAdapter, ValidationError
@@ -15,7 +16,7 @@ from arclight.application.costs import cost_facts
 from arclight.application.gateway_accounting import latest_receipt
 from arclight.application.gateway_text import execution_actor
 from arclight.application.human_reviews import require_review_actor, review_blocker
-from arclight.application.model_gateway import lock_gate, utc
+from arclight.application.model_gateway import lock_gate
 from arclight.application.producer_delegation import (
     require_producer_parent,
     validate_producer_task,
@@ -609,10 +610,8 @@ def _tasks(
             or any(key in affected for key in planned.depends_on)
             or (
                 requested
-                and (
-                    request.trigger == "BUDGET_CHANGED"
-                    or (request.trigger == "HUMAN_DECISION" and human_adjustment)
-                )
+                and request.trigger == "HUMAN_DECISION"
+                and human_adjustment
                 and child is None
             )
         ):
@@ -661,6 +660,10 @@ def _stable_research(result: InvestigateProjectResult) -> dict:
     stable = result.model_dump(
         mode="json", exclude={"read_at", "evidence_sha256", "runtime_budget"}
     )
+    for read in stable["read_versions"]:
+        if read["kind"] == "project":
+            # The project checksum captures planning inputs. Keep the timestamp in the saved read.
+            read.pop("updated_at")
     if stable["budget"] is not None:
         stable["budget"].pop("project_costs")
         stable["budget"].pop("episode_costs")
@@ -678,23 +681,57 @@ def _stable_research(result: InvestigateProjectResult) -> dict:
     return stable
 
 
-def _snapshot(request: ProducerObservationRequest, observation: ProducerObservation) -> str:
+def _snapshot(request: dict, observation: dict) -> str:
     return digest(
         {
-            "request": request.model_dump(mode="json"),
-            "overview": observation.overview.model_dump(mode="json"),
-            "reviews": observation.reviews.model_dump(mode="json"),
-            "tasks": [task.model_dump(mode="json") for task in observation.tasks],
-            "affected_task_keys": observation.affected_task_keys,
-            "authority_sha256": observation.authority_sha256,
-            "human_evidence": observation.human_evidence.model_dump(mode="json")
-            if observation.human_evidence
-            else None,
-            "stage_receipt": observation.stage_receipt.model_dump(mode="json")
-            if observation.stage_receipt
-            else None,
+            "request": request,
+            **{
+                field: observation[field]
+                for field in (
+                    "overview",
+                    "reviews",
+                    "tasks",
+                    "affected_task_keys",
+                    "authority_sha256",
+                    "human_evidence",
+                    "stage_receipt",
+                )
+            },
         }
     )
+
+
+@dataclass(frozen=True)
+class FrozenProducerObservation:
+    request_json: dict
+    observation_json: dict
+    observation: ProducerObservation
+
+
+def _observation_view(value: dict) -> ProducerObservation:
+    # Verify the original JSON separately. Only retire policy fields in the read view.
+    retired = {
+        "budget": {
+            "project_limit",
+            "policy_revision",
+            "task_limit",
+            "episode_limit",
+            "batch_limit",
+            "warning_percent",
+            "max_candidates_per_target",
+        },
+        "runtime_budget": {"limits", "deadline_at"},
+    }
+    projected = dict(value)
+    for name in ("overview", "reviews"):
+        research = dict(value[name])
+        for field, fields in retired.items():
+            if research[field] is not None:
+                research[field] = {
+                    key: val for key, val in research[field].items() if key not in fields
+                }
+        projected[name] = research
+    return ProducerObservation.model_validate(projected)
 
 
 def _collect(
@@ -734,8 +771,6 @@ def _collect(
             "base_plan_id": str(record.plan_id),
             "base_plan_sha256": record.plan_sha256,
             "root_input": scope_for_run(root, control.project_id).input_sha256,
-            "limits": control.limits_json,
-            "deadline_at": utc(control.deadline_at).isoformat(),
             "overview": _stable_research(overview),
             "reviews": _stable_research(reviews),
             "tasks": [task.model_dump(mode="json") for task in tasks],
@@ -765,52 +800,67 @@ def _collect(
         human_evidence=human,
         stage_receipt=stage_receipt,
     )
-    return observation.model_copy(update={"snapshot_sha256": _snapshot(request, observation)})
+    checksum = _snapshot(request.model_dump(mode="json"), observation.model_dump(mode="json"))
+    return observation.model_copy(update={"snapshot_sha256": checksum})
 
 
-def _saved(db: Session, root: WorkflowRun, control: AgentRunLimit, identity: UUID):
+def _saved(
+    db: Session, root: WorkflowRun, control: AgentRunLimit, identity: UUID
+) -> FrozenProducerObservation | None:
     binding = find_binding(db, control.project_id, OBSERVATION_KIND, identity)
     if binding is None:
         return None
     try:
         data = binding.snapshot_json
-        request = ProducerObservationRequest.model_validate(data["request"])
-        observation = ProducerObservation.model_validate(data["observation"])
+        request = data["request"]
+        frozen = data["observation"]
         if (
-            data["request_sha256"] != digest(request.model_dump(mode="json"))
-            or observation.id != identity
-            or observation.run_id != root.id
-            or observation.project_id != control.project_id
-            or observation.episode_id != root.episode_id
-            or observation.base_plan_id != request.base_plan_id
-            or observation.base_plan_sha256 != request.base_plan_sha256
-            or observation.trigger != request.trigger
-            or observation.reason != request.reason
-            or observation.source_event_id != request.source_event_id
-            or observation.human_decision_id != request.human_decision_id
-            or observation.snapshot_sha256 != _snapshot(request, observation)
+            data["request_sha256"] != digest(request)
+            or frozen["id"] != str(identity)
+            or frozen["run_id"] != str(root.id)
+            or frozen["project_id"] != str(control.project_id)
+            or frozen["episode_id"] != str(root.episode_id)
+            or any(
+                frozen[field] != request[field]
+                for field in (
+                    "base_plan_id",
+                    "base_plan_sha256",
+                    "trigger",
+                    "reason",
+                    "source_event_id",
+                    "human_decision_id",
+                )
+            )
+            or frozen["snapshot_sha256"] != _snapshot(request, frozen)
         ):
             raise ValueError("Observation identity or digest changed")
-    except (ValidationError, KeyError, ValueError, TypeError) as exc:
+        observation = _observation_view(frozen)
+    except (ValidationError, KeyError, ValueError, TypeError, AttributeError) as exc:
         raise DomainError("PRODUCER_OBSERVATION_CONFLICT", "持久观察合同无效", 409) from exc
-    if request.human_decision_id is not None:
-        formal = db.get(HumanReviewDecision, request.human_decision_id, populate_existing=True)
-        agent = db.get(AgentLoopDecision, request.human_decision_id, populate_existing=True)
+    if observation.human_decision_id is not None:
+        formal = db.get(HumanReviewDecision, observation.human_decision_id, populate_existing=True)
+        agent = db.get(AgentLoopDecision, observation.human_decision_id, populate_existing=True)
         subject = formal.actor_id if formal else agent.actor_id if agent else None
         if subject is None:
             raise DomainError("PRODUCER_OBSERVATION_CONFLICT", "观察的人工决定已丢失", 409)
         require_review_actor(db, control.project_id, subject, owner=formal is not None)
-    return request, observation
+    return FrozenProducerObservation(request, frozen, observation)
+
+
+def read_frozen_observation(
+    db: Session, run_id: UUID, observation_id: UUID, actor: str
+) -> FrozenProducerObservation:
+    root, control = _root(db, run_id, actor)
+    saved = _saved(db, root, control, observation_id)
+    if saved is None:
+        raise DomainError("NOT_FOUND", "生产观察不存在", 404)
+    return saved
 
 
 def read_observation(
     db: Session, run_id: UUID, observation_id: UUID, actor: str
 ) -> ProducerObservation:
-    root, control = _root(db, run_id, actor)
-    saved = _saved(db, root, control, observation_id)
-    if saved is None:
-        raise DomainError("NOT_FOUND", "生产观察不存在", 404)
-    return saved[1]
+    return read_frozen_observation(db, run_id, observation_id, actor).observation
 
 
 def validate_observation_current(
@@ -823,9 +873,12 @@ def validate_observation_current(
     current_root, control = _root(db, root.id, actor)
     _require_research(db, current_root, actor, settings)
     saved = _saved(db, current_root, control, observation.id)
-    if saved is None or saved[1] != observation:
+    if saved is None or saved.observation != observation:
         raise DomainError("PRODUCER_OBSERVATION_CONFLICT", "重规划须引用原持久观察", 409)
-    request, _ = saved
+    try:
+        request = ProducerObservationRequest.model_validate(saved.request_json)
+    except ValidationError as exc:
+        raise DomainError("PRODUCER_OBSERVATION_STALE", "请按当前生产状态重新观察", 409) from exc
     record = _base(db, current_root, control, actor, request)
     current = _collect(
         db,
@@ -863,7 +916,6 @@ def _claim_request(
     allowed = {"NONE"} if request.source_event_id is None else {"CONSUME"}
     if request.source_event_id is not None and request.trigger in {
         "RECHECK",
-        "BUDGET_CHANGED",
         "HUMAN_DECISION",
     }:
         allowed.add("RECHECK")
@@ -917,15 +969,16 @@ def observe_producer(
 ) -> ProducerObservation:
     request_id = TypeAdapter(IdempotencyKey).validate_python(request_id)
     request = ProducerObservationRequest.model_validate(request.model_dump(mode="json"))
+    request_json = request.model_dump(mode="json")
     identity = uuid5(run_id, "producer-observation:" + request_id)
     with factory.begin() as db:
         root, control = _root(db, run_id, actor)
         _require_research(db, root, actor, settings)
         saved = _saved(db, root, control, identity)
         if saved is not None:
-            if saved[0] != request:
+            if saved.request_json != request_json:
                 raise DomainError("PRODUCER_OBSERVATION_CONFLICT", "观察键已有不同请求", 409)
-            return saved[1]
+            return saved.observation
         record = _base(db, root, control, actor, request)
         _human(db, root, control, record, request.human_decision_id)
         if request.source_event_id is not None:
@@ -943,9 +996,9 @@ def observe_producer(
         _require_research(db, root, actor, settings)
         saved = _saved(db, root, control, identity)
         if saved is not None:
-            if saved[0] != request:
+            if saved.request_json != request_json:
                 raise DomainError("PRODUCER_OBSERVATION_CONFLICT", "观察键已有不同请求", 409)
-            return saved[1]
+            return saved.observation
         record = _base(db, root, control, actor, request)
         previous = db.scalars(
             select(VersionBinding).where(
@@ -971,8 +1024,8 @@ def observe_producer(
             identity,
             {
                 "schema_version": 1,
-                "request": request.model_dump(mode="json"),
-                "request_sha256": digest(request.model_dump(mode="json")),
+                "request": request_json,
+                "request_sha256": digest(request_json),
                 "observation": observation.model_dump(mode="json"),
             },
         )

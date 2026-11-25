@@ -121,8 +121,6 @@ def voice_clips(
     lines = {line.line_id: line for line in map(AudioLine.model_validate, snapshot.lines_json)}
     if not set(audio_versions) <= lines.keys():
         raise DomainError("SHORT_DRAMA_AUDIO_SCOPE", "配音输入须引用本剧本的精确台词", 422)
-    if len(lines) > 128:
-        raise DomainError("SHORT_DRAMA_AUDIO_LIMIT", "单集自动字幕最多支持 128 句台词", 422)
     tracks = {track.kind: track for track in timeline.snapshot.tracks}
     voices = list(tracks["VOICE"].clips)
     synced = {(clip.shot_id, clip.line_id): clip for clip in voices}

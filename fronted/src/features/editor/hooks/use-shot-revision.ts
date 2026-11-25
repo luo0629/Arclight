@@ -171,8 +171,9 @@ export default function useShotRevision(
       if (
         !matches(next.source) ||
         !/^[0-9a-f]{64}$/.test(next.confirmation_digest) ||
-        !/^\d+(\.\d{1,6})?$/.test(next.quote.maximum_cost) ||
-        next.quote.currency !== "USD"
+        (next.quote !== null &&
+          (!/^\d+(\.\d{1,6})?$/.test(next.quote.maximum_cost) ||
+            next.quote.currency !== "USD"))
       )
         throw new Error("修订预览与当前精确候选或可信报价不一致。");
       if (live.current && !permissionLost.current) setPreview(next);

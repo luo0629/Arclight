@@ -30,8 +30,10 @@ def reservation_for(
     )
 
 
-def reserve_next(db: Session, job: GenerationJob, amount: Decimal) -> GenerationBudgetReservation:
-    """Caller holds the project lock and has checked scoped budget admission."""
+def reserve_next(
+    db: Session, job: GenerationJob, amount: Decimal | None
+) -> GenerationBudgetReservation:
+    """Caller holds the project lock and has checked execution scope."""
     row = reservation_for(db, job.id, job.attempt_count + 1)
     if row is not None:
         settled = db.scalar(
@@ -47,13 +49,6 @@ def reserve_next(db: Session, job: GenerationJob, amount: Decimal) -> Generation
             return row
     else:
         sequence = 1
-    from arclight.application.art_concept_jobs import enforce_concept_reservation
-
-    enforce_concept_reservation(db, job, amount)
-    from arclight.application.short_drama_budget import check_budget, root_for_job
-
-    if (root := root_for_job(db, job)) is not None:
-        check_budget(db, root, job.project_id, amount)
     row = GenerationBudgetReservation(
         job_id=job.id,
         attempt_no=job.attempt_count + 1,
@@ -74,7 +69,7 @@ def reserve_next(db: Session, job: GenerationJob, amount: Decimal) -> Generation
             "reservation_id": str(row.id),
             "attempt_no": row.attempt_no,
             "sequence": row.sequence,
-            "amount": format(amount, ".6f"),
+            "amount": format(amount, ".6f") if amount is not None else None,
             "currency": "USD",
         },
     )
@@ -127,8 +122,10 @@ def settle(
             "attempt_no": reservation.attempt_no,
             "source": source,
             "cost": format(cost, ".6f"),
-            "released": format(reservation.amount - cost, ".6f"),
-            "over_quote": cost > reservation.amount,
+            "released": format(reservation.amount - cost, ".6f")
+            if reservation.amount is not None
+            else None,
+            "over_quote": cost > reservation.amount if reservation.amount is not None else None,
             "evidence_reference": evidence,
         },
     )
@@ -204,7 +201,7 @@ def costs(
         elif not (
             job.id == exclude_pending_job and reservation.attempt_no == job.attempt_count + 1
         ):
-            pending += reservation.amount
+            pending += reservation.amount or Decimal(0)
     # Costs predating quotes still count, but their historical records remain untouched.
     legacy = (
         select(GenerationAttempt.cost)

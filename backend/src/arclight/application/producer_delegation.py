@@ -7,8 +7,6 @@ from sqlalchemy.orm import Session
 
 from arclight.agents.contracts import read_script_content
 from arclight.application.agent_limits import (
-    action_usage,
-    delegation_count,
     validate_agent_execution,
 )
 from arclight.application.agent_runtime_state import scope_for_run
@@ -27,14 +25,12 @@ from arclight.application.producer_series import (
     delegated_context,
     has_series_scope,
     require_episode_prerequisites,
-    require_known_costs,
     task_context,
     validate_series_plan,
     validate_task_context,
 )
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.continuity_reviews import ReviewTarget
 from arclight.domain.continuity_workflow import CandidateReviewCreate
@@ -51,6 +47,7 @@ from arclight.domain.producer_series import (
     PRODUCER_VERSIONS,
     SeriesTaskContext,
 )
+from arclight.domain.screenwriter_creation import AUTOMATIC_REVISION_ROUNDS
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.generation_candidates import GenerationCandidate
@@ -257,7 +254,6 @@ def validate_saved_child(
     control: AgentRunLimit,
     series_context: SeriesTaskContext | None = None,
 ) -> None:
-    from arclight.application.model_gateway import utc
 
     child = context.db.get(WorkflowRun, previous.child_run_id, populate_existing=True)
     child_control = context.db.get(AgentRunLimit, previous.child_run_id)
@@ -288,8 +284,6 @@ def validate_saved_child(
         or child_control.actor_id != context.actor_id
         or child_control.project_id != context.project_id
         or child_control.depth != control.depth + 1
-        or child_control.limits_json != control.limits_json
-        or utc(child_control.deadline_at) != utc(control.deadline_at)
         or child_control.input_sha256 != scope_for_run(child, context.project_id).input_sha256
         or previous.root_run_id != root.id
         or previous.task_kind != planned.task.kind
@@ -352,21 +346,6 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
     dependency_scripts = require_episode_prerequisites(
         db, root, plan, planned, selected, context.actor_id
     )
-    require_known_costs(db, root, context.actor_id)
-    limits = AgentRunLimits.model_validate(control.limits_json)
-    if control.depth + 1 > limits.max_delegation_depth:
-        raise DomainError("AGENT_DELEGATION_DEPTH", "Agent 委派深度已达上限", 409)
-    if delegation_count(db, control.root_run_id) >= limits.max_delegations:
-        raise DomainError("AGENT_DELEGATION_LIMIT", "Agent 委派次数已达上限", 409)
-    usage = action_usage(db, control.root_run_id)
-    if (has_series_scope(root) and usage["unknown_cost"]) or (
-        limits.maximum_cost is not None
-        and (
-            usage["unknown_cost"]
-            or usage["actual_cost"] + usage["pending_estimate"] > limits.maximum_cost
-        )
-    ):
-        raise DomainError("AGENT_COST_LIMIT", "已有用量不允许新生产委派", 409)
     record = read_plan_record(db, context.project_id, request.plan_id, context.actor_id)
     origin = canonical_task(record, planned.task_key)
     identity = uuid5(root.id, "producer-delegation:" + str(origin.plan_id) + ":" + origin.task_key)
@@ -382,9 +361,8 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
             str(identity),
             root.trace_id,
             professional=True,
-            revision_rounds=task.revision_rounds,
+            revision_rounds=AUTOMATIC_REVISION_ROUNDS,
             settings=settings,
-            agent_limits=limits,
             producer_parent_run_id=root.id,
             narrative=selected.narrative if selected else None,
             producer_context=shared_context,
@@ -405,10 +383,9 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
             root.trace_id,
             script_version_id=task.script_version_id,
             professional_director=True,
-            director_revision_rounds=task.director_revision_rounds,
+            director_revision_rounds=AUTOMATIC_REVISION_ROUNDS,
             director_art_collaboration=task.art_collaboration,
             settings=settings,
-            agent_limits=limits,
             producer_parent_run_id=root.id,
             performance=performance,
             producer_context=shared_context,
@@ -425,7 +402,6 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
             art_task=task.task,
             art_concept_plan=task.concept_plan,
             settings=settings,
-            agent_limits=limits,
             producer_parent_run_id=root.id,
             producer_context=shared_context,
         )
@@ -438,9 +414,7 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
             context.project_id,
             task.candidate_id,
             context.actor_id,
-            CandidateReviewCreate(
-                storyboard_id=task.storyboard_id, shot_id=task.shot_id, agent_limits=limits
-            ),
+            CandidateReviewCreate(storyboard_id=task.storyboard_id, shot_id=task.shot_id),
             producer_parent_run_id=root.id,
             producer_context=shared_context,
         )

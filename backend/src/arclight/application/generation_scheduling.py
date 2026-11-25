@@ -1,6 +1,6 @@
-"""Database-serialized admission and persistent, bounded retry decisions."""
+"""Database-serialized admission and persistent media retry decisions."""
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from uuid import UUID
 
 from sqlalchemy import select
@@ -23,14 +23,15 @@ from arclight.persistence.generation_scheduling import (
     GenerationDeadLetter,
     GenerationSchedule,
 )
+from arclight.persistence.model_gateway import GatewayReceipt
+
+MAX_AUTOMATIC_ATTEMPTS = 3
 
 
 def schedule_for(
     db: Session,
     job: GenerationJob,
     policy: ExecutionPolicy = DEFAULT_EXECUTION_POLICY,
-    *,
-    parent_deadline: datetime | None = None,
 ) -> GenerationSchedule:
     row = db.scalar(select(GenerationSchedule).where(GenerationSchedule.job_id == job.id))
     if row is None:
@@ -40,13 +41,9 @@ def schedule_for(
                 str(job.project_id), policy.project_concurrency
             )
         }
-        deadline = leases.utc(job.created_at) + timedelta(seconds=policy.max_elapsed_seconds)
-        if parent_deadline is not None:
-            deadline = min(deadline, leases.utc(parent_deadline))
         row = GenerationSchedule(
             job_id=job.id,
             policy_json=snapshot,
-            deadline_at=deadline,
             next_attempt_at=leases.clock(db),
         )
         db.add(row)
@@ -55,7 +52,11 @@ def schedule_for(
 
 
 def policy_for(db: Session, job: GenerationJob) -> ExecutionPolicy:
-    return ExecutionPolicy.model_validate(schedule_for(db, job).policy_json)
+    snapshot = schedule_for(db, job).policy_json
+    # Historical schedules remain immutable. The active policy uses current fields.
+    return ExecutionPolicy.model_validate(
+        {name: value for name, value in snapshot.items() if name in ExecutionPolicy.model_fields}
+    )
 
 
 def diagnose(
@@ -79,7 +80,6 @@ def diagnose(
             diagnostic_json={
                 "attempt_count": job.attempt_count,
                 "status": job.status,
-                "deadline_at": leases.utc(schedule.deadline_at).isoformat(),
                 "policy": schedule.policy_json,
             },
         )
@@ -96,24 +96,21 @@ def diagnose(
     return row
 
 
-def within_limits(
-    db: Session, job: GenerationJob, *, submitting: bool = False, error: str | None = None
-) -> bool:
-    schedule = schedule_for(db, job)
-    policy = ExecutionPolicy.model_validate(schedule.policy_json)
-    reason = None
-    if leases.clock(db) >= leases.utc(schedule.deadline_at):
-        reason = "TIME_LIMIT"
-    elif job.attempt_count >= policy.max_attempts:
-        reason = "ATTEMPT_LIMIT"
-    if reason is None:
-        return True
-    schedule.blocked_code = reason
-    diagnose(db, job, reason, error)
-    if submitting and job.status in {Status.CREATED, Status.RETRY_WAIT}:
-        # No current submission exists in either queue state: fail only the job.
-        transition(db, job.id, Status.FAILED, job.revision)
-    return False
+def latest_media_receipt(db: Session, job: GenerationJob) -> GatewayReceipt | None:
+    from arclight.application.gateway_accounting import latest_receipt
+    from arclight.persistence.generation import GenerationAttempt
+    from arclight.persistence.model_gateway import GatewayCall
+
+    call = db.scalar(
+        select(GatewayCall.id)
+        .join(GenerationAttempt, GenerationAttempt.id == GatewayCall.generation_attempt_id)
+        .where(
+            GenerationAttempt.job_id == job.id, GenerationAttempt.attempt_no == job.attempt_count
+        )
+        .order_by(GatewayCall.sequence.desc())
+        .limit(1)
+    )
+    return latest_receipt(db, call) if call is not None else None
 
 
 def retry_after_failure(
@@ -127,33 +124,53 @@ def retry_after_failure(
 ) -> bool:
     if job.cancel_requested_at is not None:
         return False
-    if not within_limits(db, job, error=error):
-        return False
-    policy = policy_for(db, job)
-    if error not in policy.retry_errors:
-        diagnose(db, job, "NOT_RETRYABLE", error)
-        return False
-    if automatic and not not_accepted and error not in policy.automatic_retry_errors:
-        return False
-    from arclight.application.generation_budget import check_execution
-    from arclight.domain.generation_requests import GenerationSpec
-    from arclight.persistence.models import DependencyManifest
+    balance_retry = error == "ACCOUNT_BALANCE_INSUFFICIENT"
+    if balance_retry:
+        from arclight.application.gateway_accounting import balance_rejected
 
-    manifest = db.get(DependencyManifest, job.input_manifest_id)
-    assert manifest is not None
-    spec = GenerationSpec.model_validate(manifest.snapshot_json["context"]["generation"])
+        if automatic:
+            return False
+        if not balance_rejected(latest_media_receipt(db, job)):
+            raise DomainError(
+                "GENERATION_NOT_RETRYABLE", "账户余额不足，原调用已受理，请核对账单", 409
+            )
+    policy = policy_for(db, job)
+    if not balance_retry and error not in policy.retry_errors:
+        diagnose(db, job, "NOT_RETRYABLE", error)
+        if automatic:
+            return False
+        raise DomainError("GENERATION_NOT_RETRYABLE", "此失败不支持原任务重试", 409)
+    if automatic and not not_accepted:
+        receipt = latest_media_receipt(db, job)
+        if (
+            error not in policy.automatic_retry_errors
+            or receipt is None
+            or receipt.status != "NOT_ACCEPTED"
+            or receipt.actual_cost != 0
+        ):
+            diagnose(db, job, "NOT_RETRYABLE", error)
+            return False
+    if automatic and job.attempt_count >= MAX_AUTOMATIC_ATTEMPTS:
+        schedule_for(db, job).blocked_code = "ATTEMPT_LIMIT"
+        diagnose(db, job, "ATTEMPT_LIMIT", error)
+        return False
+    from arclight.application.generation_budget import reserve_execution
+
     try:
-        check_execution(db, job, spec)
-    except DomainError:
+        reserve_execution(db, job)
+    except DomainError as exc:
         if not automatic:
             raise
-        diagnose(db, job, "NOT_RETRYABLE", "BUDGET_EXCEEDED")
+        diagnose(db, job, "NOT_RETRYABLE", exc.code)
         return False
     schedule = schedule_for(db, job)
-    schedule.next_attempt_at = leases.clock(db) + timedelta(
-        seconds=policy.backoff(job.attempt_count)
-    )
-    schedule.blocked_code = "BACKOFF"
+    now = leases.clock(db)
+    if balance_retry:
+        schedule.next_attempt_at = now
+        schedule.blocked_code = None
+    else:
+        schedule.next_attempt_at = now + timedelta(seconds=policy.backoff(job.attempt_count))
+        schedule.blocked_code = "BACKOFF"
     transition(db, job.id, Status.RETRY_WAIT, job.revision, actor=actor)
     enqueue_dispatch(db, job)
     return True
@@ -205,11 +222,8 @@ def admit(
         )
         for call in stale:
             complete_call(db, call, "ABANDONED")
-    if kind == "SUBMIT":
-        if not within_limits(db, job, submitting=True):
-            return False
-        if leases.utc(schedule.next_attempt_at) > stamp:
-            return False
+    if kind == "SUBMIT" and leases.utc(schedule.next_attempt_at) > stamp:
+        return False
     block = capacity_block(
         db,
         job,

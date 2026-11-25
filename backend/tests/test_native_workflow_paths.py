@@ -14,7 +14,6 @@ from test_agent_model import model_service as model_service
 from test_agent_runtime import tool_feedback
 from test_art_workflow import drive, progress
 from test_asset_versions import image_bytes
-from test_generation_budget import set_policy
 from test_generation_delivery import deliver
 from test_model_services import account
 from test_native_media_integration import attempt_for, configure, project, provider_for
@@ -64,7 +63,6 @@ def test_native_concept_rounds_preserve_original_key_after_rotation_and_process_
 ):
     episode = account_episode(client)
     configure(client, settings, protocol=protocol)
-    set_policy(client, episode["project_id"], "20")
     model_requests, errors, _ = install_concept_model(model_service)
     config = client.get(
         f"/api/v1/projects/{episode['project_id']}/generation-jobs/services/image/configuration"
@@ -146,7 +144,6 @@ def test_concept_restart_captures_current_media_configuration_and_new_grant(
 ):
     episode = account_episode(client)
     configure(client, settings)
-    set_policy(client, episode["project_id"], "20")
     config = client.get(
         f"/api/v1/projects/{episode['project_id']}/generation-jobs/services/image/configuration"
     ).json()

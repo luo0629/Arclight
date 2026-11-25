@@ -12,7 +12,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from pydantic import ValidationError
-from sqlalchemy import func, select, text, update
+from sqlalchemy import event, func, select, text, update
 from sqlalchemy.exc import DBAPIError
 from test_collaboration import register
 from test_concurrency import require_postgres
@@ -28,6 +28,7 @@ from arclight.application.generation_recovery import recover_job
 from arclight.application.generation_state import find_job
 from arclight.core.config import Settings
 from arclight.domain.generation_scheduling import ERROR_CATEGORIES, ExecutionPolicy
+from arclight.domain.model_gateway import GatewayPolicy
 from arclight.persistence.generation_scheduling import (
     GenerationCall,
     GenerationDeadLetter,
@@ -55,6 +56,7 @@ def execute(client, job, provider):
         event_for(client, job),
         provider,
         execution_policy=client.app.state.settings.media_execution_policy,
+        gateway_policy=client.app.state.settings.model_gateway_policy,
     )
 
 
@@ -98,11 +100,9 @@ def test_policy_rejects_invalid_or_unbounded_configuration(values):
 
 
 def test_environment_policy_and_exponential_cap(monkeypatch):
-    monkeypatch.setenv(
-        "ARCLIGHT_MEDIA_EXECUTION_POLICY", '{"max_attempts":7,"retry_max_seconds":5}'
-    )
+    monkeypatch.setenv("ARCLIGHT_MEDIA_EXECUTION_POLICY", '{"retry_max_seconds":5}')
     policy = Settings(_env_file=None).media_execution_policy
-    assert policy.max_attempts == 7
+    assert policy.retry_max_seconds == 5
     assert [policy.backoff(n) for n in (1, 2, 3, 20)] == [2, 4, 5, 5]
 
 
@@ -176,40 +176,50 @@ def test_project_override_and_provider_pause_do_not_consume_attempts(client, epi
 
 
 @pytest.mark.parametrize(
-    "limits,blocked",
+    "limits",
     [
-        ({"global_per_minute": 1}, "GLOBAL_RATE"),
-        ({"user_per_minute": 1}, "USER_RATE"),
+        {"global_per_minute": 1},
+        {"user_per_minute": 1},
     ],
 )
-def test_sliding_rate_limits_survive_sessions_and_expire(
-    client, episode, monkeypatch, limits, blocked
-):
-    configure(client, **limits)
+def test_historical_sliding_rates_do_not_block_admission(client, episode, limits):
+    with pytest.raises(ValidationError):
+        ExecutionPolicy(**limits)
     first = capture_ok(client, episode["project_id"])
     assert execute(client, first, Provider()) == "SUCCEEDED"
-    second = capture_ok(client, episode["project_id"])
+
+    def historical_policy(_mapper, _connection, row):
+        row.policy_json = row.policy_json | limits
+
+    event.listen(GenerationSchedule, "before_insert", historical_policy)
+    try:
+        second = capture_ok(client, episode["project_id"])
+    finally:
+        event.remove(GenerationSchedule, "before_insert", historical_policy)
     provider = Provider()
-    assert execute(client, second, provider) == "CREATED"
-    assert schedule(client, second)["blocked_code"] == blocked
-    assert not provider.requests
-    clock = leases.clock
-    monkeypatch.setattr(leases, "clock", lambda db: clock(db) + timedelta(seconds=61))
     assert execute(client, second, provider) == "SUCCEEDED"
-    assert fresh(client, second)["attempt_count"] == 1
+    assert len(provider.requests) == fresh(client, second)["attempt_count"] == 1
+    assert schedule(client, second)["blocked_code"] is None
 
 
-def test_backoff_attempt_ceiling_and_manual_retry_cannot_bypass_policy(client, episode):
+def test_backoff_delays_each_retry_without_capping_attempts(client, episode):
     configure(
         client,
-        max_attempts=2,
         retry_base_seconds=20,
         retry_max_seconds=40,
-        automatic_retry_errors={"PROVIDER_FAILED"},
     )
+    client.app.state.settings.model_gateway_policy = GatewayPolicy(failure_threshold=10)
     job = capture_ok(client, episode["project_id"])
     provider = Provider(receipt=SubmissionReceipt(status="FAILED", error_code="PROVIDER_FAILED"))
-    assert execute(client, job, provider) == "RETRY_WAIT"
+    assert execute(client, job, provider) == "FAILED"
+    path = base(job["project_id"]) + f"/{job['id']}"
+
+    def retry():
+        current = fresh(client, job)
+        response = client.post(path + "/retry", json={"expected_revision": current["revision"]})
+        assert response.status_code == 200 and response.json()["status"] == "RETRY_WAIT"
+
+    retry()
     assert schedule(client, job)["blocked_code"] == "BACKOFF"
     messages = []
     assert (
@@ -217,21 +227,17 @@ def test_backoff_attempt_ceiling_and_manual_retry_cannot_bypass_policy(client, e
         == 0
     )
     assert execute(client, job, provider) == "RETRY_WAIT" and len(provider.requests) == 1
-    configure(client, max_attempts=10)
-    assert schedule(client, job)["policy_json"]["max_attempts"] == 2
-    due(client, job)
-    assert execute(client, job, provider) == "FAILED"
-    diagnostic = dead_letter(client, job)
-    assert diagnostic["reason"] == "ATTEMPT_LIMIT" and diagnostic["category"] == "SERVICE"
-    current = fresh(client, job)
-    response = client.post(
-        base(job["project_id"]) + f"/{job['id']}/retry",
-        json={"expected_revision": current["revision"]},
-    )
-    assert response.status_code == 200 and response.json()["status"] == "FAILED"
-    assert execute(client, job, provider) == "FAILED" and len(provider.requests) == 2
-    attempts = client.get(base(job["project_id"]) + f"/{job['id']}/attempts").json()
-    assert [item["attempt_no"] for item in attempts] == [1, 2]
+    configure(client, retry_base_seconds=1)
+    assert schedule(client, job)["policy_json"]["retry_base_seconds"] == 20
+    assert "max_attempts" not in schedule(client, job)["policy_json"]
+    for attempt in range(2, 6):
+        due(client, job)
+        assert execute(client, job, provider) == "FAILED"
+        assert len(provider.requests) == attempt
+        if attempt < 5:
+            retry()
+    attempts = client.get(path + "/attempts").json()
+    assert [item["attempt_no"] for item in attempts] == [1, 2, 3, 4, 5]
     assert all(item["error_category"] == "SERVICE" for item in attempts)
 
 
@@ -246,8 +252,7 @@ def test_error_classes_never_blindly_retry_nonservice_failures(client, episode, 
     result = execute(
         client, job, Provider(receipt=SubmissionReceipt(status=status, error_code=error))
     )
-    expected = "RETRY_WAIT" if error == "PROVIDER_UNAVAILABLE" else status
-    assert result == expected
+    assert result == status
     attempts = client.get(base(job["project_id"]) + f"/{job['id']}/attempts").json()
     assert attempts[0]["error_category"] == category
     if error in {
@@ -290,10 +295,7 @@ def test_actual_timeout_is_bounded_retains_capacity_and_never_resubmits(client, 
         release.set()
 
 
-def test_total_deadline_stops_queued_and_running_jobs_without_fabricating_failure(
-    client, episode, monkeypatch
-):
-    configure(client, max_elapsed_seconds=5)
+def test_elapsed_time_does_not_expire_queued_or_running_jobs(client, episode, monkeypatch):
     queued = capture_ok(client, episode["project_id"])
     running = capture_ok(client, episode["project_id"])
     assert (
@@ -306,21 +308,17 @@ def test_total_deadline_stops_queued_and_running_jobs_without_fabricating_failur
     )
     expire(client.app.state.session_factory, running)
     clock = leases.clock
-    monkeypatch.setattr(leases, "clock", lambda db: clock(db) + timedelta(seconds=10))
+    monkeypatch.setattr(leases, "clock", lambda db: clock(db) + timedelta(days=2))
     provider = Provider()
-    assert execute(client, queued, provider) == "FAILED" and not provider.requests
-    assert fresh(client, queued)["attempt_count"] == 0
-    query_provider = QueryFake(QueryReceipt(status="NOT_ACCEPTED"))
+    assert execute(client, queued, provider) == "SUCCEEDED" and len(provider.requests) == 1
+    assert fresh(client, queued)["attempt_count"] == 1
+    assert "deadline_at" not in schedule(client, queued)
+    query_provider = QueryFake(QueryReceipt(status="RUNNING"))
     assert (
         recover_job(client.app.state.session_factory, UUID(running["id"]), query_provider)
-        == "MANUAL_REVIEW"
+        == "RUNNING"
     )
-    assert not query_provider.calls
-    assert (
-        dead_letter(client, queued)["reason"]
-        == dead_letter(client, running)["reason"]
-        == "TIME_LIMIT"
-    )
+    assert len(query_provider.calls) == 1
     with client.app.state.session_factory() as db:
         call = db.scalar(select(GenerationCall).where(GenerationCall.job_id == UUID(running["id"])))
         assert call.released_at is None
@@ -383,25 +381,31 @@ def test_best_effort_cancel_needs_authoritative_confirmation(
         assert (submit.released_at is not None) == (cancellation == "CONFIRMED")
 
 
-def test_not_accepted_reconciliation_respects_attempt_limit(client, episode):
-    configure(client, max_attempts=1)
+@pytest.mark.parametrize("refusals", [1, 3])
+def test_not_accepted_reconciliation_limits_automatic_retries_of_original_job(
+    client, episode, refusals
+):
+    client.app.state.settings.model_gateway_policy = GatewayPolicy(failure_threshold=10)
     job = capture_ok(client, episode["project_id"])
-    assert (
-        execute(
-            client,
-            job,
-            Provider(
-                receipt=SubmissionReceipt(
-                    status="RESULT_UNKNOWN", request_id="unknown", error_code="RESULT_UNKNOWN"
-                )
-            ),
+    provider = Provider()
+    for attempt_no in range(1, refusals + 1):
+        provider.receipt = SubmissionReceipt(
+            status="RESULT_UNKNOWN", request_id=f"unknown-{attempt_no}", error_code="RESULT_UNKNOWN"
         )
-        == "RESULT_UNKNOWN"
-    )
-    response = query(client, fresh(client, job), QueryFake(QueryReceipt(status="NOT_ACCEPTED")))
-    assert response.json()["status"] == "FAILED"
-    assert dead_letter(client, job)["reason"] == "ATTEMPT_LIMIT"
-    assert fresh(client, job)["attempt_count"] == 1
+        due(client, job)
+        assert execute(client, job, provider) == "RESULT_UNKNOWN"
+        response = query(client, fresh(client, job), QueryFake(QueryReceipt(status="NOT_ACCEPTED")))
+        assert response.json()["status"] == ("FAILED" if attempt_no == 3 else "RETRY_WAIT")
+        assert fresh(client, job)["attempt_count"] == attempt_no
+    assert len(provider.requests) == refusals
+    if refusals == 3:
+        assert dead_letter(client, job)["reason"] == "ATTEMPT_LIMIT"
+        path = base(job["project_id"]) + f"/{job['id']}/retry"
+        explicit = client.post(path, json={"expected_revision": fresh(client, job)["revision"]})
+        assert explicit.status_code == 200 and explicit.json()["status"] == "RETRY_WAIT"
+    due(client, job)
+    assert execute(client, job, Provider()) == "SUCCEEDED"
+    assert fresh(client, job)["attempt_count"] == refusals + 1
 
 
 @pytest.mark.parametrize(
@@ -437,7 +441,6 @@ def test_async_failure_preserves_error_class_and_does_not_retry(client, episode,
 
 
 def test_owner_replay_preserves_frozen_configuration_and_lineage_and_is_idempotent(client, episode):
-    configure(client, max_attempts=1)
     source = capture_ok(client, episode["project_id"])
     assert (
         execute(
@@ -519,8 +522,8 @@ def test_unknown_cannot_replay_or_retry_and_diagnostics_are_scoped(client, episo
         assert client.get(path + "/" + suffix, params={"limit": 1000}).status_code == 422
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_database_guards_and_migration_preserve_diagnostics(client, episode, migrated):
-    configure(client, max_attempts=1)
     job = capture_ok(client, episode["project_id"])
     assert (
         execute(
@@ -551,19 +554,10 @@ def test_empty_migration_roundtrip(migrated):
     command.check(migrated)
 
 
-@pytest.mark.parametrize("scope", ["provider", "project", "global", "user"])
+@pytest.mark.parametrize("scope", ["provider", "project"])
 def test_postgres_parallel_admission_is_atomic(client, episode, settings, scope):
     require_postgres(settings)
-    limits = (
-        {"provider_concurrency": 1}
-        if scope == "provider"
-        else (
-            {"project_concurrency": 1}
-            if scope == "project"
-            else ({"global_per_minute": 1} if scope == "global" else {"user_per_minute": 1})
-        )
-    )
-    configure(client, **limits)
+    configure(client, **{f"{scope}_concurrency": 1})
     project_ids = [episode["project_id"], episode["project_id"]]
     if scope != "project":
         project_ids[1] = client.post("/api/v1/projects", json={"name": "concurrent-other"}).json()[
@@ -598,7 +592,6 @@ def test_stuck_adapter_guard_has_finite_process_capacity():
 
 @pytest.mark.parametrize("role", ["editor", "viewer"])
 def test_replay_requires_owner_even_for_project_members(client, episode, role):
-    configure(client, max_attempts=1)
     job = capture_ok(client, episode["project_id"])
     assert (
         execute(
@@ -668,12 +661,11 @@ def test_cancel_can_lose_to_authoritative_success(client, episode):
     assert fresh(client, job)["cancel_requested_at"] is not None
 
 
-def test_user_rate_is_scoped_to_creator_across_projects(client, episode):
-    configure(client, user_per_minute=1)
+def test_sequential_jobs_are_not_counted_as_a_creator_quota(client, episode):
     first = capture_ok(client, episode["project_id"])
     assert execute(client, first, Provider()) == "SUCCEEDED"
-    blocked = capture_ok(client, episode["project_id"])
-    assert execute(client, blocked, Provider()) == "CREATED"
+    next_job = capture_ok(client, episode["project_id"])
+    assert execute(client, next_job, Provider()) == "SUCCEEDED"
     register(client, "different-media-user@example.com")
     project = client.post("/api/v1/projects", json={"name": "different-creator"}).json()
     second = capture_ok(client, project["id"])
@@ -694,7 +686,6 @@ def test_scheduler_postgres_offline_sql_and_refused_offline_downgrade(migrated):
 
 def test_postgres_scheduler_history_cannot_be_truncated(client, episode, settings):
     require_postgres(settings)
-    configure(client, max_attempts=1)
     job = capture_ok(client, episode["project_id"])
     assert (
         execute(

@@ -14,7 +14,6 @@ from pydantic import SecretStr
 from sqlalchemy import select, text
 from sqlalchemy.exc import DBAPIError
 from test_asset_versions import image_bytes
-from test_generation_budget import set_policy
 from test_generation_delivery import deliver
 from test_generation_jobs import base, capture, capture_ok
 from test_generation_scheduling import execute, schedule
@@ -118,7 +117,6 @@ def test_frozen_key_dispatch_and_image_candidates_keep_existing_review_gate(clie
     uid = account(client)
     configure(client, settings)
     pid = project(client)
-    set_policy(client, pid, "20")
     job = capture_ok(client, pid, body_for(client, pid))
     configure(client, settings, revision=1, key="rotated-key")
     data = image_bytes("PNG", (1024, 1024))
@@ -158,7 +156,6 @@ def test_cleared_account_media_key_blocks_new_jobs_without_changing_frozen_bindi
     account(client)
     saved = configure(client, settings)
     pid = project(client)
-    set_policy(client, pid, "1.000000")
     body = body_for(client, pid)
     job = capture_ok(client, pid, body)
     cleared = client.put(
@@ -220,7 +217,6 @@ def test_native_audio_video_validated_durable_registered_download_is_authorized(
     account(client)
     configure(client, settings, kind, protocol)
     pid = project(client)
-    set_policy(client, pid, "20")
     job = capture_ok(client, pid, body_for(client, pid, kind))
     data = wav_bytes() if kind == "speech" else mp4_bytes()
 
@@ -271,7 +267,6 @@ def test_price_missing_or_changed_and_revoked_credential_owner_fail_closed(clien
     uid = account(client)
     configure(client, settings)
     pid = project(client)
-    set_policy(client, pid)
     body = body_for(client, pid)
     policies = settings.service_model_policies
     settings.service_model_policies = []
@@ -313,11 +308,11 @@ def assert_history_guard(factory, table, job_id):
             )
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_native_history_is_immutable_and_schema_matches_metadata(client, settings, migrated):
     account(client)
     configure(client, settings)
     pid = project(client)
-    set_policy(client, pid)
     job = capture_ok(client, pid, body_for(client, pid))
     command.check(migrated)
     assert_history_guard(client.app.state.session_factory, "generation_service_bindings", job["id"])
@@ -330,7 +325,6 @@ def test_two_accounts_and_owner_replay_keep_the_original_credential_owner(client
     owner_auth = client.headers["Authorization"]
     configure(client, settings, key="owner-key")
     pid = project(client)
-    set_policy(client, pid, "20")
     editor = account(client)
     configure(client, settings, key="editor-key")
     with client.app.state.session_factory.begin() as db:
@@ -370,7 +364,6 @@ def test_completed_download_failure_keeps_unknown_cost_in_both_ledgers(client, s
     account(client)
     configure(client, settings, protocol=protocol)
     pid = project(client)
-    set_policy(client, pid)
     job = capture_ok(client, pid, body_for(client, pid))
 
     def handler(req):
@@ -393,7 +386,6 @@ def test_sdk_timeout_keeps_original_attempt_without_resubmission(client, setting
     account(client)
     configure(client, settings, protocol="openai_image")
     pid = project(client)
-    set_policy(client, pid)
     job = capture_ok(client, pid, body_for(client, pid))
     requests = []
 
@@ -441,7 +433,6 @@ def test_images_submit_failure_keeps_or_releases_capacity_by_evidence(
         update={"project_concurrency": 1, "automatic_retry_errors": frozenset()}
     )
     pid = project(client)
-    set_policy(client, pid)
     first = capture_ok(client, pid, body_for(client, pid))
     second = capture_ok(client, pid, body_for(client, pid))
     requests = []

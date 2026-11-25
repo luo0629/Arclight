@@ -19,6 +19,7 @@ __all__ = ["render_case", "report_case", "result_case", "review_case", "timeline
 TABLES = {"render_manifests", "render_artifacts", "render_report_links"}
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_empty_render_migration_roundtrip_preserves_exact_existing_timeline(
     client, render_case, migrated
 ):
@@ -29,6 +30,7 @@ def test_empty_render_migration_roundtrip_preserves_exact_existing_timeline(
     assert client.get(f"/api/v1/timelines/{render_case['id']}").json() == render_case
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_nonempty_render_downgrade_is_atomic_and_preserves_all_receipts(
     client, report_case, migrated
 ):

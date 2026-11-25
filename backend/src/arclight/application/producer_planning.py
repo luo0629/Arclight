@@ -18,11 +18,16 @@ from arclight.application.gateway_text import execution_actor, validate_publicat
 from arclight.application.model_gateway import lock_gate
 from arclight.application.model_services import require_text_snapshot
 from arclight.application.producer_series import has_series_scope
-from arclight.application.production_versions import bind, capture_text, find_binding, text_settings
+from arclight.application.production_versions import (
+    bind,
+    capture_text,
+    find_binding,
+    producer_prompt,
+    text_settings,
+)
 from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.agent_state import transition_agent_step
@@ -43,7 +48,6 @@ from arclight.domain.producer_series import (
     SeriesProducerPlan,
     SeriesProducerScope,
     plan_model,
-    planning_instruction,
 )
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
@@ -66,7 +70,6 @@ def start_producer(
     key: str,
     request_id: str,
     *,
-    limits: AgentRunLimits | None = None,
     series: SeriesProducerScope | None = None,
     short_drama: dict | None = None,
 ) -> WorkflowRun:
@@ -76,15 +79,12 @@ def start_producer(
     Starting this coordinator does not invoke a provider or dispatch another workflow.
     """
     value = ProducerGoal(goal=goal, key=key)
-    limits = AgentRunLimits.model_validate(
-        (limits or AgentRunLimits(maximum_cost=None)).model_dump(mode="json")
-    )
     lock_gate(db)
     episode = require_episode(db, episode_id, actor, write=True)
     db.refresh(episode, with_for_update=True)
     version = SERIES_PRODUCER_VERSION if series else WORKFLOW_VERSION
     fingerprint = digest(
-        {"workflow": version, "goal": value.goal, "limits": limits.model_dump(mode="json")}
+        {"workflow": version, "goal": value.goal}
         | ({"series": series.model_dump(mode="json")} if series else {})
         | ({"short_drama": short_drama} if short_drama is not None else {})
     )
@@ -113,7 +113,6 @@ def start_producer(
         "goal": value.goal,
         "goal_sha256": digest({"goal": value.goal}),
         "target_duration_ms": episode.target_duration_ms,
-        "producer": {"agent_limits": limits.model_dump(mode="json")},
     }
     if series is not None:
         from arclight.application.producer_series import capture_scope
@@ -150,7 +149,7 @@ def start_producer(
     )
     run.agent_state_json = state.model_dump(mode="json")
     capture_text(db, episode.project_id, run, settings, actor=actor)
-    configure_agent_run(db, run.id, actor, limits)
+    configure_agent_run(db, run.id, actor)
     grant_professional_agent_tools(
         db,
         AgentToolGrantRequest(
@@ -364,7 +363,7 @@ def plan_producer(
                 result_schema_version=SERIES_PLAN_VERSION
                 if has_series_scope(run)
                 else PLAN_VERSION,
-                system_instruction=planning_instruction(run.workflow_version),
+                system_instruction=producer_prompt(db, episode.project_id, run.id),
                 messages=[
                     AgentUserMessage(
                         data={
@@ -383,7 +382,6 @@ def plan_producer(
                         }
                     )
                 ],
-                max_tokens=16000,
             )
         )
     # A planning model can investigate; delegation requires a separately completed plan.

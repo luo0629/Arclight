@@ -5,13 +5,12 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 TRACE_VERSION = "context-trace/1"
-MAX_EVIDENCE_ROUNDS = 32
 
 
 class EvidenceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     creation_key: UUID
-    expected_round: int = Field(strict=True, ge=0, lt=MAX_EVIDENCE_ROUNDS)
+    expected_round: int = Field(strict=True, ge=0)
     asset_version_ids: list[UUID] = Field(default_factory=list, max_length=64)
     story_entry_ids: list[UUID] = Field(default_factory=list, max_length=100)
     source_ids: list[UUID] = Field(default_factory=list, max_length=16)

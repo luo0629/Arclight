@@ -27,7 +27,6 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.producer_planning import DelegationRequest
 from arclight.domain.producer_series import PRODUCER_VERSIONS, REPLAN_VERSIONS, plan_model
-from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoopDecision
 from arclight.persistence.base import utcnow
 from arclight.persistence.models import Episode, WorkflowRun
@@ -46,7 +45,6 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
     episode = db.get(Episode, run.episode_id)
     assert episode is not None
     project_id = episode.project_id
-    control = db.get(AgentRunLimit, run.id)
     reason = None
     try:
         require_episode(db, episode.id, actor, write=True)
@@ -115,6 +113,8 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
         )
     if pending and any(loop.status in {"WAITING_EXTERNAL", "RECOVERY_REQUIRED"} for loop in loops):
         pending["status"] = "WAITING_EXTERNAL"
+    if pending and run.error_code in {"ACCOUNT_BALANCE_INSUFFICIENT", "WORKFLOW_RECOVERY_LIMIT"}:
+        pending["error_code"] = public_diagnostic(run.error_code)
     # Read authorization precedes the narrowly scoped immutable snapshot query. Execution
     # readers deliberately retain their stronger current-plan/creator/lifecycle guards.
     bindings = list(
@@ -210,8 +210,6 @@ def read_progress(db: Session, run_id: UUID, actor: str, settings: Settings) -> 
         "plans": plans,
         "operations": operations,
         "budget": {
-            "limits": control.limits_json if control else {},
-            "deadline_at": control.deadline_at.isoformat() if control else None,
             "actual_cost": str(usage["actual_cost"]),
             "pending_estimate": str(usage["pending_estimate"]),
             "unknown_cost": usage["unknown_cost"],

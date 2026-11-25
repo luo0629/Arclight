@@ -1,4 +1,3 @@
-from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
@@ -32,7 +31,6 @@ class ProjectPatch(Input):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     visual_bible: VisualBibleEdit | None = None
     output_profile: dict | None = None
-    budget_limit: Decimal | None = Field(default=None, ge=0, max_digits=12, decimal_places=2)
     archived: bool | None = None
 
     @model_validator(mode="after")
@@ -110,23 +108,6 @@ def patch_project(
             db, project, actor, visual.expected_version_no, visual.creation_key, visual.fields
         )
     for key, value in changes.items():
-        if key == "budget_limit" and value != project.budget_limit:
-            from arclight.application.generation_budget import policy_for
-
-            policy = policy_for(db, project_id, lock=True)
-            policy.revision += 1
-            audit(
-                db,
-                project_id,
-                actor,
-                "budget.limit_updated",
-                project_id,
-                {
-                    "previous_limit": str(project.budget_limit),
-                    "project_limit": str(value),
-                    "revision": policy.revision,
-                },
-            )
         setattr(project, key, value)
     audit(db, project_id, actor, "project.updated", project_id, {"fields": list(changes)})
     db.flush()

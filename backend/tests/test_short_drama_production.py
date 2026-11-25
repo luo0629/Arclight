@@ -2,12 +2,12 @@ from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from art_direction_support import install_direction_model, reference_set
 from sqlalchemy import select
 from test_collaboration import create_episode, create_project, register
 from test_director_revision import install_revision
-from test_generation_budget import set_policy
 from test_producer_planning import install_plan_model
 from test_producer_planning import model_service as model_service
 from test_short_drama_delivery import (
@@ -23,13 +23,13 @@ from test_short_drama_delivery import (
 )
 from test_text_contract_v2 import legacy_script, save_script
 
+from arclight.application.agent_limits import action_usage
+from arclight.application.agent_workflows import WorkflowRecoveryFailed
 from arclight.application.producer_interaction import command_rows
 from arclight.application.render_execution import execute_render
 from arclight.application.runtime import execute_run
-from arclight.application.short_drama_budget import check_budget
 from arclight.application.short_drama_delivery import queue_short_drama_delivery
 from arclight.application.short_drama_production import advance_pending, set_progress
-from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.timelines import TimelineCreate
 from arclight.persistence.agent_limits import AgentRunLimit
@@ -41,9 +41,11 @@ from arclight.persistence.models import (
     Project,
     Script,
     Storyboard,
+    WorkflowRecoveryCounter,
     WorkflowRun,
 )
 from arclight.persistence.render_manifests import RenderArtifact
+from arclight.workers import tasks as worker_tasks
 from arclight.workers.tasks import pending_workflow_events
 
 
@@ -53,7 +55,6 @@ def create_short_drama(client, episode, script, *, key=None, **overrides):
         headers={"Idempotency-Key": key or uuid4().hex},
         json={
             "script_version_id": script["id"],
-            "maximum_cost": "5",
             "generated_media_rights_confirmed": True,
             **overrides,
         },
@@ -65,7 +66,6 @@ def progress(client, episode):
 
 
 def test_confirmation_is_atomic_and_replay_preserves_exact_grant(client, episode, settings):
-    set_policy(client, episode["project_id"], "20")
     script = save_script(client, episode, approve=False)
     font_id = delivery_font(client, episode, script)
     options = {"font_file_id": str(font_id)}
@@ -95,7 +95,7 @@ def test_confirmation_is_atomic_and_replay_preserves_exact_grant(client, episode
     queued = create_short_drama(client, episode, script, key=key)
     assert queued.status_code == 202, queued.text
     assert create_short_drama(client, episode, script, key=key).json() == queued.json()
-    conflict = create_short_drama(client, episode, script, key=key, maximum_cost="6")
+    conflict = create_short_drama(client, episode, script, key=key, font_file_id=str(uuid4()))
     assert conflict.status_code == 409, conflict.text
     assert conflict.json()["error"]["code"] == "IDEMPOTENCY_CONFLICT"
     run_id = UUID(queued.json()["run_id"])
@@ -129,41 +129,91 @@ def test_only_project_owner_can_authorize_short_drama(client):
     assert progress(client, episode) is None
 
 
+def test_repeated_recovery_failures_pause_original_delivery_across_broker_messages(
+    client, episode, settings, monkeypatch
+):
+    from arclight.application import producer_execution
+
+    content = legacy_script()
+    content["scenes"][0]["dialogue"] = []
+    script = save_script(client, episode, content=content)
+    accepted = create_short_drama(client, episode, script)
+    assert accepted.status_code == 202, accepted.text
+    run_id = UUID(accepted.json()["run_id"])
+    factory = client.app.state.session_factory
+    with factory() as db:
+        original = db.scalar(select(OutboxEvent).where(OutboxEvent.run_id == run_id))
+        revision, outbox_id = original.revision, original.id
+    failures = []
+
+    def unavailable(*_):
+        failures.append(1)
+        raise RuntimeError("synthetic recovery failure")
+
+    monkeypatch.setattr(worker_tasks, "get_settings", lambda: settings)
+    monkeypatch.setattr(worker_tasks, "session_factory", lambda *_: factory)
+    monkeypatch.setattr(producer_execution, "_invoke", unavailable)
+    for _ in range(worker_tasks.MAX_WORKFLOW_RECOVERY_FAILURES - 1):
+        with pytest.raises(WorkflowRecoveryFailed):
+            worker_tasks.execute_workflow.run(str(run_id), revision)
+    worker_tasks.execute_workflow.run(str(run_id), revision)
+    worker_tasks.execute_workflow.run(str(run_id), revision)
+    assert len(failures) == worker_tasks.MAX_WORKFLOW_RECOVERY_FAILURES
+    with factory() as db:
+        assert db.get(WorkflowRecoveryCounter, outbox_id).failure_count == len(failures)
+        assert all(event.run_id != run_id for event in pending_workflow_events(db))
+    advance_pending(factory, settings)
+    assert progress(client, episode)["error_code"] == "WORKFLOW_RECOVERY_LIMIT"
+    producer = client.get(f"/api/v1/runs/{run_id}/producer").json()
+    assert producer["pending_command"]["error_code"] == "WORKFLOW_RECOVERY_LIMIT"
+    assert producer["can_recover"]
+    recovered = client.post(
+        f"/api/v1/runs/{run_id}/producer/commands",
+        headers={"Idempotency-Key": uuid4().hex},
+        json={
+            "action": "RECOVER",
+            "expected_revision": revision,
+            "command_id": producer["pending_command"]["command_id"],
+        },
+    )
+    assert recovered.status_code == 202, recovered.text
+    with factory() as db:
+        assert db.get(WorkflowRecoveryCounter, outbox_id) is None
+        assert [event.id for event in pending_workflow_events(db) if event.run_id == run_id] == [
+            outbox_id
+        ]
+
+
 def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
     client, episode, settings, model_service, monkeypatch
 ):
-    set_policy(client, episode["project_id"], "20")
     reference_set(client, episode)
     content = legacy_script()
     content["scenes"][0]["dialogue"] = []
     script = save_script(client, episode, content=content)
     settings.model_gateway_policy = GatewayPolicy(text_maximum_cost="1", pricing_version="test:1")
-    sent, errors = install_plan_model(
-        model_service,
-        cost="0.5",
-        tasks=[
-            {
-                "task_key": "art",
-                "depends_on": [],
-                "reason": "需要确定雨夜场景与角色的风格",
+    tasks = [
+        {
+            "task_key": "art",
+            "depends_on": [],
+            "reason": "需要确定雨夜场景与角色的风格",
+            "task": {
+                "kind": "art_director",
+                "script_version_id": script["id"],
                 "task": {
-                    "kind": "art_director",
-                    "script_version_id": script["id"],
-                    "task": {
-                        "visual_goal": "明确雨夜场景与角色的视觉风格",
-                        "minimum_reference_images": 0,
-                    },
+                    "visual_goal": "明确雨夜场景与角色的视觉风格",
+                    "minimum_reference_images": 0,
                 },
             },
-            {
-                "task_key": "board",
-                "depends_on": ["art"],
-                "reason": "按定稿剧本与美术设计制作分镜",
-                "task": {"kind": "director", "script_version_id": script["id"]},
-            },
-        ],
-    )
-    queued = create_short_drama(client, episode, script, maximum_cost="15")
+        },
+        {
+            "task_key": "board",
+            "depends_on": ["art"],
+            "reason": "按定稿剧本与美术设计制作分镜",
+            "task": {"kind": "director", "script_version_id": script["id"]},
+        },
+    ]
+    queued = create_short_drama(client, episode, script)
     assert queued.status_code == 202, queued.text
     root = UUID(queued.json()["run_id"])
     project = UUID(episode["project_id"])
@@ -186,6 +236,35 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
         event.published_at = utcnow() - timedelta(seconds=40)
     with factory.begin() as db:
         assert any(event.run_id == root for event in pending_workflow_events(db))
+
+    balance_requests = []
+
+    def insufficient_balance(request):
+        balance_requests.append(request.content)
+        return httpx.Response(402, json={"error": {"code": "insufficient_balance"}})
+
+    model_service(insufficient_balance)
+    execute_run(factory, settings, root, initial)
+    advance_pending(factory, settings)
+    blocked = progress(client, episode)
+    assert blocked["status"] == "RUNNING" and blocked["revision"] == initial
+    assert blocked["error_code"] == "ACCOUNT_BALANCE_INSUFFICIENT"
+    assert blocked["can_retry_balance"]
+    execute_run(factory, settings, root, initial)
+    assert len(balance_requests) == 1
+    with factory.begin() as db:
+        assert all(event.run_id != root for event in pending_workflow_events(db))
+
+    def recharge(revision):
+        result = client.post(
+            f"/api/v1/runs/{root}/short-drama/retry",
+            headers={"Idempotency-Key": uuid4().hex},
+            json={"expected_revision": revision},
+        )
+        assert result.status_code == 202, result.text
+
+    recharge(initial)
+    sent, errors = install_plan_model(model_service, cost="0.5", tasks=tasks)
     execute_run(factory, settings, root, initial)
     assert sent and not errors
     with factory.begin() as db:
@@ -204,18 +283,23 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
             select(AgentRunLimit.run_id).where(AgentRunLimit.parent_run_id == root)
         )
         assert child_id is not None and db.get(WorkflowRun, child_id).status == "QUEUED"
-        # The two successful model replies carry no recognized billing receipt.
-        # Their full 1 USD reservations continue to count against the 15 USD grant.
-        check_budget(db, db.get(WorkflowRun, root), project, Decimal("13"))
-        with pytest.raises(DomainError, match="费用上限") as over:
-            check_budget(db, db.get(WorkflowRun, root), project, Decimal("13.01"))
-        assert over.value.code == "SHORT_DRAMA_BUDGET_EXCEEDED"
+        usage = action_usage(db, root)
+        assert sum(action.kind == "MODEL" for action in usage["actions"]) == 3
+        assert usage["pending_estimate"] == Decimal("2")
     denied = client.post(f"/api/v1/runs/{child_id}/cancel")
     assert denied.status_code == 409, denied.text
 
-    art_calls, art_errors, _ = install_direction_model(model_service)
     with factory() as db:
         art_revision = db.get(WorkflowRun, child_id).revision
+    model_service(insufficient_balance)
+    execute_run(factory, settings, child_id, art_revision)
+    advance_pending(factory, settings)
+    blocked = progress(client, episode)
+    assert blocked["phase"] == "ART" and blocked["status"] == "RUNNING"
+    assert blocked["error_code"] == "ACCOUNT_BALANCE_INSUFFICIENT"
+    assert blocked["can_retry_balance"]
+    recharge(blocked["revision"])
+    art_calls, art_errors, _ = install_direction_model(model_service)
     execute_run(factory, settings, child_id, art_revision)
     assert art_calls and not art_errors
     with factory() as db:
@@ -291,7 +375,6 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
 def test_scheduler_delivers_only_after_exact_formal_render(
     client, episode, settings, timeline_case
 ):
-    set_policy(client, episode["project_id"], "20")
     body, _ = timeline_case
     request = TimelineCreate.model_validate(body)
     factory = client.app.state.session_factory

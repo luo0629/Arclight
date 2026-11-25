@@ -19,11 +19,11 @@ class AgentRunLimit(Base):
     actor_id: Mapped[str] = mapped_column(String(100))
     input_sha256: Mapped[str] = mapped_column(String(64))
     depth: Mapped[int]
-    limits_json: Mapped[dict] = mapped_column(JSON_TYPE)
-    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    limits_json: Mapped[dict] = mapped_column(JSON_TYPE, default=dict)
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     __table_args__ = (
-        CheckConstraint("depth BETWEEN 0 AND 8", name="agent_limit_depth"),
+        CheckConstraint("depth >= 0", name="agent_limit_depth"),
         CheckConstraint(
             "(depth = 0 AND parent_run_id IS NULL AND root_run_id = run_id) OR "
             "(depth > 0 AND parent_run_id IS NOT NULL AND root_run_id <> run_id)",

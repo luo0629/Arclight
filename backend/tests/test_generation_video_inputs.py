@@ -25,7 +25,6 @@ from test_asset_versions import save as save_image
 from test_asset_versions import state as image_state
 from test_assets import create as create_asset
 from test_generation_accounting import invoice, ledger, usage
-from test_generation_budget import set_policy
 from test_generation_delivery import counts, deliver, event_for
 from test_generation_jobs import base, capture, capture_ok
 from test_generation_reconciliation import query
@@ -132,7 +131,6 @@ def video_case(client, settings):
     )
     assert response.status_code == 201, response.text
     episode = response.json()
-    set_policy(client, project_id, "20")
     asset, version, data = first_frame(client, project_id)
     body = body_for(client, project_id, "video")
     body["episode_id"] = episode["id"]
@@ -541,7 +539,6 @@ def test_approved_concept_reference_reuses_its_actual_rights_approval(
         client,
         episode,
         settings,
-        rounds=1,
         spec_patch={"output_spec": {"width": 320, "height": 480, "format": "png"}},
     )
     waiting = drive(client, settings, run_id)

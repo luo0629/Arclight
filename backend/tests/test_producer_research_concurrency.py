@@ -5,7 +5,6 @@ from uuid import UUID
 
 from sqlalchemy import select
 from test_concurrency import require_postgres
-from test_generation_budget import set_policy
 from test_producer_research import (
     observed,
     prepare_producer,
@@ -19,7 +18,6 @@ from arclight.application.commands import require_project
 from arclight.application.costs import read_costs, read_entries
 from arclight.application.gateway_accounting import latest_receipt, reconcile
 from arclight.domain.model_gateway import GatewayUsage
-from arclight.persistence.generation_budget import GenerationBudgetPolicy
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import AssetVersion
 
@@ -50,7 +48,6 @@ def test_postgres_observation_cannot_mix_state_policy_and_bill_across_a_commit(
             assert receipt is not None and receipt.status == "SUCCEEDED"
             assert receipt.actual_cost == Decimal("0")
             free_receipt_ids[call.id] = receipt.id
-    policy = set_policy(client, episode["project_id"], "100", task_limit="20")
     call_id = quoted_gateway_call(client, episode)
     registry, run_id, actor = prepare_producer(client, episode, settings)
     with client.app.state.session_factory() as db:
@@ -98,13 +95,7 @@ def test_postgres_observation_cannot_mix_state_policy_and_bill_across_a_commit(
         with client.app.state.session_factory.begin() as db:
             # Preserve the domain's project-before-policy/version/receipt lock order.
             attempted.set()
-            project = require_project(
-                db, UUID(episode["project_id"]), actor, write=True, owner=True
-            )
-            project.budget_limit = Decimal("50")
-            current_policy = db.get(GenerationBudgetPolicy, project.id)
-            current_policy.revision += 1
-            current_policy.task_limit = Decimal("15")
+            require_project(db, project_id, actor, write=True, owner=True)
             db.get(AssetVersion, script_id).stale = True
             reconcile(
                 db,
@@ -133,16 +124,12 @@ def test_postgres_observation_cannot_mix_state_policy_and_bill_across_a_commit(
 
     assert during["evidence_sha256"] == before["evidence_sha256"]
     assert "STALE_INPUT" not in during["production"]["issues"]
-    assert during["budget"]["project_limit"] == "100.000000"
-    assert during["budget"]["policy_revision"] == policy["policy_revision"]
-    assert during["budget"]["task_limit"] == "20.000000"
+    assert "project_limit" not in during["budget"]
     for name in ("project_costs", "episode_costs"):
         assert during["budget"][name] == before["budget"][name] == expected_before
     assert after["evidence_sha256"] != before["evidence_sha256"]
     assert "STALE_INPUT" in after["production"]["issues"]
-    assert after["budget"]["project_limit"] == "50.000000"
-    assert after["budget"]["policy_revision"] == policy["policy_revision"] + 1
-    assert after["budget"]["task_limit"] == "15.000000"
+    assert "policy_revision" not in after["budget"]
     expected_after = {
         **expected_before,
         "confirmed_count": len(free_call_ids) + 1,

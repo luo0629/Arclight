@@ -17,7 +17,6 @@ from test_concurrency import require_postgres
 from arclight.application import art_generation as generation
 from arclight.application.art_direction import propose_art, resume_art_direction
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.art_generation import DELIVERY_KEY
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.art_proposals import (
@@ -30,13 +29,15 @@ from arclight.persistence.human_reviews import HumanReviewRequest
 
 @pytest.mark.parametrize("mode", ["human", "missing-images", "limit", "model-error"])
 def test_incomplete_direction_creates_no_candidate_or_review(
-    client, episode, settings, model_service, mode
+    client, episode, settings, model_service, monkeypatch, mode
 ):
     reference_set(client, episode)
     run_id, actor, _, task = prepare_direction(client, episode, settings)
     install_direction_model(
         model_service, human=mode == "human", include_images=mode != "missing-images"
     )
+    if mode == "limit":
+        monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
     if mode == "model-error":
         import httpx
 
@@ -48,9 +49,11 @@ def test_incomplete_direction_creates_no_candidate_or_review(
         run_id,
         actor,
         task,
-        limits=AgentRunLimits(max_model_calls=1) if mode == "limit" else None,
     )
     assert result.direction.status in {"HUMAN_REVIEW", "STOPPED"}, result.model_dump_json()
+    if mode == "limit":
+        assert result.direction.status == "STOPPED"
+        assert result.direction.stop_code == "AGENT_MODEL_CALL_LIMIT"
     assert result.delivery is None and facts(client) == before
     factory = client.app.state.session_factory
     with factory() as db:

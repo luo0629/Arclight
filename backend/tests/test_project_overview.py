@@ -35,7 +35,7 @@ def test_empty_overview_reports_coverage_without_invented_zeros(client, episode)
     assert result["stage_counts"] == {"NOT_STARTED": 1}
     assert result["task_total"] == result["pending_reviews"]["total"] == 0
     assert result["cost"]["status"] == "AVAILABLE"
-    assert result["cost"]["budget_limit"] == "123.45"
+    assert "budget_limit" not in result["cost"]
     assert result["cost"]["actual_cost"] is None
     assert result["cost"]["estimated_cost"] is None
     assert result["cost"]["entry_count"] == 0

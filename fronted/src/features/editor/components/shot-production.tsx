@@ -494,7 +494,7 @@ function ProductionBody({
             void prepare(action, selected, candidates, config, comment)
           }
         >
-          预览数量与预算
+          预览数量与费用
         </Button>
       </fieldset>
       {batch && (
@@ -513,11 +513,11 @@ function ProductionBody({
             {batch.items.filter((item) => item.phase === "blocked").length} 项
           </p>
           <p>
-            预算上限估算：
-            {total === null ? "无法完整估算，请核对受阻项目" : `${total} USD`}
+            预计费用：
+            {total === null ? "部分项目暂无报价" : `${total} USD`}
           </p>
           <p className="text-sm text-muted-foreground">
-            估算对应本次冻结的请求；每项提交时再次检查预算与当前状态。审核不新增生成费用，失败任务重试仍可能产生费用。
+            估算对应本次请求。失败任务重试可能产生供应商费用。
           </p>
           {batch.comment && (
             <p className="whitespace-pre-wrap">审核意见：{batch.comment}</p>

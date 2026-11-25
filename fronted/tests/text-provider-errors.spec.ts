@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { openWorkspacePanels } from "./workspace-helpers";
 
-test("TXT-08：余额耗尽、限流和密钥错误分别提示，保留手动重试", async ({
+test("TXT-08：余额不足、额度耗尽、限流和密钥错误分别提示", async ({
   page,
 }) => {
   const registered = await page.request.post("/api/v1/auth/register", {
@@ -31,6 +31,7 @@ test("TXT-08：余额耗尽、限流和密钥错误分别提示，保留手动�
   expect(episodeResponse.status()).toBe(201);
   const episode = await episodeResponse.json();
   const runs = [
+    "ACCOUNT_BALANCE_INSUFFICIENT",
     "GATEWAY_QUOTA_EXHAUSTED",
     "GATEWAY_PROVIDER_RATE_LIMITED",
     "GATEWAY_PROVIDER_AUTHENTICATION_FAILED",
@@ -51,10 +52,11 @@ test("TXT-08：余额耗尽、限流和密钥错误分别提示，保留手动�
   await page.goto("/");
   await openWorkspacePanels(page);
   await page.getByRole("radio", { name: "任务与审核", exact: true }).click();
-  const quotaError = page
-    .getByRole("alert")
-    .filter({ hasText: "余额不足或额度已耗尽" });
-  await expect(quotaError).toBeVisible();
+  const balanceError = page.getByRole("alert").filter({ hasText: "账户余额不足" });
+  await expect(balanceError).toBeVisible();
+  await expect(
+    page.getByRole("alert").filter({ hasText: "使用额度已耗尽" }),
+  ).toBeVisible();
   await expect(
     page.getByRole("alert").filter({ hasText: "请求过于频繁" }),
   ).toBeVisible();
@@ -66,8 +68,8 @@ test("TXT-08：余额耗尽、限流和密钥错误分别提示，保留手动�
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "重试任务", exact: true }),
-  ).toHaveCount(4);
-  const task = page.getByRole("article").filter({ has: quotaError });
+  ).toHaveCount(runs.length);
+  const task = page.getByRole("article").filter({ has: balanceError });
   await expect(task).not.toContainText(runs[0].id);
   const retryPath = `/api/v1/runs/${runs[0].id}/retry`;
   await page.route(`**${retryPath}`, (route) =>

@@ -434,8 +434,6 @@ def execute_agent_tool(
         return _failure(request, "WORKFLOW_NOT_ACTIVE", "Agent 当前没有活动步骤")
     if running_steps[0] not in tool.allowed_steps:
         return _failure(request, "AGENT_NOT_ALLOWED", "当前 Agent 步骤不允许使用此工具")
-    if len(agent_state.tool_call_refs) >= 256 or len(agent_state.observation_refs) >= 256:
-        return _failure(request, "REFERENCE_LIMIT", "工作流工具引用数量已达上限")
 
     try:
         execution = check_tool_action(

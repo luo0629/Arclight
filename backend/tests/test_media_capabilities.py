@@ -19,7 +19,7 @@ from test_generation_delivery import Provider, deliver
 from test_generation_jobs import base, capture, capture_ok, payload
 from test_generation_leases import expire
 from test_generation_reconciliation import QueryFake, query
-from test_generation_scheduling import configure, fresh
+from test_generation_scheduling import fresh
 
 from arclight.application import generation_jobs
 from arclight.application import generation_leases as leases
@@ -327,8 +327,6 @@ def test_default_options_preserve_historical_fingerprint_and_idempotent_replay(
 ):
     body = payload()
     expected = GenerationCreate.model_validate(body).model_dump(mode="json")
-    # GEN-13 adds an optional batch association; historical requests had no field.
-    del expected["batch_id"]
     # GEN-16's default classification was also absent from the historical request.
     del expected["scheduling_mode"]
     # Exact review bindings were absent from historical generic generation requests.
@@ -550,7 +548,6 @@ def test_legacy_job_is_validated_without_rewriting_old_capability_metadata(
 
 
 def test_authorized_replay_retains_exact_reference_selectors_and_batch(client, episode):
-    configure(client, max_attempts=1)
     source = create(client, episode["project_id"])
     version = approved(client, source)
     body = payload(

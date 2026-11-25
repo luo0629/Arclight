@@ -14,7 +14,6 @@ from arclight.domain.agent_state import (
 from arclight.domain.generation_requests import safe_metadata
 
 MEMORY_VERSION: Literal["agent-memory/1"] = "agent-memory/1"
-MAX_MEMORY_SOURCES = 256
 PreferenceKey = Literal["narrative_tone", "dialogue_style", "pacing", "visual_tone"]
 PREFERENCE_TASKS: dict[str, frozenset[str]] = {
     "narrative_tone": frozenset({"outline", "script", "rewrite", "producer"}),
@@ -73,15 +72,15 @@ class MemorySource(MemoryValue):
 
 class MemoryReference(MemorySource):
     manifest_id: UUID
-    evidence_round: int = Field(strict=True, ge=0, le=32)
+    evidence_round: int = Field(strict=True, ge=0)
 
 
 class WorkingMemory(MemoryValue):
     state_revision: int | None = Field(default=None, ge=0)
     plan: list[AgentPlanStep] = Field(default_factory=list, max_length=16)
     steps: list[AgentStep] = Field(default_factory=list, max_length=16)
-    observation_ids: list[UUID] = Field(default_factory=list, max_length=256)
-    tool_invocation_ids: list[UUID] = Field(default_factory=list, max_length=256)
+    observation_ids: list[UUID] = Field(default_factory=list)
+    tool_invocation_ids: list[UUID] = Field(default_factory=list)
     drafts: list[AgentDraftReference] = Field(default_factory=list, max_length=16)
 
 
@@ -95,17 +94,15 @@ class AgentMemory(MemoryValue):
     constraints_sha256: Checksum
     legacy_without_authority: bool
     working: WorkingMemory
-    domain_facts: list[MemoryReference] = Field(max_length=MAX_MEMORY_SOURCES)
-    evidence: list[MemoryReference] = Field(max_length=MAX_MEMORY_SOURCES)
+    domain_facts: list[MemoryReference]
+    evidence: list[MemoryReference]
     long_term_preferences: list[MemoryReference] = Field(max_length=4)
     constraint_precedence: Literal["REQUIRED_CONSTRAINTS"] = "REQUIRED_CONSTRAINTS"
     preference_role: Literal["ADVISORY_DATA"] = "ADVISORY_DATA"
 
     @model_validator(mode="after")
-    def bounded_sources(self):
+    def exact_sources(self):
         rows = self.domain_facts + self.evidence + self.long_term_preferences
-        if len(rows) > MAX_MEMORY_SOURCES:
-            raise ValueError("Required memory sources exceed the limit and cannot be trimmed")
         if len({(row.manifest_id, row.source_index) for row in rows}) != len(rows):
             raise ValueError("Each source belongs to exactly one memory category")
         for items, category in (

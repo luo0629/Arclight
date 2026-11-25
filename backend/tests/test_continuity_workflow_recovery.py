@@ -364,22 +364,23 @@ def test_uploaded_replacement_gets_independent_check_and_actual_review(
 
 
 def test_actual_limit_stop_persists_human_wait_without_review_or_selection(
-    client, episode, settings, reviewer_case, model_service
+    client, episode, settings, reviewer_case, model_service, monkeypatch
 ):
-    sent, _, _ = install_reviewer_model(model_service, dynamic=False)
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+    sent, _, _ = install_reviewer_model(model_service)
     job, _ = make_job(client, episode, reviewer_case)
     candidate = candidates(client, episode["project_id"], job)[0]
     binding = {name: reviewer_case["target"][name] for name in ("storyboard_id", "shot_id")}
     endpoint = (
         f"/api/v1/projects/{episode['project_id']}/generation-candidates/{candidate['id']}/review"
     )
-    response = client.post(endpoint, json=binding | {"agent_limits": {"max_model_calls": 0}})
+    response = client.post(endpoint, json=binding)
     assert response.status_code == 202, response.text
     run_work(client, settings, work_for(client, episode["project_id"], candidate))
     progress = work_for(client, episode["project_id"], candidate)
     assert progress["status"] == "WAITING_REVIEW", progress
     assert progress["pending_review"]["stop_code"] == "AGENT_MODEL_CALL_LIMIT", progress
-    assert not sent
+    assert len(sent) == 1
 
 
 def test_initial_high_risk_review_uses_owner_exception_without_automatic_selection(

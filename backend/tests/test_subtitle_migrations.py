@@ -28,6 +28,7 @@ def test_subtitle_empty_roundtrip_matches_metadata(client, migrated):
     command.check(migrated)
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_subtitle_history_blocks_downgrade_before_ddl(client, subtitle_case, migrated):
     engine = client.app.state.session_factory.kw["bind"]
     with engine.connect() as db:

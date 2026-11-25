@@ -14,7 +14,6 @@ from sqlalchemy import func, select
 from test_audio_production import output_audio, prepare, snapshot, wave_bytes
 from test_collaboration import create_episode, create_project
 from test_contexts import approved_board
-from test_generation_budget import set_policy
 from test_generation_delivery import deliver
 from test_media_validation import font_bytes
 from test_model_services import account
@@ -106,7 +105,6 @@ def authorized_run(
         "request_sha256": "a" * 64,
         "target_duration_ms": 30000,
         "output_profile": output,
-        "maximum_cost": "20",
         "font_file_id": str(font_id),
         "generated_media_rights_confirmed": generated_rights,
     }
@@ -202,7 +200,6 @@ def test_draft_preflight_saves_voices_before_single_approval(client, settings):
     configure(client, settings, "speech", "openai_tts")
     project = create_project(client)
     episode = create_episode(client, project)
-    set_policy(client, project["id"], "20")
     factory = client.app.state.session_factory
     with factory.begin() as db:
         referenced = make_asset(db, project["id"], "CHARACTER")
@@ -220,7 +217,7 @@ def test_draft_preflight_saves_voices_before_single_approval(client, settings):
 
     initial = readiness()
     assert initial["blocked_voices"] == []
-    assert float(initial["project_budget_limit"]) == 20
+    assert "project_budget_limit" not in initial
     assert initial["needed_voices"] == [
         {"speaker": "主角", "character_asset_id": None},
         {"speaker": "旁白", "character_asset_id": None},
@@ -254,20 +251,13 @@ def test_draft_preflight_saves_voices_before_single_approval(client, settings):
 
     previous_prices = settings.service_model_policies
     settings.service_model_policies = []
-    blocked = readiness()
-    assert blocked["needed_voices"] == []
-    assert {row["speaker"] for row in blocked["blocked_voices"]} == set(original)
-    assert {row["reason"] for row in blocked["blocked_voices"]} == {
-        "已配置的语音服务缺少可信报价。"
-    }
+    unquoted = readiness()
+    assert unquoted["needed_voices"] == unquoted["blocked_voices"] == []
     settings.service_model_policies = [
         row.model_copy(update={"pricing_version": "test-native:2"}) for row in previous_prices
     ]
     changed = readiness()
-    assert changed["needed_voices"] == initial["needed_voices"]
-    assert {row["reason"] for row in changed["blocked_voices"]} == {
-        "语音服务报价已变化，请重新保存音色。"
-    }
+    assert changed["needed_voices"] == changed["blocked_voices"] == []
     settings.service_model_policies = previous_prices
 
     configure(client, settings, "speech", "openai_tts", revision=1, key="changed-key")
@@ -290,7 +280,6 @@ def test_draft_preflight_saves_voices_before_single_approval(client, settings):
         path,
         json={
             "script_version_id": script["id"],
-            "maximum_cost": "5",
             "generated_media_rights_confirmed": True,
             "font_file_id": str(font_id),
         },
@@ -449,7 +438,6 @@ def test_automatic_dialogue_waits_for_raw_results_and_registers_exact_audio(clie
     script = save_script(client, episode)
     board, _ = approved_board(client, episode, script)
     board_id = UUID(board["id"])
-    set_policy(client, project["id"], "20")
     lines = {line["line_id"]: line for line in script["content_json"]["scenes"][0]["dialogue"]}
     original_voices = {}
     for speaker in {line["speaker"] for line in lines.values()}:

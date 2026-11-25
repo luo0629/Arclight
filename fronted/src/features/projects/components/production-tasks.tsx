@@ -52,6 +52,7 @@ const statuses: Record<string, string> = {
 const errorLabels: Record<string, string> = {
   INPUT_INVALID: "输入无效",
   PROVIDER_REJECTED: "供应商拒绝",
+  ACCOUNT_BALANCE_INSUFFICIENT: "账户余额不足",
   PROVIDER_FAILED: "供应商执行失败",
   PROVIDER_UNAVAILABLE: "供应商不可用",
   RESULT_UNKNOWN: "结果不确定",

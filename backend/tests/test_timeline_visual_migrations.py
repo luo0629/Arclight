@@ -17,6 +17,7 @@ from arclight.domain.versions import digest
 __all__ = ["review_case", "saved_case", "timeline_case", "visual_case"]
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_visual_upgrade_roundtrip_preserves_original_schema1_bytes_and_checksum(
     client, episode, timeline_case, migrated, monkeypatch
 ):
@@ -50,6 +51,7 @@ def test_visual_upgrade_roundtrip_preserves_original_schema1_bytes_and_checksum(
     assert client.get(save_url(legacy)).json() == legacy
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_nonempty_visual_downgrade_keeps_exact_head_schema_and_all_history(
     client, visual_case, migrated
 ):

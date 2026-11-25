@@ -17,7 +17,7 @@ from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.models import OutboxEvent, WorkflowRun
 
 
-def start_art(client, episode, settings, *, source=None, key=None, minimum=2, limits=None, **task):
+def start_art(client, episode, settings, *, source=None, key=None, minimum=2, **task):
     settings.model_gateway_policy = GatewayPolicy(
         text_maximum_cost="0", pricing_version="art-run:1"
     )
@@ -30,8 +30,6 @@ def start_art(client, episode, settings, *, source=None, key=None, minimum=2, li
             **task,
         },
     }
-    if limits is not None:
-        body["agent_limits"] = limits
     response = client.post(
         f"/api/v1/episodes/{episode['id']}/art-runs",
         headers={"Idempotency-Key": key or uuid4().hex},

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import { runErrorMessage } from "@/lib/run-errors";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -86,7 +87,7 @@ function Progress({
   });
   const [reason, setReason] = useState("");
   const [trigger, setTrigger] = useState<
-    "FAILURE" | "STALE" | "BUDGET_CHANGED" | "RECHECK"
+    "FAILURE" | "STALE" | "RECHECK"
   >("RECHECK");
   const [refreshError, setRefreshError] = useState("");
   const data = progress.data;
@@ -254,7 +255,7 @@ function Progress({
                 ? "当前项目角色只可查看生产计划与进度。"
                 : data.readonly_reason === "PRODUCER_INITIATOR_REQUIRED"
                   ? "仅原发起者可响应问题、委派或恢复本次生产协作。"
-                  : "当前生产协作已暂停或不可执行新操作，请检查状态、预算与执行记录。"}
+                  : "当前生产协作已暂停或不可执行新操作，请查看执行记录。"}
               {data.readonly_reason && (
                 <span className="text-xs">
                   状态依据：{data.readonly_reason}
@@ -262,8 +263,8 @@ function Progress({
               )}
             </Notice>
           )}
-          <section className="border-y py-4" aria-label="Producer 预算与用量">
-            <h4 className="font-medium">预算与用量</h4>
+          <section className="border-y py-4" aria-label="Producer 费用与用量">
+            <h4 className="font-medium">费用与用量</h4>
             <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-3 text-sm sm:grid-cols-3">
               <Budget
                 label="已知实际费用"
@@ -274,58 +275,23 @@ function Progress({
                 value={`${data.budget.pending_estimate} USD`}
               />
               <Budget
-                label="本次费用上限"
-                value={
-                  data.budget.limits.maximum_cost === undefined
-                    ? "未提供"
-                    : data.budget.limits.maximum_cost === null
-                      ? "未单独设置"
-                      : `${data.budget.limits.maximum_cost} USD`
-                }
-              />
-              <Budget
                 label="模型调用"
-                value={`${data.budget.model_calls} / ${data.budget.limits.max_model_calls ?? "—"}`}
+                value={String(data.budget.model_calls)}
               />
-              <Budget
-                label="工具调用"
-                value={`${data.budget.tool_calls} / ${data.budget.limits.max_tool_calls ?? "—"}`}
-              />
+              <Budget label="工具调用" value={String(data.budget.tool_calls)} />
               <Budget
                 label="专业 Agent 委派"
-                value={`${data.budget.delegations} / ${data.budget.limits.max_delegations ?? "—"}`}
-              />
-              <Budget
-                label="总调用上限"
-                value={String(data.budget.limits.max_calls ?? "—")}
-              />
-              <Budget
-                label="步骤上限"
-                value={String(data.budget.limits.max_steps ?? "—")}
-              />
-              <Budget
-                label="委派深度上限"
-                value={String(data.budget.limits.max_delegation_depth ?? "—")}
-              />
-              <Budget
-                label="执行截止"
-                value={
-                  data.budget.deadline_at
-                    ? new Date(data.budget.deadline_at).toLocaleString("zh-CN")
-                    : "未提供"
-                }
+                value={String(data.budget.delegations)}
               />
               <Budget
                 label="费用状态"
                 value={
-                  data.budget.unknown_cost
-                    ? "存在未知费用，须先核验"
-                    : "按已知用量记录"
+                  data.budget.unknown_cost ? "有费用待核账" : "按已知用量记录"
                 }
               />
             </dl>
             <p className="mt-3 text-xs text-muted-foreground">
-              预算与调用数为本次生产协作的服务端汇总；正式交付完成情况仍须检查子任务与审核结果。
+              费用与调用数为本次生产协作的服务端汇总；正式交付完成情况仍须检查子任务与审核结果。
             </p>
           </section>
           {data.pending_command && (
@@ -336,6 +302,9 @@ function Progress({
                   data.pending_command.action}{" "}
                 · {data.pending_command.status}
               </p>
+              {data.pending_command.error_code && (
+                <p>{runErrorMessage(data.pending_command.error_code)}</p>
+              )}
               {data.pending_command.status === "WAITING_EXTERNAL" && (
                 <p>
                   外部结果尚未确认，恢复会继续核验原操作，不能跳过未知结果另行发起。
@@ -415,7 +384,7 @@ function Progress({
                       </p>
                       {task.error_code && (
                         <Notice tone="error">
-                          任务受阻：{task.error_code}
+                          任务受阻：{runErrorMessage(task.error_code)}
                         </Notice>
                       )}
                       {task.unknown_external_result && (
@@ -553,9 +522,6 @@ function Progress({
                   <NativeSelectOption value="STALE">
                     输入或版本已失效
                   </NativeSelectOption>
-                  <NativeSelectOption value="BUDGET_CHANGED">
-                    预算条件变化
-                  </NativeSelectOption>
                 </NativeSelect>
               </FormLabel>
               <FormLabel>
@@ -623,7 +589,9 @@ function Progress({
                       {commandNames[item.action] ?? item.action}
                     </span>
                     <span>{item.status}</span>
-                    {item.error_code && <span>{item.error_code}</span>}
+                    {item.error_code && (
+                      <span>{runErrorMessage(item.error_code)}</span>
+                    )}
                   </li>
                 ))}
               </ol>

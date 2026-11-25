@@ -68,7 +68,6 @@ test("剧情场景展开显示精确镜头照片，并定位对应剧本场景",
     (route) =>
       route.fulfill({
         json: {
-          project_budget_limit: "0.00",
           needed_voices: [],
           blocked_voices: [],
         },
@@ -120,7 +119,7 @@ test("剧情场景展开显示精确镜头照片，并定位对应剧本场景",
   await expect(detail).toContainText(scene.action);
   await detail.getByRole("button", { name: "在剧本中打开场景" }).click();
   await expect(page.getByRole("region", { name: "短剧制作" })).toContainText(
-    "项目预算上限（USD）0.00",
+    "使用剧本",
   );
   await expect(
     page.locator(`[data-script-scene="${scene.scene_id}"]`),

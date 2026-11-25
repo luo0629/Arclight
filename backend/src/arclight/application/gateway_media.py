@@ -62,12 +62,8 @@ def submit(
                 parameters=resolve_parameters(job.provider, job.model),
                 media=provider.capabilities,
             ),
-            maximum_cost=quote.maximum_cost
-            if quote
-            else Decimal("0")
-            if source == "NONE"
-            else None,
-            pricing_version=quote.pricing_version if quote else "mock-free:1",
+            maximum_cost=quote.maximum_cost if quote else None,
+            pricing_version=quote.pricing_version if quote else "unconfigured",
         )
         call = GatewayRequest(
             project_id=job.project_id,
@@ -104,7 +100,6 @@ def submit(
             policy=policy.model_copy(
                 update={
                     "timeout_seconds": max(0.001, min(timeout, policy.timeout_seconds)),
-                    "max_attempts": 1,
                 }
             ),
             usage=lambda value: GatewayUsage(
@@ -119,16 +114,8 @@ def submit(
     except DomainError as exc:
         if exc.code == "GATEWAY_RECONCILIATION_REQUIRED":
             return SubmissionReceipt(status="RESULT_UNKNOWN", error_code="RESULT_UNKNOWN")
-        if exc.code.startswith("BUDGET_") or exc.code in {
-            "AGENT_BUDGET_EXCEEDED",
-            "AGENT_CALL_LIMIT",
-            "AGENT_MODEL_CALL_LIMIT",
-            "AGENT_TOOL_CALL_LIMIT",
-            "AGENT_AGENT_CALL_LIMIT",
-            "AGENT_STEP_LIMIT",
-            "AGENT_DEADLINE_EXCEEDED",
-        }:
-            rejection: MediaErrorCode = "BUDGET_EXCEEDED"
+        if exc.code == "ACCOUNT_BALANCE_INSUFFICIENT":
+            rejection: MediaErrorCode = "ACCOUNT_BALANCE_INSUFFICIENT"
         elif exc.code in {
             "GATEWAY_QUOTA_EXHAUSTED",
             "GATEWAY_PROVIDER_AUTHENTICATION_FAILED",
@@ -141,20 +128,23 @@ def submit(
             rejection = "PROVIDER_REJECTED"
         elif exc.code == "GATEWAY_PROVIDER_FAILED":
             rejection = "PROVIDER_FAILED"
-        elif exc.code.startswith("AGENT_") or (
-            execution is not None
-            and exc.code
-            in {
-                "FORBIDDEN",
-                "NOT_FOUND",
-                "PROJECT_ARCHIVED",
-                "RUN_STATE_INVALID",
-                "GATEWAY_SCOPE_INVALID",
-                "GATEWAY_ROUTE_FORBIDDEN",
-                "GATEWAY_CAPABILITY_REJECTED",
-                "GATEWAY_IDEMPOTENCY_CONFLICT",
-                "GATEWAY_ATTEMPT_LIMIT",
-            }
+        elif (
+            exc.code in {"MEDIA_CALL_SCOPE_INVALID", "SHORT_DRAMA_INACTIVE"}
+            or exc.code.startswith("AGENT_")
+            or (
+                execution is not None
+                and exc.code
+                in {
+                    "FORBIDDEN",
+                    "NOT_FOUND",
+                    "PROJECT_ARCHIVED",
+                    "RUN_STATE_INVALID",
+                    "GATEWAY_SCOPE_INVALID",
+                    "GATEWAY_ROUTE_FORBIDDEN",
+                    "GATEWAY_CAPABILITY_REJECTED",
+                    "GATEWAY_IDEMPOTENCY_CONFLICT",
+                }
+            )
         ):
             # Domain/authorization refusals are terminal, not transient provider failures.
             rejection = "INPUT_INVALID"

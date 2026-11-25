@@ -90,19 +90,11 @@ def test_classification_is_frozen_and_old_request_fingerprints_replay(client, ep
         db.execute(update(GenerationLane).values(lane="INTERACTIVE"))
 
 
-@pytest.mark.parametrize("resource", ["provider", "project", "global_rate", "user_rate"])
+@pytest.mark.parametrize("resource", ["provider", "project"])
 def test_batch_backlog_leaves_interactive_capacity_at_each_shared_limit(client, episode, resource):
-    limits = dict(
-        provider_concurrency=20, project_concurrency=20, global_per_minute=100, user_per_minute=100
-    )
-    limits.update(
-        {
-            "provider": {"provider_concurrency": 2},
-            "project": {"project_concurrency": 2},
-            "global_rate": {"global_per_minute": 3},
-            "user_rate": {"user_per_minute": 3},
-        }[resource]
-    )
+    limits = {
+        f"{scope}_concurrency": 2 if scope == resource else 20 for scope in ("provider", "project")
+    }
     policy = configure(client, **limits)
     batch = new(client, episode["project_id"], "BATCH")
     new(client, episode["project_id"], "BATCH")
@@ -119,8 +111,6 @@ def test_weighted_successful_admissions_and_restart_safe_cursor(client, episode)
         client,
         provider_concurrency=100,
         project_concurrency=100,
-        global_per_minute=1000,
-        user_per_minute=1000,
         dispatch_window=1,
     )
     for lane in ["INTERACTIVE"] * 9 + ["BATCH"] * 3:
@@ -146,8 +136,6 @@ def test_projects_rotate_and_a_full_project_does_not_hide_another(client, episod
         client,
         provider_concurrency=4,
         project_concurrency=1,
-        global_per_minute=1000,
-        user_per_minute=1000,
     )
     busy = new(client, project_id)
     from arclight.providers.media_submission import SubmissionReceipt
@@ -269,27 +257,32 @@ def test_projects_rotate_within_each_lane(client, episode):
     assert projects[0] != projects[1] and projects[:2] * 3 == projects
 
 
-def test_budget_block_does_not_spend_fair_share_or_hide_other_project(client, episode, monkeypatch):
+def test_legacy_budget_does_not_hide_a_project_from_the_fair_queue(client, episode, monkeypatch):
+    from decimal import Decimal
+
     from test_generation_accounting import ledger, usage
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
+
+    from arclight.persistence.models import Project
 
     first = episode["project_id"]
     other = create_project(client)["id"]
-    for project in (first, other):
-        set_policy(client, project, "10")
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, UUID(first)).budget_limit = Decimal("0.01")
     priced(monkeypatch)
-    blocked = new(client, first)
-    ready = new(client, other)
-    set_policy(client, first, "1")
+    jobs = [new(client, project) for project in (first, other)]
     configure(client, provider_concurrency=4, project_concurrency=4, dispatch_window=1)
-    received = messages(client)
-    assert len(received) == 1 and str(received[0][0]) == ready["id"]
-    assert send(client, received[0]) == "SUCCEEDED"
+    seen = []
+    for _ in jobs:
+        received = messages(client)
+        assert len(received) == 1
+        seen.append(str(received[0][0]))
+        assert send(client, received[0]) == "SUCCEEDED"
+    assert set(seen) == {job["id"] for job in jobs}
     assert messages(client) == []
-    assert permits(client, blocked)[0]["reason"] == "BUDGET_EXCEEDED"
-    assert permits(client, blocked)[0]["epoch"] == 0
+    assert permits(client, jobs[0])[0]["state"] == "CONSUMED"
     assert usage(client, first) == (0, 2) and len(ledger(client, first)) == 1
-    assert fresh(client, blocked)["attempt_count"] == 0
+    assert fresh(client, jobs[0])["attempt_count"] == 1
 
 
 def test_paid_duplicate_expiry_and_unknown_keep_one_original_reservation(
@@ -298,12 +291,11 @@ def test_paid_duplicate_expiry_and_unknown_keep_one_original_reservation(
     from decimal import Decimal
 
     from test_generation_accounting import ledger, usage
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
 
     from arclight.providers.media_submission import SubmissionReceipt
 
     project = episode["project_id"]
-    set_policy(client, project, "10")
     priced(monkeypatch)
     job = new(client, project)
     old = messages(client)[0]
@@ -376,6 +368,7 @@ def test_backlog_distinguishes_waiting_execution_and_permission_scope(client, ep
     assert client.get(base(job["project_id"]) + f"/{job['id']}/permits").status_code == 404
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_queue_history_and_protective_downgrade(client, episode, migrated):
     job = new(client, episode["project_id"])
     messages(client)
@@ -556,13 +549,13 @@ def test_postgres_schedulers_and_consumers_share_one_atomic_capacity(client, epi
     assert len(provider.requests) == 2
 
 
-def test_submission_rate_reserve_keeps_reconciliation_available(client, episode):
+def test_reconciliation_remains_available_during_submission_bursts(client, episode):
     from test_generation_reconciliation import QueryFake, query
 
     from arclight.providers.media_query import QueryReceipt
     from arclight.providers.media_submission import SubmissionReceipt
 
-    configure(client, global_per_minute=3, user_per_minute=3)
+    configure(client, provider_concurrency=6, project_concurrency=6)
     running = new(client, episode["project_id"], "BATCH")
     message = messages(client)[0]
     assert (
@@ -571,7 +564,9 @@ def test_submission_rate_reserve_keeps_reconciliation_available(client, episode)
             message,
             Provider(
                 receipt=SubmissionReceipt(
-                    status="RESULT_UNKNOWN", request_id="rate-reserve", error_code="RESULT_UNKNOWN"
+                    status="RESULT_UNKNOWN",
+                    request_id="parallel-review",
+                    error_code="RESULT_UNKNOWN",
                 )
             ),
         )
@@ -579,31 +574,33 @@ def test_submission_rate_reserve_keeps_reconciliation_available(client, episode)
     )
     new(client, episode["project_id"])
     assert send(client, messages(client)[0]) == "SUCCEEDED"
-    waiting = new(client, episode["project_id"])
-    assert messages(client) == []
+    additional = [new(client, episode["project_id"]) for _ in range(4)]
+    dispatched = messages(client)
+    assert {str(message[0]) for message in dispatched} == {job["id"] for job in additional}
     fake = QueryFake(QueryReceipt(status="RUNNING"))
     result = query(client, fresh(client, running), fake)
     assert result.status_code == 200 and len(fake.calls) == 1
-    assert fresh(client, waiting)["attempt_count"] == 0
+    assert all(send(client, message) == "SUCCEEDED" for message in dispatched)
 
 
-def test_paused_queue_still_expires_and_releases_only_unsubmitted_money(
+def test_paused_queue_keeps_work_and_accounting_evidence_until_resumed(
     client, episode, monkeypatch
 ):
     from test_generation_accounting import usage
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
 
-    set_policy(client, episode["project_id"], "4")
     priced(monkeypatch)
     job = new(client, episode["project_id"])
     configure(client, paused_providers={"mock"})
     advance(monkeypatch, 901)
     assert messages(client) == []
-    assert fresh(client, job)["status"] == "FAILED"
+    assert fresh(client, job)["status"] == "CREATED"
     assert fresh(client, job)["attempt_count"] == 0
-    assert usage(client, episode["project_id"]) == (0, 0)
+    assert usage(client, episode["project_id"]) == (0, 2)
     queue = client.get(base(episode["project_id"]) + "/queue").json()
-    assert queue["lanes"][0]["dead_letter"] == 1
+    assert queue["lanes"][0]["dead_letter"] == 0
+    configure(client, paused_providers=set())
+    assert len(messages(client)) == 1
 
 
 def test_recovery_scan_is_coalesced_across_scheduler_sessions(client, monkeypatch):
@@ -633,11 +630,10 @@ def test_postgres_expiry_cancel_and_old_message_preserve_money(
 ):
     require_postgres(settings)
     from test_generation_accounting import ledger, usage
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
 
     from arclight.application.generation_state import find_job, request_cancel
 
-    set_policy(client, episode["project_id"], "4")
     priced(monkeypatch)
     cancelled = new(client, episode["project_id"])
     remaining = new(client, episode["project_id"])
@@ -672,11 +668,10 @@ def test_postgres_reissue_expired_permit_while_old_consumer_holds_business_locks
 ):
     require_postgres(settings)
     from test_generation_accounting import ledger, usage
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
 
     from arclight.application import generation_queues, generation_scheduling
 
-    set_policy(client, episode["project_id"], "2")
     priced(monkeypatch)
     job = new(client, episode["project_id"])
     old_message = messages(client)[0]
@@ -717,11 +712,10 @@ def test_postgres_reissue_expired_permit_while_old_consumer_holds_business_locks
 
 def test_expired_permit_reclamation_survives_failed_reissue(client, episode, monkeypatch):
     from test_generation_accounting import ledger, usage
-    from test_generation_budget import priced, set_policy
+    from test_generation_budget import priced
 
     from arclight.application import generation_queues
 
-    set_policy(client, episode["project_id"], "2")
     priced(monkeypatch)
     job = new(client, episode["project_id"])
     old_message = messages(client)[0]

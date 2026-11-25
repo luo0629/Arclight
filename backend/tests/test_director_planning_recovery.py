@@ -17,7 +17,6 @@ from test_director_planning import install_model, prepare
 
 from arclight.application import director_planning as planning
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.main import create_app
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction, AgentLoopQuestion
@@ -118,27 +117,30 @@ def test_authority_exact_input_and_usability_rechecked_after_model_io(
         assert db.scalar(select(func.count()).select_from(Storyboard)) == 0
 
 
-def test_root_call_limit_is_not_reset_by_explicit_plan_retry(
+def test_completed_plan_replay_preserves_control_and_outcome(
     client, episode, settings, model_service
 ):
     run_id, actor, _ = prepare(client, episode, settings)
     sent, errors = install_model(model_service)
     factory = client.app.state.session_factory
-    limits = AgentRunLimits(max_calls=4)
-    first = planning.plan_director(factory, settings, run_id, actor, limits=limits)
-    assert first.status == "STOPPED" and first.stop_code == "AGENT_CALL_LIMIT", (
+    first = planning.plan_director(
+        factory,
+        settings,
+        run_id,
+        actor,
+    )
+    assert first.status == "COMPLETED", (
         first.model_dump_json(),
         errors,
     )
-    assert len(sent) == 1
+    assert len(sent) == 2
     with factory() as db:
         deadline = db.get(AgentRunLimit, run_id).deadline_at
         original = db.get(AgentLoop, first.loop_id).outcome_json
-    retry = planning.plan_director(factory, settings, run_id, actor, attempt=1)
-    assert retry.status == "STOPPED" and retry.stop_code == "AGENT_CALL_LIMIT"
-    assert len(sent) == 1
+    assert planning.plan_director(factory, settings, run_id, actor) == first
+    assert len(sent) == 2
     with factory() as db:
-        assert db.get(AgentRunLimit, run_id).deadline_at == deadline
+        assert db.get(AgentRunLimit, run_id).deadline_at is deadline is None
         assert db.get(AgentLoop, first.loop_id).outcome_json == original
 
 

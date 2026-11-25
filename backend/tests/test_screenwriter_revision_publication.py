@@ -31,7 +31,7 @@ def test_crash_after_saved_repair_rebuilds_from_receipt_before_publishing_once(
         return original(*args, **kwargs)
 
     monkeypatch.setattr(revision, "_round", die)
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     with pytest.raises(WorkerDied):
         run_once(client, settings, run_id)
     assert len(sent) == 6
@@ -57,7 +57,7 @@ def test_registered_revision_change_blocks_continuation_with_approved_history_pr
     from arclight.application import production_versions as versions
 
     sent, errors, ordinary_errors = install_revision(model_service, monkeypatch, settings)
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, ordinary_errors)
     candidate_id = UUID(run["pending_review"]["version_id"])

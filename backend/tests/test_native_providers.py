@@ -502,7 +502,7 @@ def test_native_agent_structured_output_tools_and_usage(settings, stub_llm, prot
     "status,code",
     [
         (401, "PROVIDER_AUTHENTICATION_FAILED"),
-        (402, "PROVIDER_QUOTA_EXHAUSTED"),
+        (402, "PROVIDER_INSUFFICIENT_BALANCE"),
         (403, "PROVIDER_ACCESS_DENIED"),
         (429, "PROVIDER_RATE_LIMITED"),
     ],
@@ -515,7 +515,6 @@ def test_native_errors_are_sanitized(settings, stub_llm, protocol, status, code)
         service.invoke(
             settings,
             [HumanMessage("synthetic")],
-            max_tokens=20,
             response_format={"type": "json_object"},
         )
     assert error.value.code == code and error.value.not_accepted
@@ -541,7 +540,6 @@ def test_completed_malformed_native_text_retains_known_usage(
         service.invoke(
             settings,
             [HumanMessage("test")],
-            max_tokens=20,
             response_format={"type": "json_object"},
         )
     assert error.value.completed and not error.value.not_accepted

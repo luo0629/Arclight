@@ -72,6 +72,7 @@ def test_definite_terminal_job_releases_asset_mutex(client, generation_seed, sta
         add_job(db, generation_seed, idempotency_key="another-command")
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_final_dispatch_receipt_is_immutable_and_downgrade_preserves_head(
     client, episode, migrated
 ):

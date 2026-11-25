@@ -184,7 +184,6 @@ class LLMService:
         settings: Settings,
         messages: list[BaseMessage],
         *,
-        max_tokens: int,
         response_format: dict,
         tools: list[dict] | None = None,
         strict_finish: bool = True,
@@ -217,7 +216,6 @@ class LLMService:
         kwargs = invocation_kwargs(
             settings,
             messages,
-            max_tokens=max_tokens,
             response_format=response_format,
             tools=tools,
         )

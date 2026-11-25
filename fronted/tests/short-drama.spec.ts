@@ -46,7 +46,7 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
       approvals.push(path);
   });
 
-  // Text drafts, edits and the project budget use the isolated real API. The
+  // Text drafts and edits use the isolated real API. The
   // media endpoints return synthetic receipts without a provider or user data.
   await page.route(
     `**${episodeApi}/short-drama/preflight?**`,
@@ -55,12 +55,8 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
         "script_version_id",
       );
       preflightScripts.push(script);
-      const budgetResponse = await page.request.get(projectApi, { headers });
-      expect(budgetResponse.status()).toBe(200);
-      const budget: Project = await budgetResponse.json();
       await route.fulfill({
         json: {
-          project_budget_limit: budget.budget_limit,
           needed_voices:
             script === savedScriptId && !savedVoice
               ? [{ speaker, character_asset_id: characterId }]
@@ -180,38 +176,13 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
     name: "确认剧本并生成短剧",
     exact: true,
   });
-  const spendingLimit = production.getByLabel("本次制作费用上限（USD）", {
-    exact: true,
-  });
+  await expect(production.getByLabel(/费用上限|项目预算/)).toHaveCount(0);
   const rights = production.getByRole("checkbox", {
     name: "我确认本次生成的画面和配音具备用于此短剧的授权。",
     exact: true,
   });
-  await expect(
-    production.getByText("请先设置大于零的项目预算。", { exact: true }),
-  ).toBeVisible();
   await expect(confirm).toBeDisabled();
-  const budgetLink = production.getByRole("link", {
-    name: "设置项目预算",
-    exact: true,
-  });
-  await expect(budgetLink).toHaveAttribute(
-    "href",
-    `/projects/${project.id}?section=settings`,
-  );
-  await budgetLink.click();
-  await page.getByLabel("预算额度", { exact: true }).fill("5");
-  await page.getByRole("button", { name: "保存设置", exact: true }).click();
-  await expect(page.getByText("设置已保存", { exact: true })).toBeVisible();
-  await page.goBack();
-  await expect(production.getByText(/^项目预算上限（USD）5/)).toBeVisible();
-  await spendingLimit.fill("6");
   await rights.check();
-  await expect(
-    production.getByText("本次制作费用上限不能超过项目预算。", { exact: true }),
-  ).toBeVisible();
-  await expect(confirm).toBeDisabled();
-  await spendingLimit.fill("3");
   await expect(confirm).toBeEnabled();
 
   await page
@@ -243,7 +214,6 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
   expect(savedScriptId).toBeTruthy();
   expect(savedScriptId).not.toBe(scripts[0].id);
   await expect(production.getByText(/使用剧本 v2/)).toBeVisible();
-  await spendingLimit.fill("3");
   await rights.check();
   await production.getByLabel("字幕字体", { exact: true }).selectOption(fontId);
   await expect(confirm).toBeDisabled();
@@ -273,7 +243,6 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
     {
       body: {
         script_version_id: savedScriptId,
-        maximum_cost: "3",
         font_file_id: fontId,
         generated_media_rights_confirmed: true,
         impact_digest: expect.stringMatching(/^[a-f0-9]{64}$/),

@@ -86,9 +86,16 @@ def json_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
-def check_size(value: dict, limits: ContextLimits) -> None:
+def validate_context_metadata(value: dict) -> None:
     try:
         safe_metadata(value)
+    except (TypeError, ValueError) as exc:
+        raise DomainError("CONTEXT_INPUT_UNSAFE", "上下文包含不支持或不安全的数据", 422) from exc
+
+
+def check_size(value: dict, limits: ContextLimits) -> None:
+    validate_context_metadata(value)
+    try:
         size = len(json_bytes(value))
     except (TypeError, ValueError) as exc:
         raise DomainError("CONTEXT_INPUT_UNSAFE", "上下文包含不支持或不安全的数据", 422) from exc
@@ -109,5 +116,5 @@ def check_call(snapshot: dict, task_input: dict) -> dict:
         if isinstance(revision, dict):
             revision.pop("object_ref", None)
     value = {"task_context": snapshot, "task_input": inputs}
-    check_size(value, ContextLimits.model_validate(snapshot["limits"]))
+    validate_context_metadata(value)
     return value

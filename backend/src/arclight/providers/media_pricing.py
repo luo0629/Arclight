@@ -11,7 +11,7 @@ from arclight.domain.generation_requests import GenerationSpec
 def quote(
     spec: GenerationSpec, task_type: str, image_service: OpenAIImageSettings | None = None
 ) -> CostQuote | None:
-    # Real adapters must supply a bounded quote before they can become billable.
+    # An estimate is available only when the adapter has verified pricing.
     if spec.provider == "mock":
         return CostQuote(maximum_cost=Decimal("0"), pricing_version="mock-free-v1")
     if spec.provider == "openai" and image_service is not None:
@@ -28,7 +28,8 @@ def quote(
         from arclight.providers.openai_images import validate_spec
 
         validate_spec(spec)
-        assert image_service.maximum_cost_per_image is not None
+        if image_service.maximum_cost_per_image is None:
+            return None
         return CostQuote(
             maximum_cost=image_service.maximum_cost_per_image * spec.batch_size,
             pricing_version=image_service.pricing_version,

@@ -15,7 +15,7 @@ from arclight.core.errors import DomainError
 from arclight.persistence.models import RenderAttempt, RenderExecution, RenderJob
 
 POLICY = LeasePolicy()
-MAX_SECONDS = 1800
+MAX_RENDER_ATTEMPTS = 3
 
 
 def owned(db: Session, run: RenderExecution, job: RenderJob, token: UUID) -> None:
@@ -62,9 +62,7 @@ def claim(
         if job.cancel_requested_at:
             finish(db, run, job, "CANCELLED", None)
             return None
-        if job.attempt_count >= 3 or (
-            job.started_at and (stamp - utc(job.started_at)).total_seconds() >= MAX_SECONDS
-        ):
+        if job.attempt_count >= MAX_RENDER_ATTEMPTS:
             finish(db, run, job, "FAILED", "RENDER_RECOVERY_EXHAUSTED")
             return None
         token = uuid4()
@@ -99,8 +97,6 @@ def observe(
         owned(db, run, job, token)
         if job.cancel_requested_at:
             raise DomainError("RENDER_CANCELLED", "渲染已请求取消", 409)
-        if job.started_at and (clock(db) - utc(job.started_at)).total_seconds() >= MAX_SECONDS:
-            raise DomainError("RENDER_TIME_LIMIT", "渲染超过总执行时限", 409)
         attempt = db.get(RenderAttempt, token)
         assert attempt is not None
         value = max(job.progress, min(99, progress)) if progress is not None else job.progress

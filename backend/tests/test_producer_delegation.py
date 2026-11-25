@@ -13,7 +13,6 @@ from test_continuity_reviewer import reviewer_case as reviewer_case
 from test_continuity_rules import rules_storage as rules_storage
 from test_director_creation import approved_script
 from test_director_revision import install_revision as install_director
-from test_generation_budget import set_policy
 from test_producer_planning import completed_plan, writer_task
 from test_screenwriter_creation import run_once
 from test_screenwriter_revision import install_revision as install_writer
@@ -87,7 +86,7 @@ def test_same_plan_task_across_tool_keys_creates_one_child_and_one_outbox(
         policy = db.get(AgentRunLimit, child_id)
         assert child.status == "QUEUED" and child.workflow_type == "script_storyboard"
         assert child.input_json["story"] == outcome.result.tasks[0].task.story
-        assert child.input_json["screenwriter"]["agent_limits"] == root.limits_json
+        assert child.input_json["screenwriter"] == {"revision_rounds": 3}
         assert policy.parent_run_id == run_id and policy.root_run_id == root.run_id
         assert policy.limits_json == root.limits_json and policy.deadline_at == root.deadline_at
         assert policy.depth == root.depth + 1
@@ -101,7 +100,11 @@ def test_same_plan_task_across_tool_keys_creates_one_child_and_one_outbox(
         assert first["plan_sha256"] == digest(outcome.result.model_dump(mode="json"))
     assert len(sent) == 2
     with client.app.state.session_factory.begin() as db, pytest.raises(DomainError) as error:
-        configure_agent_run(db, child_id, actor, AgentRunLimits(maximum_cost=None))
+        configure_agent_run(
+            db,
+            child_id,
+            actor,
+        )
     assert error.value.code == "AGENT_LIMITS_CONFLICT"
 
 
@@ -322,7 +325,7 @@ def test_delegated_reviewer_executes_real_checked_candidate_without_approval(
         assert {row.run_id for row in actions} == {run_id, child_id}
 
 
-def test_root_model_call_cap_is_enforced_by_real_child_before_network(
+def test_real_child_records_calls_past_a_historical_root_limit(
     client, episode, settings, model_service, monkeypatch
 ):
     limits = AgentRunLimits(max_model_calls=2, maximum_cost=Decimal("0"), max_duration_seconds=3600)
@@ -331,26 +334,22 @@ def test_root_model_call_cap_is_enforced_by_real_child_before_network(
     )
     receipt = dispatched(client, settings, delegation_call(run_id, reference))
     sent, errors, ordinary_errors = install_writer(model_service, monkeypatch, settings)
-    failed = run_once(client, settings, UUID(receipt["child_run_id"]))
-    assert failed["status"] == "FAILED" and failed["error_code"] == "AGENT_MODEL_CALL_LIMIT", failed
-    assert sent == [] and not errors and not ordinary_errors
+    finished = run_once(client, settings, UUID(receipt["child_run_id"]))
+    assert finished["status"] == "WAITING_REVIEW", finished
+    assert sent and not errors and not ordinary_errors
     with client.app.state.session_factory() as db:
         usage = action_usage(db, run_id)
-        assert sum(row.kind == "MODEL" for row in usage["actions"]) == 2
+        assert sum(row.kind == "MODEL" for row in usage["actions"]) > 2
         assert db.get(WorkflowRun, run_id).status == "RUNNING"
 
 
 @pytest.mark.parametrize(
-    "quote,code",
-    [
-        (Decimal("0.02"), "AGENT_BUDGET_EXCEEDED"),
-        (None, "BUDGET_QUOTE_UNAVAILABLE"),
-    ],
+    "quote",
+    [Decimal("0.02"), None],
 )
-def test_real_child_cannot_overspend_producer_actual_cost_or_use_unknown_quote(
-    client, episode, settings, model_service, monkeypatch, quote, code
+def test_real_child_records_cost_without_a_root_budget(
+    client, episode, settings, model_service, monkeypatch, quote
 ):
-    set_policy(client, episode["project_id"], "100")
     limits = AgentRunLimits(maximum_cost=Decimal("0.03"), max_duration_seconds=3600)
     run_id, actor, _, reference, root_sent = completed_plan(
         client, episode, settings, model_service, limits=limits, quote="0.01", cost="0.01"
@@ -371,43 +370,42 @@ def test_real_child_cannot_overspend_producer_actual_cost_or_use_unknown_quote(
                 GatewayUsage(actual_cost=Decimal("0.01")),
                 f"producer-invoice-{index}",
             )
+    sent, errors, ordinary_errors = install_writer(model_service, monkeypatch, settings)
     settings.model_gateway_policy = GatewayPolicy(
         text_maximum_cost=quote,
         pricing_version="prod02-child:1" if quote is not None else "unconfigured",
     )
     receipt = dispatched(client, settings, delegation_call(run_id, reference))
-    sent, errors, ordinary_errors = install_writer(model_service, monkeypatch, settings)
-    failed = run_once(client, settings, UUID(receipt["child_run_id"]))
-    assert failed["status"] == "FAILED" and failed["error_code"] == code, failed
-    assert sent == [] and not errors and not ordinary_errors
+    child_id = UUID(receipt["child_run_id"])
+    finished = run_once(client, settings, child_id)
+    assert finished["status"] == "WAITING_REVIEW", (finished, errors, ordinary_errors)
+    assert sent and not errors and not ordinary_errors
     with client.app.state.session_factory() as db:
         usage = action_usage(db, run_id)
         assert usage["actual_cost"] == Decimal("0.02")
-        assert usage["pending_estimate"] == 0 and not usage["unknown_cost"]
-        assert {row.run_id for row in usage["actions"] if row.kind == "MODEL"} == {run_id}
+        assert usage["unknown_cost"] is (quote is None)
+        assert (usage["pending_estimate"] > 0) is (quote is not None)
+        assert {row.run_id for row in usage["actions"] if row.kind == "MODEL"} == {run_id, child_id}
         assert db.get(WorkflowRun, run_id).status == "RUNNING"
 
 
 @pytest.mark.parametrize(
-    "policy,code",
-    [
-        ({"max_delegations": 0}, "AGENT_DELEGATION_LIMIT"),
-        ({"max_delegation_depth": 0}, "AGENT_DELEGATION_DEPTH"),
-    ],
+    "policy",
+    [{"max_delegations": 0}, {"max_delegation_depth": 0}],
 )
-def test_zero_root_delegation_quantity_or_depth_cannot_create_child_or_outbox(
-    client, episode, settings, model_service, policy, code
+def test_historical_zero_delegation_limits_allow_authorized_child_and_outbox(
+    client, episode, settings, model_service, policy
 ):
     limits = AgentRunLimits(maximum_cost=Decimal("0"), max_duration_seconds=3600, **policy)
     run_id, _, _, reference, _ = completed_plan(
         client, episode, settings, model_service, limits=limits
     )
     feedback = dispatch(client, settings, delegation_call(run_id, reference))
-    assert feedback.status == "FAILED" and feedback.error.code == code
+    assert feedback.status == "SUCCEEDED"
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 1
-        assert db.scalar(select(func.count()).select_from(AgentRunLimit)) == 1
-        assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 0
+        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 2
+        assert db.scalar(select(func.count()).select_from(AgentRunLimit)) == 2
+        assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
 @pytest.mark.parametrize("status", ["WAITING_REVIEW", "CANCELLED"])

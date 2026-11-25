@@ -121,22 +121,8 @@ def reconcile(
             raise DomainError(
                 "INVALID_ATTEMPT_OUTCOME", "Manual result does not match requested batch", 422
             )
-        schedule = scheduling.schedule_for(db, job)
-        if lease_token is not None and leases.clock(db) >= leases.utc(schedule.deadline_at):
-            if job.status != Status.RECONCILING:
-                transition(db, job.id, Status.RECONCILING, job.revision, actor=actor)
-            transition(db, job.id, Status.MANUAL_REVIEW, job.revision, actor=actor)
-            scheduling.diagnose(db, job, "TIME_LIMIT", "RESULT_UNKNOWN")
-            held = leases.lease_for(db, job.id)
-            if held is not None:
-                leases.release(db, held, lease_policy)
-            return job
         query_call_id = cancel_call_id = None
         timeout = scheduling.policy_for(db, job).call_timeout_seconds
-        if lease_token is not None:
-            timeout = min(
-                timeout, (leases.utc(schedule.deadline_at) - leases.clock(db)).total_seconds()
-            )
         query_supported = (
             provider.capabilities.provider == attempt.provider
             and provider.capabilities.supports_query
@@ -289,7 +275,7 @@ def reconcile(
                         transition(db, job.id, Status.CANCELLED, job.revision, actor=actor)
                     else:
                         scheduling.retry_after_failure(
-                            db, job, "PROVIDER_FAILED", not_accepted=True, actor=actor
+                            db, job, error or "PROVIDER_FAILED", not_accepted=True, actor=actor
                         )
                 elif target == Status.FAILED:
                     scheduling.retry_after_failure(db, job, error or "PROVIDER_FAILED")
@@ -302,11 +288,6 @@ def reconcile(
                     actor=actor,
                 )
                 attempt.status = Status.RUNNING
-                if leases.clock(db) >= leases.utc(scheduling.schedule_for(db, job).deadline_at):
-                    mark_result_unknown(db, job.id, attempt.id)
-                    transition(db, job.id, Status.RECONCILING, job.revision, actor=actor)
-                    transition(db, job.id, Status.MANUAL_REVIEW, job.revision, actor=actor)
-                    scheduling.diagnose(db, job, "TIME_LIMIT", "RESULT_UNKNOWN")
             else:
                 transition(db, job.id, Status.MANUAL_REVIEW, job.revision, actor=actor)
                 attempt.status = Status.RESULT_UNKNOWN

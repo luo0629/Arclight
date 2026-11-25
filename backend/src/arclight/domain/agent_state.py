@@ -119,8 +119,8 @@ class AgentRunState(BaseModel):
     status: AgentRunStatus
     plan: list[AgentPlanStep] = Field(max_length=16)
     steps: list[AgentStep] = Field(max_length=16)
-    tool_call_refs: list[UUID] = Field(default_factory=list, max_length=256)
-    observation_refs: list[UUID] = Field(default_factory=list, max_length=256)
+    tool_call_refs: list[UUID] = Field(default_factory=list)
+    observation_refs: list[UUID] = Field(default_factory=list)
     working_drafts: list[AgentDraftReference] = Field(default_factory=list, max_length=16)
     termination_reason: AgentTerminationReason | None = None
     extensions: dict[str, dict[str, JsonValue]] = Field(default_factory=dict, max_length=16)
@@ -386,8 +386,6 @@ def record_agent_tool_invocation(
         raise AgentStateError("Tool invocation requires an active Agent step")
     if invocation_id in state.tool_call_refs or invocation_id in state.observation_refs:
         return state
-    if len(state.tool_call_refs) >= 256 or len(state.observation_refs) >= 256:
-        raise AgentStateError("Agent tool and observation reference limits are exhausted")
     return AgentRunState.model_validate(
         {
             **state.model_dump(mode="json"),

@@ -1,6 +1,5 @@
 """Authority, delayed delivery and transactional recovery at the routing boundary."""
 
-from datetime import UTC, timedelta
 from uuid import uuid4
 
 import pytest
@@ -12,29 +11,25 @@ from test_continuity_reviewer import run_review
 from test_continuity_routing import route, route_counts
 from test_continuity_rules import rules_storage as rules_storage
 
-from arclight.application import agent_limits
 from arclight.application.production_event_handlers import HANDLERS, ReviewStageHandler
 from arclight.application.production_events import consume_stage_event
 from arclight.core.errors import DomainError
 from arclight.domain.production_events import StageEvent
 from arclight.domain.versions import digest
-from arclight.persistence.agent_limits import AgentRunLimit
-from arclight.persistence.models import AuditEvent
+from arclight.persistence.models import AuditEvent, WorkflowRun
 from arclight.persistence.production_events import ProductionEvent, ProductionEventReceipt
 
 
-def test_delayed_result_after_original_deadline_cannot_open_admission(
-    client, settings, model_service, reviewer_case, monkeypatch
+def test_delayed_result_after_cancellation_cannot_open_admission(
+    client, settings, model_service, reviewer_case
 ):
     install_reviewer_model(model_service, dynamic=False)
     assert run_review(client, settings, reviewer_case).status == "COMPLETED"
-    with client.app.state.session_factory() as db:
-        control = db.get(AgentRunLimit, reviewer_case["run_id"])
-        deadline = control.deadline_at.replace(tzinfo=UTC)
-    monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline + timedelta(seconds=1))
+    with client.app.state.session_factory.begin() as db:
+        db.get(WorkflowRun, reviewer_case["run_id"]).status = "CANCELLED"
     with pytest.raises(DomainError) as error:
         route(client, settings, reviewer_case)
-    assert error.value.code == "AGENT_DEADLINE_EXCEEDED"
+    assert error.value.code == "AGENT_CANCELLED"
     assert route_counts(client) == dict(records=0, admissions=0, events=0, audit=0)
 
 

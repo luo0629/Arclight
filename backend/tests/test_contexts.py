@@ -101,7 +101,8 @@ def test_each_task_contract_reads_real_domain_data(client, episode, task):
     assert value["task"] == task and value["builder_version"] == "context/1"
     assert required["episode"]["id"] == episode["id"]
     assert required["constraints"]["allowed_fields"] == list(contract.editable)
-    assert required["constraints"]["budget"]["project_limit"] == "0.00"
+    assert "budget" not in required["constraints"]
+    assert "max_output_tokens" not in required["constraints"]
     assert ("style" in required["global"]) == contract.style
     assert ("story" in required) == contract.entries
     assert ("assets" in required) == contract.assets
@@ -281,7 +282,7 @@ def test_startup_and_retry_keep_old_context_after_domain_and_policy_updates(
         )
 
 
-def test_real_text_adapter_consumes_frozen_context_and_refuses_oversized_call(
+def test_real_text_adapter_sends_complete_input_with_frozen_context(
     client, episode, settings, stub_llm
 ):
     visual_setup(client, episode)
@@ -322,13 +323,19 @@ def test_real_text_adapter_consumes_frozen_context_and_refuses_oversized_call(
     )
     with pytest.raises(DomainError, match="不安全"):
         provider.script("Bearer should-never-be-sent", {}, 30000)
-    too_small = copy.deepcopy(value)
-    too_small["limits"]["max_bytes"] = 1024
-    with pytest.raises(DomainError, match="必需上下文"):
-        OpenAICompatibleTextProvider(settings, {"script": too_small}, service=service).script(
-            "story", {}, 30000
-        )
     assert len(calls) == 1
+
+    frozen = copy.deepcopy(value)
+    frozen["limits"]["max_bytes"] = 1024
+    story = "完整故事正文。" * 256
+    provider = OpenAICompatibleTextProvider(settings, {"script": frozen}, service=service)
+    assert provider.script(story, {}, 30000) == result
+    assert len(calls) == 2
+    sent = json.loads(calls[1]["messages"][1]["content"])
+    assert sent["task_context"] == frozen
+    assert sent["task_input"]["story"] == story
+    assert "max_tokens" not in calls[1]
+    assert "max_completion_tokens" not in calls[1]
 
 
 def test_preview_read_permissions_and_cross_project_do_not_leak(client):

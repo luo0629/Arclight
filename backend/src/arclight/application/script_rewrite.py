@@ -15,8 +15,8 @@ from arclight.application.model_services import require_text_snapshot
 from arclight.application.rewrite_content import content_hash, merge_rewrite, provider_context
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.enums import RunStatus
+from arclight.domain.screenwriter_creation import AUTOMATIC_REVISION_ROUNDS
 from arclight.domain.screenwriter_revision import (
     REWRITE_SCREENWRITER_VERSION,
     SERIES_REWRITE_SCREENWRITER_VERSION,
@@ -40,13 +40,10 @@ def start_rewrite(
     *,
     purpose: ScriptWritingPurpose = "REVIEW_WORKFLOW",
     professional: bool = False,
-    agent_limits: AgentRunLimits | None = None,
     revision_rounds: int | None = None,
     narrative: NarrativeRequest | None = None,
 ) -> WorkflowRun:
-    options = ScreenwriterRevisionOptions(
-        professional=professional, agent_limits=agent_limits, revision_rounds=revision_rounds
-    )
+    ScreenwriterRevisionOptions(professional=professional, revision_rounds=revision_rounds)
     if narrative is not None and not professional:
         raise DomainError("SCREENWRITER_TASK_INVALID", "连续剧情改写须选择专业编剧", 422)
     if professional:
@@ -62,8 +59,7 @@ def start_rewrite(
     if professional:
         payload |= {
             "professional": True,
-            "agent_limits": options.frozen_limits().model_dump(mode="json"),
-            "revision_rounds": revision_rounds if revision_rounds is not None else 3,
+            "revision_rounds": AUTOMATIC_REVISION_ROUNDS,
         }
     if narrative is not None:
         payload["narrative"] = narrative.model_dump(mode="json")
@@ -154,8 +150,7 @@ def start_rewrite(
         inputs["_text_service"] = service
     if professional:
         inputs["screenwriter"] = {
-            "agent_limits": options.frozen_limits().model_dump(mode="json"),
-            "revision_rounds": revision_rounds if revision_rounds is not None else 3,
+            "revision_rounds": AUTOMATIC_REVISION_ROUNDS,
         }
     run = WorkflowRun(
         episode_id=episode_id,

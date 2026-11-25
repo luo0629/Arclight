@@ -24,7 +24,6 @@ from arclight.application.model_services import run_settings
 from arclight.application.production_versions import component, text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.continuity_escalations import LIMIT_STOP_CODES
@@ -183,7 +182,6 @@ def review_candidate(
     target: ReviewTarget,
     *,
     rerun: ReviewRerun | None = None,
-    limits: AgentRunLimits | None = None,
 ) -> AgentLoopResult[ContinuityReview]:
     target = ReviewTarget.model_validate(target.model_dump(mode="json"))
     with factory.begin() as db:
@@ -233,13 +231,6 @@ def review_candidate(
             )
             if stopped is not None and stopped.stop_code in LIMIT_STOP_CODES:
                 from arclight.application.continuity_escalations import request_escalation
-                from arclight.persistence.agent_limits import AgentRunLimit
-
-                control = db.get(AgentRunLimit, run_id)
-                if limits is not None and (
-                    control is None or AgentRunLimits.model_validate(control.limits_json) != limits
-                ):
-                    raise DomainError("AGENT_LIMITS_CONFLICT", "重入不能更换原审查运行限制", 409)
 
                 # Repair a committed stop's missing human wait after a crash, even
                 # after its execution deadline. This authorizes no new execution.
@@ -258,7 +249,6 @@ def review_candidate(
                 prompt_version=REVIEWER_PROMPT_VERSION,
                 result_schema_version=REVIEW_COMPLETION_SCHEMA,
                 system_instruction=REVIEWER_PROMPT,
-                max_tokens=16000,
                 messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
             )
     outcome = run_persistent_agent_loop(
@@ -267,7 +257,6 @@ def review_candidate(
         request,
         reviewer_registry(settings),
         ContinuityReview,
-        limits=limits,
         validate_result=lambda db, result: validate_reviewer_result(db, settings, run_id, result),
         output_projection=REVIEW_OUTPUT,
     )

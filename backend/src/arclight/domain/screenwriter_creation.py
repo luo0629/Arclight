@@ -1,13 +1,12 @@
 """Working scene fragments; only the owning service can assemble a domain candidate."""
 
 import json
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import Field, model_validator
 
 from arclight.agents.contracts import CharacterAsset, Scene, SceneV3, ScriptContent, ScriptContentV3
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.screenwriter_planning import (
     PlanEvidence,
@@ -21,6 +20,10 @@ from arclight.domain.script_narrative import NarrativeContext
 SCREENWRITER_VERSION = "screenwriter/1.0"
 SCREENWRITER_OUTLINE_VERSION = "screenwriter-outline/1.0"
 FRAGMENT_VERSION: Literal["screenwriter-fragment/1"] = "screenwriter-fragment/1"
+AUTOMATIC_REVISION_ROUNDS = 3
+type AutomaticRevisionRounds = Annotated[
+    int, Field(strict=True, ge=AUTOMATIC_REVISION_ROUNDS, le=AUTOMATIC_REVISION_ROUNDS)
+]
 
 FRAGMENT_PROMPT = """你是按已保存计划分段创作的编剧。只写服务端指定的这一个场景，
 保持原plan_loop_id、scene_id和scene_no，按该场景目标与节拍创作，不重写其他场景。
@@ -38,21 +41,6 @@ COMPLETE仅交付工作片段，不能发布候选或批准任何资产。"""
 
 class ScreenwriterOptions(PlanningValue):
     professional: bool = Field(default=False, strict=True)
-    agent_limits: AgentRunLimits | None = None
-
-    @model_validator(mode="after")
-    def explicit_limits(self):
-        if not self.professional and self.agent_limits is not None:
-            raise ValueError("Agent limits require professional creation")
-        return self
-
-    def frozen_limits(self) -> AgentRunLimits:
-        # Text spending is optional; action counts and the deadline are always bounded.
-        if self.agent_limits is None:
-            return AgentRunLimits(maximum_cost=None)
-        if "maximum_cost" not in self.agent_limits.model_fields_set:
-            return self.agent_limits.model_copy(update={"maximum_cost": None})
-        return self.agent_limits
 
 
 class ScriptFragment(PlanningValue):

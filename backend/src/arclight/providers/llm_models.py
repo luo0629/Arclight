@@ -6,7 +6,6 @@ import os
 import re
 from collections.abc import Callable
 from copy import deepcopy
-from dataclasses import dataclass
 from typing import Any
 
 import dashscope
@@ -26,19 +25,10 @@ from arclight.domain.model_gateway import GatewayFailure
 from arclight.providers.llm_transport import active_exchange, gemini_model_path
 from arclight.providers.native_text import gemini_payload
 
-
-@dataclass(frozen=True)
-class _ChatOptions:
-    token_parameter: str = "max_tokens"
-    parameters: tuple[tuple[str, JsonValue], ...] = ()
-
-
-# Wire spelling/defaults only, never a declaration of vision or tool capabilities.
-# Unknown compatible endpoints retain the standard request without vendor parameters.
-_CHAT_OPTIONS = {
-    "openai": ((r".*", _ChatOptions(token_parameter="max_completion_tokens")),),
-    "deepseek": ((r".*", _ChatOptions(parameters=(("thinking", {"type": "disabled"}),))),),
-    "qwen": ((r"^qwen", _ChatOptions(parameters=(("enable_thinking", False),))),),
+# Protocol-specific request parameters, independent of model capabilities.
+_CHAT_OPTIONS: dict[str, tuple[tuple[str, dict[str, JsonValue]], ...]] = {
+    "deepseek": ((r".*", {"thinking": {"type": "disabled"}}),),
+    "qwen": ((r"^qwen", {"enable_thinking": False}),),
 }
 
 
@@ -46,27 +36,22 @@ def invocation_kwargs(
     settings: Settings,
     messages: list[BaseMessage],
     *,
-    max_tokens: int,
     response_format: dict,
     tools: list[dict],
 ) -> dict:
     """Translate common inference options at the SDK boundary, not in the runtime."""
     if settings.llm_protocol != "openai_chat":
-        return {"max_tokens": max_tokens, "response_format": response_format, "tools": tools}
+        return {"response_format": response_format, "tools": tools}
     options = next(
         (
             options
             for pattern, options in _CHAT_OPTIONS.get(settings.llm_supplier, ())
             if re.match(pattern, settings.llm_model)
         ),
-        _ChatOptions(),
+        {},
     )
-    # extra_body prevents SDK token-field and message-role rewriting for every model.
-    extra = {
-        **deepcopy(dict(options.parameters)),
-        options.token_parameter: max_tokens,
-        "messages": message_dicts(messages),
-    }
+    # extra_body preserves the protocol roles through SDK message conversion.
+    extra = {**deepcopy(options), "messages": message_dicts(messages)}
     if response_format:
         extra["response_format"] = response_format
     kwargs: dict = {"extra_body": extra}
@@ -255,14 +240,12 @@ def _gemini(
     model: str,
     messages: list[dict],
     *,
-    max_tokens: int,
     response_format: dict,
     tools: list[dict],
 ) -> None:
     wire = gemini_payload(
         {
             "messages": messages,
-            "max_tokens": max_tokens,
             "response_format": response_format,
             "tools": tools,
         }
@@ -285,7 +268,6 @@ def _gemini(
         typed_contents.append(types.Content(role=content["role"], parts=parts))
     config = types.GenerateContentConfig(
         system_instruction=types.Content.model_validate(wire["systemInstruction"]),
-        max_output_tokens=max_tokens,
         response_mime_type=wire["generationConfig"].get("responseMimeType"),
         response_json_schema=wire["generationConfig"].get("responseJsonSchema"),
         tools=[types.Tool.model_validate(tool) for tool in wire.get("tools", [])] or None,
@@ -306,7 +288,6 @@ def _qwen(
     model: str,
     messages: list[Any],
     *,
-    max_tokens: int,
     response_format: dict,
     tools: list[dict],
 ) -> None:
@@ -319,7 +300,7 @@ def _qwen(
                 "content": "JSON Schema:\n" + json.dumps(schema, ensure_ascii=False),
             },
         )
-    parameters: dict[str, Any] = {"max_tokens": max_tokens, "enable_thinking": False}
+    parameters: dict[str, Any] = {"enable_thinking": False}
     if tools:
         parameters["tools"] = tools
     else:

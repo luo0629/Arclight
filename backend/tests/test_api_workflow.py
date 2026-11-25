@@ -90,7 +90,7 @@ def test_uniform_run_contract_freezes_inputs_reports_versions_usage_and_results(
     assert contract["versions"]["model"]["provider"] == "mock"
     assert contract["versions"]["parameter_sha256"]
     assert {item["family"] for item in contract["versions"]["components"]} == {"TEXT"}
-    assert contract["budget"]["scope"] == "project"
+    assert "budget" not in contract
     assert contract["usage"]["calls"] == []
     assert contract["result"] is None
     assert story not in str(initial)
@@ -378,8 +378,7 @@ def test_legacy_run_without_version_binding_remains_readable(client, episode):
     assert value["contract"]["requested_by"] is None
     assert value["contract"]["started_at"] is None
     assert value["contract"]["finished_at"] is None
-    assert value["contract"]["budget"]["origin"] == "UNKNOWN"
-    assert value["contract"]["budget"]["cost_estimate"] is None
+    assert "budget" not in value["contract"]
     assert value["contract"]["input_snapshot"]["references"] == []
     assert "legacy private input" not in response.text
     assert "private-inline-reference" not in response.text

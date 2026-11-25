@@ -3,7 +3,6 @@
 import copy
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
 from threading import Event
 from uuid import uuid4
 
@@ -91,7 +90,7 @@ def test_question_restarts_and_reenters_same_working_loops(
 
 
 @pytest.mark.parametrize("cancel", [False, True])
-def test_stop_retains_work_and_cancel_needs_no_new_deadline_admission(
+def test_stop_and_cancel_retain_unpublished_work(
     client, episode, settings, model_service, monkeypatch, cancel
 ):
     sent, errors = install(model_service, monkeypatch, settings, human=2)
@@ -100,12 +99,8 @@ def test_stop_retains_work_and_cancel_needs_no_new_deadline_admission(
     before = progress(client, run_id)["operations"]
     question = before[-1]
     if cancel:
-        from arclight.application import agent_limits
-        from arclight.application.model_gateway import utc
-
         with client.app.state.session_factory() as db:
-            deadline = utc(db.get(AgentRunLimit, run_id).deadline_at)
-        monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline + timedelta(seconds=1))
+            assert db.get(AgentRunLimit, run_id).deadline_at is None
         response = client.post(f"/api/v1/runs/{run_id}/cancel")
         assert response.status_code == 200, response.text
     else:

@@ -135,10 +135,10 @@ def start_attempt(
     validate_capabilities(live, spec, row.task_type, references)
     validate_video_images(db, row, snapshot)
     from arclight.application.continuity_revision_store import require_revision_execution
-    from arclight.application.generation_budget import check_execution
+    from arclight.application.generation_budget import reserve_execution
 
     require_revision_execution(db, row)
-    check_execution(db, row, spec)
+    reserve_execution(db, row)
     attempt = GenerationAttempt(
         job_id=row.id,
         attempt_no=row.attempt_count + 1,

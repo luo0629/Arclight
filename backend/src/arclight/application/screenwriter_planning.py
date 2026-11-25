@@ -20,7 +20,6 @@ from arclight.application.model_gateway import lock_gate
 from arclight.application.rewrite_content import content_hash, selected_scenes
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.agent_state import AgentRunState, state_for_scope
@@ -148,7 +147,6 @@ def _seed(run: WorkflowRun, settings: Settings) -> AgentModelRequest:
         result_schema_version=SERIES_PLAN_VERSION if series else PLAN_VERSION,
         system_instruction=SERIES_PLANNING_PROMPT if series else PLANNING_PROMPT,
         messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
-        max_tokens=16000,
     )
 
 
@@ -309,7 +307,6 @@ def plan_screenwriter(
     run_id: UUID,
     actor: str,
     *,
-    limits: AgentRunLimits | None = None,
     attempt: int = 0,
 ) -> AgentLoopResult[ScreenwriterPlan]:
     """Plan an already active writer step. Caller grants investigation before execution."""
@@ -339,7 +336,6 @@ def plan_screenwriter(
         request,
         _registry(settings, series=series),
         SeriesScreenwriterPlan if series else ScreenwriterPlan,
-        limits=limits,
         validate_result=lambda db, plan: _validate(db, run_id, plan, attempt),
     )
     _remember(factory, result)

@@ -2,7 +2,6 @@
 
 import json
 from copy import deepcopy
-from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
@@ -16,7 +15,7 @@ from test_agent_runtime import final, tool_feedback
 
 from arclight.application import producer_planning as planning
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
+from arclight.domain import producer_planning as planning_contract
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.versions import digest
 from arclight.main import create_app
@@ -38,7 +37,7 @@ def writer_task(key="write", *, story="雨夜，主角决定寻找纸船的失�
         "task_key": key,
         "depends_on": list(depends_on),
         "reason": "当前缺少本集可审核的剧本，先生成专业编剧候选。",
-        "task": {"kind": "screenwriter", "story": story, "revision_rounds": 1},
+        "task": {"kind": "screenwriter", "story": story, "revision_rounds": 3},
     }
 
 
@@ -67,7 +66,6 @@ def begin_producer(
             goal,
             key or uuid4().hex,
             "producer-test-" + uuid4().hex,
-            limits=limits or AgentRunLimits(maximum_cost=Decimal("0"), max_duration_seconds=3600),
         )
         run_id = run.id
     return run_id, actor
@@ -203,9 +201,8 @@ def test_producer_uses_shared_status_in_its_real_runtime(client, episode, settin
     assert status["result"]["data"]["status"] == "RUNNING"
 
 
-def test_start_replay_is_identical_and_changed_goal_or_limits_conflicts(client, episode, settings):
-    limits = AgentRunLimits(maximum_cost=Decimal("0"), max_duration_seconds=3600)
-    run_id, actor = begin_producer(client, episode, settings, key="frozen-goal", limits=limits)
+def test_start_replay_is_identical_and_changed_goal_conflicts(client, episode, settings):
+    run_id, actor = begin_producer(client, episode, settings, key="frozen-goal")
     factory = client.app.state.session_factory
     with factory.begin() as db:
         original = db.get(WorkflowRun, run_id)
@@ -217,22 +214,19 @@ def test_start_replay_is_identical_and_changed_goal_or_limits_conflicts(client, 
             original.input_json["goal"],
             "frozen-goal",
             "retry",
-            limits=limits,
         )
         assert same.id == run_id
-    for goal, policy in [("另一个目标", limits), ("制作纸船故事的本集剧本", AgentRunLimits())]:
-        with factory.begin() as db, pytest.raises(DomainError) as error:
-            planning.start_producer(
-                db,
-                settings,
-                UUID(episode["id"]),
-                actor,
-                goal,
-                "frozen-goal",
-                "changed",
-                limits=policy,
-            )
-        assert error.value.code == "IDEMPOTENCY_CONFLICT"
+    with factory.begin() as db, pytest.raises(DomainError) as error:
+        planning.start_producer(
+            db,
+            settings,
+            UUID(episode["id"]),
+            actor,
+            "另一个目标",
+            "frozen-goal",
+            "changed",
+        )
+    assert error.value.code == "IDEMPOTENCY_CONFLICT"
 
 
 def test_completed_plan_is_exact_version_and_replay_does_not_call_model(
@@ -328,16 +322,20 @@ def test_illegal_task_or_model_supplied_limits_never_create_a_child(
 
 
 def test_human_answer_after_application_restart_resumes_same_durable_producer_plan(
-    client, episode, settings, model_service
+    client, episode, settings, model_service, monkeypatch
 ):
     run_id, actor = begin_producer(client, episode, settings)
+    instruction = planning_contract.PLANNING_PROMPT
+    monkeypatch.setattr(planning_contract, "PLANNING_PROMPT", "新登记使用的制片提示词。")
     sent, errors = install_plan_model(model_service, human=True)
     factory = client.app.state.session_factory
     waiting = planning.plan_producer(factory, settings, run_id, actor)
     assert waiting.status == "HUMAN_REVIEW", (waiting.model_dump_json(), errors)
     with factory() as db:
         original_input = digest(db.get(WorkflowRun, run_id).input_json)
-        thread = db.get(AgentLoop, waiting.loop_id).thread_id
+        loop = db.get(AgentLoop, waiting.loop_id)
+        assert loop.seed_json["system_instruction"] == instruction
+        thread = loop.thread_id
         assert db.scalar(select(func.count()).select_from(AgentLoopQuestion)) == 1
         assert (
             db.scalar(

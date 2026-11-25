@@ -16,7 +16,6 @@ from arclight.domain.production_state import ProductionContract
 from arclight.domain.versions import digest
 
 REVISION_RESOURCE = "CONTINUITY_REVISION"
-MAX_REVISION_ROUNDS = 3
 
 
 class PromptAmendment(ProductionContract):
@@ -64,8 +63,9 @@ class RevisionOrigin(ProductionContract):
     source_manifest_id: UUID
     root_candidate_id: UUID
     parent_revision_id: UUID | None
-    round: int = Field(strict=True, ge=1, le=MAX_REVISION_ROUNDS + 1)
-    max_rounds: Literal[3] = 3
+    round: int = Field(strict=True, ge=1)
+    # Preserve the recorded contract for historical rounds.
+    max_rounds: Literal[3] | None = Field(default=None, exclude_if=lambda value: value is None)
     status: Literal["QUEUED", "NEEDS_REVIEW"]
     created_by: str
     created_at: datetime
@@ -75,8 +75,11 @@ class RevisionOrigin(ProductionContract):
         if self.request_sha256 != digest(self.request.model_dump(mode="json")):
             raise ValueError("Revision command fingerprint does not match")
         queued = self.status == "QUEUED"
-        if queued != (self.round <= self.max_rounds):
-            raise ValueError("Revision round must respect the frozen limit")
+        if self.max_rounds is None:
+            if not queued:
+                raise ValueError("A new revision must be queued")
+        elif queued != (self.round <= self.max_rounds):
+            raise ValueError("Historical revision must match its recorded round policy")
         return self
 
 

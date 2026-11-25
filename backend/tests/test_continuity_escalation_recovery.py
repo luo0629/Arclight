@@ -24,7 +24,6 @@ from arclight.application.continuity_review_store import require_review_record
 from arclight.application.continuity_selection import require_shot_review
 from arclight.application.production_events import consume_stage_event
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.continuity_escalations import ESCALATION_RESOURCE
 from arclight.domain.continuity_reviews import ReviewRerun
 from arclight.domain.versions import digest
@@ -115,7 +114,11 @@ def test_disabled_original_initiator_cannot_be_replaced_by_current_owner(
     case = new_review_run(client, episode, settings, reviewer_case)
     assert case["actor"] == actor
     with client.app.state.session_factory.begin() as db:
-        configure_agent_run(db, case["run_id"], actor, AgentRunLimits())
+        configure_agent_run(
+            db,
+            case["run_id"],
+            actor,
+        )
     row, *_ = human_case(client, settings, model_service, case)
     client.headers["Authorization"] = "Bearer test-token"
     saved = decide(client, row).json() if phase == "RESUME" else None
@@ -240,7 +243,9 @@ def test_new_exhaustion_blocks_old_result_even_before_request_repair_and_valid_r
     next_case = new_review_run(client, episode, settings, reviewer_case)
     with client.app.state.session_factory.begin() as db:
         configure_agent_run(
-            db, next_case["run_id"], next_case["actor"], AgentRunLimits(max_model_calls=1)
+            db,
+            next_case["run_id"],
+            next_case["actor"],
         )
     sent, errors, _ = install_reviewer_model(model_service)
 
@@ -249,6 +254,7 @@ def test_new_exhaustion_blocks_old_result_even_before_request_repair_and_valid_r
 
     with monkeypatch.context() as patch:
         patch.setattr(escalations, "request_escalation", crash)
+        patch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
         with pytest.raises(RuntimeError, match="stop persisted"):
             run_review(client, settings, next_case)
     assert len(sent) == 1 and not errors
@@ -263,19 +269,16 @@ def test_new_exhaustion_blocks_old_result_even_before_request_repair_and_valid_r
     if original_conclusion == "HUMAN_REVIEW":
         assert resume(client, row, saved).status_code == 409
     # Reentry repairs the missing wait without another provider request.
-    from datetime import timedelta
-
-    from arclight.persistence.base import utcnow
-
-    expired = utcnow() + timedelta(days=1)
-    with monkeypatch.context() as patch:
-        patch.setattr("arclight.application.agent_limits.utcnow", lambda: expired)
-        assert run_review(client, settings, next_case).status == "STOPPED"
+    assert run_review(client, settings, next_case).status == "STOPPED"
     assert pending(client, next_case)["status"] == "WAITING_REVIEW"
     assert len(sent) == 1
     last_case = new_review_run(client, episode, settings, next_case)
     with client.app.state.session_factory.begin() as db:
-        configure_agent_run(db, last_case["run_id"], last_case["actor"], AgentRunLimits())
+        configure_agent_run(
+            db,
+            last_case["run_id"],
+            last_case["actor"],
+        )
     install_reviewer_model(model_service, dynamic=False)
     assert (
         run_review(

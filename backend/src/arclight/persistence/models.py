@@ -418,6 +418,14 @@ class OutboxEvent(Entity, Base):
     )
 
 
+class WorkflowRecoveryCounter(Base):
+    __tablename__ = "workflow_recovery_counters"
+
+    event_id: Mapped[UUID] = mapped_column(ForeignKey("outbox_events.id"), primary_key=True)
+    failure_count: Mapped[int]
+    __table_args__ = (CheckConstraint("failure_count > 0", name="workflow_recovery_failure_count"),)
+
+
 class VisualAsset(Entity, Base):
     __tablename__ = "visual_assets"
     project_id: Mapped[UUID] = mapped_column(ForeignKey("projects.id"), index=True)

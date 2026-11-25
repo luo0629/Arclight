@@ -1,5 +1,4 @@
 from datetime import datetime
-from decimal import Decimal
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -38,7 +37,6 @@ class ProjectCreate(Input):
     name: str = Field(min_length=1, max_length=160)
     style_guide: dict = Field(default_factory=dict)
     output_profile: dict = Field(default_factory=lambda: {"width": 1080, "height": 1920, "fps": 30})
-    budget_limit: Decimal = Field(default=Decimal("0"), ge=0, max_digits=12, decimal_places=2)
 
 
 class VisualBibleEdit(Input):

@@ -100,15 +100,12 @@ def assess(
                 request,
                 AgentToolRegistry(),
                 NarrativeAssessment,
-                limits=work.request.agent_limits,
                 validate_result=validate,
             )
     except DomainError as error:
         if error.code not in LIMIT_STOP_CODES | {
             "GATEWAY_CAPABILITY_REJECTED",
             "NARRATIVE_REVIEW_CITATION_INVALID",
-            "BUDGET_QUOTE_UNAVAILABLE",
-            "BUDGET_EXCEEDED",
         }:
             raise
         return None, f"未取得有效模型证据（{error.code}），须人工调查。", False

@@ -21,9 +21,8 @@ from arclight.application.context_sources import (
 from arclight.application.source_objects import source_text
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_memory import MAX_MEMORY_SOURCES, MEMORY_VERSION
-from arclight.domain.context import TASK_CONTRACTS, ContextLimits, check_size
-from arclight.domain.context_trace import MAX_EVIDENCE_ROUNDS, TRACE_VERSION, EvidenceRequest
+from arclight.domain.context import TASK_CONTRACTS, ContextLimits, validate_context_metadata
+from arclight.domain.context_trace import TRACE_VERSION, EvidenceRequest
 from arclight.domain.versions import digest
 from arclight.persistence.models import DependencyManifest, StoryEntry, StorySource, WorkflowRun
 
@@ -44,19 +43,21 @@ def round_key(root_id: UUID, number: int) -> UUID:
 
 
 def evidence_rounds(db: Session, root: DependencyManifest) -> list[DependencyManifest]:
-    keys = [round_key(root.id, number) for number in range(1, MAX_EVIDENCE_ROUNDS + 1)]
+    value = DependencyManifest.snapshot_json["context"]
     rows = db.scalars(
-        select(DependencyManifest).where(
+        select(DependencyManifest)
+        .where(
             DependencyManifest.project_id == root.project_id,
-            DependencyManifest.creation_key.in_(keys),
+            value["startup_manifest_id"].as_string() == str(root.id),
+            value["origin"].as_string() == "context_evidence",
         )
-    ).all()
-    found = {row.creation_key: row for row in rows}
+        .order_by(value["round"].as_integer())
+    )
     result = []
     parent = root.id
-    for number, key in enumerate(keys[: len(rows)], 1):
-        row = found.get(key)
-        if row is None or digest(row.snapshot_json) != row.request_fingerprint:
+    for number, row in enumerate(rows, 1):
+        key = round_key(root.id, number)
+        if digest(row.snapshot_json) != row.request_fingerprint:
             raise DomainError("CONTEXT_REFERENCE_INVALID", "检索证据链缺失或校验失败", 409)
         value = row.snapshot_json.get("context", {})
         if (
@@ -68,6 +69,7 @@ def evidence_rounds(db: Session, root: DependencyManifest) -> list[DependencyMan
             or value.get("run_id") != root.snapshot_json["context"]["run_id"]
             or value.get("stage") != root.snapshot_json["context"]["task_context"]["task"]
             or row.id != key
+            or row.creation_key != key
         ):
             raise DomainError("CONTEXT_REFERENCE_INVALID", "检索证据链范围不匹配", 409)
         validate_sources(db, root.project_id, value["sources"])
@@ -93,24 +95,7 @@ def bounded_trace(
         ],
         "consumption": deepcopy(receipt),
     }
-    limits = ContextLimits.model_validate(context["limits"])
-    check_size(result, limits)
-    all_sources = [*(initial.get("trace") or {}).get("sources", [])]
-    for row in rounds:
-        all_sources.extend(row.snapshot_json["context"]["sources"])
-    if receipt and receipt.get("resolved_input"):
-        all_sources.extend(receipt["resolved_input"]["sources"])
-    if (initial.get("trace") or {}).get("memory_version") == MEMORY_VERSION and len(
-        all_sources
-    ) > MAX_MEMORY_SOURCES:
-        raise DomainError("AGENT_MEMORY_LIMIT", "必需记忆来源超过数量限额，不能裁剪", 422)
-    for kind, field, maximum in (
-        ("ASSET_VERSION", "asset_version_id", limits.max_assets),
-        ("STORY_ENTRY", "id", limits.max_story_entries),
-        ("STORY_SOURCE", "source_id", 16),
-    ):
-        if len({item[field] for item in all_sources if item["kind"] == kind}) > maximum:
-            raise DomainError("CONTEXT_TOO_LARGE", "累计精确证据超过上下文数量限制", 422)
+    validate_context_metadata(result)
     return result
 
 
@@ -242,8 +227,6 @@ def append_resolved_evidence(
     context = root.snapshot_json["context"]["task_context"]
     limits = ContextLimits.model_validate(context["limits"])
     number = len(rounds) + 1
-    if number > MAX_EVIDENCE_ROUNDS:
-        raise DomainError("CONTEXT_TOO_LARGE", "检索轮次达到上限", 422)
     collected = resolve(root, rounds, limits)
     sources = collected["sources"]
     validate_sources(db, root.project_id, sources)

@@ -32,7 +32,6 @@ from arclight.application.audio_voices import voice_spec
 from arclight.application.audit import audit
 from arclight.application.media_services import (
     credential_for_selection,
-    quote_selection,
     select_for_spec,
 )
 from arclight.application.music_assets import music_resource_facts, require_music_version
@@ -71,14 +70,10 @@ VOICE_BLOCK_REASONS = {
     "AUDIO_VOICE_LEDGER_NOT_APPROVED": "现有声音档案需要已批准的故事账本。",
     "AUDIO_VOICE_PROFILE_CONFLICT": "角色声音档案与当前台词的音色不一致。",
     "AUDIO_PERFORMANCE_UNSUPPORTED": "已配置的音色不支持当前台词的表演要求。",
-    "BUDGET_QUOTE_UNAVAILABLE": "已配置的语音服务缺少可信报价。",
-    "BUDGET_QUOTE_CHANGED": "语音服务报价已变化，请重新保存音色。",
     "SERVICE_KEY_UNAVAILABLE": "已保存音色的语音服务凭据不可用。",
     "FORBIDDEN": "已保存音色的服务账号已失去本项目的写入权限或已停用。",
 }
-REPLACEABLE_VOICE_ERRORS = frozenset(
-    {"BUDGET_QUOTE_CHANGED", "SERVICE_KEY_UNAVAILABLE", "FORBIDDEN"}
-)
+REPLACEABLE_VOICE_ERRORS = frozenset({"SERVICE_KEY_UNAVAILABLE", "FORBIDDEN"})
 
 
 @dataclass(frozen=True)
@@ -153,8 +148,8 @@ def dialogue_voice(
     )
     spec = voice_spec(voice, line.text, performance_parameters(voice, selection, {}))
     service = select_for_spec(db, actor, spec, "AUDIO", voice.service_snapshot_json)
-    if service is None or quote_selection(db, service, spec) is None:
-        raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "语音服务缺少可信报价", 409)
+    if service is None:
+        raise DomainError("SHORT_DRAMA_VOICE_REQUIRED", "本次制作缺少账号语音服务", 409)
     try:
         credential_for_selection(db, settings, project_id, service)
     except DomainError as error:
@@ -169,8 +164,6 @@ def inspect_dialogue(
 ) -> tuple[list[NeededVoice], list[BlockedVoice]]:
     content = read_script_content(script.content_json)
     lines = script_audio_lines(content)
-    if len(lines) > 128:
-        raise DomainError("SHORT_DRAMA_AUDIO_LIMIT", "单集自动字幕最多支持 128 句台词", 422)
     snapshot = AudioSnapshot(episode_id=script.episode_id, script_version_id=script.id)
     needed: dict[str, NeededVoice] = {}
     blocked: dict[str, BlockedVoice] = {}
@@ -207,8 +200,6 @@ def preflight_dialogue(
     db: Session, settings: Settings, run: WorkflowRun, project_id: UUID, actor: str, script_id: UUID
 ) -> None:
     snapshot = short_drama_audio_snapshot(db, run, actor, script_id)
-    if snapshot.line_count > 128:
-        raise DomainError("SHORT_DRAMA_AUDIO_LIMIT", "单集自动字幕最多支持 128 句台词", 422)
     content = script_content(db, snapshot)
     result = DialoguePlan(audio_snapshot_id=snapshot.id, voice_asset_versions={}, voices={})
     for data in snapshot.lines_json:
@@ -327,10 +318,6 @@ def select_sound_clips(
                 )
             asset, version = match
             resource = require_music_version(db, settings, project_id, asset, version, actor)
-            if len(clips) == 256:
-                raise DomainError(
-                    "SHORT_DRAMA_AUDIO_LIMIT", "单集自动制作最多支持 256 个音效片段", 422
-                )
             duration = min(shot.duration_ms, resource.validation.duration_ms)
             clips.append(
                 ClipSnapshot(
@@ -479,12 +466,8 @@ def advance_short_drama_audio(
     board, shots = approved_board(db, episode, storyboard_id)
     if board.script_version_id != script.id:
         raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "分镜须来自本次确认的精确剧本", 409)
-    if len(shots) > 63:
-        raise DomainError("TIMELINE_SHOTS_INCOMPLETE", "单集自动制作最多支持 63 个镜头", 422)
     snapshot = short_drama_audio_snapshot(db, run, actor, script.id)
     lines = [AudioLine.model_validate(line) for line in snapshot.lines_json]
-    if len(lines) > 128:
-        raise DomainError("SHORT_DRAMA_AUDIO_LIMIT", "单集自动字幕最多支持 128 句台词", 422)
     font_id = UUID(spec["font_file_id"]) if spec.get("font_file_id") else None
     font_facts(db, episode.project_id, font_id, required=bool(lines))
     shot_lines = [(shot, read_shot_content(shot.content_json).dialogue_line_ids) for shot in shots]

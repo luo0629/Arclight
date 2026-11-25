@@ -145,7 +145,6 @@ def invoke_agent[T: BaseModel](
                 tasks=frozenset({request.stage}),
                 parameters=frozenset(
                     {
-                        "max_tokens",
                         "input_images",
                         "agent_version",
                         "prompt_version",
@@ -174,7 +173,6 @@ def invoke_agent[T: BaseModel](
                 }
             ),
             parameters={
-                "max_tokens": request.max_tokens,
                 "input_images": len(request.image_ids()),
                 "agent_version": request.agent_version,
                 "prompt_version": request.prompt_version,

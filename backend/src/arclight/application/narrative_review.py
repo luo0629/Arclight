@@ -187,9 +187,7 @@ def start_review(
         run.id,
         receipt(narrative_work=work.model_dump(mode="json")),
     )
-    configure_agent_run(
-        db, run.id, actor, payload.agent_limits, parent_run_id=parent.run_id if parent else None
-    )
+    configure_agent_run(db, run.id, actor, parent_run_id=parent.run_id if parent else None)
     capture_text(db, project_id, run, settings, actor=actor)
     db.add(OutboxEvent(run_id=run.id, revision=run.revision))
     audit(db, project_id, actor, "narrative_review.started", run.id, {"scope": payload.scope})

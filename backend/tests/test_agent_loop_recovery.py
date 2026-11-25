@@ -6,7 +6,6 @@ import subprocess
 import sys
 import time
 from dataclasses import replace
-from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
 from pathlib import Path
@@ -21,11 +20,10 @@ from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 from test_agent_model import FinalResult, call_response, model_request
 from test_agent_model import model_service as model_service
-from test_agent_runtime import final, rows_for, setup_loop, tool_feedback
+from test_agent_runtime import final, rows_for, seed_historical_control, setup_loop, tool_feedback
 from test_agent_tools import create_entry
 from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
-from test_generation_budget import set_policy
 
 from arclight.agent_skills import freeze_agent_skills
 from arclight.application import agent_loop_recovery as recovery
@@ -45,7 +43,7 @@ from arclight.application.gateway_accounting import reconcile
 from arclight.application.generation_leases import LeasePolicy
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentRunLimits
-from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
+from arclight.domain.agent_model import AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision
 from arclight.domain.model_gateway import GatewayUsage
 from arclight.domain.versions import digest
@@ -57,13 +55,14 @@ from arclight.persistence.agent_loops import (
     AgentLoopQuestion,
     AgentLoopStamp,
 )
-from arclight.persistence.base import utcnow
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import AgentToolGrant, AuditEvent, ProjectMember, User, WorkflowRun
 from arclight.workflows.checkpoints import open_checkpointer
 
 
-def start(client, settings, seed, registry, **kwargs):
+def start(client, settings, seed, registry, *, limits=None, **kwargs):
+    if limits is not None:
+        seed_historical_control(client, seed.run_id, limits)
     return run_persistent_agent_loop(
         client.app.state.session_factory, settings, seed, registry, FinalResult, **kwargs
     )
@@ -161,14 +160,43 @@ def test_human_question_survives_app_restart_and_answer_continues_same_thread(
     assert len(rows_for(client, run_id)["actions"]) == 2
 
 
+def test_turn_limit_survives_repeated_human_waits_and_restart(
+    client, episode, settings, model_service, monkeypatch
+):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
+    run_id, actor, registry = setup_loop(client, episode, settings)
+    sent = []
+
+    def respond(request):
+        sent.append(request)
+        return httpx.Response(200, json=final("HUMAN_REVIEW"))
+
+    model_service(respond)
+    waiting = start(client, settings, model_request(run_id), registry)
+    assert waiting.status == "HUMAN_REVIEW" and waiting.model_turns == 1
+    with TestClient(create_app(settings)) as restarted:
+        next_wait = resume(
+            restarted, settings, waiting.loop_id, actor, registry, decision=answer(waiting)
+        )
+        assert next_wait.status == "HUMAN_REVIEW" and next_wait.model_turns == 2
+        assert next_wait.question_id != waiting.question_id
+        stopped = resume(
+            restarted, settings, waiting.loop_id, actor, registry, decision=answer(next_wait)
+        )
+        assert stopped.status == "STOPPED" and stopped.stop_code == "AGENT_MODEL_CALL_LIMIT"
+        assert stopped.model_turns == len(sent) == 2
+        assert resume(restarted, settings, waiting.loop_id, actor, registry) == stopped
+    assert len(rows_for(client, run_id)["receipts"]) == 2
+
+
 @pytest.mark.parametrize(
     "decision, expected",
     [
         ("STOP", "AGENT_HUMAN_STOPPED"),
-        ("ANSWER", "AGENT_MODEL_CALL_LIMIT"),
+        ("ANSWER", None),
     ],
 )
-def test_human_stop_and_resume_do_not_reset_original_limits(
+def test_human_stop_and_resume_keep_the_original_action_history(
     client,
     episode,
     settings,
@@ -178,16 +206,20 @@ def test_human_stop_and_resume_do_not_reset_original_limits(
 ):
     run_id, actor, registry = setup_loop(client, episode, settings)
     sent = []
-    model_service(
-        lambda request: sent.append(request) or httpx.Response(200, json=final("HUMAN_REVIEW"))
-    )
+
+    def answer_then_finish(request):
+        sent.append(request)
+        return httpx.Response(200, json=final("HUMAN_REVIEW" if len(sent) == 1 else "COMPLETE"))
+
+    model_service(answer_then_finish)
     waiting = start(
         client, settings, model_request(run_id), registry, limits=AgentRunLimits(max_model_calls=1)
     )
     request = answer(waiting, decision=decision, answer=None if decision == "STOP" else "补充")
-    stopped = resume(client, settings, waiting.loop_id, actor, registry, decision=request)
-    assert stopped.stop_code == expected and len(sent) == 1
-    assert len(rows_for(client, run_id)["actions"]) == 1
+    result = resume(client, settings, waiting.loop_id, actor, registry, decision=request)
+    assert result.stop_code == expected
+    assert result.status == ("STOPPED" if decision == "STOP" else "COMPLETED")
+    assert len(rows_for(client, run_id)["actions"]) == len(sent) == (1 if decision == "STOP" else 2)
 
 
 def test_duplicate_decision_is_idempotent_but_conflicting_or_stale_answer_is_rejected(
@@ -331,7 +363,7 @@ def test_unknown_model_result_requires_original_ledger_reconciliation_before_ret
     model_service,
     evidence,
 ):
-    run_id, actor, registry = setup_loop(client, episode, settings, attempts=2 if evidence else 1)
+    run_id, actor, registry = setup_loop(client, episode, settings)
     sent = []
 
     def fail(request):
@@ -372,19 +404,17 @@ def test_unknown_model_result_requires_original_ledger_reconciliation_before_ret
     [
         ("disable", "FORBIDDEN"),
         ("grant", "USER_NOT_AUTHORIZED"),
-        ("deadline", "AGENT_DEADLINE_EXCEEDED"),
         ("cancel", "AGENT_CANCELLED"),
         ("stale", "RUN_STATE_INVALID"),
     ],
 )
-def test_resume_rechecks_current_authority_frozen_state_and_deadline(
+def test_resume_rechecks_current_authority_and_frozen_state(
     client,
     episode,
     settings,
     model_service,
     mutation,
     code,
-    monkeypatch,
 ):
 
     run_id, actor, registry = setup_loop(client, episode, settings)
@@ -419,15 +449,6 @@ def test_resume_rechecks_current_authority_frozen_state_and_deadline(
         elif mutation == "stale":
             run = db.get(WorkflowRun, run_id)
             run.agent_state_json = run.agent_state_json | {"input_sha256": "f" * 64}
-    if mutation == "deadline":
-        from arclight.persistence.agent_limits import AgentRunLimit
-
-        with client.app.state.session_factory() as db:
-            deadline = db.get(AgentRunLimit, run_id).deadline_at
-        monkeypatch.setattr(
-            "arclight.application.agent_limits.utcnow",
-            lambda: deadline.replace(tzinfo=utcnow().tzinfo) + timedelta(seconds=1),
-        )
     if mutation == "grant":
         model_service(
             lambda request: (
@@ -486,6 +507,7 @@ def test_offline_migration_defines_frozen_threads_and_requires_online_downgrade(
         command.downgrade(config, "0046:0045", sql=True)
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_durable_history_cannot_be_overwritten_deleted_or_downgraded(
     client,
     episode,
@@ -505,7 +527,7 @@ def test_durable_history_cannot_be_overwritten_deleted_or_downgraded(
         db.execute(update(AgentLoop).values(input_sha256="b" * 64))
     with pytest.raises(DBAPIError), client.app.state.session_factory.begin() as db:
         db.execute(update(AgentLoopAction).values(result_json={"forged": True}))
-    with pytest.raises(RuntimeError, match="loop history exists"):
+    with pytest.raises(RuntimeError, match="Agent loop history exists"):
         command.downgrade(migrated, "0045")
 
 
@@ -679,25 +701,27 @@ def test_response_without_committed_receipt_stays_unknown_and_is_not_resent(
     assert stopped.stop_code == "GATEWAY_RECONCILIATION_REQUIRED" and len(sent) == 1
 
 
-def test_resume_preserves_pending_cost_and_original_deadline(
+def test_resume_beyond_old_budget_preserves_pending_cost_and_historical_control(
     client, episode, settings, model_service
 ):
     from arclight.persistence.agent_limits import AgentRunLimit
 
-    set_policy(client, episode["project_id"], "100")
     run_id, actor, registry = setup_loop(client, episode, settings, quote="1")
     sent = []
-    model_service(
-        lambda request: sent.append(request) or httpx.Response(200, json=final("HUMAN_REVIEW"))
-    )
+
+    def respond(request):
+        sent.append(request)
+        return httpx.Response(200, json=final("HUMAN_REVIEW" if len(sent) == 1 else "COMPLETE"))
+
+    model_service(respond)
     waiting = start(
         client, settings, model_request(run_id), registry, limits=AgentRunLimits(maximum_cost="1")
     )
     with client.app.state.session_factory() as db:
         deadline = db.get(AgentRunLimit, run_id).deadline_at
-    stopped = resume(client, settings, waiting.loop_id, actor, registry, decision=answer(waiting))
-    assert stopped.stop_code == "AGENT_BUDGET_EXCEEDED" and len(sent) == 1
-    assert rows_for(client, run_id)["pending"] == 1
+    result = resume(client, settings, waiting.loop_id, actor, registry, decision=answer(waiting))
+    assert result.status == "COMPLETED" and len(sent) == 2
+    assert rows_for(client, run_id)["pending"] == 2
     with client.app.state.session_factory() as db:
         assert db.get(AgentRunLimit, run_id).deadline_at == deadline
 
@@ -741,7 +765,7 @@ def test_current_initiator_authority_is_required_even_for_another_resume_actor(
     assert len(sent) == 1
 
 
-def test_human_answer_context_overflow_stops_without_discarding_frozen_evidence(
+def test_human_answer_keeps_large_context_and_frozen_evidence(
     client,
     episode,
     settings,
@@ -750,26 +774,34 @@ def test_human_answer_context_overflow_stops_without_discarding_frozen_evidence(
     run_id, actor, registry = setup_loop(client, episode, settings)
     with client.app.state.session_factory() as db:
         memory = read_agent_memory(db, db.get(WorkflowRun, run_id), "script", actor)
-    seed = model_request(run_id, messages=[AgentUserMessage(data={"padding": ""})])
-    observed = AgentModelRequest.model_validate(
-        freeze_agent_skills(seed).model_dump(mode="json")
-        | {
-            "messages": [item.model_dump(mode="json") for item in seed.messages]
-            + [AgentUserMessage(data=memory).model_dump(mode="json")]
-        }
-    )
-    size = len(json.dumps(observed.model_dump(mode="json"), ensure_ascii=False).encode())
-    seed = seed.model_copy(
-        update={"messages": [AgentUserMessage(data={"padding": "x" * (262144 - size - 100)})]}
-    )
+    source = {"padding": "x" * 262144}
+    seed = model_request(run_id, messages=[AgentUserMessage(data=source)])
     sent = []
-    model_service(
-        lambda request: sent.append(request) or httpx.Response(200, json=final("HUMAN_REVIEW"))
-    )
+
+    def respond(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(200, json=final("HUMAN_REVIEW" if len(sent) == 1 else "COMPLETE"))
+
+    model_service(respond)
     waiting = start(client, settings, seed, registry)
     assert waiting.status == "HUMAN_REVIEW"
-    stopped = resume(client, settings, waiting.loop_id, actor, registry, decision=answer(waiting))
-    assert stopped.stop_code == "AGENT_CONTEXT_LIMIT" and len(sent) == 1
+    completed = resume(client, settings, waiting.loop_id, actor, registry, decision=answer(waiting))
+    assert completed.status == "COMPLETED" and completed.model_turns == 2 and len(sent) == 2
+    delivered_memory = []
+    for request in sent:
+        user_data = [
+            json.loads(item["content"])["data"]
+            for item in request["messages"]
+            if item["role"] == "user"
+        ]
+        assert source in user_data
+        projected = next(item for item in user_data if "observation" in item)
+        assert projected["observation"] == memory["observation"]
+        assert {key: value for key, value in projected["memory"].items() if key != "working"} == {
+            key: value for key, value in memory["memory"].items() if key != "working"
+        }
+        delivered_memory.append(projected)
+    assert delivered_memory[0] == delivered_memory[1]
     with client.app.state.session_factory() as db:
         assert db.get(AgentLoop, waiting.loop_id).seed_json == freeze_agent_skills(seed).model_dump(
             mode="json"

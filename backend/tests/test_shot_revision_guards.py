@@ -370,14 +370,11 @@ def test_capability_changes_cannot_silently_fall_back_or_reuse_a_preview(
     assert row_counts(client) == before
 
 
-def test_human_revision_dead_letter_replay_cannot_reset_original_attempt_limit(
-    client, shot_revision_case, settings
+def test_human_revision_can_retry_original_job_but_cannot_create_a_replay(
+    client, shot_revision_case
 ):
     from arclight.providers.media_submission import SubmissionReceipt
 
-    settings.media_execution_policy = settings.media_execution_policy.model_copy(
-        update={"max_attempts": 1}
-    )
     case = shot_revision_case
     command, _ = preview_command(client, case)
     receipt = submit(client, case, command).json()
@@ -387,13 +384,11 @@ def test_human_revision_dead_letter_replay_cannot_reset_original_attempt_limit(
     assert deliver(client, job, provider) == "FAILED"
     failed = client.get(path).json()
     before = row_counts(client)
-    retry = client.post(path + "/retry", json={"expected_revision": failed["revision"]})
-    assert retry.status_code == 200 and retry.json()["status"] == "FAILED", retry.text
     replay = client.post(
         path + "/replay",
         json={
             "expected_revision": failed["revision"],
-            "reason": "Diagnosed failure must retain original limit",
+            "reason": "A revision must retry through its original job",
         },
         headers={"Idempotency-Key": "human-cannot-reset"},
     )
@@ -401,3 +396,6 @@ def test_human_revision_dead_letter_replay_cannot_reset_original_attempt_limit(
         replay.status_code == 409 and replay.json()["error"]["code"] == "REVISION_REPLAY_UNSAFE"
     ), replay.text
     assert row_counts(client) == before
+    retry = client.post(path + "/retry", json={"expected_revision": failed["revision"]})
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["status"] == "RETRY_WAIT" and retry.json()["id"] == receipt["job_id"]

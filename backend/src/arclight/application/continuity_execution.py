@@ -25,7 +25,6 @@ from arclight.application.model_gateway import lock_gate
 from arclight.application.production_versions import checked_snapshot, find_binding, text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_state import AgentStateError, restore_agent_state, transition_agent_step
 from arclight.domain.continuity_escalations import LIMIT_STOP_CODES
 from arclight.domain.continuity_feedback import FEEDBACK_VERSION
@@ -109,9 +108,6 @@ def execute_continuity(
                 emit(db, run, "workflow.started", {"revision": revision})
             run.status, run.pending_review = "RUNNING", None
             actor = execution_actor(db, run)
-            limits = AgentRunLimits.model_validate(
-                run.input_json["continuity_review"]["agent_limits"]
-            )
             work = [
                 CandidateReviewWork.model_validate(checked_snapshot(db, row)["continuity_work"])
                 for row in db.scalars(
@@ -170,7 +166,7 @@ def execute_continuity(
                 already_routed = find_binding(db, scope.project_id, ADMISSION_RESOURCE, identity)
             if already_routed is None:
                 outcome = review_candidate(
-                    factory, settings, run_id, actor, item.target, rerun=item.rerun, limits=limits
+                    factory, settings, run_id, actor, item.target, rerun=item.rerun
                 )
                 if outcome.status != "COMPLETED":
                     if outcome.status == "STOPPED" and outcome.stop_code not in LIMIT_STOP_CODES:

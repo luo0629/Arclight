@@ -17,7 +17,6 @@ from test_audio_version_lifecycle import (
     select_audio,
     selection_payload,
 )
-from test_generation_budget import set_policy
 from test_generation_delivery import deliver, event_for
 from test_model_services import account
 from test_native_media_integration import configure, provider_for
@@ -204,7 +203,6 @@ def series_voice_case(client, settings, request):
             scene_mapping(episode, script, scene, scene["dramatic_beat"]["story_time"])
             for scene in script["content_json"]["scenes"]
         )
-    set_policy(client, pid, "30")
     ledger_row = ledger(client, first, mappings)
     url = version_profile_url(pid, character)
     return {

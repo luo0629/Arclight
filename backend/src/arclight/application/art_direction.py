@@ -25,7 +25,6 @@ from arclight.application.gateway_text import execution_actor, validate_publicat
 from arclight.application.model_gateway import lock_gate
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.agent_tools import AgentToolContract
@@ -100,8 +99,6 @@ def propose_art(
     run_id: UUID,
     actor: str,
     task: ArtDirectionTask,
-    *,
-    limits: AgentRunLimits | None = None,
 ) -> AgentLoopResult[ArtDirectionResult]:
     """Investigate and compare an active step; caller grants the two read-only tools."""
     task = ArtDirectionTask.model_validate(task.model_dump(mode="json"))
@@ -182,7 +179,6 @@ def propose_art(
             system_instruction=DIRECTION_PROMPT
             + (CONCEPT_PROMPT if concept else "")
             + (OPINION_PROMPT if opinion is not None else ""),
-            max_tokens=16000,
             messages=[
                 AgentUserMessage(data=seed.model_dump(mode="json")),
                 *([AgentUserMessage(data={"concept_plan": concept})] if concept else []),
@@ -204,7 +200,6 @@ def propose_art(
         request,
         art_direction_registry(settings),
         ArtDirectionResult,
-        limits=limits,
         validate_result=lambda db, result: validate_art_direction(db, settings, run_id, result),
     )
 

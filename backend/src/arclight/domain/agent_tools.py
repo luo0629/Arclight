@@ -78,7 +78,7 @@ class RetrieveEvidenceParameters(AgentToolContract):
 class RetrieveEvidenceResult(AgentToolContract):
     manifest_id: UUID
     startup_manifest_id: UUID
-    evidence_round: int = Field(strict=True, ge=1, le=32)
+    evidence_round: int = Field(strict=True, ge=1)
     image_file_ids: list[UUID] = Field(default_factory=list, max_length=8)
 
 

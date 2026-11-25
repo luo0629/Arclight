@@ -7,7 +7,6 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
-from test_generation_budget import set_policy
 from test_generation_queues import messages
 from test_openai_images import attempt_for, historical_image_job
 
@@ -45,7 +44,6 @@ def test_one_authorized_synthetic_image(settings, client, episode, monkeypatch, 
         update={"max_attempts": 1, "timeout_seconds": 180}
     )
     project_id = episode["project_id"]
-    set_policy(client, project_id, str(quote), task_limit=str(quote))
     body = {
         "target_type": "SHOT_IMAGE",
         "task_type": "IMAGE",

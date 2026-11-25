@@ -24,7 +24,6 @@ from arclight.application.model_gateway import lock_gate
 from arclight.application.production_versions import text_settings
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_state import (
     AgentStateError,
     AgentStepStatus,
@@ -193,7 +192,6 @@ def execute_art(
             run.status = "RUNNING"
             actor = execution_actor(db, run)
             task = ArtDirectionTask.model_validate(run.input_json["art_direction"]["task"])
-            limits = AgentRunLimits.model_validate(run.input_json["art_direction"]["agent_limits"])
             delivery = delivered(db, run.id)
             loops = creation_loops(db, run.id, "art_director")
         if delivery is None:
@@ -203,9 +201,7 @@ def execute_art(
                     return True
                 delivery = publish_art_direction(factory, settings, loops[0].id, actor)
             else:
-                generated = generate_art_proposal(
-                    factory, settings, run_id, actor, task, limits=limits
-                )
+                generated = generate_art_proposal(factory, settings, run_id, actor, task)
                 if wait_for_agent(factory, run_id, revision, generated.direction, "art_director"):
                     return True
                 delivery = generated.delivery

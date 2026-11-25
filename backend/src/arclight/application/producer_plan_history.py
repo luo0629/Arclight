@@ -62,7 +62,7 @@ def _read(
             raise ValueError("Missing root")
         require_producer_parent(db, root.id, root.episode_id, actor)
         # Reading known history must remain possible when external cost is unknown.
-        # Authority/lifecycle/deadline are checked above; only a new operation reserves cost.
+        # All saved plan references still require authority over the original run.
         loop = db.get(AgentLoop, plan_id, populate_existing=True)
         if loop is None:
             raise ValueError("Missing plan loop")

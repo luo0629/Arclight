@@ -95,16 +95,6 @@ class RunVersionSnapshot(WorkflowContract):
         return self
 
 
-class RunBudget(WorkflowContract):
-    scope: Literal["project"] = "project"
-    origin: Literal["STARTUP_CONTEXT", "UNKNOWN"]
-    currency: Literal["USD"] = "USD"
-    limit: Money | None
-    task_limit: Money | None
-    episode_limit: Money | None
-    cost_estimate: Money | None
-
-
 class GatewayCallUsage(WorkflowContract):
     call_id: UUID
     task: Identifier
@@ -172,7 +162,6 @@ class WorkflowRunContract(WorkflowContract):
     input_snapshot: RunInputSnapshot
     workflow_version: str = Field(min_length=1, max_length=32)
     versions: RunVersionSnapshot
-    budget: RunBudget
     usage: RunUsage
     trace_id: Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[\w:-]+$")]
     status: RunStatus

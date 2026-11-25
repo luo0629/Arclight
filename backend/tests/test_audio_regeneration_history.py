@@ -10,7 +10,6 @@ from test_audio_import import completed_source, import_request
 from test_audio_production import output_audio, prepare, snapshot, wave_bytes
 from test_audio_regeneration import regeneration_case, registered_audio, tts_case
 from test_audio_tts_boundaries import boundary_state, voice_version
-from test_generation_budget import set_policy
 from test_model_services import account
 from test_native_media_integration import configure
 from test_text_contract_v2 import save_script
@@ -232,7 +231,6 @@ def test_regeneration_preserves_approved_selected_audio_and_frozen_timeline_and_
         script = db.get(Script, board.script_version_id)
         script_data = {"id": str(script.id), "content_json": deepcopy(script.content_json)}
     configure(client, settings, "speech", "openai_tts")
-    set_policy(client, episode["project_id"], "20")
     response = snapshot(client, episode, script_data)
     assert response.status_code == 201, response.text
     frozen = response.json()

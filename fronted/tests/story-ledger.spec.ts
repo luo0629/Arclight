@@ -9,11 +9,9 @@ import { openWorkspacePanels } from "./workspace-helpers";
 async function openLedger(page: Page) {
   await openWorkspacePanels(page);
   await page.getByRole("button", { name: "故事设定", exact: true }).click();
-  const disclosure = page
-    .locator("details")
-    .filter({
-      has: page.locator("summary", { hasText: /^剧情事件与状态账本$/ }),
-    });
+  const disclosure = page.locator("details").filter({
+    has: page.locator("summary", { hasText: /^剧情事件与状态账本$/ }),
+  });
   if ((await disclosure.getAttribute("open")) === null)
     await disclosure.locator("summary").first().click();
   await expect(

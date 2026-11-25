@@ -158,7 +158,7 @@ def draft(seed, feedback):
     }
 
 
-def concept_response(payload, seed, feedback, frozen):
+def concept_response(seed, feedback):
     failed = [item for item in feedback if item["status"] != "SUCCEEDED"]
     observations = [item for item in feedback if item["tool_name"] == "observe_art_concepts"]
     if failed or any(item["result"]["outcome_uncertain"] for item in observations):
@@ -175,9 +175,7 @@ def concept_response(payload, seed, feedback, frozen):
         )
     requests = [item for item in feedback if item["tool_name"] == "request_art_concepts"]
     comparisons = [item for item in feedback if item["tool_name"] == "compare_art_options"]
-    plan = frozen["plan"]
-    rounds = min(plan["maximum_rounds"], plan["maximum_candidates"] // plan["spec"]["batch_size"])
-    if not requests or len(comparisons) == len(requests) < rounds:
+    if not requests or len(comparisons) == len(requests) < 2:
         number = len(requests) + 1
         arguments = {
             "round_no": number,
@@ -227,14 +225,7 @@ def respond(payload):
         m["role"] == "user" and isinstance(m.get("content"), str) and "concept_plan" in m["content"]
         for m in payload["messages"]
     ):
-        frozen = next(
-            json.loads(m["content"])["data"]["concept_plan"]
-            for m in payload["messages"]
-            if m["role"] == "user"
-            and isinstance(m.get("content"), str)
-            and "concept_plan" in m["content"]
-        )
-        value = concept_response(payload, seed, feedback, frozen)
+        value = concept_response(seed, feedback)
     elif (
         "澄清" in seed["task"]["visual_goal"]
         and not any(

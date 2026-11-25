@@ -169,7 +169,6 @@ class ShotReviewBinding(MediaInput):
 
 class GenerationCreate(MediaInput):
     episode_id: UUID | None = None
-    batch_id: UUID | None = None
     scheduling_mode: Literal["INTERACTIVE", "BATCH"] = "INTERACTIVE"
     target_type: TargetType
     target_asset_id: UUID | None = None
@@ -220,6 +219,7 @@ MediaErrorCode = Literal[
     "INPUT_INVALID",
     "PROVIDER_REJECTED",
     "PROVIDER_FAILED",
+    "ACCOUNT_BALANCE_INSUFFICIENT",
     "PROVIDER_UNAVAILABLE",
     "RESULT_UNKNOWN",
     "STORAGE_FAILED",

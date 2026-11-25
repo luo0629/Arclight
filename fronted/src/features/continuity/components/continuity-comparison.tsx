@@ -411,7 +411,7 @@ function ComparisonBody({
                   className="min-w-0 rounded-lg border p-4"
                 >
                   <summary className="cursor-pointer text-sm font-medium">
-                    修订第 {record.round} 轮 / 最多 {record.max_rounds} 轮 ·{" "}
+                    修订第 {record.round} 轮 ·{" "}
                     {label(record.status)}
                   </summary>
                   <div className="mt-3 flex min-w-0 flex-col gap-3 text-sm">

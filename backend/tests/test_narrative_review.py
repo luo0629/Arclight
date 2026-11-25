@@ -174,7 +174,7 @@ def test_idempotent_intake_freezes_limits_and_dispatch_does_not_duplicate_report
     conflict = client.post(
         endpoint(writing_case), json=body | {"agent_limits": {"max_model_calls": 1}}
     )
-    assert conflict.status_code == 409
+    assert conflict.status_code == 422
     execute(client, settings, run_id)
     first = progress(client, writing_case, run_id)
     execute(client, settings, run_id)
@@ -490,7 +490,9 @@ def test_story_time_and_character_knowledge_keep_costume_injury_and_flashback_di
     )
 
 
-def test_no_model_budget_escalates_without_network_call(client, writing_case, settings, request):
+def test_loop_guard_escalates_without_another_model_call(
+    client, writing_case, settings, request, monkeypatch
+):
     saved, content = prepare(client, writing_case)
     model = request.getfixturevalue("model_service")
     settings.model_gateway_policy = GatewayPolicy(
@@ -498,11 +500,8 @@ def test_no_model_budget_escalates_without_network_call(client, writing_case, se
     )
     calls = []
     model(lambda req: calls.append(req) or httpx.Response(500))
-    run_id = start(
-        client,
-        writing_case,
-        payload(writing_case, saved, content, agent_limits={"max_model_calls": 0}),
-    )
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 0)
+    run_id = start(client, writing_case, payload(writing_case, saved, content))
     execute(client, settings, run_id)
     value = progress(client, writing_case, run_id)
     assert not calls
@@ -679,9 +678,7 @@ def test_terminal_parent_without_actual_resume_cannot_authorize_rereview(
     assert rejected.json()["error"]["code"] == "AGENT_NOT_ACTIVE"
 
 
-def test_rereview_uses_original_deadline_and_cannot_reset_root_policy(
-    client, writing_case, settings, monkeypatch
-):
+def test_rereview_rejects_retired_quotas_and_keeps_the_root_scope(client, writing_case, settings):
     saved, content = prepare(client, writing_case)
     run_id = start(client, writing_case, payload(writing_case, saved, content))
     execute(client, settings, run_id)
@@ -690,50 +687,47 @@ def test_rereview_uses_original_deadline_and_cannot_reset_root_policy(
     changed = client.post(
         endpoint(writing_case), json=body | {"agent_limits": {"max_model_calls": 1}}
     )
-    assert changed.status_code == 409, changed.text
-    assert changed.json()["error"]["code"] == "AGENT_LIMITS_CONFLICT"
+    assert changed.status_code == 422, changed.text
+    child = start(client, writing_case, body)
     with client.app.state.session_factory() as db:
-        from arclight.application.model_gateway import utc
-
-        deadline = utc(db.get(AgentRunLimit, UUID(run_id)).deadline_at)
-    monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline)
-    expired = client.post(endpoint(writing_case), json=body)
-    assert expired.status_code == 409, expired.text
-    assert expired.json()["error"]["code"] == "AGENT_DEADLINE_EXCEEDED"
+        control = db.get(AgentRunLimit, UUID(child))
+        root = db.get(AgentRunLimit, UUID(run_id))
+        assert control.root_run_id == control.parent_run_id == root.run_id
+        assert control.actor_id == root.actor_id
 
 
-def test_rereview_cannot_spend_more_model_calls_than_shared_root(
-    client, writing_case, settings, model_service
+def test_rereview_has_its_own_loop_and_preserves_both_reports(
+    client, writing_case, settings, model_service, monkeypatch
 ):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
     saved, content = prepare(client, writing_case)
     settings.model_gateway_policy = GatewayPolicy(
         text_maximum_cost=Decimal("0"), pricing_version="narrative-test:1"
     )
-    limits = {"max_model_calls": 1}
-    run_id = start(client, writing_case, payload(writing_case, saved, content, agent_limits=limits))
+    run_id = start(client, writing_case, payload(writing_case, saved, content))
     work = progress(client, writing_case, run_id)["work"]
     calls = []
-    model_service(
-        lambda req: calls.append(req) or httpx.Response(200, json=final(result=assessment(work)))
-    )
+
+    def respond(req):
+        calls.append(req)
+        return httpx.Response(200, json=final(result=assessment(work)))
+
+    model_service(respond)
     execute(client, settings, run_id)
     value = reject_and_finish(client, writing_case, run_id)
     child = start(
         client,
         writing_case,
-        payload(
-            writing_case,
-            saved,
-            content,
-            agent_limits=limits,
-            previous_report_id=value["report"]["report_id"],
-        ),
+        payload(writing_case, saved, content, previous_report_id=value["report"]["report_id"]),
     )
+    work = progress(client, writing_case, child)["work"]
     execute(client, settings, child)
     second = progress(client, writing_case, child)
-    assert len(calls) == 1
+    assert len(calls) == 2
     assert second["status"] == "WAITING_REVIEW", second
-    assert "AGENT_MODEL_CALL_LIMIT" in str(second["report"]["limitations"])
+    assert second["report"]["assessment"]
+    assert second["report"]["previous_report_id"] == value["report"]["report_id"]
+    assert progress(client, writing_case, run_id)["report"] == value["report"]
 
 
 def test_video_citation_accepts_only_exact_obtained_sample(client, writing_case):

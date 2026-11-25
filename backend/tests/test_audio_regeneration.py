@@ -15,7 +15,7 @@ from test_audio_tts_boundaries import (
     boundary_state,
     voice_version,
 )
-from test_generation_budget import budget, set_policy
+from test_costs import report
 from test_generation_delivery import deliver
 from test_model_services import account
 from test_native_media_integration import provider_for
@@ -27,6 +27,7 @@ from arclight.persistence.models import (
     AssetVersion,
     FileRegistration,
     GenerationJob,
+    Project,
     ProjectMember,
     VisualAsset,
 )
@@ -125,7 +126,6 @@ def test_regeneration_replay_keeps_one_job_and_conflicts_on_changed_source_or_pa
         {"voice_version_id": next_voice["id"]},
         {"performance_parameters": {"speed": 0.8}},
         {"scheduling_mode": "BATCH"},
-        {"batch_id": str(uuid4())},
     ):
         response = client.post(case["url"], json={**case["payload"], **changes})
         assert response.status_code == 409, response.text
@@ -312,17 +312,34 @@ def test_unrelated_dialogue_revision_does_not_prevent_regenerating_an_unchanged_
         assert not db.get(AssetVersion, UUID(source["binding"]["asset_version_id"])).stale
 
 
-def test_regeneration_budget_rejection_has_no_task_manifest_or_version_side_effects(
+def test_regeneration_ignores_retired_project_budget_and_preserves_original_audio(
     client, settings, tts_case
 ):
     source, _, _, _ = registered_audio(client, settings, tts_case)
-    set_policy(client, tts_case["pid"], "0")
     case = regeneration_case(tts_case, source)
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, UUID(tts_case["pid"])).budget_limit = Decimal("0.01")
     before = boundary_state(client)
+
     response = client.post(case["url"], json=case["payload"])
-    assert response.status_code == 409, response.text
-    assert response.json()["error"]["code"] == "BUDGET_EXCEEDED"
-    assert boundary_state(client) == before
+    assert response.status_code == 202, response.text
+    created = response.json()
+    assert created["status"] == "CREATED"
+    assert created["source_audio_version_id"] == source["binding"]["asset_version_id"]
+
+    after = boundary_state(client)
+    requests, jobs, attempts, artifacts, manifests, *other_counts = before["counts"]
+    assert after["counts"] == (
+        requests + 1,
+        jobs + 1,
+        attempts,
+        artifacts,
+        manifests + 2,
+        *other_counts,
+    )
+    assert set(before["reserved"]) <= set(after["reserved"])
+    assert len(after["reserved"]) == len(before["reserved"]) + 1
+    assert after["settled"] == before["settled"]
 
 
 def test_unknown_regeneration_keeps_reservation_and_never_resubmits_on_replay(
@@ -340,8 +357,9 @@ def test_unknown_regeneration_keeps_reservation_and_never_resubmits_on_replay(
     provider = provider_for(client, settings, job, uncertain)
     assert deliver(client, job, provider) == "RESULT_UNKNOWN"
     before = boundary_state(client)
-    budget_before = client.get(budget(tts_case["pid"])).json()
-    assert Decimal(budget_before["pending_estimate"]) > 0
+    project = {"project_id": tts_case["pid"]}
+    costs_before = report(client, project)
+    assert Decimal(costs_before["summary"]["pending_estimate"]) > 0
     replay = client.post(case["url"], json=case["payload"])
     assert replay.status_code == 200, replay.text
     assert replay.json()["job_id"] == row["job_id"]
@@ -352,10 +370,10 @@ def test_unknown_regeneration_keeps_reservation_and_never_resubmits_on_replay(
     assert fresh.status_code == 409, fresh.text
     assert fresh.json()["error"]["code"] == "GENERATION_TARGET_BUSY"
     assert boundary_state(client) == before
-    assert (
-        client.get(budget(tts_case["pid"])).json()["pending_estimate"]
-        == (budget_before["pending_estimate"])
-    )
+    costs_after = report(client, project)
+    costs_before.pop("generated_at")
+    costs_after.pop("generated_at")
+    assert costs_after == costs_before
     endpoint = tts_case["url"] + f"/{row['job_id']}/result"
     assert client.post(endpoint, json=declaration(expected_revision=1)).status_code == 409
     assert len(client.get(tts_case["url"].removesuffix("/tts") + "/history").json()) == 1

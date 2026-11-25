@@ -21,8 +21,7 @@ from test_continuity_reviewer import reviewer_case as reviewer_case
 from test_continuity_revisions import execution_counts, request_revision
 from test_continuity_revisions import revision_case as revision_case
 from test_continuity_rules import rules_storage as rules_storage
-from test_generation_budget import priced, set_policy
-from test_human_reviews import decide, resume
+from test_human_reviews import decide
 
 from arclight.application import continuity_feedback as feedback
 from arclight.application.continuity_feedback_store import validate_feedback_record
@@ -84,7 +83,7 @@ def test_crash_repair_keeps_selection_closed_and_no_duplicate_model_or_media(
 
 
 @pytest.mark.parametrize("reviewer_case", [AgentRunLimits(max_model_calls=10)], indirect=True)
-def test_feedback_exhausts_original_global_model_allowance_without_reset(
+def test_feedback_ignores_historical_quota_and_preserves_the_control_record(
     client, settings, model_service, feedback_case
 ):
     case = feedback_case
@@ -93,21 +92,16 @@ def test_feedback_exhausts_original_global_model_allowance_without_reset(
         original = (control.deadline_at, deepcopy(control.limits_json), control.root_run_id)
     sent, _, reviewed, errors, _ = install_feedback_model(model_service, ["READY_FOR_REVIEW"])
     result = run_feedback(client, settings, case)
-    assert result.status == "HUMAN_REVIEW", result.model_dump_json()
-    assert result.record.source == "LIMIT"
-    assert result.record.stop_code == "AGENT_MODEL_CALL_LIMIT"
-    assert not sent and len(reviewed) == 5 and not errors
+    assert result.status == "READY_FOR_REVIEW", result.model_dump_json()
+    assert result.record.source == "MODEL"
+    assert result.record.stop_code is None
+    assert len(sent) == 1 and len(reviewed) == 5 and not errors
     assert run_feedback(client, settings, case) == result
     with client.app.state.session_factory() as db:
         validate_feedback_record(db, result.record)
         control = db.get(AgentRunLimit, case["run_id"])
         assert (control.deadline_at, control.limits_json, control.root_run_id) == original
-    request = client.get(f"/api/v1/human-reviews/{result.record.human_review_request_id}")
-    assert request.status_code == 200, request.text
-    decision = decide(client, request.json())
-    assert decision.status_code == 200, decision.text
-    assert resume(client, request.json(), decision.json()).status_code == 200
-    assert not sent
+    assert len(sent) == 1
 
 
 def test_three_media_rounds_stop_via_qa05_without_a_fourth_job(
@@ -120,59 +114,66 @@ def test_three_media_rounds_stop_via_qa05_without_a_fourth_job(
     original = execution_counts(client)
     for round_no in (1, 2, 3):
         result = run_feedback(client, settings, case)
-        with client.app.state.session_factory() as db:
-            child = revision_record(db, UUID(case["project_id"]), result.record.child_revision_id)
-        assert child.round == round_no + 1
         if round_no < 3:
             assert result.status == "REVISION_QUEUED"
+            with client.app.state.session_factory() as db:
+                child = revision_record(
+                    db, UUID(case["project_id"]), result.record.child_revision_id
+                )
+            assert child.round == round_no + 1
             candidate = finish_revision(client, episode, case, child.model_dump(mode="json"))
             case = case | {"revision": child.model_dump(mode="json"), "candidate": candidate}
         else:
-            assert child.status == "NEEDS_REVIEW" and child.job_id is None
             assert result.status == "HUMAN_REVIEW"
             assert result.record.stop_code == "REVISION_ROUND_LIMIT"
+            assert result.record.child_revision_id is None
     assert len(sent) == 3 and not errors
     assert execution_counts(client)["generation_jobs"] == original["generation_jobs"] + 2
     assert run_feedback(client, settings, case) == result
-    exhausted = case | {"revision": child.model_dump(mode="json")}
-    stopped = run_feedback(client, settings, exhausted)
-    assert stopped.status == "HUMAN_REVIEW" and stopped.record.source == "LIMIT"
-    assert run_feedback(client, settings, exhausted) == stopped
+    assert (
+        client.get(f"/api/v1/human-reviews/{result.record.human_review_request_id}").status_code
+        == 200
+    )
     assert len(sent) == 3
 
 
-def test_media_budget_refusal_is_atomic_and_persists_owner_handling(
+def test_feedback_can_queue_revision_without_a_price_estimate(
     client, episode, settings, model_service, feedback_case, monkeypatch
 ):
     case = feedback_case
-    priced(monkeypatch)
-    set_policy(client, episode["project_id"], "1")
+    monkeypatch.setattr("arclight.providers.media_pricing.quote", lambda *_: None)
     sent, _, _, errors, _ = install_feedback_model(
         model_service, ["REVISE"], difference=("PROP", "MEDIUM")
     )
     before = execution_counts(client)
     result = run_feedback(client, settings, case)
-    assert result.status == "HUMAN_REVIEW", result.model_dump_json()
-    assert result.record.stop_code == "BUDGET_EXCEEDED"
-    assert result.record.child_revision_id is None
+    assert result.status == "REVISION_QUEUED", result.model_dump_json()
+    assert result.record.stop_code is None
+    assert result.record.child_revision_id is not None
     assert not errors and len(sent) == 1
     after = execution_counts(client)
-    for key in ("generation_jobs", "generation_attempts", "generation_budget_reservations"):
-        assert after[key] == before[key]
+    assert after["generation_jobs"] == before["generation_jobs"] + 1
+    assert after["generation_attempts"] == before["generation_attempts"]
+    assert after["generation_budget_reservations"] == before["generation_budget_reservations"] + 1
     assert run_feedback(client, settings, case) == result
 
 
-@pytest.mark.parametrize("reviewer_case", [AgentRunLimits(max_model_calls=11)], indirect=True)
 def test_new_exhausted_recheck_keeps_old_pass_unselectable_and_qa06_wait_durable(
-    client, settings, model_service, feedback_case
+    client, settings, model_service, feedback_case, monkeypatch
 ):
     from arclight.persistence.human_reviews import HumanReviewRequest
 
     case = feedback_case
-    sent, _, reviewed, errors, _ = install_feedback_model(model_service, ["INVESTIGATE"])
+
+    def limit_next_review(_):
+        monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+
+    sent, _, reviewed, errors, _ = install_feedback_model(
+        model_service, ["INVESTIGATE"], on_feedback=limit_next_review
+    )
     result = run_feedback(client, settings, case)
     assert result.status == "STOPPED", result.model_dump_json()
-    assert len(sent) == 1 and len(reviewed) == 5 and not errors
+    assert len(sent) == 1 and len(reviewed) == 6 and not errors
     history = feedback_rows(client, case)
     assert len(history) == 1 and history[0].action == "INVESTIGATE"
     asset, version = target_rows(client, case)
@@ -194,7 +195,7 @@ def test_new_exhausted_recheck_keeps_old_pass_unselectable_and_qa06_wait_durable
     assert rejected.status_code == 409
     assert rejected.json()["error"]["code"] == "REVIEW_NOT_COMPLETED"
     assert run_feedback(client, settings, case) == result
-    assert len(sent) == 1 and len(reviewed) == 5
+    assert len(sent) == 1 and len(reviewed) == 6
 
 
 def test_waiting_original_media_does_not_start_model_generation_or_retry(

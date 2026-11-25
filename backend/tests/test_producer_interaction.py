@@ -92,7 +92,8 @@ def test_start_queues_exactly_one_plan_and_freezes_original_inputs(client, episo
         assert len(rows) == 1 and rows[0].snapshot_json["action"] == "PLAN"
         assert run.status == "RUNNING" and digest(run.input_json) == original
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
-        assert db.get(AgentRunLimit, run_id).limits_json["max_duration_seconds"] == 3600
+        control = db.get(AgentRunLimit, run_id)
+        assert control.limits_json == {} and control.deadline_at is None
 
 
 def test_runtime_plan_replay_does_not_repeat_model_or_billing(

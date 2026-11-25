@@ -16,7 +16,6 @@ class AudioTTSCreate(AudioContract):
     target_asset_id: UUID | None = None
     expected_revision: int = Field(default=0, strict=True, ge=0)
     performance_parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    batch_id: UUID | None = None
     scheduling_mode: Literal["INTERACTIVE", "BATCH"] = "INTERACTIVE"
 
 
@@ -27,7 +26,6 @@ class AudioTTSRegenerate(AudioContract):
     voice_profile_version_id: UUID | None = None
     expected_revision: int = Field(strict=True, ge=0)
     performance_parameters: dict[str, JsonValue] = Field(default_factory=dict)
-    batch_id: UUID | None = None
     scheduling_mode: Literal["INTERACTIVE", "BATCH"] = "INTERACTIVE"
 
 

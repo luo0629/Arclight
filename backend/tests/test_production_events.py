@@ -16,7 +16,7 @@ from test_asset_selection import approved
 from test_assets import create
 from test_collaboration import register
 from test_concurrency import require_postgres
-from test_generation_budget import priced, set_policy
+from test_generation_budget import priced
 from test_generation_delivery import Provider, deliver
 from test_generation_jobs import capture_ok, payload
 from test_model_gateway import request, route
@@ -425,40 +425,25 @@ class QuotedMedia(MediaStageHandler):
         return StagePlan("WAIT_MEDIA", maximum_cost=self.maximum_cost)
 
 
-@pytest.mark.parametrize(
-    "scope,code",
-    [
-        ("project", "BUDGET_EXCEEDED"),
-        ("episode", "BUDGET_EPISODE_EXCEEDED"),
-        ("task", "BUDGET_TASK_EXCEEDED"),
-    ],
-)
-def test_scoped_budget_change_is_rechecked_and_can_resume_explicitly(client, episode, scope, code):
-    set_policy(client, episode["project_id"], "10")
+@pytest.mark.parametrize("scope", ["project", "episode", "task"])
+def test_stage_events_ignore_historical_budget_thresholds(client, episode, scope):
+    from arclight.persistence.generation_budget import GenerationBudgetPolicy
+
     _, identity = media(client, episode)
-    limits = {f"{scope}_limit": "1"} if scope != "project" else {}
-    set_policy(client, episode["project_id"], "1" if scope == "project" else "10", **limits)
+    with client.app.state.session_factory.begin() as db:
+        project = db.get(Project, UUID(episode["project_id"]))
+        if scope == "project":
+            project.budget_limit = Decimal(1)
+        else:
+            db.add(GenerationBudgetPolicy(project_id=project.id, **{f"{scope}_limit": Decimal(1)}))
     handlers = {"MEDIA": QuotedMedia()}
-    blocked = consume(client, identity, handlers=handlers)
-    assert blocked.reason == code and blocked.disposition == "BLOCKED"
-    set_policy(client, episode["project_id"], "10", **{name: "10" for name in limits})
-    assert consume(client, identity, handlers=handlers) == blocked
-    key = uuid4()
-    resumed = recheck_stage_event(
-        client.app.state.session_factory, identity, "service-owner", key, handlers=handlers
-    )
-    assert resumed.disposition == "APPLIED"
-    assert (
-        recheck_stage_event(
-            client.app.state.session_factory, identity, "service-owner", uuid4(), handlers=handlers
-        )
-        == resumed
-    )
-    assert count(client, ProductionEventReceipt) == 2 and count(client, GenerationAttempt) == 0
+    applied = consume(client, identity, handlers=handlers)
+    assert applied.disposition == "APPLIED" and applied.reason == "RECONCILED"
+    assert consume(client, identity, handlers=handlers) == applied
+    assert count(client, ProductionEventReceipt) == 1 and count(client, GenerationAttempt) == 0
 
 
 def test_budget_reads_actual_and_outstanding_shared_ledger(client, episode, monkeypatch):
-    set_policy(client, episode["project_id"], "10")
     priced(monkeypatch, "3")
     job, identity = media(client, episode)
     reserved = consume(client, identity)
@@ -478,16 +463,15 @@ def test_budget_reads_actual_and_outstanding_shared_ledger(client, episode, monk
     assert Decimal(result.budget["actual"]) == 1
     # The provider returned no media bill: the original reservation remains held.
     assert Decimal(result.budget["reserved"]) == 3
-    set_policy(client, episode["project_id"], "5")
     # The next zero-cost job retains the same outstanding shared ledger.
     priced(monkeypatch, "0")
     _, identity = media(client, episode)
-    stopped = consume(client, identity, handlers={"MEDIA": QuotedMedia()})
-    assert stopped.reason == "BUDGET_EXCEEDED" and count(client, GenerationAttempt) == 1
+    applied = consume(client, identity, handlers={"MEDIA": QuotedMedia()})
+    assert applied.disposition == "APPLIED" and count(client, GenerationAttempt) == 1
+    assert Decimal(applied.budget["reserved"]) == 3
 
 
-def test_unknown_text_cost_cannot_be_assumed_free_by_quoted_handler(client, episode):
-    set_policy(client, episode["project_id"], "10")
+def test_unknown_text_cost_is_preserved_without_blocking_quoted_handler(client, episode):
     selected = route(maximum_cost=None, pricing_version="unpriced:1")
     call = request(
         episode, selected, task="script", workflow_id=UUID(start(client, episode).json()["run_id"])
@@ -501,8 +485,8 @@ def test_unknown_text_cost_cannot_be_assumed_free_by_quoted_handler(client, epis
         usage=lambda _: GatewayUsage(),
     )
     _, identity = media(client, episode)
-    blocked = consume(client, identity, handlers={"MEDIA": QuotedMedia()})
-    assert blocked.reason == "BUDGET_UNPRICED_HISTORY" and blocked.disposition == "BLOCKED"
+    applied = consume(client, identity, handlers={"MEDIA": QuotedMedia()})
+    assert applied.disposition == "APPLIED" and applied.reason == "RECONCILED"
     assert count(client, GenerationAttempt) == 0
 
 

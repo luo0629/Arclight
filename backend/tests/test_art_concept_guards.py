@@ -15,7 +15,7 @@ from test_agent_model import model_service as model_service
 from test_art_review_workflow import decide
 from test_art_workflow import drive, progress, proposal
 from test_concurrency import require_postgres
-from test_generation_budget import priced, set_policy
+from test_generation_budget import priced
 from test_generation_candidates import ingest
 from test_generation_delivery import deliver
 from test_generation_jobs import capture, payload
@@ -30,7 +30,6 @@ from arclight.application.asset_objects import object_path
 from arclight.application.generation_accounting import costs
 from arclight.application.generation_attempts import finish_attempt, start_attempt
 from arclight.application.generation_candidates import require_candidate_review
-from arclight.application.generation_leases import utc
 from arclight.core.errors import DomainError
 from arclight.domain.agent_tools import AgentToolCall
 from arclight.domain.context import ContextLimits
@@ -54,8 +53,8 @@ from arclight.providers.media_outputs import MediaOutput, MockMediaOutputProvide
 from arclight.providers.media_submission import MockMediaSubmissionProvider, SubmissionUncertain
 
 
-def waiting(client, episode, settings, model_service, **options):
-    sent, errors, _ = install_concept_model(model_service, rounds=options.get("rounds", 2))
+def waiting(client, episode, settings, model_service, *, rounds=2, **options):
+    sent, errors, _ = install_concept_model(model_service, rounds=rounds)
     run_id, body = start_concepts(client, episode, settings, **options)
     drive(client, settings, run_id)
     detail = progress(client, run_id)
@@ -99,7 +98,7 @@ def test_frozen_plan_rejects_uncontrolled_capabilities_and_limits(
     if mutation == "target":
         plan["target_type"] = "SHOT"
     elif mutation == "batch":
-        plan["spec"]["batch_size"] = 5
+        plan["spec"]["batch_size"] = 0
     elif mutation == "quantity":
         plan["maximum_candidates"] = 1
     elif mutation == "rounds":
@@ -134,7 +133,7 @@ def test_round_replay_uses_original_job_quote_and_reservation_and_rejects_change
         schedule = db.scalar(
             select(GenerationSchedule).where(GenerationSchedule.job_id == UUID(original["job_id"]))
         )
-        assert utc(schedule.deadline_at) == utc(db.get(AgentRunLimit, UUID(run_id)).deadline_at)
+        assert schedule.deadline_at is None
     conflict = tool(
         client, settings, run_id, "request_art_concepts", arguments | {"prompt": "不同方向"}
     )
@@ -144,7 +143,7 @@ def test_round_replay_uses_original_job_quote_and_reservation_and_rejects_change
     )
     assert unknown.error.code == "INVALID_ARGUMENTS"
     skipped = tool(client, settings, run_id, "request_art_concepts", arguments | {"round_no": 3})
-    assert skipped.error.code == "ART_CONCEPT_ROUND_LIMIT"
+    assert skipped.error.code == "ART_CONCEPT_ROUND_INVALID"
     with client.app.state.session_factory() as db:
         assert len(concept_jobs(db, run_id=UUID(run_id))) == 1
         assert db.scalar(select(func.count()).select_from(GenerationBudgetReservation)) == 1
@@ -177,26 +176,22 @@ def test_revision_requires_real_comparison_and_cross_run_observation_is_forbidde
     assert observed.status == "FAILED" and observed.error.code == "NOT_FOUND"
 
 
-def test_root_budget_counts_generation_reservation_before_next_model_and_retry(
+def test_root_records_concept_estimate_without_a_budget_gate(
     client, episode, settings, model_service, monkeypatch
 ):
     priced(monkeypatch, "1")
-    set_policy(client, episode["project_id"], limit="20")
-    sent, errors, _ = install_concept_model(model_service)
-    run_id, _ = start_concepts(client, episode, settings, budget="10", limits={"maximum_cost": "1"})
-    drive(client, settings, run_id)
-    assert not errors and len(sent) == 2
-    assert progress(client, run_id)["operations"][0]["stop_code"] == "AGENT_BUDGET_EXCEEDED"
+    run_id, _, _, sent, _ = waiting(client, episode, settings, model_service, count=5)
+    assert len(sent) == 3
     with client.app.state.session_factory() as db:
-        assert not concept_jobs(db, run_id=UUID(run_id))
+        assert len(concept_jobs(db, run_id=UUID(run_id))) == 1
+        assert action_usage(db, UUID(run_id))["pending_estimate"] == Decimal("5")
 
 
-def test_original_generation_retry_cannot_reset_concept_budget(
+def test_original_generation_retry_retains_prior_concept_charges(
     client, episode, settings, model_service, monkeypatch
 ):
     priced(monkeypatch, "1")
-    set_policy(client, episode["project_id"], limit="20")
-    run_id, _, original, _, _ = waiting(client, episode, settings, model_service, budget="2")
+    run_id, _, original, _, _ = waiting(client, episode, settings, model_service)
     job_id = UUID(original["job_id"])
     with client.app.state.session_factory.begin() as db:
         job = db.get(GenerationJob, job_id)
@@ -215,19 +210,16 @@ def test_original_generation_retry_cannot_reset_concept_budget(
         f"/api/v1/projects/{episode['project_id']}/generation-jobs/{job_id}/retry",
         json={"expected_revision": revision},
     )
-    assert retry.status_code == 409 and retry.json()["error"]["code"] == "ART_CONCEPT_BUDGET", (
-        retry.text
-    )
+    assert retry.status_code == 200 and retry.json()["status"] == "RETRY_WAIT", retry.text
     with client.app.state.session_factory() as db:
         assert db.get(GenerationJob, job_id).attempt_count == 1
-        assert costs(db, UUID(episode["project_id"]), job_id=job_id) == (Decimal("1"), Decimal("0"))
+        assert costs(db, UUID(episode["project_id"]), job_id=job_id) == (Decimal("1"), Decimal("2"))
 
 
 def test_cancelling_external_wait_before_submission_releases_only_original_unspent_reservation(
     client, episode, settings, model_service, monkeypatch
 ):
     priced(monkeypatch, "1")
-    set_policy(client, episode["project_id"], limit="20")
     run_id, _, original, sent, _ = waiting(client, episode, settings, model_service)
     response = client.post(f"/api/v1/runs/{run_id}/cancel")
     assert response.status_code == 200, response.text
@@ -245,7 +237,6 @@ def test_unknown_result_is_observed_once_never_retried_or_shown_as_zero_and_canc
     client, episode, settings, model_service, monkeypatch
 ):
     priced(monkeypatch, "1")
-    set_policy(client, episode["project_id"], limit="20")
     run_id, _, original, sent, _ = waiting(client, episode, settings, model_service)
 
     class Unknown(MockMediaSubmissionProvider):
@@ -426,14 +417,14 @@ def test_forged_spec_context_cannot_change_the_original_continuity_gate(
         assert error.value.code == "CONTINUITY_REVIEW_REQUIRED"
 
 
-def test_frozen_concept_inputs_and_parent_deadline_reject_historical_rewrites(
+def test_frozen_concept_inputs_and_schedule_reject_historical_rewrites(
     client, episode, settings, model_service
 ):
     run_id, _, original, _, _ = waiting(client, episode, settings, model_service)
     factory = client.app.state.session_factory
     with factory() as db:
         saved_input = deepcopy(db.get(WorkflowRun, UUID(run_id)).input_json)
-        deadline = utc(db.get(AgentRunLimit, UUID(run_id)).deadline_at)
+        assert db.get(AgentRunLimit, UUID(run_id)).deadline_at is None
     with pytest.raises(IntegrityError, match="IMMUTABLE_HISTORY"), factory.begin() as db:
         run = db.get(WorkflowRun, UUID(run_id))
         changed = deepcopy(saved_input)
@@ -443,25 +434,24 @@ def test_frozen_concept_inputs_and_parent_deadline_reject_historical_rewrites(
         schedule = db.scalar(
             select(GenerationSchedule).where(GenerationSchedule.job_id == UUID(original["job_id"]))
         )
-        schedule.deadline_at = deadline + timedelta(days=1)
+        schedule.deadline_at = utcnow() + timedelta(days=1)
     with factory() as db:
         assert db.get(WorkflowRun, UUID(run_id)).input_json == saved_input
         schedule = db.scalar(
             select(GenerationSchedule).where(GenerationSchedule.job_id == UUID(original["job_id"]))
         )
-        assert utc(schedule.deadline_at) == deadline
+        assert schedule.deadline_at is None
 
 
 @pytest.mark.parametrize(
     "mutation,code",
     [
         ("grant", "USER_NOT_AUTHORIZED"),
-        ("deadline", "AGENT_DEADLINE_EXCEEDED"),
         ("stale", "RUN_STATE_INVALID"),
     ],
 )
 def test_external_wait_and_media_dispatch_recheck_original_authority_without_new_calls(
-    client, episode, settings, model_service, monkeypatch, mutation, code
+    client, episode, settings, model_service, mutation, code
 ):
     run_id, _, original, sent, _ = waiting(client, episode, settings, model_service)
     with client.app.state.session_factory.begin() as db:
@@ -469,16 +459,9 @@ def test_external_wait_and_media_dispatch_recheck_original_authority_without_new
             db.scalar(
                 select(AgentToolGrant).where(AgentToolGrant.run_id == UUID(run_id))
             ).allowed_tools_json = []
-        elif mutation == "stale":
+        else:
             run = db.get(WorkflowRun, UUID(run_id))
             run.agent_state_json = run.agent_state_json | {"input_sha256": "f" * 64}
-        else:
-            deadline = db.get(AgentRunLimit, UUID(run_id)).deadline_at
-    if mutation == "deadline":
-        monkeypatch.setattr(
-            "arclight.application.agent_limits.utcnow",
-            lambda: deadline.replace(tzinfo=utcnow().tzinfo) + timedelta(seconds=1),
-        )
 
     class NeverSubmit(MockMediaSubmissionProvider):
         calls = 0

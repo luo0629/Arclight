@@ -1,6 +1,5 @@
 """Bounded, content-safe single-turn Agent protocol, independent of a vendor wire format."""
 
-import json
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
 from uuid import UUID
@@ -114,16 +113,16 @@ class AgentModelRequest(AgentModelValue):
     skills: tuple[AgentSkillSnapshot, ...] = Field(
         default=(), max_length=2, exclude_if=lambda value: not value
     )
-    evidence_round: int = Field(default=0, strict=True, ge=0, le=32)
-    max_tokens: int = Field(default=4096, strict=True, ge=1, le=16000)
-    messages: list[AgentMessage] = Field(min_length=1, max_length=128, repr=False)
+    evidence_round: int = Field(default=0, strict=True, ge=0)
+    # Historical request snapshots can still be verified with their saved parameter.
+    max_tokens: int | None = Field(
+        default=None, strict=True, ge=1, exclude_if=lambda value: value is None
+    )
+    messages: list[AgentMessage] = Field(min_length=1, repr=False)
 
     @model_validator(mode="after")
-    def bounded_paired_history(self):
-        value = self.model_dump(mode="json")
-        safe_metadata(value)
-        if len(json.dumps(value, ensure_ascii=False, allow_nan=False).encode()) > 262144:
-            raise ValueError("Agent conversation exceeds its byte limit")
+    def paired_history(self):
+        safe_metadata(self.model_dump(mode="json"))
         if not isinstance(self.messages[0], AgentUserMessage):
             raise ValueError("Agent conversation must start with user data")
         pending: dict[str, ModelToolCall] = {}

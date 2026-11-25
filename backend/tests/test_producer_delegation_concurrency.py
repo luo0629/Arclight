@@ -9,7 +9,6 @@ import pytest
 from sqlalchemy import func, select
 from test_agent_model import model_service as model_service
 from test_concurrency import require_postgres
-from test_generation_budget import set_policy
 from test_model_gateway import request, route
 from test_producer_delegation import delegation_call, dispatch, dispatched
 from test_producer_planning import completed_plan, writer_task
@@ -50,7 +49,7 @@ def test_postgres_parallel_duplicate_task_has_one_child_and_one_dispatch(
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
-def test_postgres_parallel_distinct_tasks_cannot_exceed_root_delegation_quantity(
+def test_postgres_parallel_distinct_tasks_still_enforce_episode_exclusivity(
     client, episode, settings, model_service
 ):
     require_postgres(settings)
@@ -69,24 +68,23 @@ def test_postgres_parallel_distinct_tasks_cannot_exceed_root_delegation_quantity
         responses = list(pool.map(attempt, ("first", "second")))
     assert sorted(item.status for item in responses) == ["FAILED", "SUCCEEDED"]
     refused = next(item for item in responses if item.status == "FAILED")
-    assert refused.error.code == "AGENT_DELEGATION_LIMIT"
+    assert refused.error.code == "EPISODE_BUSY"
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(AgentRunLimit)) == 2
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 1
 
 
 @pytest.mark.parametrize(
-    "policy,code",
+    "policy,quote",
     [
-        ({"maximum_cost": "1"}, "AGENT_BUDGET_EXCEEDED"),
-        ({"maximum_cost": "0", "max_calls": 5}, "AGENT_CALL_LIMIT"),
+        ({"maximum_cost": "1"}, Decimal("1")),
+        ({"maximum_cost": "0", "max_calls": 5}, Decimal("0")),
     ],
 )
-def test_postgres_producer_and_actual_child_share_atomic_budget_and_call_cap(
-    client, episode, settings, model_service, policy, code
+def test_postgres_producer_and_actual_child_record_both_concurrent_calls(
+    client, episode, settings, model_service, policy, quote
 ):
     require_postgres(settings)
-    set_policy(client, episode["project_id"], "100")
     limits = AgentRunLimits(max_duration_seconds=3600, **policy)
     run_id, actor, _, reference, _ = completed_plan(
         client, episode, settings, model_service, limits=limits
@@ -106,7 +104,7 @@ def test_postgres_producer_and_actual_child_share_atomic_budget_and_call_cap(
         ).model_dump(mode="json")
         child.status = "RUNNING"
     selected = route(
-        maximum_cost=Decimal("1") if code == "AGENT_BUDGET_EXCEEDED" else Decimal("0"),
+        maximum_cost=quote,
         capabilities=GatewayCapabilities(
             version="producer-budget-test/1",
             tasks=frozenset({"producer", "script"}),
@@ -146,10 +144,10 @@ def test_postgres_producer_and_actual_child_share_atomic_budget_and_call_cap(
                 attempt, [(run_id, "producer", "producer"), (child_id, "script", "screenwriter")]
             )
         )
-    assert sorted(outcomes) == sorted(["SUCCEEDED", code])
-    assert len(adapter_calls) == 1
+    assert outcomes == ["SUCCEEDED", "SUCCEEDED"]
+    assert set(adapter_calls) == {run_id, child_id}
     with factory() as db:
         usage = action_usage(db, run_id)
-        assert len(usage["actions"]) == 5
-        assert usage["pending_estimate"] == (1 if code == "AGENT_BUDGET_EXCEEDED" else 0)
+        assert len(usage["actions"]) == 6
+        assert usage["pending_estimate"] == quote * 2
         assert db.get(AgentRunLimit, child_id).root_run_id == run_id

@@ -7,7 +7,6 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 from test_audio_production import snapshot, wave_bytes
-from test_generation_budget import set_policy
 from test_generation_delivery import deliver
 from test_generation_jobs import base, capture_ok
 from test_media_validation import wave_bytes as silent_wave
@@ -76,7 +75,6 @@ def boundary_case(client, settings):
     frozen = response.json()
     lines = client.get(f"/api/v1/audio-snapshots/{frozen['id']}/lines").json()
     voice = voice_version(client, project_id, lines[0]["speaker"])
-    set_policy(client, project_id, "20")
     return {
         "owner": owner,
         "project_id": project_id,

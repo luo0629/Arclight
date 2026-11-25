@@ -21,6 +21,25 @@ def latest_receipt(db: Session, call_id: UUID) -> GatewayReceipt | None:
     )
 
 
+def balance_rejected(receipt: GatewayReceipt | None) -> bool:
+    return (
+        receipt is not None
+        and receipt.status == "NOT_ACCEPTED"
+        and receipt.actual_cost == 0
+        and receipt.error_code == "PROVIDER_INSUFFICIENT_BALANCE"
+    )
+
+
+def workflow_balance_rejected(db: Session, run_id: UUID) -> bool:
+    call_id = db.scalar(
+        select(GatewayCall.id)
+        .where(GatewayCall.workflow_id == run_id)
+        .order_by(GatewayCall.created_at.desc(), GatewayCall.sequence.desc())
+        .limit(1)
+    )
+    return call_id is not None and balance_rejected(latest_receipt(db, call_id))
+
+
 def media_outcome(db: Session, call: GatewayCall) -> dict | None:
     """Read GEN's authoritative outcome and billing, without a second media ledger."""
     if call.generation_attempt_id is None:
@@ -77,112 +96,38 @@ def costs(
     return actual, pending
 
 
-def require_priced_history(db: Session, project_id: UUID) -> None:
-    """A later capped call must not treat earlier unpriced text as free."""
-    for call in db.scalars(
-        select(GatewayCall).where(
-            GatewayCall.project_id == project_id,
-            GatewayCall.generation_attempt_id.is_(None),
-            GatewayCall.maximum_cost.is_(None),
-        )
-    ):
-        receipt = latest_receipt(db, call.id)
-        if receipt is None or receipt.actual_cost is None:
-            raise DomainError(
-                "BUDGET_UNPRICED_HISTORY", "已有金额未知的文字调用，请先核账再启用预算门禁", 409
-            )
-
-
-def admit_budget(db: Session, request: GatewayRequest, route: GatewayRoute) -> None:
-    from arclight.application.dependencies import lock_dependency_graph
-    from arclight.application.generation_accounting import costs as project_costs
-    from arclight.application.generation_budget import policy_for
+def validate_call_owner(db: Session, request: GatewayRequest, route: GatewayRoute) -> None:
+    from arclight.application.generation_accounting import reservation_for
     from arclight.application.short_drama_budget import (
-        check_budget,
+        require_active_production,
         root_for_job,
         root_for_workflow,
     )
     from arclight.persistence.generation import GenerationAttempt, GenerationJob
-    from arclight.persistence.generation_accounting import GenerationBudgetReservation
-    from arclight.persistence.models import Project
 
     if request.generation_attempt_id is None:
         if (root := root_for_workflow(db, request.workflow_id)) is not None:
-            check_budget(db, root, request.project_id, route.maximum_cost)
-        elif route.maximum_cost:
-            lock_dependency_graph(db, request.project_id)
-    if route.maximum_cost is None:
-        if (
-            request.generation_attempt_id is None
-            and request.workflow_id is not None
-            and request.task in {"script", "storyboard", "analyze", "outline", "rewrite"}
-        ):
-            # Text may rely on the supplier's balance/quota without an app cap.
-            # A missing quote remains unknown in the immutable ledger and cost UI.
-            return
-        raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "模型调用缺少可信报价，已停止调用", 409)
-    if request.generation_attempt_id is not None:
-        attempt = db.get(GenerationAttempt, request.generation_attempt_id)
-        job = db.get(GenerationJob, attempt.job_id) if attempt else None
-        reservation = (
-            db.scalar(
-                select(GenerationBudgetReservation)
-                .where(
-                    GenerationBudgetReservation.job_id == attempt.job_id,
-                    GenerationBudgetReservation.attempt_no == attempt.attempt_no,
-                )
-                .order_by(GenerationBudgetReservation.sequence.desc())
-                .limit(1)
-            )
-            if attempt
-            else None
-        )
-        if (
-            attempt is None
-            or job is None
-            or job.project_id != request.project_id
-            or job.created_by != request.actor
-            or attempt.finished_at is not None
-            or job.attempt_count != attempt.attempt_no
-            or reservation is None
-            or reservation.amount != route.maximum_cost
-            or job.provider != route.provider
-            or job.model != route.model
-        ):
-            raise DomainError("BUDGET_RESERVATION_CONFLICT", "媒体调用与现有预算预留不匹配", 409)
-        if (root := root_for_job(db, job)) is not None:
-            check_budget(db, root, request.project_id, Decimal(0))
+            require_active_production(db, root, request.project_id)
         return
-    project = db.get(Project, request.project_id)
-    assert project is not None
-    policy = policy_for(db, project.id)
-    if route.maximum_cost > 0:
-        require_priced_history(db, project.id)
-    actual, pending = project_costs(db, project.id)
-    amount = route.maximum_cost
-    if amount > 0 and actual + pending + amount > project.budget_limit:
-        raise DomainError("BUDGET_EXCEEDED", "模型调用将超过项目预算", 409)
-    if request.episode_id is not None and policy.episode_limit is not None and amount > 0:
-        actual, pending = project_costs(db, project.id, episode_id=request.episode_id)
-        if actual + pending + amount > policy.episode_limit:
-            raise DomainError("BUDGET_EPISODE_EXCEEDED", "模型调用将超过剧集预算", 409)
-    if policy.task_limit is not None and amount > 0:
-        used = Decimal("0")
-        if request.workflow_id is not None:
-            for call in db.scalars(
-                select(GatewayCall).where(
-                    GatewayCall.workflow_id == request.workflow_id,
-                    GatewayCall.generation_attempt_id.is_(None),
-                )
-            ):
-                receipt = latest_receipt(db, call.id)
-                used += (
-                    receipt.actual_cost
-                    if receipt and receipt.actual_cost is not None
-                    else call.maximum_cost or Decimal("0")
-                )
-        if used + amount > policy.task_limit:
-            raise DomainError("BUDGET_TASK_EXCEEDED", "模型调用将超过任务预算", 409)
+
+    attempt = db.get(GenerationAttempt, request.generation_attempt_id)
+    job = db.get(GenerationJob, attempt.job_id) if attempt else None
+    reservation = reservation_for(db, attempt.job_id, attempt.attempt_no) if attempt else None
+    if (
+        attempt is None
+        or job is None
+        or job.project_id != request.project_id
+        or job.created_by != request.actor
+        or attempt.finished_at is not None
+        or job.attempt_count != attempt.attempt_no
+        or reservation is None
+        or reservation.amount != route.maximum_cost
+        or job.provider != route.provider
+        or job.model != route.model
+    ):
+        raise DomainError("MEDIA_CALL_SCOPE_INVALID", "媒体调用与已登记的执行记录不匹配", 409)
+    if (root := root_for_job(db, job)) is not None:
+        require_active_production(db, root, request.project_id)
 
 
 def reconcile(

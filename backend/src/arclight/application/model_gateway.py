@@ -5,10 +5,10 @@ from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.gateway_accounting import admit_budget, latest_receipt
+from arclight.application.gateway_accounting import latest_receipt, validate_call_owner
 from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import (
     GatewayFailure,
@@ -95,18 +95,26 @@ def admit(
         )
     )
     for call in existing:
+        parameters = call.parameters_json
+        if route.capabilities.media is None and "max_tokens" not in request.parameters:
+            # Retired transport metadata does not change the frozen input digest.
+            parameters = {key: value for key, value in parameters.items() if key != "max_tokens"}
         if (
             call.input_sha256 != request.input_sha256
             or call.task != request.task
-            or call.parameters_json != request.parameters
+            or parameters != request.parameters
             or call.actor != request.actor
             or call.episode_id != request.episode_id
             or call.workflow_id != request.workflow_id
             or call.generation_attempt_id != request.generation_attempt_id
+            or any(
+                call.route_json[field] != getattr(route, field)
+                for field in ("provider", "model", "config_version", "credential_source")
+            )
         ):
             raise DomainError("GATEWAY_IDEMPOTENCY_CONFLICT", "同一模型调用不能更换输入", 409)
         receipt = latest_receipt(db, call.id)
-        if receipt is None or receipt.status != "NOT_ACCEPTED":
+        if receipt is None or receipt.status != "NOT_ACCEPTED" or receipt.actual_cost != 0:
             raise DomainError(
                 "GATEWAY_RECONCILIATION_REQUIRED", "已有模型调用，须核验原结果后才能继续", 409
             )
@@ -121,8 +129,6 @@ def admit(
                 raise DomainError(
                     "GATEWAY_RECONCILIATION_REQUIRED", "该任务有未知模型结果，禁止重复收费调用", 409
                 )
-    if len(existing) >= policy.max_attempts:
-        raise DomainError("GATEWAY_ATTEMPT_LIMIT", "模型调用已达到尝试上限", 409)
     identity = digest({"project": str(request.project_id), "route": route_id(route)})
     circuit = db.get(GatewayCircuit, identity, populate_existing=True)
     if circuit is None:
@@ -138,17 +144,8 @@ def admit(
         raise DomainError("GATEWAY_CIRCUIT_OPEN", "模型服务熔断中，请稍后再试", 409)
     if circuit.probe_until is not None and utc(circuit.probe_until) > now:
         raise DomainError("GATEWAY_CIRCUIT_OPEN", "模型服务正在恢复探测，请稍后再试", 409)
-    recent = (
-        select(func.count())
-        .select_from(GatewayCall)
-        .where(GatewayCall.created_at > now - timedelta(seconds=60))
-    )
-    if (db.scalar(recent) or 0) >= policy.global_per_minute or (
-        db.scalar(recent.where(GatewayCall.actor == request.actor)) or 0
-    ) >= policy.user_per_minute:
-        raise DomainError("GATEWAY_RATE_LIMITED", "模型调用频率达到限制", 429)
-    check_gateway_action(db, request, route)
-    admit_budget(db, request, route)
+    check_gateway_action(db, request)
+    validate_call_owner(db, request, route)
     row = GatewayCall(
         project_id=request.project_id,
         episode_id=request.episode_id,
@@ -232,144 +229,125 @@ def invoke[T](
     usage: Callable[[T], GatewayUsage] = lambda _: GatewayUsage(),
     outcome: Callable[[T], str] = lambda _: "SUCCEEDED",
     crash_errors: tuple[type[Exception], ...] = (),
-    fallback: tuple[GatewayRoute, Callable[[], T]] | None = None,
     on_admit: Callable[[Session, UUID], None] | None = None,
     on_result: Callable[[Session, UUID, T], None] | None = None,
 ) -> T:
-    from arclight.application.agent_limits import gateway_dispatch_seconds
+    from arclight.application.agent_limits import validate_gateway_dispatch
 
-    started = utcnow()
-    current_route, current_call = route, call
-    for attempt in range(policy.max_attempts):
+    with factory.begin() as db:
+        row = admit(db, request, route, policy)
+        call_id = row.id
+        if on_admit is not None:
+            on_admit(db, call_id)
+    try:
+        with factory() as db:
+            validate_gateway_dispatch(db, request)
+    except DomainError as exc:
+        # Admission committed, but the adapter has not run: explicit safe zero billing.
         with factory.begin() as db:
-            row = admit(db, request, current_route, policy)
-            call_id = row.id
-            if on_admit is not None:
-                on_admit(db, call_id)
-        try:
-            with factory() as db:
-                execution_seconds = gateway_dispatch_seconds(db, request)
-        except DomainError as exc:
-            # Admission committed, but the adapter has not run: explicit safe zero billing.
-            with factory.begin() as db:
-                finish(
-                    db,
-                    call_id,
-                    "NOT_ACCEPTED",
-                    GatewayUsage(actual_cost=Decimal("0")),
-                    policy,
-                    exc.code,
-                )
-            raise
-        try:
-            remaining = policy.timeout_seconds - (utcnow() - started).total_seconds()
-            if execution_seconds is not None:
-                remaining = min(remaining, execution_seconds)
-            result = bounded_call(current_call, remaining)
-            actual = GatewayUsage.model_validate(usage(result).model_dump(mode="json"))
-            status = outcome(result)
-            actual.validate_status(status)
-        except Exception as exc:
-            safe_failure = isinstance(exc, GatewayFailure) and exc.not_accepted
-            completed = isinstance(exc, GatewayFailure) and exc.completed
-            error = (
-                exc.code
-                if isinstance(exc, GatewayFailure)
-                and exc.code
-                in {
-                    "PROVIDER_FAILED",
-                    "PROVIDER_UNAVAILABLE",
-                    "INPUT_INVALID",
-                    "INVALID_RESPONSE",
-                    "INVALID_SERVICE_URL",
-                    "SERVICE_DNS_UNAVAILABLE",
-                    "SERVICE_ADDRESS_BLOCKED",
-                    "SERVICE_REDIRECT_BLOCKED",
-                    "PROVIDER_QUOTA_EXHAUSTED",
-                    "PROVIDER_RATE_LIMITED",
-                    "PROVIDER_AUTHENTICATION_FAILED",
-                    "PROVIDER_ACCESS_DENIED",
-                    "PROVIDER_REFUSED",
-                    "PROVIDER_TRUNCATED",
-                }
-                else "RESULT_UNKNOWN"
+            finish(
+                db,
+                call_id,
+                "NOT_ACCEPTED",
+                GatewayUsage(actual_cost=Decimal("0")),
+                policy,
+                exc.code,
             )
-            with factory.begin() as db:
-                finish(
-                    db,
-                    call_id,
-                    "NOT_ACCEPTED" if safe_failure else "FAILED" if completed else "RESULT_UNKNOWN",
-                    GatewayUsage(actual_cost=Decimal("0"))
-                    if safe_failure
-                    else exc.usage
-                    if isinstance(exc, GatewayFailure) and completed
-                    else GatewayUsage(),
-                    policy,
-                    error,
-                )
-            if isinstance(exc, crash_errors):
-                raise RuntimeError(
-                    "Adapter execution crashed; call retained for reconciliation"
-                ) from None
-            if (
-                safe_failure
-                and isinstance(exc, GatewayFailure)
-                and exc.transient
-                and attempt + 1 < policy.max_attempts
-            ):
-                if fallback is not None:
-                    candidate, candidate_call = fallback
-                    if (
-                        request.task not in candidate.capabilities.tasks
-                        or set(request.parameters) - candidate.capabilities.parameters
-                    ):
-                        raise DomainError(
-                            "GATEWAY_CAPABILITY_REJECTED", "备用模型能力不兼容", 422
-                        ) from None
-                    current_route, current_call = candidate, candidate_call
-                continue
-            rejections = {
-                "PROVIDER_QUOTA_EXHAUSTED": (
-                    "GATEWAY_QUOTA_EXHAUSTED",
-                    "模型供应商余额不足或额度已耗尽，请充值或调整供应商额度后重试",
-                    402,
-                ),
-                "PROVIDER_RATE_LIMITED": (
-                    "GATEWAY_PROVIDER_RATE_LIMITED",
-                    "模型供应商请求过于频繁，请稍后重试",
-                    429,
-                ),
-                "PROVIDER_AUTHENTICATION_FAILED": (
-                    "GATEWAY_PROVIDER_AUTHENTICATION_FAILED",
-                    "模型供应商密钥无效或已失效，请更新文字服务密钥后重试",
-                    502,
-                ),
-                "PROVIDER_ACCESS_DENIED": (
-                    "GATEWAY_PROVIDER_ACCESS_DENIED",
-                    "模型供应商拒绝访问，请检查模型权限和服务配置后重试",
-                    502,
+        raise
+    try:
+        result = bounded_call(call, policy.timeout_seconds)
+        actual = GatewayUsage.model_validate(usage(result).model_dump(mode="json"))
+        status = outcome(result)
+        actual.validate_status(status)
+    except Exception as exc:
+        safe_failure = isinstance(exc, GatewayFailure) and exc.not_accepted
+        completed = isinstance(exc, GatewayFailure) and exc.completed
+        error = (
+            exc.code
+            if isinstance(exc, GatewayFailure)
+            and exc.code
+            in {
+                "PROVIDER_FAILED",
+                "PROVIDER_UNAVAILABLE",
+                "INPUT_INVALID",
+                "INVALID_RESPONSE",
+                "INVALID_SERVICE_URL",
+                "SERVICE_DNS_UNAVAILABLE",
+                "SERVICE_ADDRESS_BLOCKED",
+                "SERVICE_REDIRECT_BLOCKED",
+                "PROVIDER_INSUFFICIENT_BALANCE",
+                "PROVIDER_QUOTA_EXHAUSTED",
+                "PROVIDER_RATE_LIMITED",
+                "PROVIDER_AUTHENTICATION_FAILED",
+                "PROVIDER_ACCESS_DENIED",
+                "PROVIDER_REFUSED",
+                "PROVIDER_TRUNCATED",
+            }
+            else "RESULT_UNKNOWN"
+        )
+        with factory.begin() as db:
+            finish(
+                db,
+                call_id,
+                "NOT_ACCEPTED" if safe_failure else "FAILED" if completed else "RESULT_UNKNOWN",
+                GatewayUsage(actual_cost=Decimal("0"))
+                if safe_failure
+                else exc.usage
+                if isinstance(exc, GatewayFailure) and completed
+                else GatewayUsage(),
+                policy,
+                error,
+            )
+        if isinstance(exc, crash_errors):
+            raise RuntimeError(
+                "Adapter execution crashed; call retained for reconciliation"
+            ) from None
+        rejections = {
+            "PROVIDER_INSUFFICIENT_BALANCE": (
+                "ACCOUNT_BALANCE_INSUFFICIENT",
+                "账户余额不足",
+                402,
+            ),
+            "PROVIDER_QUOTA_EXHAUSTED": (
+                "GATEWAY_QUOTA_EXHAUSTED",
+                "模型供应商额度已耗尽，请检查供应商额度",
+                402,
+            ),
+            "PROVIDER_RATE_LIMITED": (
+                "GATEWAY_PROVIDER_RATE_LIMITED",
+                "模型供应商请求过于频繁，请稍后重试",
+                429,
+            ),
+            "PROVIDER_AUTHENTICATION_FAILED": (
+                "GATEWAY_PROVIDER_AUTHENTICATION_FAILED",
+                "模型供应商密钥无效或已失效，请更新文字服务密钥后重试",
+                502,
+            ),
+            "PROVIDER_ACCESS_DENIED": (
+                "GATEWAY_PROVIDER_ACCESS_DENIED",
+                "模型供应商拒绝访问，请检查模型权限和服务配置后重试",
+                502,
+            ),
+        }
+        if (safe_failure or completed) and error in rejections:
+            raise DomainError(*rejections[error]) from None
+        if completed:
+            response_errors = {
+                "PROVIDER_UNAVAILABLE": ("GATEWAY_PROVIDER_FAILED", "模型供应商执行失败"),
+                "PROVIDER_REFUSED": ("GATEWAY_MODEL_REFUSED", "模型拒绝了本次内容请求"),
+                "PROVIDER_TRUNCATED": (
+                    "GATEWAY_MODEL_TRUNCATED",
+                    "模型响应达到长度限制，未接受不完整结果",
                 ),
             }
-            if (safe_failure or completed) and error in rejections:
-                raise DomainError(*rejections[error]) from None
-            if completed:
-                response_errors = {
-                    "PROVIDER_UNAVAILABLE": ("GATEWAY_PROVIDER_FAILED", "模型供应商执行失败"),
-                    "PROVIDER_REFUSED": ("GATEWAY_MODEL_REFUSED", "模型拒绝了本次内容请求"),
-                    "PROVIDER_TRUNCATED": (
-                        "GATEWAY_MODEL_TRUNCATED",
-                        "模型响应达到长度限制，未接受不完整结果",
-                    ),
-                }
-                code, message = response_errors.get(
-                    error, ("GATEWAY_INVALID_RESPONSE", "模型响应不符合协议或输出合同")
-                )
-                raise DomainError(code, message, 502) from None
-            code = "GATEWAY_NOT_ACCEPTED" if safe_failure else "GATEWAY_RECONCILIATION_REQUIRED"
-            raise DomainError(code, "模型调用失败，已保存安全诊断", 502) from None
-        with factory.begin() as db:
-            finish(db, call_id, status, actual, policy)
-            if on_result is not None:
-                on_result(db, call_id, result)
-        return result
-    raise DomainError("GATEWAY_ATTEMPT_LIMIT", "模型调用已达到尝试上限", 409)
+            code, message = response_errors.get(
+                error, ("GATEWAY_INVALID_RESPONSE", "模型响应不符合协议或输出合同")
+            )
+            raise DomainError(code, message, 502) from None
+        code = "GATEWAY_NOT_ACCEPTED" if safe_failure else "GATEWAY_RECONCILIATION_REQUIRED"
+        raise DomainError(code, "模型调用失败，已保存安全诊断", 502) from None
+    with factory.begin() as db:
+        finish(db, call_id, status, actual, policy)
+        if on_result is not None:
+            on_result(db, call_id, result)
+    return result

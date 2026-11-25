@@ -23,7 +23,6 @@ from arclight.application.content_references import validate_script_assets
 from arclight.application.shared_agent_reads import grant_professional_agent_tools
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
 from arclight.domain.agent_runtime import AgentLoopResult
 from arclight.domain.agent_tools import AgentToolGrantRequest
@@ -114,10 +113,7 @@ def create_plan(factory: sessionmaker[Session], settings: Settings, run_id: UUID
             )
             if selected.status != "STOPPED" or saved_attempt == attempt:
                 attempt = saved_attempt
-        limits = AgentRunLimits.model_validate(run.input_json["screenwriter"]["agent_limits"])
-    return planning.plan_screenwriter(
-        factory, settings, run_id, actor, limits=limits, attempt=attempt
-    )
+    return planning.plan_screenwriter(factory, settings, run_id, actor, attempt=attempt)
 
 
 def _fragment_key(scene_no: int, attempt: int, *, series: bool = False) -> str:
@@ -275,7 +271,6 @@ def create_fragment(
                         data=seed_model.model_validate(fragment_seed).model_dump(mode="json")
                     )
                 ],
-                max_tokens=6000,
             )
     return run_persistent_agent_loop(
         factory,

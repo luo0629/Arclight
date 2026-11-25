@@ -69,8 +69,8 @@ def capture(client, project_id, body=None, key=None):
     )
 
 
-def capture_ok(client, project_id, body=None):
-    response = capture(client, project_id, body)
+def capture_ok(client, project_id, body=None, *, key=None):
+    response = capture(client, project_id, body, key=key)
     assert response.status_code == 201, response.text
     return response.json()
 

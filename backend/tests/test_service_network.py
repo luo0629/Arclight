@@ -331,13 +331,13 @@ def test_official_request_contract_and_invalid_json_rejection(stub_llm, settings
     assert body["response_format"]["type"] == supplier.response_format
     assert body["model"] == configuration.llm_model
     if supplier.id == "openai":
-        assert "max_completion_tokens" in body and "max_tokens" not in body
+        assert "max_completion_tokens" not in body and "max_tokens" not in body
         assert (
             body["response_format"]["json_schema"]["schema"]
             == StoryAnalysisContent.model_json_schema()
         )
     else:
-        assert "max_tokens" in body and "JSON Schema" in body["messages"][0]["content"]
+        assert "max_tokens" not in body and "JSON Schema" in body["messages"][0]["content"]
     assert (body.get("thinking") == {"type": "disabled"}) == (supplier.id == "deepseek")
     assert usage.input_tokens == 4
     with pytest.raises(GatewayFailure) as caught:

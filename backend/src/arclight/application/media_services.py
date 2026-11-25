@@ -1,6 +1,7 @@
 """One account resolver for quotes, job capture and immutable Worker credentials."""
 
 from dataclasses import dataclass
+from decimal import Decimal
 from uuid import UUID
 
 from sqlalchemy import select
@@ -131,25 +132,14 @@ def select_for_spec(
     return selection
 
 
-def quote_selection(
-    db: Session, selection: MediaSelection, spec: GenerationSpec
-) -> CostQuote | None:
-    settings = db.info.get("settings")
-    policy = (
-        matching_policy(settings.service_model_policies, selection.configuration)
-        if settings
-        else None
-    )
-    if policy is None or policy.maximum_cost_per_output is None or not policy.pricing_version:
+def quote_selection(selection: MediaSelection, spec: GenerationSpec) -> CostQuote | None:
+    cost = selection.configuration.get("maximum_cost_per_output")
+    pricing_version = selection.configuration.get("pricing_version")
+    if cost is None or not pricing_version:
         return None
-    if (
-        str(policy.maximum_cost_per_output) != selection.configuration["maximum_cost_per_output"]
-        or policy.pricing_version != selection.configuration["pricing_version"]
-    ):
-        raise DomainError("BUDGET_QUOTE_CHANGED", "部署侧可信报价已变化，请重新创建任务", 409)
     return CostQuote(
-        maximum_cost=policy.maximum_cost_per_output * spec.batch_size,
-        pricing_version=policy.pricing_version,
+        maximum_cost=Decimal(cost) * spec.batch_size,
+        pricing_version=pricing_version,
     )
 
 
@@ -207,17 +197,12 @@ def public_configuration(db: Session, actor: str, task_type: str) -> dict:
     selection = account_selection(db, actor, task_type)
     if selection is not None:
         configuration = selection.configuration
-        priced = configuration["maximum_cost_per_output"] is not None and bool(
-            configuration["pricing_version"]
-        )
         return {
             **configuration,
             "configured": True,
-            "enabled": priced,
+            "enabled": True,
             "credential_source": "ACCOUNT_SNAPSHOT",
             **capability_details(configuration),
-            "message": "已配置"
-            if priced
-            else "账号配置已保存；生成前需要部署侧登记该精确模型的可信报价",
+            "message": "已配置",
         }
     return {"configured": False, "enabled": False, "message": "请先配置该类型的账号服务"}

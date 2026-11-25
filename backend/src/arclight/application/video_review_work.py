@@ -143,10 +143,6 @@ def start_temporal_review(
             )
         if run is None or previous.target != target:
             raise DomainError("REVIEW_TASK_CONFLICT", "同一候选不能更换送审目标", 409)
-        if parent is None and run.input_json["video_temporal_review"][
-            "agent_limits"
-        ] != payload.agent_limits.model_dump(mode="json"):
-            raise DomainError("AGENT_LIMITS_CONFLICT", "送审不能重置审查限制", 409)
         require_temporal_parent(db, run, producer_parent_run_id)
         return run
 
@@ -181,9 +177,7 @@ def start_temporal_review(
                 "created_by": actor,
                 "script_version_id": str(board.script_version_id),
                 "target_duration_ms": episode.target_duration_ms,
-                "video_temporal_review": {
-                    "agent_limits": payload.agent_limits.model_dump(mode="json")
-                },
+                "video_temporal_review": {},
             },
         )
         snapshot = require_text_snapshot(db, actor, settings)
@@ -197,9 +191,7 @@ def start_temporal_review(
         if producer_parent_run_id is not None:
             from arclight.application.agent_limits import configure_agent_run
 
-            configure_agent_run(
-                db, run.id, actor, payload.agent_limits, parent_run_id=producer_parent_run_id
-            )
+            configure_agent_run(db, run.id, actor, parent_run_id=producer_parent_run_id)
         capture_text(db, project_id, run, settings, actor=actor)
         audit(
             db, project_id, actor, "workflow.started", run.id, {"candidate_id": str(candidate_id)}

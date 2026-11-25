@@ -35,8 +35,6 @@ _PUBLIC_FAILURES = frozenset(
         "SHORT_DRAMA_AUDIO_DURATION",
         "SHORT_DRAMA_AUDIO_REQUIRED",
         "SHORT_DRAMA_BOARD_IMPACT",
-        "SHORT_DRAMA_BUDGET_EXCEEDED",
-        "SHORT_DRAMA_DEADLINE",
         "SHORT_DRAMA_DELIVERY_QA",
         "SHORT_DRAMA_EXPORT_WARNINGS",
         "SHORT_DRAMA_FIRST_FRAME_UNSUPPORTED",
@@ -93,9 +91,7 @@ def short_drama_preflight(
     project = db.get(Project, episode.project_id)
     assert project is not None
     needed, blocked = inspect_dialogue(db, settings, project.id, actor, script)
-    return ShortDramaPreflight(
-        needed_voices=needed, project_budget_limit=project.budget_limit, blocked_voices=blocked
-    )
+    return ShortDramaPreflight(needed_voices=needed, blocked_voices=blocked)
 
 
 def start_short_drama(
@@ -128,8 +124,6 @@ def start_short_drama(
         return previous
     project = db.get(Project, episode.project_id)
     assert project is not None
-    if project.budget_limit <= 0 or payload.maximum_cost > project.budget_limit:
-        raise DomainError("SHORT_DRAMA_BUDGET_INVALID", "制作授权金额必须在项目预算以内", 422)
     script = db.get(Script, payload.script_version_id, with_for_update=True)
     if script is None or script.episode_id != episode_id:
         raise DomainError("NOT_FOUND", "本集剧本版本不存在", 404)
@@ -168,7 +162,6 @@ def start_short_drama(
         "request_sha256": request_hash,
         "target_duration_ms": episode.target_duration_ms,
         "output_profile": project.output_profile,
-        "maximum_cost": str(payload.maximum_cost),
         "font_file_id": str(payload.font_file_id) if payload.font_file_id else None,
         "generated_media_rights_confirmed": payload.generated_media_rights_confirmed,
     }
@@ -187,7 +180,6 @@ def start_short_drama(
         ),
         key,
         trace_id,
-        limits=payload.agent_limits(),
         short_drama=frozen,
     )
     from arclight.application.short_drama_audio import preflight_dialogue
@@ -218,7 +210,7 @@ def progress_for(db: Session, run: WorkflowRun) -> dict:
 
 
 def read_short_drama(db: Session, episode_id: UUID, actor: str) -> dict | None:
-    require_episode(db, episode_id, actor)
+    episode = require_episode(db, episode_id, actor)
     run = db.scalar(
         select(WorkflowRun)
         .where(
@@ -231,9 +223,14 @@ def read_short_drama(db: Session, episode_id: UUID, actor: str) -> dict | None:
     )
     if run is None:
         return None
+    from arclight.application.short_drama_production import balance_blocker
+
     return {
         "run_id": run.id,
         "status": run.status,
+        "revision": run.revision,
+        "can_retry_balance": run.input_json.get("created_by") == actor
+        and balance_blocker(db, run, episode.project_id) is not None,
         "script_version_id": run.input_json["short_drama"]["script_version_id"],
         "error_code": public_short_drama_error(run.error_code),
         **progress_for(db, run),

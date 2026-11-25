@@ -3,7 +3,6 @@
 import copy
 import json
 from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
 from threading import Event
 from uuid import UUID
 
@@ -20,7 +19,6 @@ from test_script_rewrite import start as start_rewrite
 
 from arclight.application.agent_workflows import WorkflowExecutionDeferred
 from arclight.application.runtime import execute_run
-from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision
 from arclight.persistence.models import OutboxEvent, Project, Script, User, WorkflowRun
 
@@ -97,7 +95,7 @@ def test_authority_and_frozen_input_are_rechecked_after_critique_http(
     _, errors, ordinary_errors = install_revision(
         model_service, monkeypatch, settings, on_http=on_http
     )
-    target.append(start(client, episode, revision_rounds=1))
+    target.append(start(client, episode, revision_rounds=3))
     execute_run(client.app.state.session_factory, settings, target[0], 0)
     with client.app.state.session_factory() as db:
         run = db.get(WorkflowRun, target[0])
@@ -107,33 +105,26 @@ def test_authority_and_frozen_input_are_rechecked_after_critique_http(
         )
 
 
-def test_zero_repairs_escalates_and_can_cancel_after_deadline_with_history(
+def test_exhausted_repairs_escalate_and_can_cancel_with_history(
     client, episode, settings, model_service, monkeypatch
 ):
-    sent, _, _ = install_revision(model_service, monkeypatch, settings, patches=1)
-    run_id = start(client, episode, revision_rounds=0)
+    sent, _, _ = install_revision(model_service, monkeypatch, settings, patches=4)
+    run_id = start(client, episode, revision_rounds=3)
     assert run_once(client, settings, run_id)["status"] == "RUNNING"
     original = copy.deepcopy(progress(client, run_id))
     assert original[-1]["revision"]["remaining_patches"] == 0
-    from arclight.application.model_gateway import utc
-
-    with client.app.state.session_factory() as db:
-        deadline = db.get(AgentRunLimit, run_id).deadline_at
-    monkeypatch.setattr(
-        "arclight.application.agent_limits.utcnow", lambda: utc(deadline) + timedelta(seconds=1)
-    )
     assert client.post(f"/api/v1/runs/{run_id}/cancel").status_code == 200
     assert progress(client, run_id) == original
-    assert len(sent) == 5
+    assert len(sent) == 11
 
 
 def test_unresolved_human_answer_asks_again_without_resetting_repairs(
     client, episode, settings, model_service, monkeypatch
 ):
     _, errors, ordinary_errors = install_revision(
-        model_service, monkeypatch, settings, patches=1, human_unresolved=True
+        model_service, monkeypatch, settings, patches=4, human_unresolved=True
     )
-    run_id = start(client, episode, revision_rounds=0)
+    run_id = start(client, episode, revision_rounds=3)
     run_once(client, settings, run_id)
     waiting = progress(client, run_id)[-1]
     endpoint = f"/api/v1/runs/{run_id}/screenwriter/{waiting['loop_id']}/answers"
@@ -169,7 +160,7 @@ def test_postgres_duplicate_workers_are_fenced_without_holding_run_lock_during_c
     sent, errors, ordinary_errors = install_revision(
         model_service, monkeypatch, settings, on_http=on_http
     )
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     factory = client.app.state.session_factory
     with ThreadPoolExecutor(max_workers=2) as pool:
         future = pool.submit(execute_run, factory, settings, run_id, 0)
@@ -204,8 +195,8 @@ def test_postgres_concurrent_escalation_answers_enqueue_once(
     from arclight.application.screenwriter_progress import queue_answer
     from arclight.domain.agent_runtime import AgentHumanDecision
 
-    install_revision(model_service, monkeypatch, settings, patches=1)
-    run_id = start(client, episode, revision_rounds=0)
+    install_revision(model_service, monkeypatch, settings, patches=4)
+    run_id = start(client, episode, revision_rounds=3)
     run_once(client, settings, run_id)
     waiting = progress(client, run_id)[-1]
     decision = AgentHumanDecision.model_validate(answer_body(waiting))
@@ -230,5 +221,5 @@ def test_postgres_concurrent_escalation_answers_enqueue_once(
         )
         assert (
             db.scalar(select(func.count()).select_from(AgentLoop).where(AgentLoop.run_id == run_id))
-            == 5
+            == 8
         )

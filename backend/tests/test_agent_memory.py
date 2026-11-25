@@ -26,7 +26,6 @@ from test_text_contract_v2 import make_asset
 from arclight.application import agent_memory_sources
 from arclight.application.agent_memory_sources import capture_memory_sources, memory_references
 from arclight.application.context_sources import asset_sources
-from arclight.domain.agent_memory import MAX_MEMORY_SOURCES
 from arclight.domain.context import ContextLimits
 from arclight.domain.versions import digest
 from arclight.main import create_app
@@ -230,32 +229,23 @@ def test_memory_and_preference_isolation_rechecks_membership_and_run_scope(clien
     assert response.status_code == 409 and response.json()["error"]["code"] == "RUN_STATE_INVALID"
 
 
-def test_required_memory_reference_limit_refuses_append_atomically(client, episode, settings):
+def test_memory_preserves_evidence_beyond_the_former_round_and_reference_caps(
+    client, episode, settings
+):
     settings.context_limits = ContextLimits(max_bytes=524288)
     ids = [story_entry(client, episode, name=f"世界{i}")["id"] for i in range(10)]
     run_id = run(client, episode)
     original = trace(client, run_id)
-    for number in range(32):
-        before = trace(client, run_id)
+    for number in range(33):
         response = evidence(client, run_id, expected_round=number, story_entry_ids=ids)
-        if response.status_code == 201:
-            continue
-        assert (
-            response.status_code == 422 and response.json()["error"]["code"] == "AGENT_MEMORY_LIMIT"
-        )
-        assert trace(client, run_id) == before
-        value = memory(client, run_id)
-        assert (
-            value["observation"]["task_context"]["required"]["constraints"]
-            == original["task_context"]["required"]["constraints"]
-        )
-        assert (
-            len(value["memory"]["domain_facts"] + value["memory"]["evidence"]) <= MAX_MEMORY_SOURCES
-        )
-        assert len(value["observation"]["evidence"]) == number
-        break
-    else:
-        pytest.fail("Required memory references must have a deterministic finite limit")
+        assert response.status_code == 201, response.text
+    value = memory(client, run_id)
+    assert (
+        value["observation"]["task_context"]["required"]["constraints"]
+        == (original["task_context"]["required"]["constraints"])
+    )
+    assert len(value["observation"]["evidence"]) == 33
+    assert len(value["memory"]["domain_facts"] + value["memory"]["evidence"]) > 256
 
 
 def test_preference_bytes_do_not_displace_locked_constraints_or_create_partial_run(
@@ -282,27 +272,17 @@ def test_preference_bytes_do_not_displace_locked_constraints_or_create_partial_r
     assert len(value["required"]["preferences"]) == 3
 
 
-def test_evidence_byte_limit_keeps_every_accepted_memory_projection_readable(
-    client, episode, settings
-):
+def test_appended_evidence_stays_readable_beyond_startup_size(client, episode, settings):
     settings.context_limits = ContextLimits(max_bytes=12000)
-    world = story_entry(client, episode, rules=["有限记忆保留全部必要证据"])
+    world = story_entry(client, episode, rules=["保留已记录的必要证据"])
     run_id = run(client, episode)
-    for number in range(32):
-        before = trace(client, run_id)
-        before_memory = memory(client, run_id)
+    for number in range(33):
         response = evidence(client, run_id, expected_round=number, story_entry_ids=[world["id"]])
-        if response.status_code == 201:
-            assert len(memory(client, run_id)["observation"]["evidence"]) == number + 1
-            continue
-        assert number > 0
-        assert response.status_code == 422, response.text
-        assert response.json()["error"]["code"] == "CONTEXT_TOO_LARGE"
-        assert trace(client, run_id) == before
-        assert memory(client, run_id) == before_memory
-        break
-    else:
-        pytest.fail("Evidence and its memory projection must share the frozen byte limit")
+        assert response.status_code == 201, response.text
+    observation = memory(client, run_id)["observation"]
+    assert observation["evidence"] == trace(client, run_id)["evidence"]
+    assert len(observation["evidence"]) == 33
+    assert len(json.dumps(observation, ensure_ascii=False).encode()) > 12000
 
 
 def test_runtime_receives_partitioned_memory_and_appends_evidence_without_promoting_claims(

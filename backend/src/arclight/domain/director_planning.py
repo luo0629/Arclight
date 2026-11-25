@@ -93,7 +93,7 @@ class ProductionMissing(AgentToolContract):
 class InvestigateProductionResult(AgentToolContract):
     manifest_id: UUID
     startup_manifest_id: UUID
-    evidence_round: int = Field(strict=True, ge=1, le=32)
+    evidence_round: int = Field(strict=True, ge=1)
     materials: list[ProductionMaterial] = Field(max_length=8)
     missing: list[ProductionMissing] = Field(max_length=8)
     has_more: bool

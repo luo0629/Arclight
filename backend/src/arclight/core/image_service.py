@@ -76,6 +76,4 @@ class OpenAIImageSettings(BaseModel):
     def require_ready(self) -> None:
         if not self.enabled:
             raise DomainError("IMAGE_SERVICE_DISABLED", "服务器图像服务尚未启用", 409)
-        if self.maximum_cost_per_image is None or self.pricing_version == "unconfigured":
-            raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "图像服务缺少经核验的预算报价", 422)
         self.secret()

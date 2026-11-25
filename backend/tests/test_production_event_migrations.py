@@ -32,6 +32,7 @@ def test_0048_roundtrip_retains_old_workflow_outbox(client, episode, migrated):
         assert preserved.production_event_id is None and preserved.event_type == "workflow.execute"
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_0048_with_history_refuses_destructive_downgrade(client, episode, settings, migrated):
     # Use a real media notification so the 0048 guard itself is exercised,
     # independently of the newer human-review history guard.

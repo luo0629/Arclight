@@ -109,6 +109,10 @@ def fail_workflow(factory: sessionmaker[Session], run_id: UUID, revision: int, c
         run = db.get(WorkflowRun, run_id, populate_existing=True, with_for_update=True)
         if run is None or run.status not in {"QUEUED", "RUNNING"} or run.revision != revision:
             return
+        if code == "ACCOUNT_BALANCE_INSUFFICIENT":
+            run.status, run.error_code = "FAILED", code
+            emit(db, run, "workflow.failed", {"code": code})
+            return
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
         stopped = code == "AGENT_HUMAN_STOPPED"
@@ -137,7 +141,11 @@ def fail_workflow(factory: sessionmaker[Session], run_id: UUID, revision: int, c
 
 
 class WorkflowExecutionDeferred(RuntimeError):
-    """Keep a broker delivery recoverable while an existing worker lease is alive."""
+    """Keep the original delivery while a lease or manual pause prevents execution."""
+
+
+class WorkflowRecoveryFailed(WorkflowExecutionDeferred):
+    """The original delivery ran but needs recovery before it can complete."""
 
 
 def creation_loops(db: Session, run_id: UUID, agent_name: str = "screenwriter") -> list[AgentLoop]:

@@ -244,7 +244,7 @@ export default function NarrativeReviews() {
             />
           </Field>
           <Notice>
-            发起后沿用当前模型服务与运行预算。缺少视频或声音证据将明确转人工，不自动选用最新版本。
+            发起后使用当前模型服务。缺少视频或声音证据将明确转人工，不自动选用最新版本。
           </Notice>
           <Button disabled={!writable || busy} onClick={() => void create()}>
             开始叙事审查

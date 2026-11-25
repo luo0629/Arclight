@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import execute_agent_tool
-from arclight.application.agent_workflows import WorkflowExecutionDeferred
+from arclight.application.agent_workflows import WorkflowExecutionDeferred, WorkflowRecoveryFailed
 from arclight.application.model_gateway import lock_gate
 from arclight.application.producer_interaction import (
     command_receipt,
@@ -119,12 +119,12 @@ def _invoke(factory: sessionmaker[Session], settings: Settings, command_id: UUID
         return "COMMITTED", None
     if outcome.status == "HUMAN_REVIEW":
         return "WAITING_HUMAN", None
-    if (
-        outcome.status == "WAITING_EXTERNAL"
-        or outcome.stop_code == "GATEWAY_RECONCILIATION_REQUIRED"
-    ):
+    if outcome.status == "WAITING_EXTERNAL" or outcome.stop_code in {
+        "GATEWAY_RECONCILIATION_REQUIRED",
+        "ACCOUNT_BALANCE_INSUFFICIENT",
+    }:
         # Keep the original intent pending; explicit recovery republishes its original revision.
-        return None, None
+        return None, outcome.stop_code
     return "STOPPED", outcome.stop_code
 
 
@@ -137,7 +137,11 @@ def execute_producer(
         if run is None or run.workflow_type != "producer":
             return False
         # A stale/cancelled Producer delivery cannot run a command.
-        if run.status != "RUNNING" or run.revision != revision:
+        if (
+            run.status != "RUNNING"
+            or run.revision != revision
+            or run.error_code in {"ACCOUNT_BALANCE_INSUFFICIENT", "WORKFLOW_RECOVERY_LIMIT"}
+        ):
             return True
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
@@ -170,8 +174,8 @@ def execute_producer(
         logger.exception("Producer command failed", extra={"run_id": str(run_id)})
         # A transport/checkpoint/database failure can occur after an effect committed.
         # Replay the immutable intent and original action IDs instead of closing it.
-        raise WorkflowExecutionDeferred("Producer command requires durable recovery") from exc
-    if status is None:
+        raise WorkflowRecoveryFailed("Producer command requires durable recovery") from exc
+    if status is None and code != "ACCOUNT_BALANCE_INSUFFICIENT":
         return True
     with factory.begin() as db:
         lock_gate(db)
@@ -184,6 +188,11 @@ def execute_producer(
         )
         if command_receipt(db, episode.project_id, identity):
             return True
+        if code == "ACCOUNT_BALANCE_INSUFFICIENT":
+            if run.status == "RUNNING" and run.revision == revision:
+                run.error_code = code
+            return True
+        assert status is not None
         record_receipt(db, run, episode.project_id, command, status, code)
         if code == "AGENT_HUMAN_STOPPED" and run.status == "RUNNING":
             assert run.agent_state_json is not None

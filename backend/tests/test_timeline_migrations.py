@@ -32,6 +32,7 @@ def test_empty_timeline_migration_roundtrip_preserves_existing_workflow(client, 
         assert (event.run_id, event.revision) == (run_id, revision)
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_nonempty_timeline_downgrade_is_rejected_before_any_table_is_dropped(
     client, episode, timeline_case, migrated, monkeypatch
 ):

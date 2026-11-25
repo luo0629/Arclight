@@ -5,7 +5,7 @@ from uuid import UUID, uuid5
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_limits import delegation_count, validate_agent_execution
+from arclight.application.agent_limits import validate_agent_execution
 from arclight.application.agent_tools import AgentToolContext, AgentToolDefinition
 from arclight.application.director_checks import check_seed
 from arclight.application.director_validation import revision_input
@@ -25,7 +25,6 @@ from arclight.domain.director_collaboration import (
 from arclight.domain.director_creation import COLLABORATIVE_DIRECTOR_VERSIONS
 from arclight.domain.director_revision import DirectorRevisionDecision
 from arclight.domain.versions import digest
-from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import AgentToolInvocation, WorkflowRun
 
@@ -75,13 +74,7 @@ def _request(context: AgentToolContext, request: RequestArtOpinion) -> dict:
         ):
             raise DomainError("ART_OPINION_CONFLICT", "一次导演运行最多征询一份冻结意见", 409)
         return previous.model_dump(mode="json")
-    limits = validate_agent_execution(db, run.id, "storyboard")
-    control = db.get(AgentRunLimit, run.id)
-    assert control is not None
-    if control.depth + 1 > limits.max_delegation_depth:
-        raise DomainError("AGENT_DELEGATION_DEPTH", "Agent 委派深度已达上限", 409)
-    if delegation_count(db, control.root_run_id) >= limits.max_delegations:
-        raise DomainError("AGENT_DELEGATION_LIMIT", "Agent 委派次数已达上限", 409)
+    validate_agent_execution(db, run.id, "storyboard")
     _, seed = check_seed(db, run, request.operation_key)
     return ArtOpinionRequested(
         **request.model_dump(),

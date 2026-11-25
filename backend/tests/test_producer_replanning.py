@@ -14,7 +14,6 @@ from test_agent_loop_recovery import answer
 from test_agent_model import call_response
 from test_agent_model import model_service as model_service
 from test_agent_runtime import final, tool_feedback
-from test_generation_budget import set_policy
 from test_producer_delegation import delegation_call, dispatch, dispatched
 from test_producer_planning import completed_plan, writer_task
 from test_screenwriter_creation import approve, run_once
@@ -155,7 +154,6 @@ def accounting(client, run_id):
 def test_partial_replan_preserves_actual_success_outputs_and_fees_across_restart(
     client, episode, settings, model_service, monkeypatch
 ):
-    set_policy(client, episode["project_id"], "20")
     tasks = [writer_task("keep"), writer_task("repair", story="尚待修订的另一项写作任务。")]
     limits = AgentRunLimits(maximum_cost=Decimal("20"), max_duration_seconds=3600, max_steps=128)
     run_id, actor, initial, original, _ = completed_plan(
@@ -272,7 +270,7 @@ def test_unchanged_undelegated_task_keeps_canonical_origin_through_three_plans(
 
 
 def test_replan_question_and_decision_survive_restart_without_automatic_asset_approval(
-    client, episode, settings, model_service
+    client, episode, settings, model_service, monkeypatch
 ):
     run_id, actor, _, original, _ = completed_plan(client, episode, settings, model_service)
     observed = observation(client, settings, run_id, actor, original)
@@ -300,8 +298,14 @@ def test_replan_question_and_decision_survive_restart_without_automatic_asset_ap
     sent, errors = install_replan_model(model_service, human=True, on_http=observe_saved_answer)
     waiting = replanning.replan_producer(factory, settings, run_id, actor, observed.id)
     assert waiting.status == "HUMAN_REVIEW" and waiting.question_id
+    instruction = replanning.replanning_instruction("producer/1")
     with factory() as db:
-        thread = db.get(AgentLoop, waiting.loop_id).thread_id
+        loop = db.get(AgentLoop, waiting.loop_id)
+        assert loop.seed_json["system_instruction"] == instruction
+        thread = loop.thread_id
+    monkeypatch.setattr(
+        replanning, "replanning_instruction", lambda _version: "新登记使用的重规划提示词。"
+    )
     with TestClient(create_app(settings)) as restarted:
         restored = restarted.app.state.session_factory
         assert (
@@ -328,17 +332,18 @@ def test_replan_question_and_decision_survive_restart_without_automatic_asset_ap
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
-def test_changed_budget_policy_invalidates_observation_before_another_model_call(
+def test_new_delegation_invalidates_observation_before_another_model_call(
     client, episode, settings, model_service
 ):
     run_id, actor, _, original, _ = completed_plan(client, episode, settings, model_service)
     observed = observation(client, settings, run_id, actor, original)
-    set_policy(client, episode["project_id"], "0")
+    dispatched(client, settings, delegation_call(run_id, original))
     sent, errors = install_replan_model(model_service)
-    with pytest.raises(DomainError):
+    with pytest.raises(DomainError) as failure:
         replanning.replan_producer(
             client.app.state.session_factory, settings, run_id, actor, observed.id
         )
+    assert failure.value.code == "PRODUCER_OBSERVATION_STALE"
     assert not sent and not errors
     with client.app.state.session_factory() as db:
         assert (

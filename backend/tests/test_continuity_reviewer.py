@@ -9,6 +9,7 @@ import pytest
 import test_continuity_rules as rules_module
 from continuity_reviewer_support import install_reviewer_model
 from sqlalchemy import func, select
+from test_agent_limits import configure_with_historical_limits
 from test_agent_loop_recovery import answer
 from test_agent_model import model_service as model_service
 from test_art_direction import facts
@@ -18,7 +19,6 @@ from test_continuity_rules import rules_storage as rules_storage
 
 from arclight.application import agent_loop_recovery as recovery
 from arclight.application import continuity_reviewer
-from arclight.application.agent_limits import configure_agent_run
 from arclight.application.continuity_reviewer import (
     resume_reviewer,
     review_candidate,
@@ -40,13 +40,18 @@ def reviewer_case(client, episode, settings, model_service, rules_storage, reque
         update={"max_input_images": 8}
     )
     parameter = getattr(request, "param", "match")
-    limits = parameter if isinstance(parameter, AgentRunLimits) else AgentRunLimits()
+    limits = parameter.model_dump(mode="json") if isinstance(parameter, AgentRunLimits) else {}
     prepare = rules_module.prepare
 
     def prepare_with_limits(*args, **kwargs):
         run_id, actor, source = prepare(*args, **kwargs)
         with client.app.state.session_factory.begin() as db:
-            configure_agent_run(db, run_id, actor, limits)
+            configure_with_historical_limits(
+                db,
+                run_id,
+                actor,
+                limits,
+            )
         return run_id, actor, source
 
     monkeypatch.setattr(rules_module, "prepare", prepare_with_limits)
@@ -483,22 +488,19 @@ def test_restart_reuses_committed_model_and_tool_actions(
 
 
 @pytest.mark.parametrize("reviewer_case", [AgentRunLimits(max_model_calls=1)], indirect=True)
-def test_exhaustion_is_bounded_and_reentry_does_not_reset_budget(
+def test_reviewer_finishes_past_legacy_call_cap_and_reentry_reuses_result(
     client,
     settings,
     model_service,
     reviewer_case,
 ):
     sent, errors, _ = install_reviewer_model(model_service)
-    limits = AgentRunLimits(max_model_calls=1)
-    outcome = run_review(client, settings, reviewer_case, limits=limits)
+    outcome = run_review(client, settings, reviewer_case)
     assert not errors, errors
-    assert outcome.status == "STOPPED" and outcome.stop_code == "AGENT_MODEL_CALL_LIMIT", (
-        outcome.model_dump_json()
-    )
-    assert len(sent) == 1
+    assert outcome.status == "COMPLETED" and outcome.result.conclusion == "PASS"
+    assert len(sent) == outcome.model_turns == 7
     assert run_review(client, settings, reviewer_case) == outcome
-    assert len(sent) == 1
+    assert len(sent) == 7
 
 
 @pytest.mark.parametrize("mutation", ["grant", "stale", "archived"])

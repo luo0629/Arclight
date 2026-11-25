@@ -22,7 +22,6 @@ from arclight.application import agent_loop_recovery as recovery
 from arclight.application import art_direction
 from arclight.application.art_direction import propose_art, resume_art_direction
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import AgentToolGrant, AssetVersion, Project, User, WorkflowRun
@@ -107,18 +106,10 @@ def test_human_response_cannot_replace_missing_approved_image_evidence(
     assert facts(client) == before
 
 
-@pytest.mark.parametrize(
-    "patch,code",
-    [
-        ({"max_model_calls": 1}, "AGENT_MODEL_CALL_LIMIT"),
-        ({"max_tool_calls": 0}, "AGENT_TOOL_CALL_LIMIT"),
-        ({"max_steps": 0}, "AGENT_STEP_LIMIT"),
-        ({"max_calls": 1}, "AGENT_CALL_LIMIT"),
-    ],
-)
-def test_art_loop_exhaustion_obeys_shared_root_limits_without_formal_writes(
-    client, episode, settings, model_service, patch, code
+def test_art_loop_stops_at_the_runtime_turn_limit_without_formal_writes(
+    client, episode, settings, model_service, monkeypatch
 ):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
     reference_set(client, episode)
     run_id, actor, _, task = prepare_direction(client, episode, settings)
     sent, errors, _ = install_direction_model(model_service)
@@ -129,11 +120,11 @@ def test_art_loop_exhaustion_obeys_shared_root_limits_without_formal_writes(
         run_id,
         actor,
         task,
-        limits=AgentRunLimits(**patch),
     )
     assert not errors, errors
-    assert result.status == "STOPPED" and result.stop_code == code, result.model_dump_json()
-    assert len(sent) <= 1
+    assert result.status == "STOPPED", result.model_dump_json()
+    assert result.stop_code == "AGENT_MODEL_CALL_LIMIT"
+    assert len(sent) == 1
     assert facts(client) == before
 
 

@@ -160,7 +160,7 @@ def test_progress_and_answer_authority_scope(client, settings, model_service, mo
 
 
 @pytest.mark.parametrize("season,human", [(False, "plan"), (False, 2), (True, "plan")])
-def test_unanswered_creation_can_cancel_after_deadline_and_keep_working_history(
+def test_unanswered_creation_can_cancel_and_keep_working_history(
     client, episode, settings, model_service, monkeypatch, season, human
 ):
     sent, errors = install(model_service, monkeypatch, settings, human=human)
@@ -171,14 +171,11 @@ def test_unanswered_creation_can_cancel_after_deadline_and_keep_working_history(
     waiting = saved[-1]
     count = len(sent)
     factory = client.app.state.session_factory
-    from arclight.application.model_gateway import utc
-
     with factory() as db:
-        deadline = db.get(AgentRunLimit, run_id).deadline_at
-    monkeypatch.setattr(
-        "arclight.application.agent_limits.utcnow", lambda: utc(deadline) + timedelta(seconds=1)
-    )
+        assert db.get(AgentRunLimit, run_id).deadline_at is None
     assert client.get(f"/api/v1/runs/{run_id}/screenwriter").json()["can_cancel"]
+    cancelled = client.post(f"/api/v1/runs/{run_id}/cancel")
+    assert cancelled.status_code == 200 and cancelled.json()["status"] == "CANCELLED"
     rejected = client.post(
         f"/api/v1/runs/{run_id}/screenwriter/{waiting['loop_id']}/answers",
         json={
@@ -189,15 +186,13 @@ def test_unanswered_creation_can_cancel_after_deadline_and_keep_working_history(
         },
     )
     assert rejected.status_code == 409
-    assert rejected.json()["error"]["code"] == "AGENT_DEADLINE_EXCEEDED"
-    cancelled = client.post(f"/api/v1/runs/{run_id}/cancel")
-    assert cancelled.status_code == 200 and cancelled.json()["status"] == "CANCELLED"
+    assert rejected.json()["error"]["code"] == "AGENT_CANCELLED"
     assert progress(client, run_id) == saved
     assert not client.get(f"/api/v1/runs/{run_id}/screenwriter").json()["can_cancel"]
     assert run_once(client, settings, run_id)["status"] == "CANCELLED" and len(sent) == count
     with factory() as db:
         assert db.get(WorkflowRun, run_id).agent_state_json["status"] == "CANCELLED"
-        assert db.get(AgentRunLimit, run_id).deadline_at == deadline
+        assert db.get(AgentRunLimit, run_id).deadline_at is None
         assert (
             db.scalar(select(func.count()).select_from(Script).where(Script.run_id == run_id)) == 0
         )
@@ -272,28 +267,34 @@ def test_authority_changes_during_model_io_prevent_publication(
         )
 
 
-@pytest.mark.parametrize("limits", [None, {}, {"max_model_calls": 32}])
-def test_optional_spending_limit_keeps_unknown_cost_and_requires_quote_only_when_set(
-    client, episode, settings, model_service, monkeypatch, limits
+def test_creation_without_a_quote_keeps_unknown_cost(
+    client, episode, settings, model_service, monkeypatch
 ):
     sent, errors = install(model_service, monkeypatch, settings)
     settings.model_gateway_policy = GatewayPolicy()
-    run_id = start(client, episode, **({"agent_limits": limits} if limits is not None else {}))
+    run_id = start(client, episode)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW" and len(sent) == 4, errors
     with client.app.state.session_factory() as db:
-        assert db.get(AgentRunLimit, run_id).limits_json["maximum_cost"] is None
+        assert db.get(AgentRunLimit, run_id).limits_json == {}
 
 
-def test_setting_spending_limit_without_quote_stops_before_http(
-    client, episode, settings, model_service, monkeypatch
+@pytest.mark.parametrize("limits", [{}, {"max_model_calls": 32}, {"maximum_cost": "1"}])
+def test_retired_limits_are_rejected_before_workflow_creation(
+    client, episode, settings, model_service, limits
 ):
-    sent, _ = install(model_service, monkeypatch, settings)
-    settings.model_gateway_policy = GatewayPolicy()
-    run_id = start(client, episode, agent_limits={"maximum_cost": "1"})
-    run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "BUDGET_QUOTE_UNAVAILABLE"
-    assert len(sent) == 0
+    sent = []
+    model_service(lambda request: sent.append(request))
+    response = client.post(
+        f"/api/v1/episodes/{episode['id']}/script-runs",
+        json={"story": "雨夜发现纸船", "professional": True, "agent_limits": limits},
+        headers={"Idempotency-Key": uuid4().hex},
+    )
+    assert response.status_code == 422
+    assert response.json()["error"]["details"][0]["location"] == ["body", "agent_limits"]
+    assert not sent
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(func.count()).select_from(WorkflowRun)) == 0
 
 
 def test_completed_run_history_remains_readable_after_another_run(
@@ -398,7 +399,7 @@ def test_worker_redelivery_retries_live_lease_and_recovers_after_expiry(
     with pytest.raises(Retry):
         tasks.execute_workflow.run(str(run_id), 0)
     assert len(retries) == 1 and retries[0]["countdown"] == 10
-    assert tasks.execute_workflow.max_retries is None
+    assert tasks.execute_workflow.max_retries == 7
     assert isinstance(retries[0]["exc"], WorkflowExecutionDeferred)
     assert len(sent) == 4
     with factory.begin() as db:

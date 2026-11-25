@@ -2,9 +2,6 @@
 
 from uuid import UUID
 
-from pydantic import Field
-
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.continuity_reviews import ReviewRerun, ReviewTarget
 from arclight.domain.generation_requests import MediaInput, ShotReviewBinding
 
@@ -14,7 +11,7 @@ REVIEW_BLOCK_RESOURCE = "CONTINUITY_BLOCK"
 
 
 class CandidateReviewCreate(ShotReviewBinding):
-    agent_limits: AgentRunLimits = Field(default_factory=lambda: AgentRunLimits(maximum_cost=None))
+    pass
 
 
 class CandidateReviewWork(MediaInput):

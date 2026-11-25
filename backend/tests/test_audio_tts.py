@@ -9,7 +9,6 @@ import httpx
 import pytest
 from sqlalchemy import func, select
 from test_audio_production import snapshot, wave_bytes
-from test_generation_budget import set_policy
 from test_generation_delivery import deliver
 from test_model_services import account
 from test_native_media_integration import attempt_for, configure, project, provider_for
@@ -47,7 +46,6 @@ def tts_case(client, settings):
     assert result.status_code == 201, result.text
     snap = result.json()
     lines = client.get(f"/api/v1/audio-snapshots/{snap['id']}/lines").json()
-    set_policy(client, pid, "20")
     voice_payload = {
         "creation_key": str(uuid4()),
         "speaker": lines[0]["speaker"],
@@ -202,11 +200,9 @@ def test_tts_freezes_deployment_execution_policy_and_replay_preserves_it(
     from arclight.persistence.generation_scheduling import GenerationSchedule
 
     policy = ExecutionPolicy(
-        max_attempts=1,
         retry_errors=frozenset(),
         automatic_retry_errors=frozenset(),
         call_timeout_seconds=45,
-        max_elapsed_seconds=90,
     )
     settings.media_execution_policy = policy
     expected_policy = policy.model_dump(mode="json") | {
@@ -218,7 +214,7 @@ def test_tts_freezes_deployment_execution_policy_and_replay_preserves_it(
             select(GenerationSchedule).where(GenerationSchedule.job_id == UUID(row["job_id"]))
         )
         assert schedule.policy_json == expected_policy
-    settings.media_execution_policy = ExecutionPolicy(max_attempts=5)
+    settings.media_execution_policy = ExecutionPolicy(call_timeout_seconds=90)
     replay = client.post(tts_case["url"], json=tts_case["payload"])
     assert replay.status_code == 200 and replay.json() == row
     with client.app.state.session_factory() as db:

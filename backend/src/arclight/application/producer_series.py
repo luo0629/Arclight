@@ -52,26 +52,6 @@ def require_available_episode(db: Session, episode: Episode, parent_id: UUID | N
         raise DomainError("EPISODE_BUSY", "本集已属于活动多集制作范围", 409)
 
 
-def require_known_costs(db: Session, run: WorkflowRun, actor: str) -> None:
-    if not has_series_scope(run):
-        return
-    from arclight.application.costs import cost_facts, read_costs
-
-    scope = read_scope(db, run)
-    project_id = UUID(scope["project_id"])
-    facts = cost_facts(project_id)
-    unresolved = db.scalar(
-        select(facts.c.id)
-        .where(
-            facts.c.status.in_(["RESULT_UNKNOWN", "RECONCILING", "MANUAL_REVIEW"]),
-            facts.c.actual_cost.is_(None),
-        )
-        .limit(1)
-    )
-    if unresolved or read_costs(db, project_id, actor).summary.unpriced_count:
-        raise DomainError("PRODUCER_COST_UNKNOWN", "项目存在未知费用，请先对账再继续制作", 409)
-
-
 def capture_scope(db: Session, anchor: Episode, actor: str, request: SeriesProducerScope) -> dict:
     require_review_actor(db, anchor.project_id, actor, owner=True)
     if anchor.id != request.episodes[0].episode_id:

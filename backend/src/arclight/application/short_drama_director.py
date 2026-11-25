@@ -15,7 +15,7 @@ DIRECTOR_INSTRUCTIONS = """
 本次分镜将直接用于短剧制作。按原场景和顺序为每条台词指定恰好一个镜头，保留全部台词。
 配音由后续独立环节制作，逐镜为本镜台词留足自然语速所需时长。太密集时按原顺序拆镜。
 音效是可选的。只可在 sound_effects 中引用后续数据所列的项目音效原名，可留空。
-遵守后续数据中的镜头总数上限。保留原剧本的表演及对白要求。
+保留原剧本的表演及对白要求。
 """
 
 
@@ -27,7 +27,6 @@ def director_model_input(
         return prompt, messages
 
     from arclight.application.short_drama_audio import available_sound_effects
-    from arclight.application.short_drama_visuals import MAX_SHOTS
 
     control = db.get(AgentRunLimit, run.id)
     assert control is not None
@@ -36,7 +35,6 @@ def director_model_input(
         AgentUserMessage(
             data={
                 "production": "SHORT_DRAMA",
-                "maximum_shots": MAX_SHOTS,
                 "sound_effects": [asset.name for asset, _ in effects.values()],
             }
         )
@@ -51,13 +49,8 @@ def short_drama_media_issues(
         return []
 
     from arclight.application.short_drama_audio import available_sound_effects
-    from arclight.application.short_drama_visuals import MAX_SHOTS
 
     issues = []
-    if sum(len(scene.shots) for scene in work.scenes) > MAX_SHOTS:
-        issues.append(
-            DirectorIssue(code="SHORT_DRAMA_SHOT_LIMIT", message=f"镜头总数最多为 {MAX_SHOTS}")
-        )
     names = {
         canonical_name(cue)
         for scene in work.scenes

@@ -13,7 +13,6 @@ from test_agent_runtime import final
 from test_asset_versions import image_bytes
 from test_collaboration import create_episode, create_project
 from test_contexts import approved_board
-from test_generation_budget import set_policy
 from test_generation_delivery import deliver
 from test_generation_jobs import base, capture
 from test_generation_reconciliation import query
@@ -60,7 +59,6 @@ def test_draft_first_frame_remains_scoped_and_video_uses_shared_temporal_review(
     episode = create_episode(client, project)
     script = save_script(client, episode)
     board, shots = approved_board(client, episode, script)
-    set_policy(client, project["id"], "20")
     board_id = UUID(board["id"])
     run_id, _ = authorized_run(
         client,
@@ -230,6 +228,9 @@ def test_draft_first_frame_remains_scoped_and_video_uses_shared_temporal_review(
 
     model_service(assess)
     execute_run(factory, settings, review_id, revision)
+    with factory() as db:
+        review = db.get(WorkflowRun, review_id)
+        assert review.status == "WAITING_REVIEW", review.error_code
     assert advance() is None
     with factory() as db:
         review = db.get(WorkflowRun, review_id)

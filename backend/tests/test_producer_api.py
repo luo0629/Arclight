@@ -1,6 +1,5 @@
 """PROD-04: actual HTTP, transactions, worker dispatch and public authorization."""
 
-from datetime import timedelta
 from uuid import UUID, uuid4
 
 import httpx
@@ -48,7 +47,7 @@ def command(client, run_id, payload, key=None):
     )
 
 
-def test_start_is_committed_202_and_replay_freezes_limits(client, episode, settings):
+def test_start_is_committed_202_and_freezes_run_scope(client, episode, settings):
     response = start(client, episode, settings)
     assert response.status_code == 202, response.text
     accepted = response.json()
@@ -58,8 +57,7 @@ def test_start_is_committed_202_and_replay_freezes_limits(client, episode, setti
         run = db.get(WorkflowRun, run_id)
         assert run and run.revision == 1
         limit = db.get(AgentRunLimit, run_id)
-        assert limit.limits_json["maximum_cost"] is None
-        assert limit.limits_json["max_duration_seconds"] == 3600
+        assert limit.limits_json == {} and limit.deadline_at is None
         assert (
             db.scalar(
                 select(func.count()).select_from(OutboxEvent).where(OutboxEvent.run_id == run_id)
@@ -73,7 +71,7 @@ def test_start_is_committed_202_and_replay_freezes_limits(client, episode, setti
     )
     value = progress(client, run_id)
     assert value["pending_command"]["action"] == "PLAN"
-    assert value["budget"]["limits"]["maximum_cost"] is None
+    assert "limits" not in value["budget"]
     listing = client.get(f"/api/v1/projects/{episode['project_id']}/tasks")
     assert listing.status_code == 200, listing.text
     task = next(item for item in listing.json()["items"] if item["id"] == str(run_id))
@@ -420,24 +418,20 @@ def test_stopped_root_preserves_child_but_blocks_new_family_model_calls(
     assert final["plans"][0]["tasks"][0]["child_run_id"] == str(child_id)
 
 
-def test_deadline_is_a_public_limit_failure_and_still_allows_explicit_stop(
-    client, episode, settings, model_service, monkeypatch
+def test_no_execution_deadline_and_explicit_stop_remains_available(
+    client, episode, settings, model_service
 ):
-    from arclight.application import agent_limits
-    from arclight.application.model_gateway import utc
-
     sent, errors = install_plan_model(model_service)
     run_id = start(client, episode, settings).json()["run_id"]
     with client.app.state.session_factory() as db:
-        deadline = utc(db.get(AgentRunLimit, UUID(run_id)).deadline_at)
-    monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline + timedelta(seconds=1))
-    expired = dispatch(client, settings, run_id)
-    assert expired["commands"][0]["error_code"] == "AGENT_DEADLINE_EXCEEDED"
-    assert expired["readonly_reason"] == "AGENT_DEADLINE_EXCEEDED"
-    assert not expired["can_operate"] and expired["can_cancel"]
-    assert not sent and not errors
+        assert db.get(AgentRunLimit, UUID(run_id)).deadline_at is None
+    planned = dispatch(client, settings, run_id)
+    assert planned["commands"][0]["status"] == "COMMITTED"
+    assert planned["readonly_reason"] is None
+    assert planned["can_operate"] and planned["can_cancel"]
+    assert len(sent) == 2 and not errors
     response = command(
-        client, run_id, {"action": "CANCEL", "expected_revision": expired["revision"]}
+        client, run_id, {"action": "CANCEL", "expected_revision": planned["revision"]}
     )
     assert response.status_code == 202, response.text
     assert progress(client, run_id)["status"] == "CANCELLED"

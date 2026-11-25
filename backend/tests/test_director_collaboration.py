@@ -122,7 +122,7 @@ def install_collaboration(
 
 def begin(client, episode, **options):
     return start(
-        client, episode, director_revision_rounds=2, director_art_collaboration=True, **options
+        client, episode, director_revision_rounds=3, director_art_collaboration=True, **options
     )
 
 
@@ -237,23 +237,26 @@ def test_art_clarification_resumes_original_run_and_opinion_without_publishing_a
     assert operations[0]["status"] == "COMPLETED"
 
 
-@pytest.mark.parametrize(
-    "limits,code",
-    [
-        ({"max_delegations": 0}, "AGENT_DELEGATION_LIMIT"),
-        ({"max_delegation_depth": 0}, "AGENT_DELEGATION_DEPTH"),
-    ],
-)
-def test_delegation_limits_block_before_art_model_io(
-    client, episode, settings, model_service, monkeypatch, limits, code
+@pytest.mark.parametrize("limits", [{"max_delegations": 0}, {"max_delegation_depth": 0}])
+def test_historical_delegation_quotas_do_not_block_the_original_art_operation(
+    client, episode, settings, model_service, monkeypatch, limits
 ):
+    from test_agent_limits import configure_with_historical_limits
+
+    from arclight.application.gateway_text import execution_actor
+    from arclight.persistence.models import WorkflowRun
+
     reference_set(client, episode)
     _, art_sent, *errors = install_collaboration(model_service, monkeypatch, settings)
-    run_id, _ = begin(client, episode, agent_limits=limits)
-    before = facts(client)
+    run_id, _ = begin(client, episode)
+    with client.app.state.session_factory.begin() as db:
+        actor = execution_actor(db, db.get(WorkflowRun, run_id))
+        configure_with_historical_limits(db, run_id, actor, limits)
     run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == code, (run, errors)
-    assert art_sent == [] and facts(client) == before
+    assert run["status"] == "WAITING_REVIEW" and len(art_sent) == 4, (run, errors)
+    with client.app.state.session_factory() as db:
+        assert delegation_count(db, run_id) == 1
+        assert db.get(AgentRunLimit, run_id).limits_json == {"schema_version": 1, **limits}
 
 
 @pytest.mark.parametrize("mode", ["skip", "forged"])
@@ -287,7 +290,7 @@ def test_collaboration_entry_requires_explicit_checked_director_and_exact_idempo
     key = {"Idempotency-Key": uuid4().hex}
     invalid = {"script_version_id": source["id"], "director_art_collaboration": True}
     assert client.post(path, headers=key, json=invalid).status_code == 422
-    body = invalid | {"professional": True, "director_revision_rounds": 2}
+    body = invalid | {"professional": True, "director_revision_rounds": 3}
     response = client.post(path, headers=key, json=body)
     assert response.status_code == 202, response.text
     assert client.post(path, headers=key, json=body).json()["run_id"] == response.json()["run_id"]
@@ -351,38 +354,36 @@ def test_forged_working_source_cannot_delegate(
     assert facts(client) == before
 
 
-def test_art_cost_reservations_share_original_root_budget_without_reset(
+def test_art_cost_reservations_share_the_original_accounting_without_a_budget_gate(
     client, episode, settings, model_service, monkeypatch
 ):
     from decimal import Decimal
 
-    from test_generation_budget import set_policy
+    from test_agent_limits import configure_with_historical_limits
 
     from arclight.application.agent_limits import action_usage
+    from arclight.application.gateway_text import execution_actor
     from arclight.domain.model_gateway import GatewayPolicy
+    from arclight.persistence.models import WorkflowRun
 
     reference_set(client, episode)
-    set_policy(client, episode["project_id"], "100")
-    _, art_sent, *_ = install_collaboration(model_service, monkeypatch, settings)
+    _, art_sent, *errors = install_collaboration(model_service, monkeypatch, settings)
     settings.model_gateway_policy = GatewayPolicy(
-        text_maximum_cost="0.2", pricing_version="direct04-budget:1"
+        text_maximum_cost="0.2", pricing_version="direct04-accounting:1"
     )
-    run_id, _ = begin(client, episode, agent_limits={"maximum_cost": "1.9"})
-    before = facts(client)
+    run_id, _ = begin(client, episode)
+    with client.app.state.session_factory.begin() as db:
+        actor = execution_actor(db, db.get(WorkflowRun, run_id))
+        configure_with_historical_limits(db, run_id, actor, {"maximum_cost": "0.1"})
     run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "AGENT_BUDGET_EXCEEDED", run
-    calls = len(art_sent)
-    assert 0 < calls < 4 and facts(client) == before
+    assert run["status"] == "WAITING_REVIEW" and len(art_sent) == 4, (run, errors)
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(AgentRunLimit)) == 1
         usage = action_usage(db, run_id)
         models = [action for action in usage["actions"] if action.kind == "MODEL"]
         assert {action.agent_name for action in models} == {"director", "art_director"}
-        assert len([action for action in models if action.agent_name == "art_director"]) == calls
+        assert len([action for action in models if action.agent_name == "art_director"]) == 4
         assert usage["actual_cost"] == 0
-        assert usage["pending_estimate"] == Decimal("0.2") * len(models)
-        assert usage["actual_cost"] + usage["pending_estimate"] <= Decimal("1.9")
-        assert usage["actual_cost"] + usage["pending_estimate"] + Decimal("0.2") > Decimal("1.9")
-    assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
-    assert run_once(client, settings, run_id)["error_code"] == "AGENT_BUDGET_EXCEEDED"
-    assert len(art_sent) == calls
+        assert usage["pending_estimate"] > Decimal("0.1")
+    assert run_once(client, settings, run_id) == run
+    assert len(art_sent) == 4

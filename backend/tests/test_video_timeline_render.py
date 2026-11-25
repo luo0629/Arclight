@@ -343,6 +343,7 @@ def test_selected_dynamic_video_renders_trimmed_motion_sound_subtitles_and_forma
     assert state["shots"][0]["media_version_id"] == str(case["version_id"])
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_video_snapshot_rejects_forged_or_superseded_review_and_stale_worker(
     client, dynamic_video, migrated
 ):

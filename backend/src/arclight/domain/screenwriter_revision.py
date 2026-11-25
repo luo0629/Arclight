@@ -18,7 +18,11 @@ from arclight.domain.director_creation import (
     REVISED_ITERATIVE_PRODUCTION_VERSION,
     REVISED_PRODUCTION_VERSION,
 )
-from arclight.domain.screenwriter_creation import SERIES_SCREENWRITER_VERSION, ScreenwriterOptions
+from arclight.domain.screenwriter_creation import (
+    SERIES_SCREENWRITER_VERSION,
+    AutomaticRevisionRounds,
+    ScreenwriterOptions,
+)
 from arclight.domain.screenwriter_planning import PlanEvidence, PlanningValue, SeriesPlanEvidence
 
 REVISED_SCREENWRITER_VERSION = "screenwriter/2.0"
@@ -50,7 +54,7 @@ REVISE必须说明问题；ACCEPT须五类全部检查、无未解决问题且�
 
 
 class ScreenwriterRevisionOptions(ScreenwriterOptions):
-    revision_rounds: int | None = Field(default=None, strict=True, ge=0, le=8)
+    revision_rounds: AutomaticRevisionRounds | None = None
 
     @model_validator(mode="after")
     def professional_revision(self):

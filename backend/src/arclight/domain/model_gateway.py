@@ -21,11 +21,8 @@ class GatewayValue(BaseModel):
 
 
 class GatewayPolicy(GatewayValue):
-    global_per_minute: int = Field(default=600, ge=1, le=100000)
-    user_per_minute: int = Field(default=120, ge=1, le=100000)
     failure_threshold: int = Field(default=3, ge=1, le=100)
     cooldown_seconds: int = Field(default=60, ge=1, le=3600)
-    max_attempts: int = Field(default=1, ge=1, le=3)
     timeout_seconds: float = Field(default=60, gt=0, le=600)
     text_maximum_cost: Decimal | None = Field(default=None, ge=0, le=10000, decimal_places=6)
     pricing_version: str = Field(default="unconfigured", min_length=1, max_length=100)
@@ -133,7 +130,6 @@ class GatewayFailure(Exception):
         code: str,
         *,
         not_accepted: bool = False,
-        transient: bool = False,
         completed: bool = False,
         usage: GatewayUsage | None = None,
     ):
@@ -143,7 +139,6 @@ class GatewayFailure(Exception):
             raise ValueError("Usage requires a completed provider response")
         self.code = code
         self.not_accepted = not_accepted
-        self.transient = transient
         self.completed = completed
         self.usage = GatewayUsage.model_validate(usage.model_dump()) if usage else GatewayUsage()
         super().__init__("Model service call failed")

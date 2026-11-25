@@ -325,7 +325,6 @@ def create_tts(
         f"audio-tts:{payload.creation_key}",
         GenerationCreate(
             episode_id=episode.id,
-            batch_id=payload.batch_id,
             scheduling_mode=payload.scheduling_mode,
             target_type="AUDIO",
             target_asset_id=asset.id,

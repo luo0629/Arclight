@@ -69,7 +69,6 @@ test("creates a critiqued candidate, shows patch feedback and uses both original
   await page
     .getByRole("radio", { name: "创作、评价与局部修订", exact: true })
     .click();
-  await page.getByLabel("最多自动修订轮数", { exact: true }).fill("2");
   await page.getByRole("button", { name: "分步制作", exact: true }).click();
   await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   await expect(
@@ -125,7 +124,6 @@ test("retains exhausted issues and work across reload, then resumes the same run
   await page
     .getByRole("radio", { name: "创作、评价与局部修订", exact: true })
     .click();
-  await page.getByLabel("最多自动修订轮数", { exact: true }).fill("1");
   await page.getByRole("button", { name: "分步制作", exact: true }).click();
   await page.getByRole("button", { name: "开始分步制作", exact: true }).click();
   const work = page.getByRole("region", { name: "编剧计划与工作稿" });
@@ -207,9 +205,8 @@ test("starts professional Unicode paragraph rewrite at 390px and approves once w
     .getByRole("radio", { name: "调查、规划与评价改写", exact: true })
     .click();
   await page.getByLabel("改写指令", { exact: true }).fill("补充行动动机");
-  await expect(
-    page.getByLabel("最多自动修订轮数", { exact: true }),
-  ).toHaveValue("3");
+  await expect(page.getByText(/最多自动修订 3 次/)).toBeVisible();
+  await expect(page.getByLabel("最多自动修订轮数", { exact: true })).toHaveCount(0);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

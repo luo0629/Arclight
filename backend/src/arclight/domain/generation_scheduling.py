@@ -16,19 +16,13 @@ class ExecutionPolicy(BaseModel):
     project_concurrency: PositiveLimit = 2
     project_limits: dict[str, PositiveLimit] = Field(default_factory=dict)
     paused_providers: frozenset[str] = frozenset()
-    global_per_minute: PositiveLimit = 60
-    user_per_minute: PositiveLimit = 20
     interactive_weight: int = Field(default=3, strict=True, ge=1, le=20)
     batch_weight: int = Field(default=1, strict=True, ge=1, le=20)
     interactive_concurrency_reserve: int = Field(default=1, strict=True, ge=0, le=100)
-    interactive_rate_reserve: int = Field(default=1, strict=True, ge=0, le=100)
-    recovery_rate_reserve: int = Field(default=1, strict=True, ge=0, le=100)
     permit_seconds: float = Field(default=30, gt=0, le=300)
     publish_cooldown_seconds: float = Field(default=5, gt=0, le=60)
     dispatch_window: int = Field(default=64, strict=True, ge=1, le=1000)
     call_timeout_seconds: float = Field(default=60, gt=0, le=3600)
-    max_elapsed_seconds: float = Field(default=900, gt=0, le=86400)
-    max_attempts: int = Field(default=3, strict=True, ge=1, le=20)
     retry_base_seconds: float = Field(default=2, gt=0, le=3600)
     retry_max_seconds: float = Field(default=60, gt=0, le=3600)
     retry_errors: frozenset[RetryError] = frozenset({"PROVIDER_FAILED", "PROVIDER_UNAVAILABLE"})
@@ -62,6 +56,7 @@ ERROR_CATEGORIES = {
     "RESULT_UNKNOWN": "UNCERTAIN",
     "STORAGE_FAILED": "STORAGE",
     "CANCELLED": "CANCELLATION",
+    "ACCOUNT_BALANCE_INSUFFICIENT": "BILLING",
     "BUDGET_EXCEEDED": "BUDGET",
     "QUALITY_FAILED": "QUALITY",
 }

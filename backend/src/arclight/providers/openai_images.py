@@ -14,7 +14,9 @@ from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationResult, GenerationSpec
 from arclight.domain.media_capabilities import validate_capabilities
 from arclight.domain.model_gateway import GatewayFailure
+from arclight.providers.chat import raise_for_provider_status
 from arclight.providers.media_capabilities import OPENAI_IMAGE_CAPABILITIES, resolve_parameters
+from arclight.providers.media_io import JSON_RESPONSE_LIMIT, read_provider_response
 from arclight.providers.media_outputs import MediaOutput
 from arclight.providers.media_submission import MediaSubmission, SubmissionReceipt
 from arclight.providers.network import PublicHTTPTransport
@@ -62,10 +64,11 @@ def _actual_image_kind(data: bytes, requested_kind: str) -> str:
 
 
 def _validate_server_response(response: httpx.Response) -> None:
-    if response.status_code in {401, 403, 404, 422, 429}:
-        raise GatewayFailure(
-            "PROVIDER_UNAVAILABLE", not_accepted=True, transient=response.status_code == 429
-        )
+    if response.is_error:
+        try:
+            read_provider_response(response, maximum=JSON_RESPONSE_LIMIT)
+        except httpx.HTTPError:
+            raise_for_provider_status(response, {})
     encoding = response.headers.get("content-encoding", "identity")
     if response.status_code != 200 or encoding not in {"", "identity"}:
         raise GatewayFailure("INVALID_RESPONSE")
@@ -81,23 +84,31 @@ class OpenAIImageProvider:
         self.transport = transport
         self.store = ObjectStorage(settings)
 
+    def validate_input(self, snapshot: dict) -> GenerationSpec:
+        service = self.settings.image_service
+        service.require_ready()
+        try:
+            context = snapshot["context"]
+            spec = GenerationSpec.model_validate(context["generation"])
+        except (KeyError, TypeError, ValidationError):
+            raise DomainError("INVALID_GENERATION_INPUT", "媒体输入清单无效", 409) from None
+        validate_spec(spec)
+        configuration = service.public_configuration()
+        if (
+            spec.model != service.model
+            or spec.model_config_version != configuration["configuration_version"]
+            or context.get("provider_configuration") != configuration
+        ):
+            raise DomainError("IMAGE_SERVICE_CONFIG_CHANGED", "图像服务配置已变化", 409)
+        return spec
+
     def submit(self, request: MediaSubmission) -> SubmissionReceipt:
         service = self.settings.image_service
         try:
-            service.require_ready()
-            spec = GenerationSpec.model_validate(request.snapshot["context"]["generation"])
-            validate_spec(spec)
-            if (
-                spec.model != service.model
-                or spec.model_config_version
-                != service.public_configuration()["configuration_version"]
-                or request.snapshot["context"].get("provider_configuration")
-                != service.public_configuration()
-            ):
-                raise DomainError("IMAGE_SERVICE_CONFIG_CHANGED", "图像服务配置已变化", 409)
+            spec = self.validate_input(request.snapshot)
             secret = service.secret()
             self.store.check()
-        except (DomainError, KeyError, ValidationError):
+        except DomainError:
             raise GatewayFailure("INPUT_INVALID", not_accepted=True) from None
 
         output = spec.output_spec

@@ -123,7 +123,7 @@ function RevisionBody(props: RevisionProps & { onDismiss: () => void }) {
               disabled={frozen || !state.instruction.trim()}
               onClick={() => void state.prepare()}
             >
-              {state.busy ? "正在核对修订" : "预览修订与预算"}
+              {state.busy ? "正在核对修订" : "预览修订与费用"}
             </Button>
           )}
         </FieldGroup>
@@ -146,8 +146,10 @@ function RevisionBody(props: RevisionProps & { onDismiss: () => void }) {
             {state.preview.source.model}
           </p>
           <p className="text-sm">
-            预算上限估算：{state.preview.quote.maximum_cost}{" "}
-            {state.preview.quote.currency}
+            费用估算：
+            {state.preview.quote
+              ? `${state.preview.quote.maximum_cost} ${state.preview.quote.currency}`
+              : "待供应商账单确认"}
           </p>
           <p className="text-sm text-muted-foreground">
             {state.preview.mode_description}

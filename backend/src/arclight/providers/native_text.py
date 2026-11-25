@@ -61,9 +61,7 @@ def gemini_payload(payload: dict) -> dict:
             contents[-1]["parts"].extend(parts)
         else:
             contents.append({"role": native_role, "parts": parts})
-    config: dict = {
-        "maxOutputTokens": payload.get("max_tokens", payload.get("max_completion_tokens"))
-    }
+    config: dict = {}
     tools = payload.get("tools", [])
     schema = payload.get("response_format", {}).get("json_schema", {}).get("schema")
     # Function calling and constrained JSON are not composable on every Gemini model.

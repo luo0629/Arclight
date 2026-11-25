@@ -16,7 +16,7 @@ async function setup(page: Page, count = 1) {
   const project = await (
     await page.request.post("/api/v1/projects", {
       headers,
-      data: { name: "项目总览验收", budget_limit: "125.50" },
+      data: { name: "项目总览验收" },
     })
   ).json();
   const episodes = [];
@@ -137,8 +137,12 @@ test("aggregates actual versions and tasks, refreshes reviews, opens tasks, and 
   await open(page);
   await expect(surface(page)).toHaveAttribute("aria-busy", "false");
   await expect(page.getByText("剧本待审核 · 2", { exact: true })).toBeVisible();
-  await expect(page.getByText("125.50", { exact: true })).toBeVisible();
-  await expect(page.getByText("实际成本", { exact: true })).toBeVisible();
+  await expect(page.getByText(/已配置预算上限/)).toHaveCount(0);
+  const actualCost = page.getByText("实际成本", { exact: true });
+  await expect(actualCost).toBeVisible();
+  await expect(actualCost.locator("..").getByRole("definition")).toHaveText(
+    "0.000000 USD",
+  );
   await expect(
     page.getByRole("link", { name: "查看项目成片", exact: true }),
   ).toBeVisible();

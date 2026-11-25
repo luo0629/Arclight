@@ -1,7 +1,6 @@
 """Controlled concept requests and asynchronous observations over GenerationService."""
 
 from copy import deepcopy
-from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -22,6 +21,7 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.art_concepts import (
+    MAX_CONCEPT_ROUNDS,
     OBSERVE_CONCEPT_TOOL,
     REQUEST_CONCEPT_TOOL,
     ArtConceptObserved,
@@ -83,9 +83,7 @@ def freeze_concept_plan(
         spec=plan.spec,
     )
     service = select_for_spec(db, actor or "service-owner", plan.spec, "IMAGE", frozen_service)
-    quote = quote_job(db, project_id, payload, actor=actor, frozen_service=frozen_service)
-    if quote.maximum_cost > plan.maximum_cost:
-        raise DomainError("ART_CONCEPT_BUDGET", "单轮可信报价已超过概念图总预算", 409)
+    quote = quote_job(db, payload, actor=actor or "service-owner", frozen_service=frozen_service)
     project = db.get(Project, project_id)
     assert project is not None
     return {
@@ -95,7 +93,7 @@ def freeze_concept_plan(
         | {"task_types": sorted(capabilities.task_types)},
         "visual_bible": visual_snapshot(db, project),
         "provider_configuration": service.configuration if service else None,
-        "initial_quote": quote.model_dump(mode="json"),
+        "initial_quote": quote.model_dump(mode="json") if quote is not None else None,
     }
 
 
@@ -104,7 +102,11 @@ def frozen_plan(db: Session, run_id: UUID) -> tuple[WorkflowRun, dict, ArtConcep
     frozen = run.input_json.get("art_direction", {}).get("concept") if run else None
     if run is None or frozen is None:
         raise DomainError("ART_CONCEPT_NOT_ENABLED", "原运行未授权概念图探索", 403)
-    return run, frozen, ArtConceptPlan.model_validate(frozen["plan"])
+    # Read the active inputs without rewriting the original plan or its checksum.
+    plan = {
+        name: value for name, value in frozen["plan"].items() if name in ArtConceptPlan.model_fields
+    }
+    return run, frozen, ArtConceptPlan.model_validate(plan)
 
 
 def concept_ready(db: Session, job: GenerationJob) -> bool:
@@ -201,10 +203,10 @@ def request_concepts(context: AgentToolContext, parameters: RequestArtConcepts) 
                 "job_id": str(job.id),
                 "input_manifest_id": str(job.input_manifest_id),
             }
-    if parameters.round_no != len(jobs) + 1 or parameters.round_no > plan.maximum_rounds:
-        raise DomainError("ART_CONCEPT_ROUND_LIMIT", "概念图轮次须连续且不能超过冻结上限", 409)
-    if (len(jobs) + 1) * plan.spec.batch_size > plan.maximum_candidates:
-        raise DomainError("ART_CONCEPT_CANDIDATE_LIMIT", "候选总数量已达到冻结上限", 409)
+    if parameters.round_no > MAX_CONCEPT_ROUNDS:
+        raise DomainError("ART_CONCEPT_ROUND_LIMIT", "概念图自动探索已达到轮次上限", 409)
+    if parameters.round_no != len(jobs) + 1:
+        raise DomainError("ART_CONCEPT_ROUND_INVALID", "概念图轮次须连续", 409)
     previous_invocation_id = None
     if jobs:
         previous_invocation_id = _previous_comparison(db, run.id, parameters, jobs[-1])
@@ -219,7 +221,8 @@ def request_concepts(context: AgentToolContext, parameters: RequestArtConcepts) 
         actor=context.actor_id,
         frozen_service=private_service,
     )
-    if {key: value for key, value in frozen.items() if key != "initial_quote"} != {
+    frozen_inputs = frozen | {"plan": plan.model_dump(mode="json")}
+    if {key: value for key, value in frozen_inputs.items() if key != "initial_quote"} != {
         key: value for key, value in fresh.items() if key != "initial_quote"
     }:
         raise DomainError(
@@ -246,17 +249,12 @@ def request_concepts(context: AgentToolContext, parameters: RequestArtConcepts) 
         inputs=plan.inputs,
         spec=spec,
     )
-    quote = quote_job(
-        db, context.project_id, payload, actor=context.actor_id, frozen_service=private_service
-    )
-    spent = sum((sum(costs(db, context.project_id, job_id=item.id)) for item in jobs), Decimal("0"))
-    if spent + quote.maximum_cost > plan.maximum_cost:
-        raise DomainError("ART_CONCEPT_BUDGET", "概念图已用及预留费用将超过冻结预算", 409)
+    quote = quote_job(db, payload, actor=context.actor_id, frozen_service=private_service)
     control = db.get(AgentRunLimit, run.id)
     assert control is not None
     receipt = {
         "round_no": parameters.round_no,
-        "maximum_cost": str(quote.maximum_cost),
+        "maximum_cost": str(quote.maximum_cost) if quote is not None else None,
         "candidate_count": spec.batch_size,
         "rationale": parameters.rationale,
     }

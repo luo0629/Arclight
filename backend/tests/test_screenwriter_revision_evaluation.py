@@ -72,7 +72,7 @@ def test_revision_offline_subset_observes_real_tools_patches_recovery_and_escala
                 model_service,
                 monkeypatch,
                 settings,
-                patches=2 if mode == "exhausted" else 1,
+                patches=4 if mode == "exhausted" else 1,
                 mutate_report=mutate,
             )
             started = time.monotonic()
@@ -87,7 +87,7 @@ def test_revision_offline_subset_observes_real_tools_patches_recovery_and_escala
                 run_id = start(
                     client,
                     selected_episode,
-                    revision_rounds=1,
+                    revision_rounds=3,
                     story=case.input_payload["story"] + case.input_payload["untrusted_margin_note"],
                 )
             run = run_once(client, settings, run_id)

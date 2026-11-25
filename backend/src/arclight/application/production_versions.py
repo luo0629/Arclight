@@ -44,7 +44,7 @@ from arclight.persistence.models import (
     VersionBinding,
     WorkflowRun,
 )
-from arclight.providers.prompts import TEXT_MAX_TOKENS, TEXT_PROMPTS
+from arclight.providers.prompts import TEXT_PROMPTS
 
 TEXT_STAGES = {
     "producer": ("producer",),
@@ -258,7 +258,6 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
                     "runtime": "persistent-agent/1",
                     "direction_version": DIRECTION_VERSION,
                     "delivery_key": DELIVERY_KEY,
-                    "max_tokens": 16000,
                 },
             ),
             ("PROMPT", DIRECTION_VERSION, {"direction": DIRECTION_PROMPT}),
@@ -280,7 +279,6 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
                     "workflow_version": workflow_version,
                     "fragment_version": director_revision.WORKING_VERSION,
                     "revision_version": director_revision.REVISION_VERSION,
-                    "revision_max_tokens": 8000,
                     "assembly": "complete-scenes-checked-local-patches/1",
                     "repair_policy": "frozen-bounded-director-receipts/1",
                     "human_escalation": "server-initial-question/1",
@@ -344,9 +342,7 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
                     "workflow_version": workflow_version,
                     "runtime": "persistent-agent/1",
                     "planning_version": director_planning.PLAN_VERSION,
-                    "plan_max_tokens": 16000,
                     "fragment_version": director_creation.FRAGMENT_VERSION,
-                    "fragment_max_tokens": 8000,
                     "assembly": "complete-scenes-contiguous-shots/1",
                 },
             ),
@@ -400,7 +396,6 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
                     "operation": stage,
                     "workflow_version": workflow_version,
                     "revision_version": REVISION_VERSION,
-                    "revision_max_tokens": 8000,
                     "repair_policy": "frozen-bounded-receipts/1",
                     "human_escalation": "server-initial-question/1",
                 }
@@ -415,7 +410,7 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
                     "candidate": ScriptContent.model_json_schema(),
                 }
             if stage == "rewrite":
-                for name in ("fragment", "fragment_version", "fragment_max_tokens"):
+                for name in ("fragment", "fragment_version"):
                     definition.pop(name, None)
             result.append((kind, workflow_version, definition))
         return result
@@ -433,12 +428,7 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
                     "runtime": "persistent-agent/1",
                     "planning_agent_version": "screenwriter-planning/1",
                     "planning_prompt_version": "screenwriter-planning/1",
-                    "plan_max_tokens": 16000,
-                    **(
-                        {"fragment_version": FRAGMENT_VERSION, "fragment_max_tokens": 6000}
-                        if stage == "script"
-                        else {}
-                    ),
+                    **({"fragment_version": FRAGMENT_VERSION} if stage == "script" else {}),
                 },
             ),
             (
@@ -516,15 +506,9 @@ def series_text_definitions(stage: str, workflow_version: str) -> list[tuple[str
                 "planning_version": SERIES_PLAN_VERSION,
                 "revision_version": SERIES_REVISION_VERSION,
                 "patch_tool": SERIES_PATCH_TOOL,
-                "plan_max_tokens": 16000,
-                "revision_max_tokens": 8000,
                 "repair_policy": "frozen-bounded-series-receipts/1",
                 "human_escalation": "server-initial-question/1",
-                **(
-                    {"fragment_version": SERIES_FRAGMENT_VERSION, "fragment_max_tokens": 6000}
-                    if stage == "script"
-                    else {}
-                ),
+                **({"fragment_version": SERIES_FRAGMENT_VERSION} if stage == "script" else {}),
             },
         ),
         (
@@ -624,7 +608,6 @@ def capture_text(
     if capabilities is not None:
         model["agent_capabilities"] = capabilities.model_dump(mode="json")
     parameters = {
-        "max_tokens": TEXT_MAX_TOKENS,
         "timeout_seconds": settings.llm_timeout_seconds,
         "duration_tolerance_percent": settings.text_duration_tolerance_percent,
         "gateway_policy": settings.model_gateway_policy.model_dump(mode="json"),
@@ -679,11 +662,41 @@ def checked_snapshot(db: Session, binding: VersionBinding) -> dict:
         raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "版本合同不支持恢复", 409)
     for entry in value["components"]:
         row = db.get(ProductionVersion, UUID(entry["id"]))
-        if row is None or row.project_id != binding.project_id or row.digest != entry["digest"]:
+        if (
+            row is None
+            or row.project_id != binding.project_id
+            or row.family != entry["family"]
+            or row.kind != entry["kind"]
+            or row.name != entry["name"]
+            or row.version != entry["version"]
+            or row.digest != entry["digest"]
+            or digest(row.definition_json) != row.digest
+        ):
             raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "版本登记缺失或不匹配", 409)
     if value["parameter_sha256"] != digest(value["parameters"]):
         raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "参数版本摘要不匹配", 409)
     return value
+
+
+def prompt_instruction(definition: dict) -> str:
+    instruction = definition.get("instruction")
+    if set(definition) != {"instruction"} or not isinstance(instruction, str) or not instruction:
+        raise ValueError("Frozen prompt instruction is invalid")
+    return instruction
+
+
+def producer_prompt(db: Session, project_id: UUID, run_id: UUID) -> str:
+    binding = find_binding(db, project_id, "WORKFLOW", run_id)
+    if binding is not None:
+        for entry in checked_snapshot(db, binding)["components"]:
+            if entry["name"] == "producer" and entry["kind"] == "PROMPT":
+                component_row = db.get(ProductionVersion, UUID(entry["id"]))
+                assert component_row is not None
+                try:
+                    return prompt_instruction(component_row.definition_json)
+                except ValueError:
+                    break
+    raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "缺少有效的冻结制片提示词", 409)
 
 
 def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Settings) -> Settings:
@@ -699,17 +712,45 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
         for stage in text_stages(run)
         for kind, _, definition in text_definitions(stage, run.workflow_version)
     }
+    recorded = {}
+    removed_parameters = {
+        "max_tokens",
+        "plan_max_tokens",
+        "fragment_max_tokens",
+        "revision_max_tokens",
+    }
+    for entry in snapshot["components"]:
+        if entry["kind"] == "MODEL":
+            continue
+        component_row = db.get(ProductionVersion, UUID(entry["id"]))
+        assert component_row is not None  # checked_snapshot verified the registry binding.
+        definition = component_row.definition_json
+        key = (entry["name"], entry["kind"])
+        if key in recorded:
+            raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "冻结版本登记重复", 409)
+        if run.workflow_type == "producer" and key == ("producer", "PROMPT"):
+            # Producer replay reads the exact retained instruction. Agent and schema
+            # definitions still have to match the implementation.
+            try:
+                prompt_instruction(definition)
+            except ValueError as exc:
+                raise DomainError(
+                    "PRODUCTION_VERSION_INCOMPATIBLE", "冻结制片提示词无效", 409
+                ) from exc
+            recorded[key] = expected[key]
+        else:
+            recorded[key] = digest(
+                {
+                    name: value
+                    for name, value in definition.items()
+                    if name not in removed_parameters
+                }
+            )
     if (
         snapshot["workflow_type"] != run.workflow_type
-        or snapshot["parameters"]["max_tokens"] != TEXT_MAX_TOKENS
         or snapshot["workflow_version"] != run.workflow_version
         or snapshot["inputs"] != input_summary(run.input_json)
-        or {
-            (entry["name"], entry["kind"]): entry["digest"]
-            for entry in snapshot["components"]
-            if entry["kind"] != "MODEL"
-        }
-        != expected
+        or recorded != expected
     ):
         raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "提示词、Agent或Schema不兼容恢复", 409)
     model, parameters = snapshot["model"], snapshot["parameters"]
@@ -730,7 +771,13 @@ def text_settings(db: Session, project_id: UUID, run: WorkflowRun, settings: Set
             else None,
             "llm_timeout_seconds": parameters["timeout_seconds"],
             "text_duration_tolerance_percent": parameters["duration_tolerance_percent"],
-            "model_gateway_policy": GatewayPolicy.model_validate(parameters["gateway_policy"])
+            "model_gateway_policy": GatewayPolicy.model_validate(
+                {
+                    key: value
+                    for key, value in parameters["gateway_policy"].items()
+                    if key in GatewayPolicy.model_fields
+                }
+            )
             if "gateway_policy" in parameters
             else settings.model_gateway_policy,
         }

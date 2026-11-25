@@ -14,7 +14,7 @@ async function setup(page: Page) {
   const headers = { Authorization: "Bearer " + owner.access_token };
   const created = await page.request.post("/api/v1/projects", {
     headers,
-    data: { name: "成本验收项目", budget_limit: "20" },
+    data: { name: "成本验收项目" },
   });
   expect(created.status()).toBe(201);
   const project = await created.json();
@@ -224,7 +224,7 @@ test("task pagination keeps project totals and dimensions switch without stale r
   ).toBeVisible();
   await expect(
     surface(page).getByText(
-      "11 条待核账，0 条缺少可信报价。预留代表预算占用，最终费用以账单为准。",
+      "11 条待核账，0 条缺少可信报价。最终费用以供应商账单为准。",
       { exact: true },
     ),
   ).toBeVisible();
@@ -236,7 +236,7 @@ test("task pagination keeps project totals and dimensions switch without stale r
   ).toBeVisible();
   await expect(
     surface(page).getByText(
-      "11 条待核账，0 条缺少可信报价。预留代表预算占用，最终费用以账单为准。",
+      "11 条待核账，0 条缺少可信报价。最终费用以供应商账单为准。",
       { exact: true },
     ),
   ).toBeVisible();

@@ -97,7 +97,7 @@ export function CostSummary({ value }: { value: CostTotals }) {
       {value.cost_is_estimate && (
         <p className="text-xs leading-relaxed text-muted-foreground">
           {value.estimated_count} 条待核账，{value.unpriced_count}{" "}
-          条缺少可信报价。预留代表预算占用，最终费用以账单为准。
+          条缺少可信报价。最终费用以供应商账单为准。
         </p>
       )}
     </div>
@@ -279,7 +279,7 @@ export default function ProjectCosts({ projectId }: { projectId: string }) {
   return (
     <PagePanel
       title="成本明细"
-      description="费用来自已保存的调用与账单记录；报价、预算预留和实际账单分别展示。"
+      description="费用来自已保存的调用与账单记录；报价、待核账金额和实际账单分别展示。"
       drawing="film"
     >
       <section
@@ -321,7 +321,7 @@ export default function ProjectCosts({ projectId }: { projectId: string }) {
             <CostSummary value={data.summary} />
             {!data.summary.entry_count && (
               <EmptyState>
-                任务产生调用或预算预留后，将在此显示。缺失账单会保留为待核账。
+                费用记录将在任务提交后显示。缺失账单会保留为待核账。
               </EmptyState>
             )}
             <div className="flex flex-col gap-4">

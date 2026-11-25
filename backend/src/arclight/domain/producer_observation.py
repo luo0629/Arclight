@@ -14,7 +14,7 @@ from arclight.domain.producer_planning import DelegationRequest, PlanText, TaskK
 from arclight.domain.producer_research import InvestigateProjectResult
 from arclight.domain.production_events import StageReceipt
 
-ObservationTrigger = Literal["FAILURE", "STALE", "BUDGET_CHANGED", "HUMAN_DECISION", "RECHECK"]
+ObservationTrigger = Literal["FAILURE", "STALE", "HUMAN_DECISION", "RECHECK"]
 
 
 class ProducerObservationRequest(AgentToolContract):
@@ -86,7 +86,7 @@ class ProducerObservation(AgentToolContract):
     base_plan_id: UUID
     base_plan_sha256: Checksum
     version_no: StrictInt = Field(ge=1)
-    trigger: ObservationTrigger
+    trigger: ObservationTrigger | Literal["BUDGET_CHANGED"]
     reason: PlanText
     read_at: datetime
     snapshot_sha256: Checksum

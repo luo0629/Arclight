@@ -1138,15 +1138,13 @@ test("SERIES-08 launches the exact approved scope from overview and replays the 
   await start
     .getByLabel("制作目标", { exact: true })
     .fill("依批准的主线制作前两集。");
-  await start.getByLabel("跨集预算上限（USD）", { exact: true }).fill("0");
+  await expect(start.getByLabel(/预算上限|调用上限/)).toHaveCount(0);
   const submit = start.getByRole("button", {
     name: "发起多集制作",
     exact: true,
   });
   await expect(submit).toBeDisabled();
-  await start
-    .getByLabel("确认上述范围和预算；所有集共用同一上限及截止时间。")
-    .check();
+  await start.getByLabel("确认上述剧集和制作目标。").check();
   await submit.click();
   await expect(
     start.getByRole("button", { name: "重发原多集发起", exact: true }),
@@ -1174,7 +1172,7 @@ test("SERIES-08 launches the exact approved scope from overview and replays the 
     { episode_id: data.episode.id, requires_episode_ids: [] },
     { episode_id: later.id, requires_episode_ids: [data.episode.id] },
   ]);
-  expect(payload.limits.maximum_cost).toBe("0");
+  expect(payload).not.toHaveProperty("limits");
   const catalog = await (
     await page.request.get(`${root}/series-overview`, { headers: data.headers })
   ).json();

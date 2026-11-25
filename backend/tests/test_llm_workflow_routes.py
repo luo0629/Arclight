@@ -41,12 +41,14 @@ def assert_request(req, protocol, endpoint, model, key, supplier, *, output_form
     if protocol == "gemini":
         assert req.headers["x-goog-api-key"] == key
         config = body["generationConfig"]
+        assert "maxOutputTokens" not in config
         assert config["responseMimeType"] == "application/json"
         assert ("responseJsonSchema" in config) == (output_format == "json_schema")
     else:
         assert req.headers["authorization"] == "Bearer " + key
         assert body["model"] == model
         if protocol == "qwen_chat":
+            assert "max_tokens" not in body["parameters"]
             assert body["parameters"]["response_format"] == {"type": "json_object"}
             assert body["parameters"]["enable_thinking"] is False
             first = body["input"]["messages"][0]
@@ -56,8 +58,8 @@ def assert_request(req, protocol, endpoint, model, key, supplier, *, output_form
             assert body["response_format"]["type"] == output_format
             if output_format == "json_schema":
                 assert body["response_format"]["json_schema"]["name"] == "StoryAnalysisContent"
-            assert ("max_completion_tokens" in body) == (supplier == "openai")
-            assert ("max_tokens" in body) == (supplier != "openai")
+            assert "max_completion_tokens" not in body
+            assert "max_tokens" not in body
             if supplier == "deepseek":
                 assert body["thinking"] == {"type": "disabled"}
 

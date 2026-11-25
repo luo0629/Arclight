@@ -20,6 +20,7 @@ __all__ = ["job_case", "render_case", "review_case", "timeline_case"]
 TABLES = ("render_jobs", "render_attempts")
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_empty_job_migration_roundtrip_preserves_existing_manifest(client, render_case, migrated):
     manifest, _ = ready_manifest(client, render_case)
     command.downgrade(migrated, "0057")
@@ -30,6 +31,7 @@ def test_empty_job_migration_roundtrip_preserves_existing_manifest(client, rende
     assert client.get(f"/api/v1/timelines/{render_case['id']}").json() == render_case
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_nonempty_job_downgrade_refuses_before_touching_schema(client, job_case, migrated):
     manifest, value, _ = job_case
     tables = set(inspect(client.app.state.engine).get_table_names())

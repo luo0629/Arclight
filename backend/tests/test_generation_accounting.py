@@ -11,7 +11,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 from test_collaboration import create_project, register
 from test_concurrency import require_postgres
-from test_generation_budget import budget, priced, set_policy
+from test_generation_budget import budget, priced
 from test_generation_delivery import Provider, deliver, event_for, retry_due
 from test_generation_jobs import base, capture, capture_ok, payload
 from test_generation_reconciliation import QueryFake, query, unknown
@@ -38,8 +38,10 @@ def ledger(client, project_id):
 
 
 def usage(client, project_id):
-    value = client.get(budget(project_id)).json()
-    return tuple(Decimal(value[key]) for key in ("actual_cost", "pending_estimate"))
+    from arclight.application.generation_accounting import costs
+
+    with client.app.state.session_factory() as db:
+        return costs(db, UUID(str(project_id)))
 
 
 def invoice(client, project_id, row, amount="1.25", **changes):
@@ -72,7 +74,6 @@ def terminal(client, job, *, cost=None, status=Status.SUCCEEDED):
 
 def test_creation_reserves_once_and_callback_settles_once(client, episode, monkeypatch):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "4")
     priced(monkeypatch)
     key = str(uuid4())
     created = capture(client, project_id, key=key)
@@ -114,7 +115,6 @@ def test_job_reservation_and_outbox_rollback_as_one_transaction(client, episode,
     from arclight.application import generation_jobs
 
     project_id = episode["project_id"]
-    set_policy(client, project_id)
     priced(monkeypatch)
 
     def fail(*args):
@@ -135,7 +135,6 @@ def test_failed_paid_call_releases_only_known_unspent_budget(
     client, episode, monkeypatch, cost, expected
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id)
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     terminal(client, job, cost=cost, status=Status.FAILED)
@@ -149,7 +148,6 @@ def test_cancel_intent_never_releases_a_submitted_reservation(
     client, episode, monkeypatch, before_submit
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id)
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     if not before_submit:
@@ -169,7 +167,7 @@ def test_cancel_intent_never_releases_a_submitted_reservation(
 
 
 @pytest.mark.parametrize("change", ["price", "target", "time"])
-def test_pre_submission_failure_releases_without_calling_provider(
+def test_only_invalid_target_blocks_submission_when_prices_or_time_change(
     client, episode, monkeypatch, change
 ):
     from datetime import timedelta
@@ -178,7 +176,6 @@ def test_pre_submission_failure_releases_without_calling_provider(
     from arclight.persistence.base import utcnow
 
     project_id = episode["project_id"]
-    set_policy(client, project_id)
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     if change == "price":
@@ -191,16 +188,25 @@ def test_pre_submission_failure_releases_without_calling_provider(
     else:
         future = utcnow() + timedelta(days=1)
         monkeypatch.setattr(generation_leases, "clock", lambda db: future)
-    provider = Provider()
-    assert deliver(client, job, provider) == "FAILED"
-    assert provider.requests == [] and usage(client, project_id) == (0, 0)
-    assert ledger(client, project_id)[0]["source"] == "PRE_SUBMISSION"
+    provider = Provider(
+        receipt=SubmissionReceipt(
+            status="SUCCEEDED",
+            cost=Decimal("1"),
+            result=GenerationResult(output_handles=["fake/image/1"]),
+        )
+    )
+    if change == "target":
+        assert deliver(client, job, provider) == "FAILED"
+        assert provider.requests == [] and usage(client, project_id) == (0, 0)
+        assert ledger(client, project_id)[0]["source"] == "PRE_SUBMISSION"
+    else:
+        assert deliver(client, job, provider) == "SUCCEEDED"
+        assert len(provider.requests) == 1 and usage(client, project_id) == (1, 0)
 
 
 @pytest.mark.parametrize("outcome", ["NOT_FOUND", "UNKNOWN", "CANCELLED", "FAILED", "SUCCEEDED"])
 def test_unknown_and_final_result_without_bill_remain_held(client, episode, monkeypatch, outcome):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "2")
     priced(monkeypatch)
     job, _ = unknown(client, project_id)
     row = ledger(client, project_id)[0]
@@ -212,7 +218,7 @@ def test_unknown_and_final_result_without_bill_remain_held(client, episode, monk
     response = query(client, job, QueryFake(receipt))
     assert response.status_code == 200, response.text
     assert usage(client, project_id) == (0, 2)
-    assert capture(client, project_id).json()["error"]["code"] == "BUDGET_EXCEEDED"
+    assert capture(client, project_id).status_code == 201
     assert ledger(client, project_id)[0]["status"] == "HELD"
 
 
@@ -220,7 +226,6 @@ def test_not_accepted_releases_old_attempt_and_reserves_retry_atomically(
     client, episode, monkeypatch
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "2", task_limit="2")
     priced(monkeypatch)
     job, _ = unknown(client, project_id)
     response = query(client, job, QueryFake(QueryReceipt(status="NOT_ACCEPTED")))
@@ -244,7 +249,6 @@ def test_manual_invoice_is_owner_evidence_idempotent_and_preserves_attempt(
     client, episode, monkeypatch
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "2")
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     attempt = terminal(client, job)
@@ -265,51 +269,51 @@ def test_invoice_rejects_invalid_costs(client, episode, cost):
     assert response.status_code == 422
 
 
-def test_over_quote_actual_bill_is_recorded_and_blocks_new_paid_work(client, episode, monkeypatch):
+def test_over_quote_actual_bill_is_recorded_and_new_paid_work_continues(
+    client, episode, monkeypatch
+):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "2")
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     terminal(client, job, cost=Decimal("3"))
     assert usage(client, project_id) == (3, 0)
     assert ledger(client, project_id)[0]["released"] == "-1.000000"
-    assert capture(client, project_id).json()["error"]["code"] == "BUDGET_EXCEEDED"
+    assert capture(client, project_id).status_code == 201
     assert client.get(base(project_id) + f"/{job['id']}/attempts").status_code == 200
 
 
-def test_retry_reservation_failure_does_not_queue_or_duplicate_spending(
-    client, episode, monkeypatch
-):
+def test_retry_reserves_a_new_attempt_and_preserves_the_previous_bill(client, episode, monkeypatch):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "2")
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     terminal(client, job, cost=Decimal("1"), status=Status.FAILED)
     with client.app.state.session_factory.begin() as db:
         current = find_job(db, UUID(job["id"]), lock=True)
-        with pytest.raises(DomainError) as exc:
-            request_retry(db, current.id, current.revision, "service-owner")
-        assert exc.value.code == "BUDGET_EXCEEDED" and current.status == "FAILED"
-    assert len(ledger(client, project_id)) == 1 and usage(client, project_id) == (1, 0)
+        request_retry(db, current.id, current.revision, "service-owner")
+        assert current.status == "RETRY_WAIT"
+    assert len(ledger(client, project_id)) == 2 and usage(client, project_id) == (1, 2)
+
+
+class InvalidBeforeSubmission(Provider):
+    def validate_input(self, snapshot):
+        raise DomainError("INPUT_INVALID", "Invalid synthetic provider configuration", 409)
 
 
 def test_repeated_pre_submission_retry_keeps_separate_immutable_reservations(
     client, episode, monkeypatch
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "4")
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     terminal(client, job, cost=Decimal("0"), status=Status.FAILED)
     with client.app.state.session_factory.begin() as db:
         current = find_job(db, UUID(job["id"]), lock=True)
         request_retry(db, current.id, current.revision, "service-owner")
-    set_policy(client, project_id, "1")
     retry_due(client, job)
-    provider = Provider()
+
+    provider = InvalidBeforeSubmission()
     assert deliver(client, job, provider) == "FAILED" and provider.requests == []
     assert usage(client, project_id) == (0, 0)
-    set_policy(client, project_id, "4")
     with client.app.state.session_factory.begin() as db:
         current = find_job(db, UUID(job["id"]), lock=True)
         request_retry(db, current.id, current.revision, "service-owner")
@@ -330,7 +334,6 @@ def test_cancel_supersedes_query_without_releasing_funds_until_new_evidence(
     client, episode, monkeypatch
 ):
     project_id = episode["project_id"]
-    set_policy(client, project_id, "2")
     priced(monkeypatch)
     job, _ = unknown(client, project_id)
 
@@ -361,7 +364,6 @@ def test_ledger_pagination_permission_isolation_and_archived_reading(client, mon
         (register(client, f"ledger-{role}@example.com"), role) for role in ("editor", "viewer")
     ]
     client.headers["Authorization"] = "Bearer " + token
-    set_policy(client, project_id)
     priced(monkeypatch)
     for _ in range(2):
         terminal(client, capture_ok(client, project_id))
@@ -400,6 +402,7 @@ def test_ledger_pagination_permission_isolation_and_archived_reading(client, mon
     assert client.get(budget(project_id) + "/ledger").status_code == 404
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_accounting_history_database_protection_and_downgrade(client, episode, migrated):
     terminal(client, capture_ok(client, episode["project_id"]))
     for table in ("generation_budget_reservations", "generation_budget_settlements"):
@@ -422,7 +425,6 @@ def test_accounting_history_database_protection_and_downgrade(client, episode, m
 def test_postgres_duplicate_settlement_and_creation_race(client, episode, settings, monkeypatch):
     require_postgres(settings)
     project_id = episode["project_id"]
-    set_policy(client, project_id, "3")
     priced(monkeypatch)
     job = capture_ok(client, project_id)
     with client.app.state.session_factory.begin() as db:
@@ -455,23 +457,19 @@ def test_postgres_duplicate_settlement_and_creation_race(client, episode, settin
     with ThreadPoolExecutor(max_workers=3) as pool:
         outcomes = list(pool.map(work, range(3)))
     assert outcomes[:2] == ["SETTLED", "SETTLED"]
-    assert outcomes[2] in {"CREATED", "BUDGET_EXCEEDED"}
-    if outcomes[2] == "BUDGET_EXCEEDED":
-        capture_ok(client, project_id)
+    assert outcomes[2] == "CREATED"
     assert usage(client, project_id) == (1, 2)
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(Settlement)) == 1
 
 
-def test_postgres_two_retries_compete_for_one_reservation(client, episode, settings, monkeypatch):
+def test_postgres_two_retries_get_independent_reservations(client, episode, settings, monkeypatch):
     require_postgres(settings)
     project_id = episode["project_id"]
-    set_policy(client, project_id, "4")
     priced(monkeypatch)
     jobs = [capture_ok(client, project_id) for _ in range(2)]
     for job in jobs:
         terminal(client, job, cost=Decimal("0"), status=Status.FAILED)
-    set_policy(client, project_id, "2")
     barrier = Barrier(2)
 
     def retry(job):
@@ -486,8 +484,8 @@ def test_postgres_two_retries_compete_for_one_reservation(client, episode, setti
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(retry, jobs))
-    assert sorted(outcomes) == ["BUDGET_EXCEEDED", "RETRY_WAIT"]
-    assert usage(client, project_id) == (0, 2)
+    assert outcomes == ["RETRY_WAIT", "RETRY_WAIT"]
+    assert usage(client, project_id) == (0, 4)
 
 
 def test_upgrade_backfills_evidence_without_rewriting_historical_attempts(settings):

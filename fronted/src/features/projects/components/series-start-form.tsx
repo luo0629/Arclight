@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { FormLabel, Notice } from "@/components/ui-kit";
 import { useAuth } from "@/features/auth/auth-context";
@@ -38,7 +37,6 @@ export default function SeriesStartForm({
   });
   const [selected, setSelected] = useState<Selected[]>([]);
   const [goal, setGoal] = useState("");
-  const [budget, setBudget] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [opened, setOpened] = useState<string | null>(null);
   const plan = workspace.plan;
@@ -51,7 +49,6 @@ export default function SeriesStartForm({
   );
   const locked =
     !writable || !intent.ready || intent.mutating || !!intent.pending;
-  const validBudget = /^\d{1,12}(\.\d{1,6})?$/.test(budget);
 
   function toggle(episode: Episode) {
     setConfirmed(false);
@@ -103,7 +100,6 @@ export default function SeriesStartForm({
     setSelected([]);
     setConfirmed(false);
     setGoal("");
-    setBudget("");
     onStarted();
   }
 
@@ -144,17 +140,16 @@ export default function SeriesStartForm({
               !confirmed ||
               !selected.length ||
               !goal.trim() ||
-              !validBudget
+              !goal.trim()
             )
               return;
             void send({
               goal: goal.trim(),
-              limits: { maximum_cost: budget, max_duration_seconds: 3600 },
               scope: {
                 series_plan_version_id: plan.id,
                 ledger_version_id: workspace.ledger_version_id,
                 expected_ledger_head_revision: workspace.ledger_head_revision,
-                confirmation: `确认按规划第 ${plan.version_no} 版制作所列剧集，预算上限 ${budget} USD；批次成果不等于全剧交付。`,
+                confirmation: `确认按规划第 ${plan.version_no} 版制作所列剧集。`,
                 episodes: selected.map((row) => ({
                   episode_id: row.episode.id,
                   requires_episode_ids: row.requires,
@@ -259,20 +254,6 @@ export default function SeriesStartForm({
               }}
             />
           </FormLabel>
-          <FormLabel>
-            跨集预算上限（USD）
-            <Input
-              disabled={locked}
-              value={budget}
-              inputMode="decimal"
-              required
-              maxLength={19}
-              onChange={(event) => {
-                setBudget(event.target.value);
-                setConfirmed(false);
-              }}
-            />
-          </FormLabel>
           <label className="flex items-start gap-2 text-sm">
             <input
               type="checkbox"
@@ -280,18 +261,13 @@ export default function SeriesStartForm({
               checked={confirmed}
               onChange={(event) => setConfirmed(event.target.checked)}
             />
-            确认上述范围和预算；所有集共用同一上限及截止时间。
+            确认上述剧集和制作目标。
           </label>
           <Button
             className="justify-self-start"
             type="submit"
             disabled={
-              locked ||
-              !fresh ||
-              !confirmed ||
-              !selected.length ||
-              !validBudget ||
-              !goal.trim()
+              locked || !fresh || !confirmed || !selected.length || !goal.trim()
             }
           >
             发起多集制作

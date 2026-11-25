@@ -22,7 +22,6 @@ from arclight.domain.model_gateway import (
 )
 from arclight.domain.versions import digest
 from arclight.providers.llm import dispatch_inference
-from arclight.providers.prompts import TEXT_MAX_TOKENS
 
 
 @dataclass(frozen=True)
@@ -127,7 +126,7 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
             capabilities=GatewayCapabilities(
                 version=f"text-{settings.llm_response_format}:1",
                 tasks=frozenset({"script", "storyboard", "analyze", "outline", "rewrite"}),
-                parameters=frozenset({"max_tokens"}),
+                parameters=frozenset(),
             ),
             maximum_cost=Decimal("0") if mock else policy.text_maximum_cost,
             pricing_version="mock-free:1" if mock else policy.pricing_version,
@@ -140,7 +139,7 @@ def invoke_text[T](provider, stage: str, data: dict, call: Callable[[], T]) -> T
             operation_key=f"text:{run.id}:{runtime.revision}:{stage}",
             task=stage,
             input_sha256=digest(data),
-            parameters={"max_tokens": TEXT_MAX_TOKENS},
+            parameters={},
             authorized_routes=frozenset({route_id(route)}),
             execution=_professional_execution(run, stage, runtime.revision),
         )

@@ -139,7 +139,6 @@ export type ContinuityComparison = {
       parent_revision_id: string | null;
       root_candidate_id: string;
       round: number;
-      max_rounds: number;
       status: string;
       job_id: string | null;
       target: { candidate_id: string; asset_version_id: string };

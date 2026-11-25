@@ -58,7 +58,7 @@ type Pending = {
   project_id: string;
   key: string;
   request: Request;
-  maximum_cost: string;
+  maximum_cost: string | null;
   phase: "PREPARED" | "UNKNOWN" | "ACCEPTED";
   job_id: string | null;
 };
@@ -173,7 +173,8 @@ export default function useVideoGeneration({
           row.request.review_target.storyboard_id !== storyboardId ||
           row.request.review_target.shot_id !== shotId ||
           !["PREPARED", "UNKNOWN", "ACCEPTED"].includes(row.phase) ||
-          !/^\d+(\.\d{1,6})?$/.test(row.maximum_cost) ||
+          (row.maximum_cost !== null &&
+            !/^\d+(\.\d{1,6})?$/.test(row.maximum_cost)) ||
           (row.phase === "ACCEPTED"
             ? !isResourceId(row.job_id ?? "")
             : row.job_id !== null)
@@ -318,19 +319,11 @@ export default function useVideoGeneration({
         },
       };
       const estimate = await api<{
-        allowed: boolean;
-        message?: string;
         estimate: { maximum_cost: string; currency: string } | null;
-      }>(root + "/budget/estimate", { ...json("POST", request), signal });
-      if (
-        !estimate.allowed ||
-        !estimate.estimate ||
-        estimate.estimate.currency !== "USD" ||
-        !/^\d+(\.\d{1,6})?$/.test(estimate.estimate.maximum_cost)
-      )
-        throw new Error(
-          estimate.message ?? "缺少可信费用估算，暂不能生成视频。",
-        );
+      }>(root + "/generation-costs/estimate", {
+        ...json("POST", request),
+        signal,
+      });
       if (!live.current || signal.aborted) return;
       persist({
         schema: 1,
@@ -338,7 +331,7 @@ export default function useVideoGeneration({
         project_id: projectId,
         key: crypto.randomUUID(),
         request,
-        maximum_cost: estimate.estimate.maximum_cost,
+        maximum_cost: estimate.estimate?.maximum_cost ?? null,
         phase: "PREPARED",
         job_id: null,
       });

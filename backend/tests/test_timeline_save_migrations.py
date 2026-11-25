@@ -18,6 +18,7 @@ from arclight.persistence.timelines import Timeline
 __all__ = ["review_case", "timeline_case"]
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_0055_roundtrip_keeps_preexisting_timeline_and_frozen_children(
     client, episode, timeline_case, migrated, monkeypatch
 ):
@@ -32,6 +33,7 @@ def test_0055_roundtrip_keeps_preexisting_timeline_and_frozen_children(
     assert client.get(save_url(original)).json() == original
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_0055_nonempty_downgrade_keeps_full_schema_head_and_both_versions(
     client, episode, timeline_case, migrated, monkeypatch
 ):

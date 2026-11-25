@@ -52,7 +52,6 @@ export default function Settings({
     const data = new FormData(event.currentTarget);
     void change(`/projects/${project.id}`, {
       name: data.get("name"),
-      budget_limit: data.get("budget"),
     });
   }
   return (
@@ -60,7 +59,7 @@ export default function Settings({
       className="studio-page studio-settings"
       eyebrow="收好每一个小宇宙"
       title="项目设置"
-      description="归档不会删除历史版本；归档前请先完成或取消所有进行中的任务。预算用于调用准入与预留，实际费用及待核账估算可在项目总览查看。"
+      description="归档不会删除历史版本；归档前请先完成或取消所有进行中的任务。实际费用及待核账估算可在项目总览查看。"
     >
       {error && (
         <Notice tone="error" className="error" role="alert">
@@ -73,7 +72,7 @@ export default function Settings({
         </Notice>
       )}
       <form
-        className="settings-form grid items-end gap-4 md:grid-cols-[1fr_1fr_auto]"
+        className="settings-form grid items-end gap-4 md:grid-cols-[1fr_auto]"
         onSubmit={save}
       >
         <FieldGroup className="contents">
@@ -84,19 +83,6 @@ export default function Settings({
               key={project.name}
               defaultValue={project.name}
               maxLength={160}
-              required
-              disabled={busy || project.archived}
-            />
-          </FormLabel>
-          <FormLabel>
-            预算额度
-            <Input
-              name="budget"
-              type="number"
-              defaultValue={project.budget_limit}
-              min="0"
-              max="9999999999.99"
-              step="0.01"
               required
               disabled={busy || project.archived}
             />

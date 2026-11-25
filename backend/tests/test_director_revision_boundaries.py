@@ -51,7 +51,7 @@ def test_invalid_scope_is_observed_then_corrected_without_leaking_changes(
     sent, errors, base_errors = install_revision(
         model_service, monkeypatch, settings, mutate=missing, invalid_first=invalid
     )
-    run_id, _ = start(client, episode, director_revision_rounds=1)
+    run_id, _ = start(client, episode, director_revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, base_errors)
     first = checks(client, run_id)[0]
@@ -101,7 +101,7 @@ def test_insert_delete_split_renumber_only_outside_selected_range(
     _, errors, base_errors = install_revision(
         model_service, monkeypatch, settings, mutate=mutate, make_patch=patch
     )
-    run_id, _ = start(client, episode, director_revision_rounds=1)
+    run_id, _ = start(client, episode, director_revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, base_errors)
     before, after = [
@@ -145,7 +145,7 @@ def test_forged_or_wrong_decision_cannot_publish(
         mutate_report=report,
         skip_check=fault == "blind",
     )
-    run_id, _ = start(client, episode, director_revision_rounds=1)
+    run_id, _ = start(client, episode, director_revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "FAILED", (run, errors, base_errors)
     with client.app.state.session_factory() as db:
@@ -173,7 +173,7 @@ def test_dialogue_order_and_truncated_issue_count_remain_blocking(
 
     _, errors, base_errors = install_revision(model_service, monkeypatch, settings, mutate=mutate)
     source = approved_script(client, episode, configure=configure)
-    run_id, _ = start(client, episode, source, director_revision_rounds=1)
+    run_id, _ = start(client, episode, source, director_revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, base_errors)
     checked = checks(client, run_id)[0]["observations"][0]["feedback"]["result"]
@@ -219,18 +219,18 @@ def test_strict_publication_contract_and_old_version_definitions_are_preserved()
 def test_entry_validation_and_idempotency_include_director_round_limit(
     client, episode, settings, model_service, monkeypatch
 ):
-    for value in (-1, 9, True, 1.5, "1"):
+    for value in (-1, 0, 1, 2, 4, True, 3.0, "3"):
         with pytest.raises(ValidationError):
             StoryboardRunCreate(
                 script_version_id=uuid4(), professional=True, director_revision_rounds=value
             )
     with pytest.raises(ValidationError):
-        StoryboardRunCreate(script_version_id=uuid4(), director_revision_rounds=1)
+        StoryboardRunCreate(script_version_id=uuid4(), director_revision_rounds=3)
     with pytest.raises(ValidationError):
-        RunCreate(story="故事", professional=True, director_revision_rounds=1)
+        RunCreate(story="故事", professional=True, director_revision_rounds=3)
     install_revision(model_service, monkeypatch, settings)
     source = approved_script(client, episode)
-    body = {"script_version_id": source["id"], "professional": True, "director_revision_rounds": 1}
+    body = {"script_version_id": source["id"], "professional": True, "director_revision_rounds": 3}
     url = f"/api/v1/episodes/{episode['id']}/storyboard-runs"
     headers = {"Idempotency-Key": uuid4().hex}
     first = client.post(url, headers=headers, json=body)
@@ -238,7 +238,7 @@ def test_entry_validation_and_idempotency_include_director_round_limit(
     assert client.post(url, headers=headers, json=body).json() == first.json()
     assert (
         client.post(url, headers=headers, json=body | {"director_revision_rounds": 2}).status_code
-        == 409
+        == 422
     )
 
 
@@ -259,7 +259,7 @@ def test_repair_keeps_script_and_approved_exact_bindings(
 
     _, errors, base_errors = install_revision(model_service, monkeypatch, settings, mutate=missing)
     source = approved_script(client, episode, configure=configure)
-    run_id, _ = start(client, episode, source, director_revision_rounds=1)
+    run_id, _ = start(client, episode, source, director_revision_rounds=3)
     assert run_once(client, settings, run_id)["status"] == "WAITING_REVIEW", (errors, base_errors)
     with client.app.state.session_factory() as db:
         board = db.scalar(select(Storyboard))

@@ -18,7 +18,7 @@ from arclight.application.agent_loop_store import (
     keep_loop_alive,
     submit_agent_decision,
 )
-from arclight.application.agent_runtime import _AgentRuntime
+from arclight.application.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT, _AgentRuntime
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import (
     AgentToolRegistry,
@@ -31,7 +31,6 @@ from arclight.application.generation_leases import DEFAULT_POLICY, LeasePolicy
 from arclight.application.shared_agent_reads import agent_tool_declarations
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_model import AgentModelRequest, AgentModelResponse, AgentUserMessage
 from arclight.domain.agent_runtime import (
     AgentDecision,
@@ -74,8 +73,8 @@ def _initial_question(request: AgentModelRequest) -> HumanDecisionRequest | None
 
 
 class _RecoveryRequired(DomainError):
-    def __init__(self, state: AgentLoopState):
-        super().__init__("GATEWAY_RECONCILIATION_REQUIRED", "原行动须对账后恢复", 409)
+    def __init__(self, state: AgentLoopState, code: str):
+        super().__init__(code, "原行动等待恢复", 409)
         self.state = state
 
 
@@ -97,10 +96,9 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
         if code == "PRODUCER_PAUSED":
             # A reversible admission pause must not become a terminal journal outcome.
             raise DomainError(code, "多集制片暂停，原行动等待恢复", 409)
-        if code == "GATEWAY_RECONCILIATION_REQUIRED":
-            # Do not checkpoint a terminal result over the pending action. After explicit
-            # NOT_ACCEPTED evidence, the same logical action may safely continue.
-            raise _RecoveryRequired(state)
+        if code in {"GATEWAY_RECONCILIATION_REQUIRED", "ACCOUNT_BALANCE_INSUFFICIENT"}:
+            # Keep the pending action and its input. Reentry requires a NOT_ACCEPTED receipt.
+            raise _RecoveryRequired(state, code)
         return super()._stop(state, code)
 
     def _stamped(self, state: AgentLoopState, changes: AgentLoopState) -> AgentLoopState:
@@ -302,10 +300,10 @@ def _execute[T: BaseModel](
     )
     persistent.store = store = AgentLoopStore(runtime.factory, loop_id, token)
     persistent.input_sha256 = input_sha256
-    persistent.project_id, persistent.limits = runtime.project_id, runtime.limits
+    persistent.project_id = runtime.project_id
     config = {
         "configurable": {"thread_id": f"agent-loop:{loop_id}"},
-        "recursion_limit": min(runtime.limits.max_steps, runtime.limits.max_model_calls) * 4 + 10,
+        "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
     }
     with keep_loop_alive(store, lease_policy), open_checkpointer(runtime.settings) as saver:
         initial_question = _initial_question(runtime.seed)
@@ -384,7 +382,6 @@ def run_persistent_agent_loop[T: BaseModel](
     registry: AgentToolRegistry,
     result_model: type[T],
     *,
-    limits: AgentRunLimits | None = None,
     parent_run_id: UUID | None = None,
     validate_result: Callable[[Session, T], None] | None = None,
     output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
@@ -397,7 +394,7 @@ def run_persistent_agent_loop[T: BaseModel](
     runtime = _AgentRuntime(
         factory, settings, request, registry, result_model, validate_result, output_projection
     )
-    runtime.prepare(limits, parent_run_id)
+    runtime.prepare(parent_run_id)
     with factory.begin() as db:
         run, project_id, actor = runtime._context(db)
         loop = db.scalar(
@@ -430,8 +427,8 @@ def run_persistent_agent_loop[T: BaseModel](
             # exact instructions, including operations sealed before Skill loading.
             seed = AgentModelRequest.model_validate(loop.seed_json)
             if loop.result_schema_sha256 != schema or digest(
-                seed.model_dump(mode="json", exclude={"skills"})
-            ) != digest(request.model_dump(mode="json", exclude={"skills"})):
+                seed.model_dump(mode="json", exclude={"skills", "max_tokens"})
+            ) != digest(request.model_dump(mode="json", exclude={"skills", "max_tokens"})):
                 raise DomainError("AGENT_LOOP_CONFLICT", "同一操作不能更换请求或结果合同", 409)
         loop_id = loop.id
     runtime.seed = seed
@@ -462,5 +459,5 @@ def resume_agent_loop[T: BaseModel](
     runtime = _AgentRuntime(
         factory, settings, seed, registry, result_model, validate_result, output_projection
     )
-    runtime.prepare(None, None)
+    runtime.prepare(None)
     return _execute(runtime, loop_id, actor=actor, lease_policy=lease_policy)

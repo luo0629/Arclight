@@ -226,16 +226,11 @@ export default function useShotProduction(
             };
             const estimate = await api<{
               estimate: { maximum_cost: string; currency: string } | null;
-              allowed: boolean;
-              message?: string;
-            }>(projectPath + "/budget/estimate", json("POST", item.request));
-            if (
-              !estimate.allowed ||
-              !estimate.estimate ||
-              estimate.estimate.currency !== "USD"
-            )
-              throw new Error(estimate.message ?? "无法准确估算，暂不能提交。");
-            item.cost = estimate.estimate.maximum_cost;
+            }>(
+              projectPath + "/generation-costs/estimate",
+              json("POST", item.request),
+            );
+            item.cost = estimate.estimate?.maximum_cost ?? null;
           } else if (action === "retry") {
             if (!shot.job || shot.job.status !== "FAILED")
               throw new Error(
@@ -243,8 +238,6 @@ export default function useShotProduction(
                   ? "已生成成功，保留原结果"
                   : "只允许重试明确失败的任务；未知结果须先在任务中心对账",
               );
-            if (shot.job.maximum_cost === null || shot.job.currency !== "USD")
-              throw new Error("原任务缺少可信报价，请在任务中心核对。");
             item.job = shot.job;
             item.cost = shot.job.maximum_cost;
           } else {
@@ -371,7 +364,7 @@ export default function useShotProduction(
                 throw new ApiError(
                   409,
                   "GENERATION_NOT_RETRYABLE",
-                  "原任务未进入重试，请在任务中心核对重试限制、预算和失败原因。",
+                  "原任务未进入重试，请在任务中心查看当前状态和失败原因。",
                 );
               item.result = "原失败任务已进入重试";
             }

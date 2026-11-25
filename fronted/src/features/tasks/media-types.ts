@@ -81,12 +81,9 @@ export type MediaQueue = {
   lanes: MediaQueueLane[];
 };
 export type MediaSchedule = {
-  deadline_at: string;
   next_attempt_at: string;
   blocked_code: string | null;
   policy: {
-    max_attempts?: number;
-    max_elapsed_seconds?: number;
     retry_base_seconds?: number;
     retry_max_seconds?: number;
   };

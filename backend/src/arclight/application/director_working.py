@@ -91,7 +91,6 @@ def create_working_fragment(
                 prompt_version=contracts.working_version,
                 result_schema_version=contracts.working_version,
                 system_instruction=prompt,
-                max_tokens=8000,
                 messages=messages,
             )
     return run_persistent_agent_loop(

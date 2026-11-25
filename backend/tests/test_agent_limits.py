@@ -14,7 +14,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from pydantic import ValidationError
-from sqlalchemy import func, select, text
+from sqlalchemy import event, func, select, text
 from sqlalchemy.exc import DBAPIError
 from test_agent_model import (
     FinalResult,
@@ -27,7 +27,7 @@ from test_agent_tools import activate_run, create_entry, create_run, grant, regi
 from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
 from test_context_trace import evidence
-from test_generation_budget import priced, set_policy
+from test_generation_budget import priced
 from test_generation_delivery import Provider, deliver
 from test_generation_jobs import capture_ok
 from test_model_gateway import request, route
@@ -43,6 +43,7 @@ from arclight.domain.agent_limits import AgentExecutionContext, AgentRunLimits
 from arclight.domain.agent_tools import AgentToolCall
 from arclight.domain.model_gateway import GatewayFailure, GatewayPolicy, GatewayUsage
 from arclight.persistence.agent_limits import AgentRunLimit
+from arclight.persistence.base import utcnow
 from arclight.persistence.generation_accounting import GenerationBudgetReservation
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import (
@@ -55,17 +56,25 @@ from arclight.persistence.models import (
 )
 
 
+def configure_with_historical_limits(db, identity, actor, limits, *, parent=None):
+    if limits:
+
+        def seed_historical_policy(session, *_):
+            control = next(row for row in session.new if isinstance(row, AgentRunLimit))
+            control.limits_json = {"schema_version": 1, **limits}
+            control.deadline_at = utcnow() + timedelta(
+                seconds=limits.get("max_duration_seconds", 300)
+            )
+
+        event.listen(db, "before_flush", seed_historical_policy, once=True)
+    return configure_agent_run(db, identity, actor, parent_run_id=parent)
+
+
 def bounded_run(client, episode, *, parent=None, **limits):
     identity = create_run(client, episode, key=uuid4().hex)
     actor = activate_run(client, identity, episode["id"])
     with client.app.state.session_factory.begin() as db:
-        configure_agent_run(
-            db,
-            identity,
-            actor,
-            AgentRunLimits(**limits) if limits else None,
-            parent_run_id=parent,
-        )
+        configure_with_historical_limits(db, identity, actor, limits, parent=parent)
     return identity, actor
 
 
@@ -191,20 +200,36 @@ def test_contract_is_frozen_and_execution_is_explicit_server_scope():
             AgentExecutionContext.model_validate(context.model_dump(mode="json") | patch)
 
 
-def test_policy_binds_actor_input_and_cannot_be_reconfigured_or_installed_late(client, episode):
+def test_control_binds_actor_input_and_cannot_be_installed_late(client, episode, monkeypatch):
     run_id, actor = bounded_run(client, episode, max_calls=1)
     factory = client.app.state.session_factory
     with factory.begin() as db:
         original = db.get(AgentRunLimit, run_id)
-        repeated = configure_agent_run(db, run_id, actor, AgentRunLimits(max_calls=1))
+        repeated = configure_agent_run(
+            db,
+            run_id,
+            actor,
+        )
         assert repeated.run_id == original.run_id
         assert repeated.created_at == original.created_at
         assert repeated.input_sha256 and repeated.actor_id == actor
-    with factory.begin() as db, pytest.raises(DomainError) as changed:
-        configure_agent_run(db, run_id, actor, AgentRunLimits(max_calls=2))
-    assert changed.value.code == "AGENT_LIMITS_CONFLICT"
+        assert repeated.limits_json["max_calls"] == 1
+    scope_for_run = agent_limits.scope_for_run
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            agent_limits,
+            "scope_for_run",
+            lambda *args: scope_for_run(*args).model_copy(update={"input_sha256": "f" * 64}),
+        )
+        with factory.begin() as db, pytest.raises(DomainError) as changed:
+            configure_agent_run(db, run_id, actor)
+        assert changed.value.code == "AGENT_LIMITS_CONFLICT"
     with factory.begin() as db, pytest.raises(DomainError):
-        configure_agent_run(db, run_id, str(uuid4()), AgentRunLimits(max_calls=1))
+        configure_agent_run(
+            db,
+            run_id,
+            str(uuid4()),
+        )
     other_episode = sibling_episode(client, episode, 2)
     other_run = create_run(client, other_episode)
     other_actor = activate_run(client, other_run, other_episode["id"])
@@ -222,35 +247,24 @@ def test_policy_binds_actor_input_and_cannot_be_reconfigured_or_installed_late(c
 
 
 @pytest.mark.parametrize(
-    "field,kind,code",
+    "field,kind",
     [
-        ("max_calls", "MODEL", "AGENT_CALL_LIMIT"),
-        ("max_model_calls", "MODEL", "AGENT_MODEL_CALL_LIMIT"),
-        ("max_tool_calls", "TOOL", "AGENT_TOOL_CALL_LIMIT"),
-        ("max_agent_calls", "MODEL", "AGENT_AGENT_CALL_LIMIT"),
-        ("max_steps", "MODEL", "AGENT_STEP_LIMIT"),
+        ("max_calls", "MODEL"),
+        ("max_model_calls", "MODEL"),
+        ("max_tool_calls", "TOOL"),
+        ("max_agent_calls", "MODEL"),
+        ("max_steps", "MODEL"),
     ],
 )
-def test_zero_limit_stops_before_adapter_and_does_not_create_action(
-    client, episode, field, kind, code
-):
+def test_historical_zero_limit_allows_calls_with_action_receipts(client, episode, field, kind):
     run_id, actor = bounded_run(client, episode, **{field: 0})
     if kind == "TOOL":
         registry, call, calls = tool_setup(client, episode, run_id, actor)
         feedback = tool_action(client, registry, call)
-        assert feedback.error.code == code and calls == []
+        assert feedback.status == "SUCCEEDED" and len(calls) == 1
     else:
-        selected = route(maximum_cost=Decimal("0"))
-        with pytest.raises(DomainError) as caught:
-            invoke(
-                client.app.state.session_factory,
-                gateway_request(episode, run_id, actor, selected),
-                selected,
-                lambda: pytest.fail("Exhausted Agent reached provider"),
-                policy=GatewayPolicy(),
-            )
-        assert caught.value.code == code
-    assert usage_for(client, run_id)["actions"] == []
+        assert model_action(client, episode, run_id, actor) == "observed"
+    assert [row.kind for row in usage_for(client, run_id)["actions"]] == [kind]
 
 
 def test_one_turn_shares_step_but_counts_model_and_tool_separately(client, episode):
@@ -260,14 +274,13 @@ def test_one_turn_shares_step_but_counts_model_and_tool_separately(client, episo
     assert tool_action(client, registry, call).status == "SUCCEEDED"
     assert len(calls) == 1
     next_call = call.model_copy(update={"idempotency_key": "another-logical-tool"})
-    assert tool_action(client, registry, next_call, step="turn-2").error.code == "AGENT_STEP_LIMIT"
-    assert tool_action(client, registry, next_call).status == "SUCCEEDED"
+    assert tool_action(client, registry, next_call, step="turn-2").status == "SUCCEEDED"
     third = call.model_copy(update={"idempotency_key": "third-logical-tool"})
-    assert tool_action(client, registry, third).error.code == "AGENT_CALL_LIMIT"
-    assert len(calls) == 2
+    assert tool_action(client, registry, third).status == "SUCCEEDED"
+    assert len(calls) == 3
     records = usage_for(client, run_id)["actions"]
-    assert len(records) == 3 and {row.step_key for row in records} == {"turn-1"}
-    assert sorted(row.kind for row in records) == ["MODEL", "TOOL", "TOOL"]
+    assert len(records) == 4 and {row.step_key for row in records} == {"turn-1", "turn-2"}
+    assert sorted(row.kind for row in records) == ["MODEL", "TOOL", "TOOL", "TOOL"]
 
 
 def test_failed_tool_consumes_once_rolls_back_domain_write_and_replays_without_new_slot(
@@ -289,18 +302,16 @@ def test_failed_tool_consumes_once_rolls_back_domain_write_and_replays_without_n
         tool_action(client, registry, call, step="replay-step").model_dump() == failed.model_dump()
     )
     different = call.model_copy(update={"idempotency_key": "new-call"})
-    assert tool_action(client, registry, different).error.code == "AGENT_CALL_LIMIT"
+    assert tool_action(client, registry, different).error.code == "EXECUTION_FAILED"
     with client.app.state.session_factory() as db:
         assert db.get(StoryEntry, UUID(call.arguments["entry_id"])).name != "must-roll-back"
-        assert db.scalar(select(func.count()).select_from(AgentToolInvocation)) == 1
-    assert len(usage_for(client, run_id)["actions"]) == 1
+        assert db.scalar(select(func.count()).select_from(AgentToolInvocation)) == 2
+    assert len(usage_for(client, run_id)["actions"]) == 2
 
 
 @pytest.mark.parametrize("missing", [None, "unconfigured"])
 @pytest.mark.parametrize("kind", ["MODEL", "TOOL"])
-def test_bounded_paid_call_requires_trusted_quote_before_any_adapter(
-    client, episode, missing, kind
-):
+def test_paid_call_can_execute_without_a_verified_quote(client, episode, missing, kind):
     run_id, actor = bounded_run(client, episode, maximum_cost="10")
     if kind == "TOOL":
         tool_setup(client, episode, run_id, actor)
@@ -308,25 +319,25 @@ def test_bounded_paid_call_requires_trusted_quote_before_any_adapter(
         maximum_cost=None if missing is None else Decimal("2"),
         pricing_version="trusted:1" if missing is None else missing,
     )
-    with pytest.raises(DomainError) as caught:
+    assert (
         invoke(
             client.app.state.session_factory,
             gateway_request(episode, run_id, actor, selected).model_copy(
                 update={"execution": execution(run_id, kind=kind)}
             ),
             selected,
-            lambda: pytest.fail("Unquoted Agent reached supplier"),
+            lambda: "observed",
             policy=GatewayPolicy(),
         )
-    assert caught.value.code == "BUDGET_QUOTE_UNAVAILABLE"
-    assert usage_for(client, run_id)["actions"] == []
+        == "observed"
+    )
+    assert [row.kind for row in usage_for(client, run_id)["actions"]] == [kind]
 
 
 def test_unknown_money_reserves_until_existing_owner_reconciliation_then_releases_difference(
     client,
     episode,
 ):
-    set_policy(client, episode["project_id"], "100")
     run_id, actor = bounded_run(client, episode, maximum_cost="3")
     selected = route()
     assert (
@@ -337,14 +348,6 @@ def test_unknown_money_reserves_until_existing_owner_reconciliation_then_release
     )
     pending = usage_for(client, run_id)
     assert pending["actual_cost"] == 0 and pending["pending_estimate"] == 2
-    with pytest.raises(DomainError) as exhausted:
-        model_action(client, episode, run_id, actor, step="turn-2", selected=selected)
-    assert exhausted.value.code == "AGENT_BUDGET_EXCEEDED"
-    with client.app.state.session_factory.begin() as db:
-        call = db.get(GatewayCall, pending["actions"][0].gateway_call_id)
-        reconcile(db, call, actor, "SUCCEEDED", GatewayUsage(actual_cost=Decimal("1")), "invoice-1")
-    settled = usage_for(client, run_id)
-    assert settled["actual_cost"] == 1 and settled["pending_estimate"] == 0
     assert (
         model_action(
             client,
@@ -357,49 +360,56 @@ def test_unknown_money_reserves_until_existing_owner_reconciliation_then_release
         )
         == "observed"
     )
-    with pytest.raises(DomainError) as depleted:
-        model_action(client, episode, run_id, actor, step="turn-3", selected=selected)
-    assert depleted.value.code == "AGENT_BUDGET_EXCEEDED"
-    # Existing GEN convention permits zero-cost observations even after paid exhaustion.
+    with client.app.state.session_factory.begin() as db:
+        call = db.get(GatewayCall, pending["actions"][0].gateway_call_id)
+        reconcile(db, call, actor, "SUCCEEDED", GatewayUsage(actual_cost=Decimal("1")), "invoice-1")
+    settled = usage_for(client, run_id)
+    assert settled["actual_cost"] == 3 and settled["pending_estimate"] == 0
+    assert (
+        model_action(
+            client,
+            episode,
+            run_id,
+            actor,
+            step="turn-3",
+            selected=selected,
+            usage=GatewayUsage(actual_cost=Decimal("2")),
+        )
+        == "observed"
+    )
     assert model_action(client, episode, run_id, actor, step="free") == "observed"
     final = usage_for(client, run_id)
-    assert final["actual_cost"] == 3 and final["pending_estimate"] == 0
+    assert final["actual_cost"] == 5 and final["pending_estimate"] == 0
 
 
-@pytest.mark.parametrize("maximum,expected", [(1, 1), (2, 2)])
-def test_each_safe_retry_is_admitted_again_and_cannot_bypass_call_limit(
-    client,
-    episode,
-    maximum,
-    expected,
-):
+@pytest.mark.parametrize("maximum", [1, 2])
+def test_each_safe_retry_is_recorded_despite_historical_call_limits(client, episode, maximum):
     run_id, actor = bounded_run(client, episode, max_model_calls=maximum, max_steps=1)
     selected = route(maximum_cost=Decimal("0"))
     calls = []
 
     def safe_failure():
         calls.append(1)
-        raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True, transient=True)
+        raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True)
 
-    with pytest.raises(DomainError) as caught:
-        invoke(
-            client.app.state.session_factory,
-            gateway_request(episode, run_id, actor, selected),
-            selected,
-            safe_failure,
-            policy=GatewayPolicy(max_attempts=2),
-        )
-    assert caught.value.code == (
-        "AGENT_MODEL_CALL_LIMIT" if maximum == 1 else "GATEWAY_NOT_ACCEPTED"
-    )
-    assert len(calls) == expected
+    request = gateway_request(episode, run_id, actor, selected)
+    for _ in range(2):
+        with pytest.raises(DomainError) as caught:
+            invoke(
+                client.app.state.session_factory,
+                request,
+                selected,
+                safe_failure,
+                policy=GatewayPolicy(),
+            )
+        assert caught.value.code == "GATEWAY_NOT_ACCEPTED"
+    assert len(calls) == 2
     records = usage_for(client, run_id)
-    assert len(records["actions"]) == expected and records["pending_estimate"] == 0
+    assert len(records["actions"]) == 2 and records["pending_estimate"] == 0
     assert {row.step_key for row in records["actions"]} == {"turn-1"}
 
 
-def test_nested_delegates_share_deadline_budget_steps_and_agent_call_limit(client, episode):
-    set_policy(client, episode["project_id"], "100")
+def test_nested_delegates_share_action_accounting_and_run_lineage(client, episode):
     root, actor = bounded_run(
         client,
         episode,
@@ -415,7 +425,8 @@ def test_nested_delegates_share_deadline_budget_steps_and_agent_call_limit(clien
     grandchild, _ = bounded_run(client, grand_episode, parent=child)
     with client.app.state.session_factory() as db:
         controls = [db.get(AgentRunLimit, key) for key in (root, child, grandchild)]
-        assert {utc(row.deadline_at) for row in controls} == {utc(controls[0].deadline_at)}
+        assert controls[0].deadline_at is not None
+        assert all(row.deadline_at is None for row in controls[1:])
         assert [row.depth for row in controls] == [0, 1, 2]
         assert all(row.root_run_id == root for row in controls)
     assert (
@@ -429,48 +440,48 @@ def test_nested_delegates_share_deadline_budget_steps_and_agent_call_limit(clien
         )
         == "observed"
     )
-    with pytest.raises(DomainError) as cost:
-        model_action(client, grand_episode, grandchild, actor, selected=route())
-    assert cost.value.code == "AGENT_BUDGET_EXCEEDED"
-    assert model_action(client, grand_episode, grandchild, actor) == "observed"
-    with pytest.raises(DomainError) as agent:
-        model_action(client, episode, root, actor)
-    assert agent.value.code == "AGENT_AGENT_CALL_LIMIT"
-    assert len(usage_for(client, root)["actions"]) == 2
+    assert model_action(client, grand_episode, grandchild, actor, selected=route()) == "observed"
+    assert model_action(client, episode, root, actor) == "observed"
+    assert len(usage_for(client, root)["actions"]) == 3
 
 
 @pytest.mark.parametrize(
-    "limits,parent_kind,code",
+    "limits,parent_kind",
     [
-        ({"max_delegation_depth": 0}, "root", "AGENT_DELEGATION_DEPTH"),
-        ({"max_delegations": 0}, "root", "AGENT_DELEGATION_LIMIT"),
-        ({"max_delegation_depth": 1}, "child", "AGENT_DELEGATION_DEPTH"),
+        ({"max_delegation_depth": 0}, "root"),
+        ({"max_delegations": 0}, "root"),
+        ({"max_delegation_depth": 1}, "child"),
     ],
 )
-def test_delegation_quantity_and_depth_cannot_reset_limits(
-    client, episode, limits, parent_kind, code
-):
+def test_delegation_can_exceed_historical_quantity_and_depth(client, episode, limits, parent_kind):
     root, _ = bounded_run(client, episode, **limits)
     parent = root
     if parent_kind == "child":
         parent, _ = bounded_run(client, sibling_episode(client, episode, 2), parent=root)
-    with pytest.raises(DomainError) as caught:
-        bounded_run(client, sibling_episode(client, episode, 3), parent=parent)
-    assert caught.value.code == code
+    child, _ = bounded_run(client, sibling_episode(client, episode, 3), parent=parent)
+    with client.app.state.session_factory() as db:
+        row = db.get(AgentRunLimit, child)
+        assert (row.parent_run_id, row.root_run_id, row.depth) == (
+            parent,
+            root,
+            2 if parent_kind == "child" else 1,
+        )
 
 
-def test_delegation_rejects_changed_policy_cross_project_and_parent_rebinding(client, episode):
+def test_delegation_rejects_cross_project_and_parent_rebinding(client, episode):
     root, actor = bounded_run(client, episode, max_calls=2)
     child_episode = sibling_episode(client, episode, 2)
     child = create_run(client, child_episode)
     activate_run(client, child, child_episode["id"])
-    with client.app.state.session_factory.begin() as db, pytest.raises(DomainError) as changed:
-        configure_agent_run(db, child, actor, AgentRunLimits(max_calls=3), parent_run_id=root)
-    assert changed.value.code == "AGENT_LIMITS_CONFLICT"
     with client.app.state.session_factory.begin() as db:
-        configure_agent_run(db, child, actor, parent_run_id=root)
+        assert configure_agent_run(db, child, actor, parent_run_id=root).root_run_id == root
+        assert configure_agent_run(db, child, actor, parent_run_id=root).root_run_id == root
     with client.app.state.session_factory.begin() as db, pytest.raises(DomainError) as rebound:
-        configure_agent_run(db, child, actor, AgentRunLimits(max_calls=2))
+        configure_agent_run(
+            db,
+            child,
+            actor,
+        )
     assert rebound.value.code == "AGENT_LIMITS_CONFLICT"
     foreign_episode = create_episode(client, create_project(client))
     with pytest.raises(DomainError) as foreign:
@@ -482,7 +493,6 @@ def test_delegation_rejects_changed_policy_cross_project_and_parent_rebinding(cl
     "change,code",
     [
         ("cancel", "AGENT_CANCELLED"),
-        ("deadline", "AGENT_DEADLINE_EXCEEDED"),
         ("inactive", "AGENT_NOT_ACTIVE"),
         ("input", "AGENT_INPUT_CHANGED"),
         ("state", "RUN_STATE_INVALID"),
@@ -499,9 +509,6 @@ def test_each_admission_rechecks_live_run_and_scope(client, episode, monkeypatch
         run = db.get(WorkflowRun, run_id)
         if change == "cancel":
             run.status = "CANCELLED"
-        elif change == "deadline":
-            deadline = utc(db.get(AgentRunLimit, run_id).deadline_at)
-            monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline)
         elif change == "inactive":
             run.status = "WAITING_REVIEW"
         elif change == "input":
@@ -540,8 +547,10 @@ def test_each_admission_rechecks_live_run_and_scope(client, episode, monkeypatch
     assert usage_for(client, run_id)["actions"] == []
 
 
-def test_parent_cancellation_and_deadline_stop_descendant_calls(client, episode, monkeypatch):
-    root, actor = bounded_run(client, episode)
+def test_parent_cancellation_stops_children_even_with_an_expired_historical_control(
+    client, episode
+):
+    root, actor = bounded_run(client, episode, max_duration_seconds=0)
     child_episode = sibling_episode(client, episode, 2)
     child, _ = bounded_run(client, child_episode, parent=root)
     with client.app.state.session_factory.begin() as db:
@@ -551,11 +560,8 @@ def test_parent_cancellation_and_deadline_stop_descendant_calls(client, episode,
     assert cancelled.value.code == "AGENT_CANCELLED"
     with client.app.state.session_factory.begin() as db:
         db.get(WorkflowRun, root).status = "RUNNING"
-        deadline = utc(db.get(AgentRunLimit, root).deadline_at)
-    monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline)
-    with pytest.raises(DomainError) as expired:
-        model_action(client, child_episode, child, actor)
-    assert expired.value.code == "AGENT_DEADLINE_EXCEEDED"
+        assert utc(db.get(AgentRunLimit, root).deadline_at) <= utcnow()
+    assert model_action(client, child_episode, child, actor) == "observed"
 
 
 @pytest.mark.parametrize("disabled", [False, True])
@@ -663,16 +669,8 @@ def test_external_io_has_no_business_locks_and_next_call_sees_cancellation(clien
     assert caught.value.code == "AGENT_CANCELLED"
 
 
-def test_deadline_bounds_network_unknown_result_keeps_reservation_and_never_retries(
-    client,
-    episode,
-    monkeypatch,
-):
-    set_policy(client, episode["project_id"], "100")
+def test_single_request_timeout_keeps_unknown_result_reservation_without_retry(client, episode):
     run_id, actor = bounded_run(client, episode, maximum_cost="2")
-    with client.app.state.session_factory() as db:
-        deadline = utc(db.get(AgentRunLimit, run_id).deadline_at)
-    monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline - timedelta(milliseconds=100))
     entered, release = Event(), Event()
     calls = []
 
@@ -691,7 +689,7 @@ def test_deadline_bounds_network_unknown_result_keeps_reservation_and_never_retr
                 call,
                 selected,
                 slow,
-                policy=GatewayPolicy(max_attempts=3, timeout_seconds=10),
+                policy=GatewayPolicy(timeout_seconds=0.25),
             )
         assert entered.is_set() and timed_out.value.code == "GATEWAY_RECONCILIATION_REQUIRED"
         with pytest.raises(DomainError) as repeated:
@@ -714,7 +712,7 @@ def test_deadline_bounds_network_unknown_result_keeps_reservation_and_never_retr
 
 @pytest.mark.parametrize("vision", [False, True])
 @pytest.mark.parametrize("quoted", [False, True])
-def test_real_text_and_vision_protocol_use_same_limits_and_keep_unknown_money(
+def test_real_text_and_vision_record_unknown_money_with_or_without_a_quote(
     client,
     episode,
     settings,
@@ -722,7 +720,6 @@ def test_real_text_and_vision_protocol_use_same_limits_and_keep_unknown_money(
     vision,
     quoted,
 ):
-    set_policy(client, episode["project_id"], "100")
     images = [add_image(client, episode), add_image(client, episode)] if vision else []
     if quoted:
         # The production version freezes this policy when the run is created.
@@ -755,19 +752,6 @@ def test_real_text_and_vision_protocol_use_same_limits_and_keep_unknown_money(
     model_service(handler)
     registry = build_agent_tool_registry()
     call = model_request(run_id, **patch)
-    if not quoted:
-        with pytest.raises(DomainError) as missing:
-            invoke_agent(
-                client.app.state.session_factory,
-                settings,
-                call,
-                registry,
-                FinalResult,
-                execution=execution(run_id),
-            )
-        assert missing.value.code == "BUDGET_QUOTE_UNAVAILABLE" and seen == []
-        assert usage_for(client, run_id)["actions"] == []
-        return
     result = invoke_agent(
         client.app.state.session_factory,
         settings,
@@ -777,18 +761,18 @@ def test_real_text_and_vision_protocol_use_same_limits_and_keep_unknown_money(
         execution=execution(run_id),
     )
     assert result.status == "FINAL" and len(seen) == 1
-    with pytest.raises(DomainError) as depleted:
-        invoke_agent(
-            client.app.state.session_factory,
-            settings,
-            model_request(run_id, **patch),
-            registry,
-            FinalResult,
-            execution=execution(run_id, "turn-2"),
-        )
-    assert depleted.value.code == "AGENT_BUDGET_EXCEEDED" and len(seen) == 1
+    another = invoke_agent(
+        client.app.state.session_factory,
+        settings,
+        model_request(run_id, operation_key="another-call", **patch),
+        registry,
+        FinalResult,
+        execution=execution(run_id, "turn-2"),
+    )
+    assert another.status == "FINAL" and len(seen) == 2
     current = usage_for(client, run_id)
-    assert current["actual_cost"] == 0 and current["pending_estimate"] == 2
+    assert current["actual_cost"] == 0 and current["pending_estimate"] == (4 if quoted else 0)
+    assert len(current["actions"]) == 2
     with client.app.state.session_factory() as db:
         call_row = db.get(GatewayCall, current["actions"][0].gateway_call_id)
         assert call_row.parameters_json["input_images"] == (2 if vision else 0)
@@ -803,7 +787,6 @@ def test_paid_media_tool_uses_original_gen_reservation_and_settlement_once(
     monkeypatch,
     actual,
 ):
-    set_policy(client, episode["project_id"], "100")
     priced(monkeypatch, "2")
     run_id, actor = bounded_run(client, episode, maximum_cost="2")
     tool_setup(client, episode, run_id, actor)
@@ -825,60 +808,48 @@ def test_paid_media_tool_uses_original_gen_reservation_and_settlement_once(
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(GenerationBudgetReservation)) == 1
         assert db.scalar(select(func.count()).select_from(GatewayCall)) == 1
-    project = client.get(f"/api/v1/projects/{episode['project_id']}/budget").json()
-    assert Decimal(project["pending_estimate"]) == (2 if actual is None else 0)
-    assert Decimal(project["actual_cost"]) == (actual or 0)
     second = capture_ok(client, episode["project_id"])
-    assert deliver(client, second, provider) == "FAILED"
-    assert len(provider.requests) == 1
-    assert len(usage_for(client, run_id)["actions"]) == 1
-    from arclight.persistence.generation_scheduling import GenerationDeadLetter
-
+    assert deliver(client, second, provider) == "SUCCEEDED"
+    assert len(provider.requests) == 2
+    after = usage_for(client, run_id)
+    assert len(after["actions"]) == 2
+    assert after["actual_cost"] == 2 * (actual or 0)
+    assert after["pending_estimate"] == (4 if actual is None else 0)
     with client.app.state.session_factory() as db:
-        stopped = db.scalar(
-            select(GenerationDeadLetter).where(GenerationDeadLetter.job_id == UUID(second["id"]))
-        )
-        assert stopped.reason == "NOT_RETRYABLE" and stopped.error_code == "BUDGET_EXCEEDED"
+        assert db.scalar(select(func.count()).select_from(GenerationBudgetReservation)) == 2
+        assert db.scalar(select(func.count()).select_from(GatewayCall)) == 2
 
 
 @pytest.mark.parametrize(
-    "change,error",
+    "change",
     [
-        (name, "BUDGET_EXCEEDED")
-        for name in (
-            "max_calls",
-            "max_tool_calls",
-            "max_steps",
-            "max_agent_calls",
-            "budget",
-            "deadline",
-        )
-    ]
-    + [("cancel", "INPUT_INVALID"), ("grant", "INPUT_INVALID")],
+        "max_calls",
+        "max_tool_calls",
+        "max_steps",
+        "max_agent_calls",
+        "budget",
+        "deadline",
+        "cancel",
+        "grant",
+    ],
 )
-def test_media_executor_stops_permanent_agent_refusals_without_automatic_retry(
-    client,
-    episode,
-    monkeypatch,
-    change,
-    error,
+def test_media_executor_rechecks_authority_and_ignores_historical_caps(
+    client, episode, monkeypatch, change
 ):
     from arclight.persistence.generation import GenerationDispatch
     from arclight.persistence.generation_scheduling import GenerationDeadLetter
 
-    set_policy(client, episode["project_id"], "100")
     priced(monkeypatch, "2")
     limits = {"maximum_cost": "0" if change == "budget" else "10"}
     if change.startswith("max_"):
         limits[change] = 0
+    if change == "deadline":
+        limits["max_duration_seconds"] = 0
     run_id, actor = bounded_run(client, episode, **limits)
     tool_setup(client, episode, run_id, actor)
     job = capture_ok(client, episode["project_id"])
     with client.app.state.session_factory.begin() as db:
-        if change == "deadline":
-            deadline = utc(db.get(AgentRunLimit, run_id).deadline_at)
-            monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline)
-        elif change == "cancel":
+        if change == "cancel":
             db.get(WorkflowRun, run_id).status = "CANCELLED"
         elif change == "grant":
             db.scalar(
@@ -891,36 +862,36 @@ def test_media_executor_stops_permanent_agent_refusals_without_automatic_retry(
 
     monkeypatch.setattr(gateway_media, "submit", bounded_submit)
     provider = Provider()
-    assert deliver(client, job, provider) == "FAILED"
-    assert provider.requests == [] and usage_for(client, run_id)["actions"] == []
+    refused = change in {"cancel", "grant"}
+    assert deliver(client, job, provider) == ("FAILED" if refused else "SUCCEEDED")
+    assert len(provider.requests) == len(usage_for(client, run_id)["actions"]) == int(not refused)
     with client.app.state.session_factory() as db:
         dead = db.scalar(
             select(GenerationDeadLetter).where(GenerationDeadLetter.job_id == UUID(job["id"]))
         )
-        assert dead.reason == "NOT_RETRYABLE" and dead.error_code == error
+        if refused:
+            assert dead.reason == "NOT_RETRYABLE" and dead.error_code == "INPUT_INVALID"
+        else:
+            assert dead is None
         assert db.scalar(select(func.count()).select_from(GenerationDispatch)) == 1
-        assert db.scalar(select(func.count()).select_from(GatewayCall)) == 0
-    budget = client.get(f"/api/v1/projects/{episode['project_id']}/budget").json()
-    assert Decimal(budget["actual_cost"]) == Decimal(budget["pending_estimate"]) == 0
+        assert db.scalar(select(func.count()).select_from(GatewayCall)) == int(not refused)
 
 
 @pytest.mark.parametrize(
-    "limits,code",
+    "limits",
     [
-        ({"maximum_cost": "2"}, "AGENT_BUDGET_EXCEEDED"),
-        ({"max_calls": 1}, "AGENT_CALL_LIMIT"),
-        ({"max_steps": 1}, "AGENT_STEP_LIMIT"),
+        {"maximum_cost": "2"},
+        {"max_calls": 1},
+        {"max_steps": 1},
     ],
 )
-def test_postgres_parallel_delegates_cannot_overspend_or_exceed_shared_limits(
+def test_postgres_parallel_delegates_record_both_calls_past_shared_historical_limits(
     client,
     episode,
     settings,
     limits,
-    code,
 ):
     require_postgres(settings)
-    set_policy(client, episode["project_id"], "100")
     root, actor = bounded_run(client, episode, **limits)
     children = []
     for number in (2, 3):
@@ -948,12 +919,15 @@ def test_postgres_parallel_delegates_cannot_overspend_or_exceed_shared_limits(
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(attempt, children))
-    assert sorted(outcomes) == sorted(["SUCCEEDED", code])
-    assert len(calls) == 1 and len(usage_for(client, root)["actions"]) == 1
-    assert usage_for(client, root)["pending_estimate"] == (2 if "maximum_cost" in limits else 0)
+    assert outcomes == ["SUCCEEDED", "SUCCEEDED"]
+    assert sorted(calls) == sorted(identity for _, identity in children)
+    assert len(usage_for(client, root)["actions"]) == 2
+    assert usage_for(client, root)["pending_estimate"] == (4 if "maximum_cost" in limits else 0)
 
 
-def test_postgres_parallel_delegation_cannot_exceed_root_quantity(client, episode, settings):
+def test_postgres_parallel_delegations_keep_shared_root_past_historical_quantity(
+    client, episode, settings
+):
     require_postgres(settings)
     root, actor = bounded_run(client, episode, max_delegations=1)
     children = []
@@ -975,25 +949,27 @@ def test_postgres_parallel_delegation_cannot_exceed_root_quantity(client, episod
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         outcomes = list(pool.map(configure, children))
-    assert sorted(outcomes) == ["AGENT_DELEGATION_LIMIT", "CONFIGURED"]
+    assert outcomes == ["CONFIGURED", "CONFIGURED"]
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(func.count()).select_from(AgentRunLimit)) == 2
+        assert {
+            row.run_id
+            for row in db.scalars(select(AgentRunLimit).where(AgentRunLimit.root_run_id == root))
+        } == {root, *children}
 
 
-def test_nested_free_tools_share_tool_call_cap(client, episode):
+def test_nested_free_tools_are_counted_past_historical_tool_call_caps(client, episode):
     root, actor = bounded_run(client, episode, max_tool_calls=1)
     registry, call, calls = tool_setup(client, episode, root, actor)
     assert tool_action(client, registry, call).status == "SUCCEEDED" and len(calls) == 1
     child_episode = sibling_episode(client, episode, 2)
     child, _ = bounded_run(client, child_episode, parent=root)
     child_registry, child_call, child_calls = tool_setup(client, child_episode, child, actor)
-    stopped = tool_action(client, child_registry, child_call)
-    assert stopped.error.code == "AGENT_TOOL_CALL_LIMIT" and child_calls == []
-    assert len(usage_for(client, root)["actions"]) == 1
+    result = tool_action(client, child_registry, child_call)
+    assert result.status == "SUCCEEDED" and len(child_calls) == 1
+    assert len(usage_for(client, root)["actions"]) == 2
 
 
-def test_paid_tool_rejects_missing_live_grant_and_zero_default_budget(client, episode):
-    set_policy(client, episode["project_id"], "100")
+def test_paid_tool_requires_live_grant_and_runs_without_a_budget(client, episode):
     run_id, actor = bounded_run(client, episode)
     selected = route(maximum_cost=Decimal("0"))
     call = gateway_request(episode, run_id, actor, selected).model_copy(
@@ -1007,10 +983,17 @@ def test_paid_tool_rejects_missing_live_grant_and_zero_default_budget(client, ep
     paid = gateway_request(episode, run_id, actor, paid_route).model_copy(
         update={"execution": execution(run_id, kind="TOOL")}
     )
-    with client.app.state.session_factory.begin() as db, pytest.raises(DomainError) as zero_cap:
-        admit(db, paid, paid_route, GatewayPolicy())
-    assert zero_cap.value.code == "AGENT_BUDGET_EXCEEDED"
-    assert usage_for(client, run_id)["actions"] == []
+    assert (
+        invoke(
+            client.app.state.session_factory,
+            paid,
+            paid_route,
+            lambda: "observed",
+            policy=GatewayPolicy(),
+        )
+        == "observed"
+    )
+    assert [row.kind for row in usage_for(client, run_id)["actions"]] == ["TOOL"]
 
 
 @pytest.mark.parametrize("change", [{"step_key": "changed"}, {"agent_name": "director"}])
@@ -1018,7 +1001,7 @@ def test_safe_retry_cannot_rebind_executor_identity(client, episode, change):
     run_id, actor = bounded_run(client, episode)
     selected = route(maximum_cost=Decimal("0"))
     call = gateway_request(episode, run_id, actor, selected)
-    policy = GatewayPolicy(max_attempts=3)
+    policy = GatewayPolicy()
 
     def not_accepted():
         raise GatewayFailure("INPUT_INVALID", not_accepted=True)
@@ -1098,6 +1081,7 @@ def test_postgres_first_policy_and_first_action_are_atomic(client, episode, sett
             assert invoked == "AGENT_CONTEXT_REQUIRED" and actions == len(calls) == 0
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_limits_and_action_history_are_immutable_and_block_downgrade(client, episode, migrated):
     run_id, actor = bounded_run(client, episode)
     assert model_action(client, episode, run_id, actor) == "observed"
@@ -1120,7 +1104,7 @@ def test_limits_and_action_history_are_immutable_and_block_downgrade(client, epi
     for statement in statements:
         with pytest.raises(DBAPIError, match="IMMUTABLE_HISTORY"), engine.begin() as db:
             db.execute(text(statement))
-    with pytest.raises(RuntimeError, match="history exists"):
+    with pytest.raises(RuntimeError, match="Agent execution limit history exists"):
         command.downgrade(migrated, "0044")
     assert len(usage_for(client, run_id)["actions"]) == 1
     command.check(migrated)

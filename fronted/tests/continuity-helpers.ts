@@ -288,7 +288,6 @@ export async function continuityFixture(page: Page, human = false) {
             parent_revision_id: null,
             root_candidate_id: candidateIds[0],
             round: 1,
-            max_rounds: 3,
             status: "QUEUED",
             job_id: id(),
             target: {

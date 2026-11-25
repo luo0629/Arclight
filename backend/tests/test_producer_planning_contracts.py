@@ -98,7 +98,6 @@ def test_plan_reuses_bounded_concept_contract_without_a_parallel_service_task():
             "prompt_version": "1",
             "output_spec": {"width": 512, "height": 512},
         },
-        "maximum_cost": "0.25",
     }
     payload = plan_payload(
         task(

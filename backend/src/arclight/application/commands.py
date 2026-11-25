@@ -26,7 +26,6 @@ from arclight.application.story_sources import (
 )
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.art_concepts import ArtConceptPlan
 from arclight.domain.art_direction import ArtDirectionTask
 from arclight.domain.director_creation import (
@@ -43,7 +42,11 @@ from arclight.domain.director_creation import (
 from arclight.domain.director_revision import DirectorRevisionOptions
 from arclight.domain.enums import AssetStatus, RunStatus
 from arclight.domain.project_settings import ProjectStorySettings
-from arclight.domain.screenwriter_creation import SCREENWRITER_VERSION, SERIES_SCREENWRITER_VERSION
+from arclight.domain.screenwriter_creation import (
+    AUTOMATIC_REVISION_ROUNDS,
+    SCREENWRITER_VERSION,
+    SERIES_SCREENWRITER_VERSION,
+)
 from arclight.domain.screenwriter_revision import (
     REVISED_SCREENWRITER_VERSION,
     ScreenwriterRevisionOptions,
@@ -149,7 +152,6 @@ def start_run(
     purpose: ScriptWritingPurpose = "REVIEW_WORKFLOW",
     rebuild_from_version_id: UUID | None = None,
     professional: bool = False,
-    agent_limits: AgentRunLimits | None = None,
     revision_rounds: int | None = None,
     professional_director: bool = False,
     director_revision_rounds: int | None = None,
@@ -165,9 +167,8 @@ def start_run(
         script_version_id is not None or professional_director or art_task is not None
     ):
         raise DomainError("SCREENWRITER_TASK_INVALID", "剧本草稿不包含分镜或美术任务", 422)
-    options = ScreenwriterRevisionOptions(
+    ScreenwriterRevisionOptions(
         professional=professional or professional_director or art_task is not None,
-        agent_limits=agent_limits,
         revision_rounds=revision_rounds,
     )
     if performance:
@@ -213,9 +214,7 @@ def start_run(
     if producer_parent_run_id is not None:
         from arclight.application.producer_delegation import require_producer_parent
 
-        parent_control = require_producer_parent(db, producer_parent_run_id, episode_id, actor)
-        if options.frozen_limits().model_dump(mode="json") != parent_control.limits_json:
-            raise DomainError("AGENT_LIMITS_CONFLICT", "委派不得更换根运行限制", 409)
+        require_producer_parent(db, producer_parent_run_id, episode_id, actor)
         if not (professional or professional_director or art_task is not None):
             raise DomainError("PRODUCER_TASK_INVALID", "委派须使用已注册的专业任务", 422)
     if professional and script_version_id is not None:
@@ -241,14 +240,12 @@ def start_run(
     if professional:
         payload |= {
             "professional": True,
-            "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
         if revision_rounds is not None:
             payload["revision_rounds"] = revision_rounds
     if professional_director:
         payload |= {
             "professional_director": True,
-            "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
         if director_revision_rounds is not None:
             payload["director_revision_rounds"] = director_revision_rounds
@@ -259,7 +256,6 @@ def start_run(
     if art_task is not None:
         payload |= {
             "art_task": art_task.model_dump(mode="json"),
-            "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
     if art_concept_plan is not None:
         payload["art_concept_plan"] = art_concept_plan.model_dump(mode="json")
@@ -379,15 +375,13 @@ def start_run(
     if snapshot:
         inputs["_text_service"] = snapshot
     if professional:
-        inputs["screenwriter"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
+        inputs["screenwriter"] = {}
         if revision_rounds is not None or narrative is not None:
-            inputs["screenwriter"]["revision_rounds"] = (
-                revision_rounds if revision_rounds is not None else 3
-            )
+            inputs["screenwriter"]["revision_rounds"] = AUTOMATIC_REVISION_ROUNDS
     if professional_director:
-        inputs["director"] = {"agent_limits": options.frozen_limits().model_dump(mode="json")}
+        inputs["director"] = {}
         if director_revision_rounds is not None:
-            inputs["director"]["revision_rounds"] = director_revision_rounds
+            inputs["director"]["revision_rounds"] = AUTOMATIC_REVISION_ROUNDS
         if director_art_collaboration:
             inputs["director"]["art_collaboration"] = True
         if performance:
@@ -397,7 +391,6 @@ def start_run(
 
         inputs["art_direction"] = {
             "task": art_task.model_dump(mode="json"),
-            "agent_limits": options.frozen_limits().model_dump(mode="json"),
         }
         version = ART_WORKFLOW_VERSION
         if art_concept_plan is not None:
@@ -484,9 +477,7 @@ def start_run(
     if producer_parent_run_id is not None:
         from arclight.application.agent_limits import configure_agent_run
 
-        configure_agent_run(
-            db, run.id, actor, options.frozen_limits(), parent_run_id=producer_parent_run_id
-        )
+        configure_agent_run(db, run.id, actor, parent_run_id=producer_parent_run_id)
     from arclight.application.production_versions import capture_text
 
     capture_text(db, episode.project_id, run, settings, actor=actor)
@@ -694,12 +685,14 @@ def cancel_workflow_state(db: Session, run: WorkflowRun) -> WorkflowRun:
     return run
 
 
-def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
+def retry_run(db: Session, run: WorkflowRun, *, automatic_short_drama: bool = False) -> WorkflowRun:
     if run.workflow_type == "producer":
         raise DomainError("PRODUCER_CONTROL_REQUIRED", "请通过生产协作入口恢复原命令", 409)
     from arclight.application.short_drama_budget import require_manual_workflow
 
-    require_manual_workflow(db, run.id)
+    balance_error = run.error_code == "ACCOUNT_BALANCE_INSUFFICIENT"
+    if not (automatic_short_drama and balance_error):
+        require_manual_workflow(db, run.id)
     if run.status != RunStatus.FAILED:
         raise DomainError("NOT_RETRYABLE", "只有失败的工作流可以显式重试")
     if run.workflow_type == "art_proposal":
@@ -724,8 +717,6 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
                 or control.root_run_id != parent_control.run_id
                 or control.project_id != parent_control.project_id
                 or control.depth != parent_control.depth + 1
-                or control.limits_json != parent_control.limits_json
-                or control.deadline_at != parent_control.deadline_at
             ):
                 raise DomainError("AGENT_SCOPE_INVALID", "Agent 委派作用范围不匹配", 409)
             producer_parent_run_id = parent.id
@@ -741,6 +732,24 @@ def retry_run(db: Session, run: WorkflowRun) -> WorkflowRun:
     )
     if active:
         raise DomainError("EPISODE_BUSY", "该剧集已有其他未完成工作流")
+    if balance_error:
+        from arclight.application.gateway_accounting import workflow_balance_rejected
+        from arclight.application.gateway_text import validate_publication
+
+        validate_publication(db, run.id)
+        if not workflow_balance_rejected(db, run.id):
+            raise DomainError("NOT_RETRYABLE", "原调用须核对供应商回执", 409)
+        delivery = db.scalar(
+            select(OutboxEvent).where(
+                OutboxEvent.run_id == run.id, OutboxEvent.revision == run.revision
+            )
+        )
+        if delivery is None:
+            raise DomainError("NOT_RETRYABLE", "原工作流投递不存在", 409)
+        run.status, run.error_code = RunStatus.QUEUED, None
+        delivery.published_at = None
+        emit(db, run, "workflow.retry_requested")
+        return run
     # 此重试由用户主动请求；模型超时不触发隐式付费重提。
     if run.agent_state_json is not None:
         from arclight.domain.agent_state import AgentStateError, retry_agent_state

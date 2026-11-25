@@ -29,7 +29,7 @@ from test_continuity_selection import approve, target_rows
 from test_continuity_workflow import BatchImages, make_job, work_for
 from test_continuity_workflow_recovery import run_work
 from test_director_creation import install as install_director
-from test_generation_budget import priced, set_policy
+from test_generation_budget import priced
 from test_generation_candidates import candidates, ingest
 from test_generation_delivery import deliver
 from test_human_reviews import decide, resume
@@ -148,7 +148,6 @@ def test_short_story_review_revision_human_selection_default_timeline_and_real_m
     assert created.status_code == 201, created.text
     episode = created.json()
     priced(monkeypatch, "1", "test16-offline-quote:1")
-    set_policy(client, project_id, "10", task_limit="1")
     settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
         update={"max_input_images": 8}
     )
@@ -207,13 +206,6 @@ def test_short_story_review_revision_human_selection_default_timeline_and_real_m
             }
             endpoint = f"/api/v1/projects/{project_id}/continuity-revisions"
             headers = {"Idempotency-Key": "test16-one-local-revision"}
-            set_policy(client, project_id, "10", task_limit="0.50")
-            blocked = client.post(endpoint, json=command, headers=headers)
-            assert (
-                blocked.status_code == 409
-                and blocked.json()["error"]["code"] == "BUDGET_TASK_EXCEEDED"
-            ), blocked.text
-            set_policy(client, project_id, "10", task_limit="1")
             revision = client.post(endpoint, json=command, headers=headers)
             assert revision.status_code == 201, revision.text
             revision = revision.json()
@@ -252,7 +244,6 @@ def test_short_story_review_revision_human_selection_default_timeline_and_real_m
                 control = db.get(AgentRunLimit, run_id)
                 assert (control.limits_json, control.deadline_at, control.root_run_id) == limits
             revision_evidence = {
-                "budget_denial": blocked.json(),
                 "revision": revision,
                 "replay": replay.json(),
                 "limits": limits[0],

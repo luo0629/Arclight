@@ -24,7 +24,6 @@ from arclight.application.agent_runtime_state import initialize_run_state, scope
 from arclight.application.agent_tools import build_agent_tool_registry
 from arclight.application.gateway_text import execution_actor
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.agent_state import transition_agent_step
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.screenwriter_planning import ScreenwriterPlan
@@ -490,7 +489,10 @@ def test_foreign_project_cannot_read_start_or_resume_a_plan(
     assert error.value.code == "NOT_FOUND" and len(sent) == 2, errors
 
 
-def test_planning_obeys_original_model_limit(client, episode, settings, model_service):
+def test_planning_stops_at_the_agent_turn_limit(
+    client, episode, settings, model_service, monkeypatch
+):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
     run_id, actor = prepare(client, episode, settings)
     sent, errors = install_model(model_service)
     result = planning.plan_screenwriter(
@@ -498,7 +500,6 @@ def test_planning_obeys_original_model_limit(client, episode, settings, model_se
         settings,
         run_id,
         actor,
-        limits=AgentRunLimits(max_model_calls=1),
     )
     assert result.status == "STOPPED" and result.stop_code == "AGENT_MODEL_CALL_LIMIT", errors
     assert len(sent) == 1

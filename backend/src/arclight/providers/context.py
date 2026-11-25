@@ -26,7 +26,9 @@ def provider_call[T](call: Callable[[], T], *, provider: TextProvider, stage: st
             safe_metadata(result.model_dump(mode="json"))
         return result
     except DomainError as exc:
-        if exc.code.startswith(("GATEWAY_", "BUDGET_", "AGENT_")):
+        if exc.code == "ACCOUNT_BALANCE_INSUFFICIENT" or exc.code.startswith(
+            ("GATEWAY_", "AGENT_")
+        ):
             raise
         raise DomainError("TEXT_PROVIDER_FAILED", "文本模型调用失败", 502) from None
     except Exception:

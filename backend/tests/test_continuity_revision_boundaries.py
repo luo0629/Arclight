@@ -11,6 +11,8 @@ from sqlalchemy.exc import DBAPIError
 from test_agent_model import model_service as model_service
 from test_collaboration import register
 from test_concurrency import require_postgres
+from test_continuity_feedback import feedback_case as feedback_case
+from test_continuity_feedback import finish_revision, install_feedback_model, run_feedback
 from test_continuity_reviewer import reviewer_case as reviewer_case
 from test_continuity_reviewer import run_review
 from test_continuity_revisions import (
@@ -24,16 +26,19 @@ from test_continuity_revisions import (
 from test_continuity_routing import new_review_run, route
 from test_continuity_rules import rules_storage as rules_storage
 from test_generation_accounting import ledger, usage
-from test_generation_budget import priced, set_policy
+from test_generation_budget import priced
 from test_generation_candidates import candidates, generate, ingest
 from test_generation_delivery import Provider, deliver, event_for, retry_due
 from test_generation_reconciliation import QueryFake, query
+from test_generation_scheduling import dead_letter
 
+from arclight.application.continuity_revision_store import revision_record
 from arclight.application.continuity_revisions import request_revision as submit_revision
 from arclight.application.generation_attempts import start_attempt
 from arclight.core.errors import DomainError
 from arclight.domain.continuity_revisions import RevisionRequest
 from arclight.domain.generation_requests import GenerationResult
+from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.versions import digest
 from arclight.persistence.models import (
     AssetVersion,
@@ -87,27 +92,27 @@ def observe_candidate(client, episode, settings, model_service, case, candidate)
     }
 
 
-def test_budget_refusal_rolls_back_and_same_key_reserves_exactly_once(
+def test_historical_budget_does_not_block_revision_or_duplicate_its_quote(
     client, episode, revision_case, monkeypatch
 ):
     priced(monkeypatch)
-    set_policy(client, episode["project_id"], "1")
+    project_id = episode["project_id"]
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, UUID(project_id)).budget_limit = Decimal("0.01")
     before = execution_counts(client)
-    ledger_before = ledger(client, episode["project_id"])
-    rejected = request_revision(client, revision_case, key="budget-command")
-    assert rejected.status_code == 409, rejected.text
-    assert execution_counts(client) == before
-    assert ledger(client, episode["project_id"]) == ledger_before
-    set_policy(client, episode["project_id"], "5")
     response = request_revision(client, revision_case, key="budget-command")
     assert response.status_code == 201, response.text
-    assert usage(client, episode["project_id"])[1] == 2
-    entries = ledger(client, episode["project_id"])
+    after = execution_counts(client)
+    assert after["generation_jobs"] == before["generation_jobs"] + 1
+    assert after["generation_attempts"] == before["generation_attempts"]
+    assert usage(client, project_id)[1] == 2
+    entries = ledger(client, project_id)
     revision_entries = [row for row in entries if row["job_id"] == response.json()["job_id"]]
     assert len(revision_entries) == 1 and Decimal(revision_entries[0]["reserved"]) == 2
     replay = request_revision(client, revision_case, key="budget-command")
     assert replay.status_code == 200 and replay.json() == response.json()
-    assert ledger(client, episode["project_id"]) == entries
+    assert ledger(client, project_id) == entries
+    assert execution_counts(client) == after
 
 
 def test_batch_problem_item_retry_preserves_successful_siblings_and_original_inputs(
@@ -159,7 +164,6 @@ def test_unknown_result_keeps_reservation_and_never_resends_before_reconciliatio
     client, episode, revision_case, monkeypatch
 ):
     priced(monkeypatch)
-    set_policy(client, episode["project_id"], "5")
     revision = checked_request(client, revision_case)
     job = revision_job(client, revision_case, revision)
     provider = Provider(
@@ -203,78 +207,92 @@ def test_unknown_result_keeps_reservation_and_never_resends_before_reconciliatio
     assert len(provider.requests) == 1
 
 
-def test_attempt_limit_and_dead_letter_replay_cannot_reset_revision_allowance(
+def test_revision_stops_automatic_retries_and_cannot_be_cloned_from_dead_letter(
     client, settings, revision_case
 ):
-    settings.media_execution_policy = settings.media_execution_policy.model_copy(
-        update={"max_attempts": 1}
-    )
+    settings.model_gateway_policy = GatewayPolicy(failure_threshold=10)
     revision = checked_request(client, revision_case)
     job = revision_job(client, revision_case, revision)
-    assert (
-        deliver(
-            client,
-            job,
-            Provider(
-                receipt=SubmissionReceipt(
-                    status="FAILED", error_code="PROVIDER_FAILED", cost=Decimal("0")
-                )
-            ),
+    provider = Provider()
+    for attempt_no in range(1, 4):
+        provider.receipt = SubmissionReceipt(
+            status="RESULT_UNKNOWN",
+            request_id=f"revision-outcome-{attempt_no}",
+            error_code="RESULT_UNKNOWN",
         )
-        == "FAILED"
-    )
-    failed = revision_job(client, revision_case, revision)
+        retry_due(client, job)
+        assert deliver(client, job, provider) == "RESULT_UNKNOWN"
+        job = revision_job(client, revision_case, revision)
+        response = query(client, job, QueryFake(QueryReceipt(status="NOT_ACCEPTED")))
+        assert response.status_code == 200, response.text
+        job = revision_job(client, revision_case, revision)
+        assert job["status"] == ("FAILED" if attempt_no == 3 else "RETRY_WAIT")
+        assert job["attempt_count"] == attempt_no
+
+    assert len(provider.requests) == 3
+    assert dead_letter(client, job)["reason"] == "ATTEMPT_LIMIT"
     before = execution_counts(client)
-    response = retry(client, failed)
-    assert response.status_code == 200 and response.json()["status"] == "FAILED", response.text
     replay = client.post(
         f"/api/v1/projects/{job['project_id']}/generation-jobs/{job['id']}/replay",
         headers={"Idempotency-Key": "cannot-reset"},
-        json={"expected_revision": failed["revision"], "reason": "Try again outside the limit"},
+        json={"expected_revision": job["revision"], "reason": "Try again outside the limit"},
     )
     assert (
         replay.status_code == 409 and replay.json()["error"]["code"] == "REVISION_REPLAY_UNSAFE"
     ), replay.text
     assert execution_counts(client) == before
+    explicit = retry(client, job)
+    assert explicit.status_code == 200 and explicit.json()["status"] == "RETRY_WAIT", explicit.text
+    assert explicit.json()["id"] == job["id"] and explicit.json()["attempt_count"] == 3
 
 
-def test_three_reviewed_generations_then_durable_exhaustion_without_fourth_job(
-    client, episode, settings, model_service, revision_case
+def test_automatic_feedback_requests_human_review_after_three_exact_revisions(
+    client, episode, settings, model_service, feedback_case
 ):
-    case = revision_case
-    parent_id = None
-    root = case["target"]["candidate_id"]
-    for round_no in range(1, 4):
-        revision = checked_request(client, case)
-        assert revision["round"] == round_no and revision["parent_revision_id"] == parent_id
-        assert revision["root_candidate_id"] == root
-        parent_id = revision["revision_id"]
-        job = revision_job(client, case, revision)
-        assert deliver(client, job, MockMediaSubmissionProvider()) == "SUCCEEDED"
+    case = feedback_case
+    root = case["revision"]["root_candidate_id"]
+    sent, _, _, errors, _ = install_feedback_model(
+        model_service, ["REVISE"], difference=("PROP", "MEDIUM")
+    )
+    for round_no in (2, 3):
+        before = execution_counts(client)
+        result = run_feedback(client, settings, case)
+        assert result.status == "REVISION_QUEUED", result.model_dump_json()
+        after = execution_counts(client)
+        assert after["generation_jobs"] == before["generation_jobs"] + 1
+        assert run_feedback(client, settings, case) == result
+        assert execution_counts(client) == after
         with client.app.state.session_factory() as db:
-            attempt_id = db.scalar(
-                select(GenerationAttempt.id).where(GenerationAttempt.job_id == UUID(job["id"]))
-            )
-        assert ingest(client, attempt_id) == 1
-        new = candidates(client, episode["project_id"], job)[0]
-        case = observe_candidate(client, episode, settings, model_service, case, new)
+            child = revision_record(db, UUID(case["project_id"]), result.record.child_revision_id)
+            assert child.parent_revision_id == UUID(case["revision"]["revision_id"])
+            assert child.round == round_no and child.root_candidate_id == UUID(root)
+        revision = child.model_dump(mode="json")
+        candidate = finish_revision(client, episode, case, revision)
+        case = case | {"revision": revision, "candidate": candidate}
+
     before = execution_counts(client)
-    response = request_revision(client, case, key="exhausted")
-    assert response.status_code == 201, response.text
-    stopped = response.json()
-    assert stopped["status"] == "NEEDS_REVIEW" and stopped["round"] == 4
-    assert stopped["job_id"] is None and stopped["input_manifest_id"] is None
-    assert stopped["parent_revision_id"] == parent_id and stopped["root_candidate_id"] == root
-    assert execution_counts(client) == before
-    replay = request_revision(client, case, key="exhausted")
-    assert replay.status_code == 200 and replay.json() == stopped
-    assert request_revision(client, case).status_code == 409
+    stopped = run_feedback(client, settings, case)
+    assert stopped.status == "HUMAN_REVIEW", stopped.model_dump_json()
+    assert stopped.record.stop_code == "REVISION_ROUND_LIMIT"
+    assert stopped.record.child_revision_id is None
+    assert stopped.record.human_review_request_id is not None
+    assert len(sent) == 3 and not errors
+    paused = execution_counts(client)
+    assert paused == before | {
+        "dependency_manifests": before["dependency_manifests"] + 2,
+        "outbox_events": before["outbox_events"] + 1,
+    }
+    assert run_feedback(client, settings, case) == stopped
+    assert execution_counts(client) == paused
     with client.app.state.session_factory() as db:
         assert (
             db.scalar(
                 select(func.count())
                 .select_from(AuditEvent)
-                .where(AuditEvent.action == "continuity_revision.exhausted")
+                .where(
+                    AuditEvent.action == "continuity_feedback.decided",
+                    AuditEvent.resource_id == stopped.record.feedback_id,
+                )
             )
             == 1
         )

@@ -21,7 +21,7 @@ from arclight.application.short_drama import (
 from arclight.domain.agent_runtime import AgentHumanDecision
 from arclight.domain.producer_interaction import ProducerCommand, ProducerRunCreate
 from arclight.domain.producer_series import SeriesCompletion, SeriesControl, SeriesProducerCreate
-from arclight.domain.short_drama import ShortDramaCreate, ShortDramaPreflight
+from arclight.domain.short_drama import ShortDramaCreate, ShortDramaPreflight, ShortDramaRetry
 
 router = APIRouter(prefix="/api/v1", tags=["producer"])
 CommandKey = Annotated[
@@ -79,6 +79,24 @@ def create_short_drama(
             payload,
             key,
             request.state.request_id,
+        )
+    )
+
+
+@router.post("/runs/{run_id}/short-drama/retry", status_code=202)
+def retry_short_drama_run(
+    run_id: UUID,
+    payload: ShortDramaRetry,
+    request: Request,
+    db: Database,
+    actor: Actor,
+    key: Annotated[str, Header(alias="Idempotency-Key", min_length=1, max_length=128)],
+) -> AcceptedRun:
+    from arclight.application.short_drama_production import retry_short_drama
+
+    return _accepted(
+        retry_short_drama(
+            db, request.app.state.settings, run_id, payload.expected_revision, actor, key
         )
     )
 

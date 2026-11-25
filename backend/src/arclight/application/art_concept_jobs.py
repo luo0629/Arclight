@@ -137,35 +137,3 @@ def concept_round(db: Session, job: GenerationJob) -> dict:
         "outcome_uncertain": uncertain,
         "candidates": candidates,
     }
-
-
-def enforce_concept_reservation(db: Session, job: GenerationJob, amount: Decimal) -> None:
-    origin = concept_origin(db, job)
-    if origin is None:
-        return
-    run = db.get(WorkflowRun, UUID(origin["run_id"]))
-    assert run is not None
-    plan = ArtConceptPlan.model_validate(run.input_json["art_direction"]["concept"]["plan"])
-    used = sum(
-        (
-            sum(costs(db, item.project_id, job_id=item.id))
-            for item in concept_jobs(db, run_id=run.id)
-        ),
-        Decimal("0"),
-    )
-    if used + amount > plan.maximum_cost:
-        raise DomainError("ART_CONCEPT_BUDGET", "概念图重试或新请求将超过原冻结总预算", 409)
-    from arclight.application.agent_limits import action_usage
-    from arclight.domain.agent_limits import AgentRunLimits
-
-    root_id = UUID(origin["root_run_id"])
-    root = db.get(AgentRunLimit, root_id)
-    if root is None:
-        raise DomainError("AGENT_LIMITS_REQUIRED", "概念图缺少根运行限制", 409)
-    limit = AgentRunLimits.model_validate(root.limits_json)
-    usage = action_usage(db, root_id)
-    if limit.maximum_cost is not None and (
-        usage["unknown_cost"]
-        or usage["actual_cost"] + usage["pending_estimate"] + amount > limit.maximum_cost
-    ):
-        raise DomainError("AGENT_BUDGET_EXCEEDED", "概念图将超过跨调用共享总预算", 409)

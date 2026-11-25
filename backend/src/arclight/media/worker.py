@@ -5,7 +5,7 @@ import sys
 
 from arclight.media.execution import FAILURES, MediaExecutionError, command_for
 from arclight.media.isolation import IsolationUnavailable, seal_process
-from arclight.media.limits import restrict_process
+from arclight.media.limits import CPU_SECONDS, restrict_process
 from arclight.media.text import InvalidStoryText, decode_story
 
 
@@ -20,7 +20,8 @@ def main() -> None:
     if operation == "lip-sync":
         from arclight.media.lip_sync import encode_lip_sync
 
-    restrict_process(render=operation in {"render", "inspect", "lip-sync"})
+    cpu_seconds = None if operation in {"render", "inspect"} else CPU_SECONDS
+    restrict_process(cpu_seconds=120 if operation == "lip-sync" else cpu_seconds)
     seal_process()
     data = sys.stdin.buffer.read(-1 if command.input_limit is None else command.input_limit + 1)
     if not data or (command.input_limit is not None and len(data) > command.input_limit):

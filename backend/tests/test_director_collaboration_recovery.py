@@ -1,7 +1,6 @@
 """Exercise specialist delegation failures and durable recovery through the real workflow."""
 
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, timedelta
 from threading import Event
 from uuid import UUID, uuid4
 
@@ -164,9 +163,8 @@ def test_external_scan_preserves_art_question_and_answer_resumes_original_run(
         )
 
 
-@pytest.mark.parametrize("mutation", ["revoked", "deadline"])
-def test_external_opinion_scan_routes_invalid_authority_to_executor_without_model_io(
-    client, episode, settings, model_service, monkeypatch, mutation
+def test_external_opinion_scan_routes_revoked_authority_to_executor_without_model_io(
+    client, episode, settings, model_service, monkeypatch
 ):
     reference_set(client, episode)
     director_sent, art_sent, *errors = install_collaboration(
@@ -177,15 +175,7 @@ def test_external_opinion_scan_routes_invalid_authority_to_executor_without_mode
     original_calls = len(director_sent), len(art_sent)
     factory = client.app.state.session_factory
     with factory.begin() as db:
-        if mutation == "revoked":
-            db.get(Project, UUID(episode["project_id"])).owner_id = "other-owner"
-        else:
-            deadline = db.get(AgentRunLimit, run_id).deadline_at
-    if mutation == "deadline":
-        monkeypatch.setattr(
-            "arclight.application.agent_limits.utcnow",
-            lambda: deadline.replace(tzinfo=UTC) + timedelta(seconds=1),
-        )
+        db.get(Project, UUID(episode["project_id"])).owner_id = "other-owner"
     assert queue_ready_external(factory, settings) == 1
     assert queue_ready_external(factory, settings) == 0
     with factory() as db:
@@ -227,50 +217,33 @@ def test_unknown_art_http_result_keeps_receipt_and_never_replays_blindly(
     assert len(art_sent) == 1 and facts(client) == before
 
 
-def test_root_model_limit_counts_director_and_art_and_cannot_reset_on_retry(
+def test_director_and_art_calls_share_accounting_in_one_run(
     client, episode, settings, model_service, monkeypatch
 ):
     reference_set(client, episode)
     _, art_sent, *errors = install_collaboration(model_service, monkeypatch, settings)
-    run_id, _ = begin(client, episode, agent_limits={"max_model_calls": 10})
-    before = facts(client)
+    run_id, _ = begin(client, episode)
     run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "AGENT_MODEL_CALL_LIMIT", (
-        run,
-        errors,
-    )
-    assert 0 < len(art_sent) < 4 and facts(client) == before
+    assert run["status"] == "WAITING_REVIEW" and not any(errors), (run, errors)
+    assert len(art_sent) == 4
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(AgentRunLimit)) == 1
         count = db.scalar(select(func.count()).select_from(GatewayReceipt))
-        assert count == 10
-    calls = len(art_sent)
-    assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
-    assert run_once(client, settings, run_id)["error_code"] == "AGENT_MODEL_CALL_LIMIT"
-    assert len(art_sent) == calls
+        assert count > 10
 
 
-def test_root_deadline_expiring_during_art_io_cannot_be_reset(
+def test_art_collaboration_keeps_original_run_without_an_expiration(
     client, episode, settings, model_service, monkeypatch
 ):
     reference_set(client, episode)
-    targets = []
-
-    def expire(_):
-        from arclight.application import agent_limits
-        from arclight.application.model_gateway import utc
-
-        with client.app.state.session_factory() as db:
-            deadline = utc(db.get(AgentRunLimit, targets[0]).deadline_at)
-        monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline + timedelta(seconds=1))
-
-    _, art_sent, *_ = install_collaboration(model_service, monkeypatch, settings, on_art=expire)
+    _, art_sent, *errors = install_collaboration(model_service, monkeypatch, settings)
     run_id, _ = begin(client, episode)
-    targets.append(run_id)
-    before = facts(client)
     run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "AGENT_DEADLINE_EXCEEDED", run
-    assert len(art_sent) == 1 and facts(client) == before
+    assert run["status"] == "WAITING_REVIEW" and not any(errors), (run, errors)
+    assert len(art_sent) == 4
+    with client.app.state.session_factory() as db:
+        control = db.get(AgentRunLimit, run_id)
+        assert control.root_run_id == run_id and control.deadline_at is None
 
 
 @pytest.mark.parametrize("phase", ["art", "director"])
@@ -438,9 +411,9 @@ def test_both_combined_workflows_keep_script_and_storyboard_reviews(
             "story": "雨夜寻找纸船失主",
             "professional": True,
             "professional_director": True,
-            "director_revision_rounds": 2,
+            "director_revision_rounds": 3,
             "director_art_collaboration": True,
-            **({"revision_rounds": 1} if revised else {}),
+            **({"revision_rounds": 3} if revised else {}),
         },
     )
     assert response.status_code == 202, response.text

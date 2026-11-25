@@ -290,6 +290,7 @@ def test_upload_replacement_gets_a_new_exact_check_and_keeps_the_original(client
     assert state(client, asset, replacement["version"], "READY_FOR_REVIEW").status_code == 409
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_check_history_is_protected_and_downgrade_refuses_evidence_loss(client, episode, migrated):
     project_id = episode["project_id"]
     job, attempt = generate(client, project_id)
@@ -313,6 +314,7 @@ def test_check_history_is_protected_and_downgrade_refuses_evidence_loss(client, 
     assert candidates(client, project_id, job) == before
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_upgrade_keeps_legacy_evidence_missing_and_never_fabricates_a_pass(
     client, episode, migrated
 ):

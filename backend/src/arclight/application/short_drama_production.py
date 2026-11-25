@@ -1,27 +1,32 @@
 """Advance durable short-drama production from the existing worker scheduler."""
 
 import logging
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_runtime_state import scope_for_run
-from arclight.application.commands import cancel_workflow_state, emit
+from arclight.application.commands import cancel_workflow_state, emit, retry_run
+from arclight.application.gateway_accounting import balance_rejected, workflow_balance_rejected
+from arclight.application.generation_attempts import request_retry
+from arclight.application.generation_scheduling import latest_media_receipt
 from arclight.application.generation_state import request_cancel
-from arclight.application.model_gateway import lock_gate, utc
+from arclight.application.model_gateway import lock_gate
 from arclight.application.producer_interaction import (
     command_receipt,
     command_rows,
     pending_commands,
     queue_command,
     record_receipt,
+    require_producer,
 )
 from arclight.application.producer_plan_history import (
     canonical_task,
     find_task_delegation,
     read_current_plan,
 )
+from arclight.application.production_versions import bind, find_binding
 from arclight.application.render_reports import delivery_acceptance
 from arclight.application.short_drama import (
     PROGRESS_EVENT,
@@ -39,7 +44,7 @@ from arclight.application.short_drama_reviews import apply_art_selection, approv
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_state import terminate_agent_state, transition_agent_step
-from arclight.domain.producer_interaction import ProducerDelegateCommand
+from arclight.domain.producer_interaction import ProducerDelegateCommand, ProducerRecoverCommand
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.base import utcnow
@@ -154,8 +159,8 @@ def advance(
         finish_render(db, run, project_id, render)
         return
     control = db.get(AgentRunLimit, run.id)
-    if control is None or utcnow() >= utc(control.deadline_at):
-        raise DomainError("SHORT_DRAMA_DEADLINE", "短剧制作已达到执行时限", 409)
+    if control is None:
+        raise DomainError("SHORT_DRAMA_INACTIVE", "本次短剧制作缺少执行范围", 409)
     commands = command_rows(db, run, project_id)
     if not commands:
         raise DomainError("SHORT_DRAMA_COMMAND_MISSING", "本次制作缺少原制片命令", 409)
@@ -275,6 +280,83 @@ def advance(
     )
 
 
+def balance_blocker(
+    db: Session, run: WorkflowRun, project_id: UUID
+) -> WorkflowRun | GenerationJob | None:
+    if run.status != "RUNNING" or run.error_code != "ACCOUNT_BALANCE_INSUFFICIENT":
+        return None
+    if pending_commands(db, run, project_id) and workflow_balance_rejected(db, run.id):
+        return run
+    for child in db.scalars(
+        select(WorkflowRun)
+        .join(AgentRunLimit, AgentRunLimit.run_id == WorkflowRun.id)
+        .where(
+            AgentRunLimit.root_run_id == run.id,
+            WorkflowRun.id != run.id,
+            WorkflowRun.status == "FAILED",
+            WorkflowRun.error_code == "ACCOUNT_BALANCE_INSUFFICIENT",
+        )
+    ):
+        if workflow_balance_rejected(db, child.id):
+            return child
+    for job in db.scalars(
+        select(GenerationJob)
+        .join(VersionBinding, VersionBinding.resource_id == GenerationJob.id)
+        .where(
+            VersionBinding.project_id == project_id,
+            VersionBinding.resource_type == MEDIA_SCOPE,
+            VersionBinding.snapshot_json["run_id"].as_string() == str(run.id),
+            GenerationJob.status == "FAILED",
+            GenerationJob.cancel_requested_at.is_(None),
+        )
+    ):
+        if balance_rejected(latest_media_receipt(db, job)):
+            return job
+    return None
+
+
+def retry_short_drama(
+    db: Session, settings: Settings, run_id: UUID, revision: int, actor: str, key: str
+) -> WorkflowRun:
+    lock_gate(db)
+    run, episode = require_producer(db, run_id, actor)
+    _, _, spec = require_run_authorization(db, run)
+    require_exact_inputs(db, episode, spec)
+    receipt_id = uuid5(run.id, "short-drama-balance-retry:" + key)
+    intent = {"run_id": str(run.id), "revision": revision, "actor": actor}
+    kind = "SHORT_DRAMA_BALANCE_RETRY"
+    if prior := find_binding(db, episode.project_id, kind, receipt_id):
+        if prior.snapshot_json != intent:
+            raise DomainError("IDEMPOTENCY_CONFLICT", "同一幂等键不能更换恢复请求", 409)
+        return run
+    if run.revision != revision:
+        raise DomainError("REVISION_CONFLICT", "制作进度已变化，请刷新后重试", 409)
+    target = balance_blocker(db, run, episode.project_id)
+    if target is None:
+        raise DomainError("NOT_RETRYABLE", "当前没有可继续的余额不足请求", 409)
+    if target.id == run.id:
+        command = pending_commands(db, run, episode.project_id)[-1]
+        queue_command(
+            db,
+            settings,
+            run.id,
+            actor,
+            ProducerRecoverCommand(
+                action="RECOVER", expected_revision=revision, command_id=command.resource_id
+            ),
+            key,
+        )
+    elif isinstance(target, GenerationJob):
+        request_retry(db, target.id, target.revision, actor)
+    else:
+        child = db.get(WorkflowRun, target.id, populate_existing=True, with_for_update=True)
+        assert child is not None
+        retry_run(db, child, automatic_short_drama=True)
+    run.error_code = None
+    bind(db, episode.project_id, kind, receipt_id, intent)
+    return run
+
+
 def advance_pending(factory: sessionmaker[Session], settings: Settings) -> None:
     with factory() as db:
         identities = list(
@@ -283,6 +365,8 @@ def advance_pending(factory: sessionmaker[Session], settings: Settings) -> None:
                 .where(
                     WorkflowRun.workflow_type == "producer",
                     WorkflowRun.status == "RUNNING",
+                    WorkflowRun.error_code.is_distinct_from("ACCOUNT_BALANCE_INSUFFICIENT"),
+                    WorkflowRun.error_code.is_distinct_from("WORKFLOW_RECOVERY_LIMIT"),
                     WorkflowRun.input_json["short_drama"]["script_version_id"]
                     .as_string()
                     .is_not(None),
@@ -296,13 +380,20 @@ def advance_pending(factory: sessionmaker[Session], settings: Settings) -> None:
             with factory.begin() as db:
                 lock_gate(db)
                 run = db.get(WorkflowRun, identity, populate_existing=True, with_for_update=True)
-                if run is None or run.status != "RUNNING":
+                if (
+                    run is None
+                    or run.status != "RUNNING"
+                    or run.error_code in {"ACCOUNT_BALANCE_INSUFFICIENT", "WORKFLOW_RECOVERY_LIMIT"}
+                ):
                     continue
                 specialists = lock_specialists(db, run)
                 try:
                     with db.begin_nested():
                         advance(db, settings, run, specialists)
                 except DomainError as exc:
+                    if exc.code == "ACCOUNT_BALANCE_INSUFFICIENT":
+                        run.error_code = exc.code
+                        continue
                     if exc.status_code >= 500:
                         raise
                     episode = db.get(Episode, run.episode_id)

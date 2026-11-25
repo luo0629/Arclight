@@ -243,7 +243,7 @@ test("Producer answers the exact saved question by keyboard after refresh and re
   );
   expect(conflicting.status()).toBe(409);
   const budget = panel.getByRole("region", {
-    name: "Producer 预算与用量",
+    name: "Producer 费用与用量",
     exact: true,
   });
   await expect(
@@ -421,10 +421,9 @@ test("Producer retains the original creation request across a lost response and 
       return route.fulfill({ response });
     },
   );
-  const goal = "保留原目标和预算，制作纸船剧本。";
+  const goal = "保留原目标，制作纸船剧本。";
   await page.getByLabel("生产目标", { exact: true }).fill(goal);
-  await page.getByLabel("费用上限（USD，可选）", { exact: true }).fill("0.5");
-  await page.getByLabel("模型调用上限", { exact: true }).fill("16");
+  await expect(page.getByLabel(/费用上限|模型调用上限/)).toHaveCount(0);
   await page.getByRole("button", { name: "发起生产计划", exact: true }).click();
   await expect(page.getByText(/操作结果尚未确认/)).toBeVisible();
   const runs = await (
@@ -442,9 +441,6 @@ test("Producer retains the original creation request across a lost response and 
   await expect(
     page.getByRole("textbox", { name: "生产目标", exact: true }),
   ).toBeDisabled();
-  await expect(
-    page.getByLabel("费用上限（USD，可选）", { exact: true }),
-  ).toHaveValue("0.5");
   await page
     .getByRole("button", { name: "重发原发起请求", exact: true })
     .click();
@@ -461,8 +457,7 @@ test("Producer retains the original creation request across a lost response and 
   expect(after.map((run: { id: string }) => run.id)).toEqual([runId]);
   const saved = await readProgress(page, runId, env.headers);
   expect(saved.goal).toBe(goal);
-  expect(Number(saved.budget.limits.maximum_cost)).toBe(0.5);
-  expect(saved.budget.limits.max_model_calls).toBe(16);
+  expect(saved.budget).not.toHaveProperty("limits");
 });
 
 test("Producer delegates the canonical child, preserves it in replanning and stops only the root", async ({
@@ -578,13 +573,16 @@ test("Producer displays unknown costs and sends recovery for the exact pending c
   const env = await setup(page);
   const runId = await start(page, env.episode.id, "检查原命令恢复界面。");
   await expect
-    .poll(async () => {
-      const state = await readProgress(page, runId, env.headers);
-      return {
-        plans: state.plans.length,
-        pending: state.pending_command !== null,
-      };
-    })
+    .poll(
+      async () => {
+        const state = await readProgress(page, runId, env.headers);
+        return {
+          plans: state.plans.length,
+          pending: state.pending_command !== null,
+        };
+      },
+      { timeout: 20000 },
+    )
     .toEqual({ plans: 1, pending: false });
   const saved = await readProgress(page, runId, env.headers);
   const commandId = crypto.randomUUID();
@@ -626,14 +624,12 @@ test("Producer displays unknown costs and sends recovery for the exact pending c
   await page.reload();
   await closeDirectory(page);
   const panel = progress(page);
-  await expect(
-    panel.getByText("存在未知费用，须先核验", { exact: true }),
-  ).toBeVisible();
+  await expect(panel.getByText("有费用待核账", { exact: true })).toBeVisible();
   await expect(panel.getByText("0.125000 USD", { exact: true })).toBeVisible();
   await expect(panel.getByText("0.250000 USD", { exact: true })).toBeVisible();
   await expect(panel.getByText(/外部结果尚未确认/)).toBeVisible();
   const budget = panel.getByRole("region", {
-    name: "Producer 预算与用量",
+    name: "Producer 费用与用量",
     exact: true,
   });
   await budget.scrollIntoViewIfNeeded();

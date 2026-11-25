@@ -257,6 +257,7 @@ def test_legacy_orphan_is_recovered_without_creating_a_dispatch(client, episode)
         assert db.scalar(select(func.count()).select_from(GenerationAttempt)) == 1
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_lease_migration_roundtrip_and_history_preservation(client, episode, migrated):
     command.check(migrated)
     command.downgrade(migrated, "0032")

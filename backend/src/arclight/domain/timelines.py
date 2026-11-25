@@ -34,7 +34,7 @@ class TimelineCreate(TimelineContract):
     creation_key: UUID
     storyboard_id: UUID
     default_duration_ms: int = Field(default=3000, strict=True, ge=500, le=30000)
-    selected_shots: list[ShotSelection] = Field(min_length=1, max_length=63)
+    selected_shots: list[ShotSelection] = Field(min_length=1)
 
     @model_validator(mode="after")
     def unique_shots(self):
@@ -102,7 +102,7 @@ class TrackSnapshot(TimelineContract):
     id: UUID
     kind: TrackKind
     ordinal: int = Field(strict=True, ge=0, le=4)
-    clips: list[ClipSnapshot] = Field(default_factory=list, max_length=256)
+    clips: list[ClipSnapshot] = Field(default_factory=list)
     enabled: bool = Field(default=True, strict=True, exclude_if=lambda value: value)
 
     @model_validator(mode="after")

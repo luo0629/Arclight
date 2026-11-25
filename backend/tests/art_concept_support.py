@@ -24,10 +24,7 @@ def start_concepts(
     episode,
     settings,
     *,
-    rounds=2,
     count=2,
-    budget="10",
-    limits=None,
     key=None,
     spec_patch=None,
     minimum=None,
@@ -51,13 +48,8 @@ def start_concepts(
         "concept_plan": {
             "target_type": "STYLE",
             "spec": spec,
-            "maximum_rounds": rounds,
-            "maximum_candidates": count * rounds,
-            "maximum_cost": budget,
         },
     }
-    if limits is not None:
-        body["agent_limits"] = limits
     response = client.post(
         f"/api/v1/episodes/{episode['id']}/art-runs",
         headers={"Idempotency-Key": key or uuid4().hex},

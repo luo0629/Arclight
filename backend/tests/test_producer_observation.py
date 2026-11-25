@@ -48,6 +48,7 @@ from arclight.application.producer_observation import (
     validate_observation_current,
 )
 from arclight.application.production_events import enqueue_source
+from arclight.application.production_versions import bind
 from arclight.core.errors import DomainError
 from arclight.domain.agent_tools import AgentToolCall, AgentToolGrantRequest
 from arclight.domain.producer_observation import ProducerObservationRequest
@@ -154,17 +155,23 @@ def test_runtime_usage_has_separate_full_snapshot_hash(client, episode, settings
         validate_observation_current(db, settings, db.get(WorkflowRun, root), first, actor)
 
 
-def test_current_policy_changes_invalidate_old_snapshot(client, episode, settings, model_service):
+def test_retired_budget_policy_does_not_invalidate_current_observation(
+    client, episode, settings, model_service
+):
     root, actor, _, reference, _ = completed_plan(client, episode, settings, model_service)
     first = observe(client, settings, root, actor, reference)
     with client.app.state.session_factory.begin() as db:
         project = db.get(Project, UUID(episode["project_id"]))
         project.budget_limit += 1
-    with client.app.state.session_factory.begin() as db, pytest.raises(DomainError) as error:
         validate_observation_current(db, settings, db.get(WorkflowRun, root), first, actor)
-    assert error.value.code == "PRODUCER_OBSERVATION_STALE"
-    second = observe(client, settings, root, actor, reference, trigger="BUDGET_CHANGED")
-    assert second.overview.budget.project_limit == first.overview.budget.project_limit + 1
+    second = observe(client, settings, root, actor, reference)
+    assert second.authority_sha256 == first.authority_sha256
+
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, UUID(episode["project_id"])).name = "更新的项目名称"
+        with pytest.raises(DomainError) as stale:
+            validate_observation_current(db, settings, db.get(WorkflowRun, root), second, actor)
+    assert stale.value.code == "PRODUCER_OBSERVATION_STALE"
 
 
 def test_failed_task_and_downstream_are_affected_but_active_task_is_protected(
@@ -199,26 +206,70 @@ def test_failed_task_and_downstream_are_affected_but_active_task_is_protected(
     assert observed.tasks[2].status in {"QUEUED", "RUNNING"}
 
 
-def test_undelegated_task_requires_real_human_or_budget_adjustment(
-    client,
-    episode,
-    settings,
-    model_service,
+def test_budget_change_is_rejected_and_passive_observation_cannot_replace_undelegated_task(
+    client, episode, settings, model_service
 ):
     root, actor, _, reference, _ = completed_plan(client, episode, settings, model_service)
     passive = observe(client, settings, root, actor, reference, requested_task_keys=["write"])
     assert passive.affected_task_keys == []
-    budget = observe(
-        client,
-        settings,
-        root,
-        actor,
-        reference,
-        trigger="BUDGET_CHANGED",
-        requested_task_keys=["write"],
+    assert passive.tasks[0].replaceable is False
+    with pytest.raises(ValidationError, match="BUDGET_CHANGED"):
+        request_for(reference, trigger="BUDGET_CHANGED", requested_task_keys=["write"])
+
+
+def test_budget_observation_preserves_original_evidence_and_requires_fresh_observation(
+    client, episode, settings, model_service
+):
+    root, actor, _, reference, _ = completed_plan(client, episode, settings, model_service)
+    current = observe(client, settings, root, actor, reference)
+    historical_id = uuid4()
+    request = request_for(
+        reference, reason=current.reason, requested_task_keys=["write"]
+    ).model_dump(mode="json") | {"trigger": "BUDGET_CHANGED"}
+    historical = current.model_dump(mode="json") | {
+        "id": str(historical_id),
+        "trigger": "BUDGET_CHANGED",
+        "affected_task_keys": ["write"],
+    }
+    historical["tasks"][0]["replaceable"] = True
+    historical["overview"]["budget"].update(project_limit="20.000000", policy_revision=1)
+    historical["overview"]["runtime_budget"]["deadline_at"] = current.read_at.isoformat()
+    historical["snapshot_sha256"] = digest(
+        {
+            "request": request,
+            "overview": historical["overview"],
+            "reviews": historical["reviews"],
+            "tasks": historical["tasks"],
+            "affected_task_keys": historical["affected_task_keys"],
+            "authority_sha256": historical["authority_sha256"],
+            "human_evidence": historical["human_evidence"],
+            "stage_receipt": historical["stage_receipt"],
+        }
     )
-    assert budget.affected_task_keys == ["write"]
-    assert budget.tasks[0].replaceable
+    with client.app.state.session_factory.begin() as db:
+        bind(
+            db,
+            current.project_id,
+            "PRODUCER_OBSERVATION",
+            historical_id,
+            {
+                "schema_version": 1,
+                "request": request,
+                "request_sha256": digest(request),
+                "observation": historical,
+            },
+        )
+    with client.app.state.session_factory.begin() as db:
+        saved = observing.read_frozen_observation(db, root, historical_id, actor)
+        assert saved.observation_json == historical
+        assert saved.observation.trigger == "BUDGET_CHANGED"
+        assert saved.observation.snapshot_sha256 == historical["snapshot_sha256"]
+        assert saved.observation.overview.budget == current.overview.budget
+        with pytest.raises(DomainError) as failure:
+            validate_observation_current(
+                db, settings, db.get(WorkflowRun, root), saved.observation, actor
+            )
+        assert failure.value.code == "PRODUCER_OBSERVATION_STALE"
 
 
 def test_saved_agent_decision_is_exact_current_plan_evidence(

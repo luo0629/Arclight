@@ -11,7 +11,7 @@ from arclight.application.commands import emit
 from arclight.application.human_reviews import require_review_actor
 from arclight.application.model_gateway import lock_gate
 from arclight.application.producer_interaction import pending_commands, require_producer
-from arclight.application.producer_series import has_series_scope, read_scope, require_known_costs
+from arclight.application.producer_series import has_series_scope, read_scope
 from arclight.application.production_versions import bind, find_binding
 from arclight.core.errors import DomainError
 from arclight.domain.agent_state import transition_agent_step
@@ -27,7 +27,7 @@ from arclight.persistence.human_reviews import (
     HumanReviewRequest,
     HumanReviewResume,
 )
-from arclight.persistence.models import WorkflowRun
+from arclight.persistence.models import OutboxEvent, WorkflowRun
 from arclight.persistence.versions import VersionBinding
 
 CONTROL_KIND = "PRODUCER_SERIES_CONTROL"
@@ -98,6 +98,34 @@ def control_series(
         if payload.action == "RESUME":
             # A failed admission cannot leave a resume receipt, even if its caller catches it.
             validate_agent_execution(db, run.id, "producer")
+            # Republish interrupted children whose broker deliveries may have expired during pause.
+            waiting = (
+                select(AgentLoop.id)
+                .where(
+                    AgentLoop.run_id == WorkflowRun.id,
+                    AgentLoop.status.in_(
+                        ("WAITING_HUMAN", "WAITING_EXTERNAL", "RECOVERY_REQUIRED")
+                    ),
+                )
+                .exists()
+            )
+            interrupted = db.execute(
+                select(WorkflowRun, OutboxEvent)
+                .join(AgentRunLimit, AgentRunLimit.run_id == WorkflowRun.id)
+                .join(OutboxEvent, OutboxEvent.run_id == WorkflowRun.id)
+                .where(
+                    AgentRunLimit.root_run_id == run.id,
+                    WorkflowRun.id != run.id,
+                    WorkflowRun.status == "RUNNING",
+                    WorkflowRun.error_code.is_(None),
+                    WorkflowRun.pending_review["resource_type"].as_string().is_(None),
+                    OutboxEvent.revision == WorkflowRun.revision,
+                    ~waiting,
+                )
+            )
+            for child, delivery in interrupted:
+                child.status = "QUEUED"
+                delivery.published_at = None
         emit(
             db,
             run,
@@ -270,7 +298,6 @@ def complete_series(
     if paused(db, run) or pending_commands(db, run, episode.project_id):
         raise DomainError("PRODUCER_COMMAND_PENDING", "请先恢复并完成原生产命令", 409)
     validate_agent_execution(db, run.id, "producer")
-    require_known_costs(db, run, actor)
     children = db.scalars(
         select(WorkflowRun)
         .join(AgentRunLimit, AgentRunLimit.run_id == WorkflowRun.id)

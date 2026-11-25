@@ -1,7 +1,6 @@
 """Transactional stage Outbox, authoritative rechecks and atomic handler receipts."""
 
 from collections.abc import Callable, Mapping
-from decimal import Decimal
 from uuid import UUID, uuid5
 
 from sqlalchemy import exists, select
@@ -9,7 +8,6 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.commands import require_episode
 from arclight.application.dependencies import exact_version
-from arclight.application.gateway_accounting import require_priced_history
 from arclight.application.generation_accounting import costs
 from arclight.application.production_event_handlers import HANDLERS, StageHandler, StagePlan
 from arclight.application.production_event_sources import StageSource, current_text, read_source
@@ -151,38 +149,12 @@ def _budget(db: Session, event: StageEvent) -> dict[str, str]:
     }
 
 
-def _check_plan(
-    db: Session,
-    event: StageEvent,
-    plan: StagePlan,
-    state: EpisodeProductionState,
-    budget: dict[str, str],
-) -> None:
+def _check_plan(plan: StagePlan, state: EpisodeProductionState) -> None:
     if not plan.maximum_cost.is_finite() or plan.maximum_cost < 0:
         raise DomainError("STAGE_COST_INVALID", "阶段报价无效", 409)
     satisfied = {row.condition for row in state.conditions if row.satisfied}
     if not set(plan.required_conditions) <= satisfied:
         raise DomainError("STAGE_DEPENDENCY_BLOCKED", "阶段依赖或审核尚未满足", 409)
-    if plan.maximum_cost == 0:
-        return
-    require_priced_history(db, event.project_id)
-    from arclight.application.generation_budget import policy_for
-
-    policy = policy_for(db, event.project_id)
-    project = db.get(Project, event.project_id)
-    assert project is not None
-    if (
-        Decimal(budget["actual"]) + Decimal(budget["reserved"]) + plan.maximum_cost
-        > project.budget_limit
-    ):
-        raise DomainError("BUDGET_EXCEEDED", "阶段将超过项目预算", 409)
-    if policy.episode_limit is not None and (
-        Decimal(budget["episode_actual"]) + Decimal(budget["episode_reserved"]) + plan.maximum_cost
-        > policy.episode_limit
-    ):
-        raise DomainError("BUDGET_EPISODE_EXCEEDED", "阶段将超过剧集预算", 409)
-    if policy.task_limit is not None and plan.maximum_cost > policy.task_limit:
-        raise DomainError("BUDGET_TASK_EXCEEDED", "阶段将超过单任务预算", 409)
 
 
 def consume_stage_event(
@@ -301,7 +273,7 @@ def _consume_stage_event(
             if handler is None:
                 raise DomainError("STAGE_HANDLER_UNAVAILABLE", "阶段处理器尚未接入", 409)
             plan = handler.prepare(db, event, state)
-            _check_plan(db, event, plan, state, budget)
+            _check_plan(plan, state)
         except DomainError as error:
             receipt = StageReceipt(
                 event_id=event_id,

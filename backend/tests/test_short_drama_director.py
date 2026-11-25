@@ -14,7 +14,6 @@ from test_short_drama_delivery import authorized_run
 
 from arclight.application.commands import start_run
 from arclight.application.screenwriter_creation import creation_loops
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.persistence.models import WorkflowRun
 
 
@@ -59,8 +58,7 @@ def test_short_drama_director_repairs_unavailable_sound_without_removing_dialogu
             settings=settings,
             script_version_id=UUID(script["id"]),
             professional_director=True,
-            director_revision_rounds=2,
-            agent_limits=AgentRunLimits(maximum_cost=0),
+            director_revision_rounds=3,
             producer_parent_run_id=root_id,
         )
         child_id = child.id

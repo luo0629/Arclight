@@ -210,7 +210,6 @@ def _round(
                 result_schema_version=version,
                 system_instruction=SERIES_REVISION_PROMPT if series else REVISION_PROMPT,
                 messages=[AgentUserMessage(data=seed.model_dump(mode="json"))],
-                max_tokens=8000,
             )
             if human:
                 problems = "；".join(f"{issue.category}：{issue.problem}" for issue in previous)

@@ -402,8 +402,6 @@ export default function useMediaTasks({
         errors.latestAttempt = "尚未取得最新执行记录，请刷新后操作。";
       const policy: MediaSchedule["policy"] = {};
       for (const field of [
-        "max_attempts",
-        "max_elapsed_seconds",
         "retry_base_seconds",
         "retry_max_seconds",
       ] as const) {
@@ -413,7 +411,6 @@ export default function useMediaTasks({
       }
       const schedule: MediaSchedule | null = scheduleRaw
         ? {
-            deadline_at: scheduleRaw.deadline_at,
             next_attempt_at: scheduleRaw.next_attempt_at,
             blocked_code: scheduleRaw.blocked_code,
             policy,
@@ -655,7 +652,7 @@ export default function useMediaTasks({
         const status = result.status_label || result.status;
         setNotice(
           action === "replay"
-            ? `已创建新任务，状态：${status}。原任务与费用历史保留，新任务独立预留预算。`
+            ? `已创建新任务，状态：${status}。原任务与费用历史保留，新任务单独记录费用。`
             : action === "cancel"
               ? result.status === "CANCELLED"
                 ? "任务已取消。"

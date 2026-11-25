@@ -2,7 +2,7 @@
 
 from uuid import UUID, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from arclight.application.agent_limits import validate_agent_execution
@@ -29,7 +29,7 @@ from arclight.domain.producer_series import (
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision
 from arclight.persistence.base import utcnow
-from arclight.persistence.models import Episode, OutboxEvent, WorkflowRun
+from arclight.persistence.models import Episode, OutboxEvent, WorkflowRecoveryCounter, WorkflowRun
 from arclight.persistence.versions import VersionBinding
 
 COMMAND = "PRODUCER_COMMAND"
@@ -196,7 +196,6 @@ def start_interactive_producer(
         payload.goal,
         key,
         request_id,
-        limits=payload.limits,
         series=payload.scope if isinstance(payload, SeriesProducerCreate) else None,
     )
     episode = db.get(Episode, run.episode_id)
@@ -221,7 +220,6 @@ def validate_delegation(
     actor: str,
     request: DelegationRequest,
 ) -> None:
-    from arclight.application.agent_limits import action_usage, delegation_count
     from arclight.application.producer_delegation import (
         require_producer_parent,
         validate_delegation_scope,
@@ -231,7 +229,6 @@ def validate_delegation(
         find_task_delegation,
         read_plan_record,
     )
-    from arclight.domain.agent_limits import AgentRunLimits
 
     available = available_agent_tools(
         db, producer_registry(settings), run.id, "producer", actor, "producer"
@@ -245,16 +242,13 @@ def validate_delegation(
         return
     planned = next(task for task in record.plan.tasks if task.task_key == request.task_key)
     from arclight.application.producer_series import (
-        has_series_scope,
         require_episode_prerequisites,
-        require_known_costs,
         task_context,
     )
 
     require_episode_prerequisites(
         db, run, record.plan, planned, task_context(run, record.plan, planned.task_key), actor
     )
-    require_known_costs(db, run, actor)
     for dependency in planned.depends_on:
         scope = request.model_copy(update={"task_key": dependency})
         validate_delegation_scope(context, scope, settings)
@@ -262,21 +256,7 @@ def validate_delegation(
         child = db.get(WorkflowRun, saved.child_run_id) if saved else None
         if child is None or child.status != "SUCCEEDED":
             raise DomainError("PRODUCER_PREREQUISITE_PENDING", "前置生产任务尚未成功", 409)
-    control = require_producer_parent(db, run.id, episode.id, actor)
-    limits = AgentRunLimits.model_validate(control.limits_json)
-    if control.depth + 1 > limits.max_delegation_depth:
-        raise DomainError("AGENT_DELEGATION_DEPTH", "Agent 委派深度已达上限", 409)
-    if delegation_count(db, run.id) >= limits.max_delegations:
-        raise DomainError("AGENT_DELEGATION_LIMIT", "Agent 委派次数已达上限", 409)
-    usage = action_usage(db, run.id)
-    if (has_series_scope(run) and usage["unknown_cost"]) or (
-        limits.maximum_cost is not None
-        and (
-            usage["unknown_cost"]
-            or usage["actual_cost"] + usage["pending_estimate"] > limits.maximum_cost
-        )
-    ):
-        raise DomainError("AGENT_COST_LIMIT", "已有用量不允许新生产委派", 409)
+    require_producer_parent(db, run.id, episode.id, actor)
 
 
 def queue_command(
@@ -340,7 +320,7 @@ def queue_command(
                     )
             stop_specialists(db, specialists)
             stop_media(db, run, episode.project_id)
-        # Cancellation is local and needs neither provider admission nor an unexpired budget.
+        # Cancellation is local and does not require provider admission.
         for pending in pending_commands(db, run, episode.project_id):
             record_receipt(db, run, episode.project_id, pending, "STOPPED", "AGENT_CANCELLED")
         command = _enqueue(db, run, episode, actor, key, value)
@@ -368,6 +348,17 @@ def queue_command(
         )
         if outbox is None:
             raise DomainError("PRODUCER_COMMAND_INVALID", "原生产命令缺少投递记录", 409)
+        if run.error_code == "ACCOUNT_BALANCE_INSUFFICIENT":
+            from arclight.application.gateway_accounting import workflow_balance_rejected
+
+            if not workflow_balance_rejected(db, run.id):
+                raise DomainError("NOT_RETRYABLE", "原调用须核对供应商回执", 409)
+            run.error_code = None
+        if run.error_code == "WORKFLOW_RECOVERY_LIMIT":
+            run.error_code = None
+            db.execute(
+                delete(WorkflowRecoveryCounter).where(WorkflowRecoveryCounter.event_id == outbox.id)
+            )
         bind(db, episode.project_id, RECOVERY, recovery_id, {"actor_id": actor, "payload": value})
         outbox.published_at = None
         emit(db, run, "producer.command.requeued", {"command_id": str(original.resource_id)})

@@ -1,6 +1,5 @@
 "use client";
 
-import { useId } from "react";
 import type { Episode } from "@/types/api";
 import NarrativeInputs from "./narrative-inputs";
 import {
@@ -16,7 +15,6 @@ import {
   FieldSet,
   FieldLegend,
 } from "@/components/ui/field";
-import { Input } from "@/components/ui/input";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type CreationOptions = {
@@ -26,49 +24,22 @@ export type CreationOptions = {
   professionalDirector?: boolean;
   directorReview?: boolean;
   artCollaboration?: boolean;
-  directorRevisionRounds?: string;
   review: boolean;
-  revisionRounds: string;
-  cost: string;
-  seconds: string;
-  calls: string;
 };
 export const initialCreationOptions: CreationOptions = {
   professional: false,
   professionalDirector: false,
   directorReview: false,
   artCollaboration: false,
-  directorRevisionRounds: "3",
   review: false,
-  revisionRounds: "3",
-  cost: "",
-  seconds: "300",
-  calls: "32",
 };
+const automaticRevisionRounds = 3;
+
 export function validCreationOptions(value: CreationOptions) {
   return (
     !value.professional ||
-    ((!value.narrative ||
-      (!value.professionalDirector &&
-        !narrativeRequestProblem(value.narrative))) &&
-      Number.isInteger(Number(value.seconds)) &&
-      Number(value.seconds) >= 1 &&
-      Number(value.seconds) <= 86400 &&
-      Number.isInteger(Number(value.calls)) &&
-      Number(value.calls) >= 1 &&
-      Number(value.calls) <= 1024 &&
-      (!value.review ||
-        (value.revisionRounds.trim() !== "" &&
-          Number.isInteger(Number(value.revisionRounds)) &&
-          Number(value.revisionRounds) >= 0 &&
-          Number(value.revisionRounds) <= 8)) &&
-      (!value.directorReview ||
-        (String(value.directorRevisionRounds ?? "3").trim() !== "" &&
-          Number.isInteger(Number(value.directorRevisionRounds ?? "3")) &&
-          Number(value.directorRevisionRounds ?? "3") >= 0 &&
-          Number(value.directorRevisionRounds ?? "3") <= 8)) &&
-      (!value.cost ||
-        (/^\d+(\.\d{1,6})?$/.test(value.cost) && Number(value.cost) < 1e12)))
+    !value.narrative ||
+    (!value.professionalDirector && !narrativeRequestProblem(value.narrative))
   );
 }
 export function creationPayload(value: CreationOptions, directorOnly = false) {
@@ -78,7 +49,7 @@ export function creationPayload(value: CreationOptions, directorOnly = false) {
         ...(directorOnly && value.performance
           ? {
               performance: true,
-              director_revision_rounds: Number(value.revisionRounds),
+              director_revision_rounds: automaticRevisionRounds,
             }
           : {}),
         ...(value.narrative ? { narrative: value.narrative } : {}),
@@ -91,22 +62,14 @@ export function creationPayload(value: CreationOptions, directorOnly = false) {
           : {}),
         ...(value.review
           ? directorOnly
-            ? { director_revision_rounds: Number(value.revisionRounds) }
-            : { revision_rounds: Number(value.revisionRounds) }
+            ? { director_revision_rounds: automaticRevisionRounds }
+            : { revision_rounds: automaticRevisionRounds }
           : {}),
         ...(value.professionalDirector && value.directorReview
           ? {
-              director_revision_rounds: Number(
-                value.directorRevisionRounds ?? "3",
-              ),
+              director_revision_rounds: automaticRevisionRounds,
             }
           : {}),
-        agent_limits: {
-          maximum_cost: value.cost || null,
-          max_duration_seconds: Number(value.seconds),
-          max_model_calls: Number(value.calls),
-          max_steps: Number(value.calls),
-        },
       }
     : {};
 }
@@ -125,12 +88,7 @@ export function isCreationOptions(value: unknown): value is CreationOptions {
       typeof row.artCollaboration === "boolean") &&
     (row.directorReview === undefined ||
       typeof row.directorReview === "boolean") &&
-    (row.directorRevisionRounds === undefined ||
-      typeof row.directorRevisionRounds === "string") &&
-    typeof row.review === "boolean" &&
-    ["revisionRounds", "cost", "seconds", "calls"].every(
-      (key) => typeof row[key] === "string",
-    )
+    typeof row.review === "boolean"
   );
 }
 export default function CreationOptionsFields({
@@ -156,7 +114,6 @@ export default function CreationOptionsFields({
   narrativeEpisode?: Episode;
   performanceSourceSchema?: string;
 }) {
-  const id = useId();
   const performanceAvailable = performanceSourceSchema === "3.0";
   return (
     <FieldSet disabled={disabled}>
@@ -226,10 +183,12 @@ export default function CreationOptionsFields({
             <FieldDescription>
               {directorOnly
                 ? value.review
-                  ? "工具检查对白覆盖、镜头顺序和时长；导演选择局部修法并复查，通过后交完整分镜审核。"
+                  ? "工具检查对白覆盖、镜头顺序和时长，最多自动修订 3 次。通过后交完整分镜审核。"
                   : "先调查精确批准剧本并保存场景计划，再逐场景拆镜；遇到问题会等待你的回答，完整分镜仍须审核。"
                 : value.review
-                  ? "结合剧情评价和规则检查，按限定范围修订；无法解决的问题会请你决定。"
+                  ? rewrite
+                    ? "按指令完成首次改写，再结合剧情评价和规则检查，最多自动修订 3 次。"
+                    : "结合剧情评价和规则检查，最多自动修订 3 次。若问题仍未解决，会请你决定。"
                   : "先调查并保存计划，再逐段创作；遇到问题会等待你的回答。"}
               {!directorOnly &&
                 (editableDraft ? "完成后可编辑剧本。" : "完整稿仍须审核。")}
@@ -305,36 +264,12 @@ export default function CreationOptionsFields({
                 <FieldDescription>
                   {value.narrative
                     ? "连续剧剧本批准后可直接拆镜；连续剧专业导演接入将在后续任务开放。"
-                    : "先审核剧本，再审核完整分镜；两个阶段共用本次执行限制。"}
+                    : value.directorReview
+                      ? "剧本批准后自动检查和修订分镜，最多修订 3 次。"
+                      : "先审核剧本，再审核完整分镜。"}
                 </FieldDescription>
               </Field>
             )}
-            {allowDirector &&
-              value.professionalDirector &&
-              value.directorReview && (
-                <Field>
-                  <FieldLabel htmlFor={id + "-director-rounds"}>
-                    最多导演自动修订轮数
-                  </FieldLabel>
-                  <Input
-                    id={id + "-director-rounds"}
-                    type="number"
-                    min={0}
-                    max={8}
-                    step={1}
-                    value={value.directorRevisionRounds ?? "3"}
-                    onChange={(e) =>
-                      onChange({
-                        ...value,
-                        directorRevisionRounds: e.target.value,
-                      })
-                    }
-                  />
-                  <FieldDescription>
-                    对白、镜头顺序和时长全部通过后才交审核；耗尽时保存问题并等待你的决定。
-                  </FieldDescription>
-                </Field>
-              )}
             {((directorOnly && value.review) ||
               (allowDirector &&
                 value.professionalDirector &&
@@ -362,83 +297,10 @@ export default function CreationOptionsFields({
                   </ToggleGroupItem>
                 </ToggleGroup>
                 <FieldDescription>
-                  可基于已批准剧本和工作中镜头征询一次视觉意见，共用本次费用与调用限制；正式变更仍须人工批准。
+                  可基于已批准剧本和工作中镜头征询一次视觉意见，正式变更须人工批准。
                 </FieldDescription>
               </Field>
             )}
-            {value.review && (
-              <Field>
-                <FieldLabel htmlFor={id + "-rounds"}>
-                  {directorOnly ? "最多导演自动修订轮数" : "最多自动修订轮数"}
-                </FieldLabel>
-                <Input
-                  id={id + "-rounds"}
-                  type="number"
-                  min={0}
-                  max={8}
-                  step={1}
-                  value={value.revisionRounds}
-                  onChange={(e) =>
-                    onChange({ ...value, revisionRounds: e.target.value })
-                  }
-                />
-                <FieldDescription>
-                  修订后重新检查；额度用完会保留问题并请你决定。
-                  {rewrite && "首次按你的指令改写不计入修订轮数。"}
-                </FieldDescription>
-              </Field>
-            )}
-            <Field>
-              <FieldLabel htmlFor={id + "-cost"}>
-                本次可选费用上限（USD）
-              </FieldLabel>
-              <Input
-                id={id + "-cost"}
-                type="number"
-                min="0"
-                step="0.000001"
-                placeholder="留空使用供应商余额或额度"
-                value={value.cost}
-                onChange={(e) => onChange({ ...value, cost: e.target.value })}
-              />
-              <FieldDescription>
-                设置上限需要可信报价；当前费用以调用记录为准。
-              </FieldDescription>
-            </Field>
-            <Field>
-              <FieldLabel htmlFor={id + "-seconds"}>
-                总执行时限（秒）
-              </FieldLabel>
-              <Input
-                id={id + "-seconds"}
-                type="number"
-                min={1}
-                max={86400}
-                step={1}
-                value={value.seconds}
-                onChange={(e) =>
-                  onChange({ ...value, seconds: e.target.value })
-                }
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor={id + "-calls"}>最多模型调用次数</FieldLabel>
-              <Input
-                id={id + "-calls"}
-                type="number"
-                min={1}
-                max={1024}
-                step={1}
-                value={value.calls}
-                onChange={(e) => onChange({ ...value, calls: e.target.value })}
-              />
-              <FieldDescription>
-                {editableDraft
-                  ? "调查与创作共用本次限制"
-                  : "调查、创作与后续分镜共用本次限制"}
-                ；重试和人工回答不会重置。
-              </FieldDescription>
-            </Field>
           </>
         )}
       </FieldGroup>

@@ -97,7 +97,7 @@ test("QA-08：桌面逐图比较、精确依据、旧审查禁选与跨资产轮
     fullPage: true,
   });
   await dialog
-    .getByText("修订第 1 轮 / 最多 3 轮 · 已排队", { exact: true })
+    .getByText("修订第 1 轮 · 已排队", { exact: true })
     .click();
   await expect(
     dialog.getByText("对照修订新图与冻结参考后，保留本轮依据。", {

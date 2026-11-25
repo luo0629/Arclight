@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { FormLabel, Notice, PagePanel } from "@/components/ui-kit";
 import { useAuth } from "@/features/auth/auth-context";
@@ -41,9 +40,6 @@ function StartForm({
 }: Props & { userId: string }) {
   const router = useRouter();
   const [goal, setGoal] = useState("");
-  const [maximumCost, setMaximumCost] = useState("");
-  const [modelCalls, setModelCalls] = useState("32");
-  const [delegations, setDelegations] = useState("8");
   const [refreshError, setRefreshError] = useState("");
   const intent = useProducerIntent({
     userId,
@@ -83,16 +79,9 @@ function StartForm({
       {refreshError && <Notice tone="error">{refreshError}</Notice>}
       {original && (
         <Notice>
-          <p>
-            尚有一项发起请求待核验。生产目标与预算已固定，刷新页面后仍会保留。
-          </p>
+          <p>尚有一项发起请求待核验。生产目标已固定，刷新页面后仍会保留。</p>
           <p className="whitespace-pre-wrap break-words">
             原生产目标：{original.goal}
-          </p>
-          <p>
-            原费用上限：{original.limits?.maximum_cost ?? "未单独设置"} USD ·
-            原模型调用上限：{original.limits?.max_model_calls ?? 32}·
-            原委派上限：{original.limits?.max_delegations ?? 8}
           </p>
           <Button
             type="button"
@@ -113,15 +102,7 @@ function StartForm({
           void intent
             .submit({
               kind: "START",
-              payload: {
-                goal,
-                limits: {
-                  maximum_cost: maximumCost.trim() || null,
-                  max_model_calls: Number(modelCalls),
-                  max_delegations: Number(delegations),
-                  max_duration_seconds: 3600,
-                },
-              },
+              payload: { goal },
             })
             .then(accepted);
         }}
@@ -137,57 +118,6 @@ function StartForm({
             placeholder="例如：根据本集已批准大纲完成剧本、分镜与美术提案，并检查画面连续性。"
           />
         </FormLabel>
-        <div className="grid gap-4 sm:grid-cols-3">
-          <FormLabel>
-            费用上限（USD，可选）
-            <Input
-              type="number"
-              min="0"
-              max="999999999999.999999"
-              step="0.000001"
-              value={
-                original ? (original.limits?.maximum_cost ?? "") : maximumCost
-              }
-              onChange={(event) => setMaximumCost(event.target.value)}
-              disabled={locked}
-              placeholder="沿用项目预算"
-            />
-          </FormLabel>
-          <FormLabel>
-            模型调用上限
-            <Input
-              type="number"
-              min="0"
-              max="4096"
-              step="1"
-              required
-              value={
-                original ? (original.limits?.max_model_calls ?? 32) : modelCalls
-              }
-              onChange={(event) => setModelCalls(event.target.value)}
-              disabled={locked}
-            />
-          </FormLabel>
-          <FormLabel>
-            专业 Agent 委派上限
-            <Input
-              type="number"
-              min="0"
-              max="128"
-              step="1"
-              required
-              value={
-                original ? (original.limits?.max_delegations ?? 8) : delegations
-              }
-              onChange={(event) => setDelegations(event.target.value)}
-              disabled={locked}
-            />
-          </FormLabel>
-        </div>
-        <p className="text-xs leading-relaxed text-muted-foreground">
-          本次协作最长 60
-          分钟，费用与调用限制由服务端统一检查。未设置本次费用上限时，项目既有预算仍然生效。
-        </p>
         <div>
           <Button type="submit" disabled={locked || !goal.trim()}>
             {intent.mutating ? "正在发起生产计划…" : "发起生产计划"}

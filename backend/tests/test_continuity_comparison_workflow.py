@@ -27,7 +27,6 @@ from test_continuity_revisions import revision_case as revision_case
 from test_continuity_rules import rules_storage as rules_storage
 from test_human_reviews import decide, decision_payload, resume
 
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.persistence.models import AssetVersion, ProjectMember, VisualAsset
 
 
@@ -205,10 +204,10 @@ def test_changed_version_keeps_receipt_but_closes_actions(
     assert client.get(comparison_path(case)).status_code == 200
 
 
-@pytest.mark.parametrize("reviewer_case", [AgentRunLimits(max_model_calls=1)], indirect=True)
 def test_incomplete_review_has_no_approval_capability_but_can_be_rejected_and_resumed(
-    client, settings, model_service, reviewer_case
+    client, settings, model_service, reviewer_case, monkeypatch
 ):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
     sent, errors, _ = install_reviewer_model(model_service)
     outcome = run_review(client, settings, reviewer_case)
     assert not errors and outcome.status == "STOPPED" and len(sent) == 1

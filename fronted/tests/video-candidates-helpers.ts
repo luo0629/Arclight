@@ -73,12 +73,6 @@ export async function realVideoFixture(
     },
   });
   expect(configured.status(), await configured.text()).toBe(200);
-  const budget = await (await page.request.get(root + "/budget", call)).json();
-  const limited = await page.request.patch(root + "/budget", {
-    ...call,
-    data: { expected_revision: budget.policy_revision, project_limit: "20" },
-  });
-  expect(limited.status(), await limited.text()).toBe(200);
   const created = await page.request.post(root + "/assets", {
     ...call,
     data: { name: "合成视频首帧", asset_type: "SCENE" },
@@ -164,14 +158,17 @@ export async function realVideoFixture(
     name: "视频费用确认与提交结果",
     exact: true,
   });
-  await expect(confirmation).toContainText("最高费用");
+  await expect(confirmation).toContainText("费用估算 1 USD");
   const submit = confirmation.getByRole("button", {
     name: "确认费用并生成镜头视频",
     exact: true,
   });
   await expect(submit).toBeDisabled();
   await confirmation
-    .getByRole("checkbox", { name: /我确认本次视频最高费用/ })
+    .getByRole("checkbox", {
+      name: "确认使用当前供应商生成视频",
+      exact: true,
+    })
     .check();
   let responsePromise = loseGenerationResponse
     ? null

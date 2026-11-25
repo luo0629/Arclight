@@ -19,7 +19,7 @@ class GenerationSchedule(Entity, Base):
     __tablename__ = "generation_schedules"
     job_id: Mapped[UUID] = mapped_column(ForeignKey("generation_jobs.id"), unique=True)
     policy_json: Mapped[dict] = mapped_column(JSON_TYPE)
-    deadline_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deadline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     blocked_code: Mapped[str | None] = mapped_column(String(64))
 

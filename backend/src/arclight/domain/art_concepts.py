@@ -15,6 +15,7 @@ CONCEPT_WORKFLOW_VERSION = "art-proposal/2.0"
 CONCEPT_DIRECTION_VERSION = "art-direction/2"
 REQUEST_CONCEPT_TOOL = "request_art_concepts"
 OBSERVE_CONCEPT_TOOL = "observe_art_concepts"
+MAX_CONCEPT_ROUNDS = 4
 CONCEPT_PROMPT = """
 本次额外允许按服务端冻结concept_plan调用request_art_concepts，再用observe_art_concepts
 等待原job的异步结果；不得自行调用Provider或修改能力、参考输入、数量和费用上限。
@@ -32,14 +33,9 @@ class ArtConceptPlan(AgentToolContract):
     target_type: Literal["CHARACTER", "SCENE", "PROP", "STYLE"] = "STYLE"
     spec: GenerationSpec
     inputs: list[DependencyInput] = Field(default_factory=list, max_length=16)
-    maximum_rounds: int = Field(default=2, strict=True, ge=1, le=4)
-    maximum_candidates: int = Field(default=4, strict=True, ge=1, le=8)
-    maximum_cost: Decimal = Field(ge=0, le=10000, max_digits=12, decimal_places=6)
 
     @model_validator(mode="after")
     def bounded_plan(self):
-        if self.spec.batch_size > self.maximum_candidates or self.spec.batch_size > 4:
-            raise ValueError("Concept batches must fit the frozen candidate limit")
         if self.spec.context:
             raise ValueError("Concept context is constructed from the frozen art run")
         identities = [(row.source_asset_version_id, row.dependency_type) for row in self.inputs]
@@ -49,7 +45,7 @@ class ArtConceptPlan(AgentToolContract):
 
 
 class RequestArtConcepts(AgentToolContract):
-    round_no: int = Field(strict=True, ge=1, le=4)
+    round_no: int = Field(strict=True, ge=1)
     prompt: str = Field(min_length=1, max_length=16000)
     rationale: str = Field(min_length=1, max_length=2000)
     previous_comparison_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
@@ -59,7 +55,7 @@ class ArtConceptRequested(AgentToolContract):
     job_id: UUID
     round_no: int
     input_manifest_id: UUID
-    maximum_cost: Decimal
+    maximum_cost: Decimal | None
     candidate_count: int
     rationale: str
 

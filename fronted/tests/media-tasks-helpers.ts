@@ -323,8 +323,8 @@ export async function mediaFixture(page: Page) {
           json: schedules.get(jobId) ?? {
             id: id(),
             job_id: jobId,
-            policy_json: { max_attempts: 3, max_elapsed_seconds: 600 },
-            deadline_at: "2026-11-11T07:10:00Z",
+            policy_json: { retry_base_seconds: 2, retry_max_seconds: 60 },
+            deadline_at: null,
             next_attempt_at: now,
             blocked_code: null,
           },

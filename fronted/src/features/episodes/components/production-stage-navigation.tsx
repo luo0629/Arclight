@@ -229,7 +229,7 @@ export default function ProductionStageNavigation({
                   {stageGuidance[selected.id]}
                 </p>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  查看阶段不会启动生产。实际提交时会重新检查权限、精确版本、审核和预算；请先处理提示中的前置条件。
+                  查看阶段不会启动生产。实际提交时会重新检查权限、精确版本和审核状态；请先处理提示中的前置条件。
                 </p>
                 {state && (
                   <>

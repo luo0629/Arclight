@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.dependencies import exact_version, lock_dependency_graph
-from arclight.application.generation_budget import enforce_budget, quote_job
+from arclight.application.generation_budget import quote_job
 from arclight.application.generation_events import enqueue_dispatch
 from arclight.application.generation_scheduling import schedule_for
 from arclight.application.generation_targets import require_available_target
@@ -39,8 +39,6 @@ def request_fingerprint(payload: GenerationCreate) -> str:
     values = payload.model_dump(mode="json")
     if values["review_target"] is None:
         del values["review_target"]
-    if values["batch_id"] is None:
-        del values["batch_id"]
     if values["scheduling_mode"] == "INTERACTIVE":
         del values["scheduling_mode"]
     # Preserve idempotent replays of requests captured before capability options existed.
@@ -143,8 +141,7 @@ def create_job(
     service = select_for_spec(db, actor, payload.spec, payload.task_type, frozen_service)
     if service is not None:
         require_project(db, project_id, service.created_by, write=True)
-    budget_quote = quote_job(db, project_id, payload, actor=actor, frozen_service=frozen_service)
-    enforce_budget(db, project_id, payload, budget_quote.maximum_cost)
+    budget_quote = quote_job(db, payload, actor=actor, frozen_service=frozen_service)
     require_available_target(db, payload.target_asset_id)
     inputs = []
     prompt_sources = []
@@ -316,8 +313,7 @@ def create_job(
                     else {}
                 ),
                 "provider_capabilities": capabilities.model_dump(mode="json"),
-                "budget_quote": budget_quote.model_dump(mode="json"),
-                "budget_batch_id": str(payload.batch_id) if payload.batch_id else None,
+                "budget_quote": budget_quote.model_dump(mode="json") if budget_quote else None,
                 **(
                     {"prompt_composition": prompt_composition}
                     if prompt_composition is not None
@@ -349,16 +345,16 @@ def create_job(
     bind_selection(db, job, service)
     from arclight.persistence.generation_budget import GenerationBudgetQuote
 
-    db.add(
-        GenerationBudgetQuote(
-            job_id=job.id,
-            batch_id=payload.batch_id,
-            maximum_cost=budget_quote.maximum_cost,
-            currency=budget_quote.currency,
-            pricing_version=budget_quote.pricing_version,
-            candidate_count=payload.spec.batch_size,
+    if budget_quote is not None:
+        db.add(
+            GenerationBudgetQuote(
+                job_id=job.id,
+                maximum_cost=budget_quote.maximum_cost,
+                currency=budget_quote.currency,
+                pricing_version=budget_quote.pricing_version,
+                candidate_count=payload.spec.batch_size,
+            )
         )
-    )
     from arclight.application.generation_accounting import reserve_next
 
     db.flush()
@@ -366,7 +362,7 @@ def create_job(
         from arclight.application.short_drama_budget import bind_media_job
 
         bind_media_job(db, short_drama_run_id, job)
-    reserve_next(db, job, budget_quote.maximum_cost)
+    reserve_next(db, job, budget_quote.maximum_cost if budget_quote else None)
     from arclight.application.production_versions import capture_media
 
     capture_media(
@@ -379,14 +375,7 @@ def create_job(
         inputs,
         prompt_composition=prompt_composition,
     )
-    parent_deadline = None
-    if art_concept_origin is not None:
-        from arclight.persistence.agent_limits import AgentRunLimit
-
-        root = db.get(AgentRunLimit, UUID(art_concept_origin["root_run_id"]))
-        assert root is not None
-        parent_deadline = root.deadline_at
-    schedule_for(db, job, execution_policy, parent_deadline=parent_deadline)
+    schedule_for(db, job, execution_policy)
     from arclight.application.generation_queues import classify
 
     classify(db, job, payload)

@@ -2,7 +2,6 @@
 
 import json
 from copy import deepcopy
-from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -12,18 +11,15 @@ from sqlalchemy import func, select
 from test_agent_loop_recovery import answer
 from test_agent_model import model_service as model_service
 from test_collaboration import create_episode, create_project, register
-from test_generation_budget import set_policy
 from test_producer_delegation import delegation_call, dispatch
 from test_producer_planning import completed_plan, writer_task
 from test_producer_replanning import install_replan_model, observation, replanned
 from test_screenwriter_creation import run_once
 
-from arclight.application import agent_limits
 from arclight.application import producer_replanning as replanning
 from arclight.application.agent_limits import action_usage
 from arclight.application.agent_tools import grant_agent_tools
 from arclight.application.gateway_accounting import latest_receipt
-from arclight.application.model_gateway import utc
 from arclight.application.producer_plan_history import read_current_plan
 from arclight.application.producer_planning import producer_registry
 from arclight.core.errors import DomainError
@@ -234,11 +230,9 @@ def editor_episode(client):
 
 
 @pytest.mark.parametrize("phase", ["begin", "completed_replay", "human_resume"])
-@pytest.mark.parametrize(
-    "revocation", ["grant", "disabled", "viewer", "archived", "cancelled", "deadline"]
-)
+@pytest.mark.parametrize("revocation", ["grant", "disabled", "viewer", "archived", "cancelled"])
 def test_replan_reauthorizes_begin_completed_replay_and_human_resume_before_side_effects(
-    client, settings, model_service, monkeypatch, phase, revocation
+    client, settings, model_service, phase, revocation
 ):
     episode, owner, member = editor_episode(client)
     actor = member["user"]["id"]
@@ -271,11 +265,8 @@ def test_replan_reauthorizes_begin_completed_replay_and_human_resume_before_side
                 db.get(User, UUID(actor)).disabled = True
             elif revocation == "archived":
                 db.get(Project, UUID(episode["project_id"])).archived = True
-            elif revocation == "cancelled":
-                db.get(WorkflowRun, run_id).status = "CANCELLED"
             else:
-                deadline = utc(db.get(AgentRunLimit, run_id).deadline_at)
-                monkeypatch.setattr(agent_limits, "utcnow", lambda: deadline + timedelta(seconds=1))
+                db.get(WorkflowRun, run_id).status = "CANCELLED"
     with factory() as db:
         counts = effect_counts(db)
     sent_before = len(sent)
@@ -290,7 +281,6 @@ def test_replan_reauthorizes_begin_completed_replay_and_human_resume_before_side
         "FORBIDDEN",
         "PROJECT_ARCHIVED",
         "AGENT_CANCELLED",
-        "AGENT_DEADLINE_EXCEEDED",
         "AGENT_TOOL_GRANT_FORBIDDEN",
         "AGENT_NOT_ACTIVE",
     }
@@ -301,7 +291,7 @@ def test_replan_reauthorizes_begin_completed_replay_and_human_resume_before_side
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
 
-def test_new_replan_loop_cannot_reset_original_model_call_cap_or_deadline(
+def test_new_replan_continues_after_historical_call_cap_and_preserves_old_plan(
     client, episode, settings, model_service
 ):
     limits = AgentRunLimits(max_model_calls=3, maximum_cost=Decimal("0"), max_duration_seconds=3600)
@@ -316,17 +306,16 @@ def test_new_replan_loop_cannot_reset_original_model_call_cap_or_deadline(
         frozen = (control.limits_json, control.deadline_at)
     sent, errors = install_replan_model(model_service)
     result = replanning.replan_producer(factory, settings, run_id, actor, observed.id)
-    assert result.status == "STOPPED" and result.stop_code == "AGENT_MODEL_CALL_LIMIT", (
-        result.model_dump_json()
-    )
-    assert len(sent) == 1 and not errors
+    assert result.status == "COMPLETED", result.model_dump_json()
+    assert len(sent) == 2 and not errors
     assert replanning.replan_producer(factory, settings, run_id, actor, observed.id) == result
-    assert len(sent) == 1
+    assert len(sent) == 2
     with factory() as db:
-        assert len([row for row in action_usage(db, run_id)["actions"] if row.kind == "MODEL"]) == 3
+        assert len([row for row in action_usage(db, run_id)["actions"] if row.kind == "MODEL"]) == 4
         control = db.get(AgentRunLimit, run_id)
         assert (control.limits_json, control.deadline_at) == frozen
-        assert read_current_plan(db, db.get(WorkflowRun, run_id), actor).plan_id == original.plan_id
+        current = read_current_plan(db, db.get(WorkflowRun, run_id), actor)
+        assert current.plan_id == result.loop_id and current.previous_plan_id == original.plan_id
         assert db.scalar(select(func.count()).select_from(AgentRunLimit)) == 1
         assert db.scalar(select(func.count()).select_from(OutboxEvent)) == 0
 
@@ -335,7 +324,6 @@ def test_new_replan_loop_cannot_reset_original_model_call_cap_or_deadline(
 def test_real_unknown_child_result_is_observable_but_never_replaced_or_resent(
     client, episode, settings, model_service, mutation
 ):
-    set_policy(client, episode["project_id"], "100")
     anchor = writer_task("anchor", story="另一独立制作目标作为既有前置键。")
     run_id, actor, _, original, _ = completed_plan(
         client,

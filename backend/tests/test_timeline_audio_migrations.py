@@ -13,6 +13,7 @@ from test_timelines import timeline_case
 __all__ = ["review_case", "saved_case", "timeline_case", "audio_timeline_case"]
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_0068_empty_audio_roundtrip_preserves_exact_legacy_history(client, saved_case, migrated):
     original, body, _ = saved_case
     saved = saved_timeline(client, original, body)
@@ -27,6 +28,7 @@ def test_0068_empty_audio_roundtrip_preserves_exact_legacy_history(client, saved
     assert saved_timeline(client, original, body) == saved
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_0068_nonempty_audio_cannot_be_downgraded_or_discarded(
     client, audio_timeline_case, migrated
 ):

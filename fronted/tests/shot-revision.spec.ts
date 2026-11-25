@@ -37,7 +37,7 @@ for (const [operation, label] of Object.entries(revisionOperations)) {
       .getByRole("textbox", { name: "具体修订要求", exact: true })
       .fill(instruction);
     await dialog
-      .getByRole("button", { name: "预览修订与预算", exact: true })
+      .getByRole("button", { name: "预览修订与费用", exact: true })
       .click();
     const preview = dialog.getByRole("region", {
       name: "单镜头修订预览与结果",
@@ -90,7 +90,7 @@ for (const [code, message] of [
     if (code === "SHOT_REVISION_PROTECTED")
       env.setPreviewFailure({ code, message });
     await dialog
-      .getByRole("button", { name: "预览修订与预算", exact: true })
+      .getByRole("button", { name: "预览修订与费用", exact: true })
       .click();
     if (code === "SHOT_REVISION_PREVIEW_CHANGED") {
       await page.route("**" + env.endpoint, (route) =>
@@ -118,7 +118,7 @@ test("UI-04：丢失提交响应后刷新并用原幂等键和冻结请求恢复
     .getByRole("textbox", { name: "具体修订要求", exact: true })
     .fill("轻微惊讶，保持人物身份");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   env.loseResponse();
   await dialog
@@ -156,7 +156,7 @@ test("UI-04：受理后刷新失败保留回执，再次打开不会自动提交
     .getByRole("textbox", { name: "具体修订要求", exact: true })
     .fill("修复手部指节");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   await page.route("**" + env.productionPath + "?**", (route) =>
     apiFailure(route, "TEMPORARILY_UNAVAILABLE", "生产列表暂时读取失败", 503),
@@ -207,7 +207,7 @@ test("UI-04：撤权清空候选与待确认记录且不会重放", async ({ pag
     .getByRole("textbox", { name: "具体修订要求", exact: true })
     .fill("保持人物姿态调整构图");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   env.loseResponse();
   await dialog
@@ -266,7 +266,7 @@ test("UI-04：关闭上层工作区后迟到的预览不提交且不污染重开
     .getByRole("textbox", { name: "具体修订要求", exact: true })
     .fill("旧草稿");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   await started;
   // Navigating away closes both dialogs while a real async request remains in flight.
@@ -297,7 +297,7 @@ test("UI-04：来源不一致或无可信报价时不允许确认", async ({ pag
     .getByRole("textbox", { name: "具体修订要求", exact: true })
     .fill("调整构图");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   await expect(dialog.getByRole("alert")).toContainText(
     "当前精确候选或可信报价不一致",
@@ -307,10 +307,14 @@ test("UI-04：来源不一致或无可信报价时不允许确认", async ({ pag
   ).toHaveCount(0);
   env.setPrepareOverride((preview) => ({
     ...preview,
-    quote: { ...preview.quote, maximum_cost: "unknown" },
+    quote: {
+      currency: "USD",
+      pricing_version: "test",
+      maximum_cost: "unknown",
+    },
   }));
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   await expect(dialog.getByRole("alert")).toContainText(
     "当前精确候选或可信报价不一致",
@@ -353,7 +357,7 @@ test("UI-04：手机键盘填写与预算确认，原图可见且对话框无横
   });
   await instruction.fill("修复握灯的手指，保持握持动作与人物身份。");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   await expect(
     dialog.getByRole("region", { name: "单镜头修订预览与结果", exact: true }),
@@ -408,7 +412,7 @@ test("UI-04：无法持久保存幂等键时阻断提交", async ({ page }) => {
     .getByRole("textbox", { name: "具体修订要求", exact: true })
     .fill("保持人物调整构图");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   await page.evaluate(() => {
     const original = Storage.prototype.setItem;
@@ -454,7 +458,7 @@ test("UI-04：后台撤权后迟到的受理响应不能重建本地回执", asy
     .getByRole("textbox", { name: "具体修订要求", exact: true })
     .fill("保持人物调整构图");
   await dialog
-    .getByRole("button", { name: "预览修订与预算", exact: true })
+    .getByRole("button", { name: "预览修订与费用", exact: true })
     .click();
   const response = page.waitForResponse((result) =>
     result.url().endsWith(env.endpoint),

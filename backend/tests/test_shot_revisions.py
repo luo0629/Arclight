@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from test_concurrency import race, require_postgres
 from test_continuity_reviews import review_case
 from test_generation_attempts import fail, start
-from test_generation_budget import priced, set_policy
+from test_generation_budget import priced
 from test_generation_candidates import candidates, ingest
 from test_generation_delivery import Provider, deliver
 from test_generation_jobs import base
@@ -226,26 +226,43 @@ def test_preview_confirmation_rechecks_sources_quote_locks_and_scope(
     assert row_counts(client) == before
 
 
-def test_unknown_quote_and_budget_exhaustion_cannot_create_revision(
-    client, shot_revision_case, monkeypatch
+@pytest.mark.parametrize("amount", [None, "2.000000"])
+def test_revision_records_optional_quote_without_a_project_budget_gate(
+    client, shot_revision_case, monkeypatch, amount
 ):
     case = shot_revision_case
-    project_id = case["episode"]["project_id"]
-    command, _ = preview_command(client, case)
+    project_id = UUID(case["episode"]["project_id"])
+    with client.app.state.session_factory.begin() as db:
+        db.get(Project, project_id).budget_limit = Decimal("0.01")
+    if amount is None:
+        monkeypatch.setattr("arclight.providers.media_pricing.quote", lambda *args: None)
+    else:
+        priced(monkeypatch, amount)
+
     before = row_counts(client)
-    monkeypatch.setattr("arclight.providers.media_pricing.quote", lambda *args: None)
-    unavailable = client.post(revision_path(project_id) + "/preview", json=intent_for(case))
-    assert (
-        unavailable.status_code == 422
-        and unavailable.json()["error"]["code"] == "BUDGET_QUOTE_UNAVAILABLE"
-    )
-    assert submit(client, case, command).status_code == 422
-    priced(monkeypatch, "2.000000")
-    set_policy(client, project_id, limit="1.000000")
-    command, _ = preview_command(client, case)
-    blocked = submit(client, case, command)
-    assert blocked.status_code == 409 and blocked.json()["error"]["code"].startswith("BUDGET_")
+    command, preview = preview_command(client, case)
+    quote = preview["quote"]
+    if amount is None:
+        assert quote is None
+    else:
+        assert Decimal(quote["maximum_cost"]) == Decimal(amount)
     assert row_counts(client) == before
+
+    response = submit(client, case, command)
+    assert response.status_code == 201, response.text
+    after = row_counts(client)
+    assert after[0] == before[0] + 1
+    assert after[-1] == before[-1]
+    with client.app.state.session_factory() as db:
+        stored = db.scalar(
+            select(GenerationBudgetQuote).where(
+                GenerationBudgetQuote.job_id == UUID(response.json()["job_id"])
+            )
+        )
+        if amount is None:
+            assert stored is None
+        else:
+            assert stored.maximum_cost == Decimal(amount)
 
 
 @pytest.mark.parametrize("mode", ["MASK", "PIXEL_EDIT"])

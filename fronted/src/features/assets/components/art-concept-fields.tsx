@@ -24,9 +24,6 @@ export type ConceptPlan = {
     batch_size: number;
     output_spec: { width: number; height: number; format: string };
   };
-  maximum_rounds: number;
-  maximum_candidates: number;
-  maximum_cost: string;
 };
 
 function initialPlan(): ConceptPlan {
@@ -41,9 +38,6 @@ function initialPlan(): ConceptPlan {
       batch_size: 2,
       output_spec: { width: 1024, height: 1024, format: "png" },
     },
-    maximum_rounds: 2,
-    maximum_candidates: 4,
-    maximum_cost: "2",
   };
 }
 
@@ -135,7 +129,6 @@ export default function ArtConceptFields({
           model: config.model,
           model_config_version: config.configuration_version,
         },
-        maximum_candidates: batch * value.maximum_rounds,
       });
     } catch (error) {
       setError(message(error));
@@ -143,15 +136,9 @@ export default function ArtConceptFields({
       setLoading(false);
     }
   }
-  function quantity(batch: number, rounds: number) {
-    if (!value) return;
-    const boundedRounds = Math.min(rounds, Math.floor(8 / batch));
-    onChange({
-      ...value,
-      spec: { ...value.spec, batch_size: batch },
-      maximum_rounds: boundedRounds,
-      maximum_candidates: batch * boundedRounds,
-    });
+  function quantity(batch: number) {
+    if (value)
+      onChange({ ...value, spec: { ...value.spec, batch_size: batch } });
   }
   return (
     <FieldSet disabled={disabled || loading}>
@@ -236,44 +223,8 @@ export default function ArtConceptFields({
               disabled={disabled}
               onChange={(event) => {
                 const count = Number(event.target.value);
-                if (count >= 1 && count <= maxBatch)
-                  quantity(count, value.maximum_rounds);
+                if (count >= 1 && count <= maxBatch) quantity(count);
               }}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="art-concept-rounds">最多概念图轮次</FieldLabel>
-            <Input
-              id="art-concept-rounds"
-              type="number"
-              min={1}
-              max={Math.min(4, Math.floor(8 / value.spec.batch_size))}
-              required
-              value={value.maximum_rounds}
-              disabled={disabled}
-              onChange={(event) => {
-                const rounds = Number(event.target.value);
-                if (rounds >= 1 && rounds <= 4)
-                  quantity(value.spec.batch_size, rounds);
-              }}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="art-concept-budget">
-              概念图总预算（USD）
-            </FieldLabel>
-            <Input
-              id="art-concept-budget"
-              type="number"
-              min={0}
-              max={10000}
-              step="0.000001"
-              required
-              value={value.maximum_cost}
-              disabled={disabled}
-              onChange={(event) =>
-                onChange({ ...value, maximum_cost: event.target.value })
-              }
             />
           </Field>
           {(["width", "height"] as const).map((dimension) => (
@@ -305,8 +256,7 @@ export default function ArtConceptFields({
             </Field>
           ))}
           <p className="text-sm text-muted-foreground">
-            最多 {value.maximum_candidates}{" "}
-            张候选。开始时核验能力与可信报价并冻结计划；每轮生成使用原预算，正式参考须经人工批准。
+            候选图片用于美术比较，正式使用前需要审核。
           </p>
         </FieldGroup>
       )}

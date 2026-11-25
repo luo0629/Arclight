@@ -91,12 +91,8 @@ def create_outline(
         db,
         episode_id,
         actor,
-        payload.model_dump(mode="json", exclude={"professional", "agent_limits"})
-        | (
-            {"professional": True, "agent_limits": payload.frozen_limits().model_dump(mode="json")}
-            if payload.professional
-            else {}
-        ),
+        payload.model_dump(mode="json", exclude={"professional"})
+        | ({"professional": True} if payload.professional else {}),
         idempotency_key,
         request.state.request_id,
         request.app.state.settings,

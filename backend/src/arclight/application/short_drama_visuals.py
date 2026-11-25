@@ -28,7 +28,6 @@ from arclight.application.video_review import video_review_facts
 from arclight.application.video_review_work import read_temporal_work
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.asset_versions import next_status
 from arclight.domain.continuity_workflow import CandidateReviewCreate
 from arclight.domain.dependencies import DependencyInput
@@ -38,6 +37,7 @@ from arclight.domain.render_manifests import RenderOutputProfile
 from arclight.domain.timelines import ShotSelection, VideoTrim
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
+from arclight.persistence.generation import GenerationAttempt
 from arclight.persistence.models import (
     AssetVersion,
     Episode,
@@ -54,7 +54,6 @@ from arclight.providers.native_media_protocols import fitting_video_spec, valida
 
 SHOT_SELECTION = "SHORT_DRAMA_SHOT_SELECTION"
 VISUAL_RIGHTS = "SHORT_DRAMA_VISUAL_RIGHTS"
-MAX_SHOTS = 63
 MAX_GENERATIONS = 2
 RETRYABLE_REVIEW_CODES = {
     "CONTINUITY_REVISION_REQUIRED",
@@ -304,7 +303,7 @@ def reviewed_version(
     if work is None:
         control = db.get(AgentRunLimit, run.id)
         if control is None:
-            raise DomainError("SHORT_DRAMA_REVIEW_SCOPE", "缺少本次制作的根任务限额", 409)
+            raise DomainError("SHORT_DRAMA_REVIEW_SCOPE", "缺少本次制作的执行范围", 409)
         start_candidate_review(
             db,
             settings,
@@ -314,7 +313,6 @@ def reviewed_version(
             CandidateReviewCreate(
                 storyboard_id=shot.storyboard_id,
                 shot_id=shot.id,
-                agent_limits=AgentRunLimits.model_validate(control.limits_json),
             ),
             producer_parent_run_id=run.id,
         )
@@ -532,7 +530,18 @@ def advance_shot(
         if job.status == "CANCELLED":
             raise DomainError("SHORT_DRAMA_VISUAL_CANCELLED", "镜头媒体任务已取消", 409)
         if job.status == "FAILED":
-            continue
+            latest = db.scalar(
+                select(GenerationAttempt)
+                .where(GenerationAttempt.job_id == job.id)
+                .order_by(GenerationAttempt.attempt_no.desc())
+                .limit(1)
+            )
+            error_code = latest.error_code if latest else None
+            if error_code == "ACCOUNT_BALANCE_INSUFFICIENT":
+                raise DomainError(error_code, "账户余额不足", 402)
+            raise DomainError(
+                error_code or "SHORT_DRAMA_VISUAL_FAILED", "镜头媒体任务未能生成可交付结果", 409
+            )
         candidate = newest_candidate(db, job)
         if candidate is None:
             return None
@@ -605,8 +614,8 @@ def advance_short_drama_visuals(
     board, shots = approved_board(db, episode, storyboard_id)
     if str(board.script_version_id) != grant["script_version_id"]:
         raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "分镜须来自本次确认的精确剧本", 409)
-    if not 1 <= len(shots) <= MAX_SHOTS:
-        raise DomainError("SHORT_DRAMA_SHOT_LIMIT", f"自动制作支持 1 到 {MAX_SHOTS} 个镜头", 422)
+    if not shots:
+        raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "自动制作需要有镜头的分镜", 422)
     geometry = output_profile(grant["output_profile"], "FORMAL")
     contents = [read_shot_content(shot.content_json) for shot in shots]
     if any(

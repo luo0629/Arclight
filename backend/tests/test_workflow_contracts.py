@@ -9,7 +9,6 @@ from pydantic import ValidationError
 from sqlalchemy import func, select
 from test_api_workflow import advance, start
 from test_collaboration import create_episode, create_project, register
-from test_generation_budget import set_policy
 from test_model_gateway import request, route
 
 from arclight.application.gateway_accounting import reconcile
@@ -61,13 +60,6 @@ def contract_fixture(family="TEXT"):
                 }
                 for kind in ("AGENT", "PROMPT", "SCHEMA", "MODEL")
             ],
-        },
-        "budget": {
-            "origin": "STARTUP_CONTEXT",
-            "limit": "10",
-            "task_limit": "2",
-            "episode_limit": "5",
-            "cost_estimate": "1.25",
         },
         "usage": {"total_calls": 0, "calls": []},
         "trace_id": "contract-fixture-trace",
@@ -127,8 +119,8 @@ def test_trace_namespace_does_not_allow_payloads_paths_or_unbounded_values(trace
         (("versions", "components", 0, "kind"), "UNKNOWN"),
         (("versions", "components", 0, "family"), "UNKNOWN"),
         (("versions", "components", 0, "definition"), {"system_prompt": "private"}),
-        (("budget", "cost_estimate"), "-1"),
-        (("budget", "limit"), "NaN"),
+        (("budget",), {"cost_estimate": "-1"}),
+        (("limit",), "NaN"),
         (("usage", "total_calls"), "0"),
         (("input_snapshot", "references", 0, "value"), "private-inline-data"),
         (("input_snapshot", "references", 0, "field"), "api_key"),
@@ -246,20 +238,11 @@ def test_run_contract_reads_latest_reconciliation_once_without_disclosing_eviden
         assert db.scalar(select(func.count()).select_from(GatewayReceipt)) == 2
 
 
-def test_run_budget_snapshot_does_not_change_with_live_project_limits(client, episode):
-    project_id = episode["project_id"]
-    set_policy(client, project_id, "20", task_limit="4", episode_limit="8")
+def test_run_exposes_usage_without_a_budget(client, episode):
     run_id = start(client, episode).json()["run_id"]
-    frozen = client.get(f"/api/v1/runs/{run_id}").json()["contract"]["budget"]
-    assert frozen["origin"] == "STARTUP_CONTEXT"
-    assert [Decimal(frozen[field]) for field in ("limit", "task_limit", "episode_limit")] == [
-        Decimal("20"),
-        Decimal("4"),
-        Decimal("8"),
-    ]
-    assert Decimal(frozen["cost_estimate"]) == 0
-    set_policy(client, project_id, "30", task_limit="6", episode_limit="12")
-    assert client.get(f"/api/v1/runs/{run_id}").json()["contract"]["budget"] == frozen
+    contract = client.get(f"/api/v1/runs/{run_id}").json()["contract"]
+    assert "budget" not in contract
+    assert contract["usage"]["total_calls"] == 0
 
 
 def test_call_without_receipt_keeps_outcome_and_actual_usage_unknown(client, episode):

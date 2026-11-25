@@ -9,9 +9,8 @@ from arclight.application.agent_memory_sources import memory_references
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.context_evidence import read_trace
 from arclight.core.errors import DomainError
-from arclight.domain.agent_memory import MAX_MEMORY_SOURCES, AgentMemory, WorkingMemory
+from arclight.domain.agent_memory import AgentMemory, WorkingMemory
 from arclight.domain.agent_state import AgentStateError, state_for_scope
-from arclight.domain.context import ContextLimits, check_size
 from arclight.domain.versions import digest
 from arclight.persistence.models import WorkflowRun
 
@@ -63,8 +62,6 @@ def project_agent_memory(run: WorkflowRun, trace: dict) -> dict:
             )
             rows.extend(references)
             legacy |= old
-        if len(rows) > MAX_MEMORY_SOURCES:
-            raise DomainError("AGENT_MEMORY_LIMIT", "必需记忆来源超过数量限额，不能裁剪", 422)
         memory = AgentMemory(
             run_id=run.id,
             project_id=scope.project_id,
@@ -80,6 +77,4 @@ def project_agent_memory(run: WorkflowRun, trace: dict) -> dict:
         )
     except ValidationError:
         raise DomainError("AGENT_MEMORY_INVALID", "记忆分类合同无效", 409) from None
-    result = {"observation": trace, "memory": memory.model_dump(mode="json")}
-    check_size(result, ContextLimits.model_validate(trace["task_context"]["limits"]))
-    return result
+    return {"observation": trace, "memory": memory.model_dump(mode="json")}

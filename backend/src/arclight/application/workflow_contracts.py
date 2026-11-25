@@ -1,6 +1,5 @@
 """Read common run/result facts without copying secrets or creating another ledger."""
 
-from decimal import Decimal
 from uuid import UUID, uuid5
 
 from pydantic import ValidationError
@@ -17,7 +16,6 @@ from arclight.domain.workflow_contracts import (
     GatewayCallUsage,
     InputReference,
     ProductionComponent,
-    RunBudget,
     RunInputSnapshot,
     RunModelVersion,
     RunUsage,
@@ -28,7 +26,6 @@ from arclight.domain.workflow_contracts import (
 from arclight.persistence.model_gateway import GatewayCall
 from arclight.persistence.models import (
     AuditEvent,
-    DependencyManifest,
     Episode,
     Script,
     StoryAnalysis,
@@ -171,42 +168,6 @@ def _input(run: WorkflowRun, binding: VersionBinding | None) -> RunInputSnapshot
     )
 
 
-def _budget(db: Session, binding: VersionBinding | None) -> RunBudget:
-    values: dict = {
-        "origin": "UNKNOWN",
-        "limit": None,
-        "task_limit": None,
-        "episode_limit": None,
-        "cost_estimate": None,
-    }
-    if binding:
-        snapshot = binding.snapshot_json
-        manifests = snapshot.get("context_manifest_ids", {})
-        for identity in sorted(set(manifests.values())):
-            manifest = db.get(DependencyManifest, UUID(identity))
-            if manifest is None or manifest.project_id != binding.project_id:
-                raise DomainError("RUN_CONTRACT_INVALID", "运行输入清单缺失或不匹配", 409)
-            budget = manifest.snapshot_json["context"]["task_context"]["required"]["constraints"][
-                "budget"
-            ]
-            values.update(
-                origin="STARTUP_CONTEXT",
-                limit=budget["project_limit"],
-                task_limit=budget["task_limit"],
-                episode_limit=budget["episode_limit"],
-            )
-            break  # All stages capture the same transaction's project budget.
-        policy = snapshot["parameters"].get("gateway_policy", {})
-        maximum = policy.get("text_maximum_cost")
-        if snapshot["model"]["provider"] == "mock":
-            maximum = "0"
-        if maximum is not None:
-            # This is a frozen conservative quote, not an actual bill.
-            stages = sum(item["kind"] == "AGENT" for item in snapshot["components"])
-            values["cost_estimate"] = Decimal(maximum) * stages
-    return RunBudget.model_validate(values)
-
-
 def _usage(db: Session, project_id: UUID, run_id: UUID) -> RunUsage:
     scope = (
         GatewayCall.workflow_id == run_id,
@@ -281,7 +242,6 @@ def run_contract(db: Session, run: WorkflowRun, *, automatic: bool) -> WorkflowR
         input_snapshot=_input(run, binding),
         workflow_version=run.workflow_version,
         versions=_versions(db, run, binding),
-        budget=_budget(db, binding),
         usage=_usage(db, episode.project_id, run.id),
         trace_id=run.trace_id,
         status=RunStatus(run.status),

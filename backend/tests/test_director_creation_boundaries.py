@@ -142,30 +142,28 @@ def test_working_progress_and_answers_recheck_authority_and_exact_question(
 
 
 @pytest.mark.parametrize("combined", [False, True])
-def test_model_quota_cannot_reset_on_director_handoff_or_retry(
+def test_loop_allowance_is_independent_for_each_director_scene(
     client, episode, settings, model_service, monkeypatch, combined
 ):
+    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
     sent, errors = install(model_service, monkeypatch, settings)
     if combined:
-        run_id = start_writer(
-            client, episode, professional_director=True, agent_limits={"max_model_calls": 5}
-        )
+        run_id = start_writer(client, episode, professional_director=True)
         run = run_once(client, settings, run_id)
         assert run["status"] == "WAITING_REVIEW", (run, errors)
         approve(client, run)
     else:
-        run_id, _ = start(client, episode, agent_limits={"max_model_calls": 3})
+        run_id, _ = start(client, episode)
     run = run_once(client, settings, run_id)
-    assert run["status"] == "FAILED" and run["error_code"] == "AGENT_MODEL_CALL_LIMIT", (
-        run,
-        errors,
-    )
-    count = len(sent)
-    assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
-    assert run_once(client, settings, run_id)["status"] == "FAILED"
-    assert len(sent) == count
+    assert run["status"] == "WAITING_REVIEW", (run, errors)
+    assert run["pending_review"]["resource_type"] == "storyboard"
+    calls = len(sent)
+    assert calls == (4 if combined else 5)
+    assert all(item["status"] == "COMPLETED" for item in progress(client, run_id)["operations"])
+    assert run_once(client, settings, run_id) == run
+    assert len(sent) == calls
     with client.app.state.session_factory() as db:
-        assert db.scalar(select(func.count()).select_from(Storyboard)) == 0
+        assert db.scalar(select(func.count()).select_from(Storyboard)) == 1
 
 
 def test_registered_director_definition_changes_stop_before_more_http(
@@ -193,7 +191,7 @@ def test_revised_writer_hands_final_approved_script_to_new_director(
     client, episode, settings, model_service, monkeypatch
 ):
     _, errors = install(model_service, monkeypatch, settings, revised=True)
-    run_id = start_writer(client, episode, professional_director=True, revision_rounds=2)
+    run_id = start_writer(client, episode, professional_director=True, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW" and run["workflow_version"] == "production/2.0", (
         run,

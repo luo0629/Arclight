@@ -16,7 +16,6 @@ MAX_INPUT_BYTES = None
 MAX_OUTPUT_BYTES = None
 MAX_FRAMES = 18_000
 MAX_PIXEL_FRAMES = 10_000_000_000
-RENDER_TIMEOUT = 600
 AUDIO_RATE = 48_000
 MAX_ACTIVE_AUDIO = 16
 MAX_AUDIO_DECODE_SAMPLES = AUDIO_RATE * 3600
@@ -111,7 +110,7 @@ class RenderSubtitles(BaseModel):
     font: str = Field(min_length=1)
     font_media_type: Literal["font/ttf", "font/otf"]
     style: SubtitleStyle
-    cues: tuple[RenderCue, ...] = Field(min_length=1, max_length=256)
+    cues: tuple[RenderCue, ...] = Field(min_length=1)
 
 
 def validate_audio_work(ranges: Sequence[tuple[int, int, int]]) -> None:
@@ -131,9 +130,9 @@ class RenderPlan(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     output: RenderOutputProfile
     duration_ms: int = Field(strict=True, gt=0, le=3_600_000)
-    clips: tuple[RenderClip, ...] = Field(min_length=1, max_length=63)
-    audio_sources: tuple[RenderAudioSource, ...] = Field(default=(), max_length=768)
-    audio_clips: tuple[RenderAudioClip, ...] = Field(default=(), max_length=768)
+    clips: tuple[RenderClip, ...] = Field(min_length=1)
+    audio_sources: tuple[RenderAudioSource, ...] = ()
+    audio_clips: tuple[RenderAudioClip, ...] = ()
     subtitles: RenderSubtitles | None = None
 
     @property

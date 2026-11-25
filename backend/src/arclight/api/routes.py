@@ -148,7 +148,6 @@ def create_script_run(
         narrative=payload.narrative,
         purpose=payload.purpose,
         professional=payload.professional,
-        agent_limits=payload.agent_limits,
         revision_rounds=payload.revision_rounds,
         professional_director=payload.professional_director,
         director_revision_rounds=payload.director_revision_rounds,
@@ -185,7 +184,6 @@ def create_storyboard_run(
         director_revision_rounds=payload.director_revision_rounds,
         director_art_collaboration=payload.director_art_collaboration,
         performance=payload.performance,
-        agent_limits=payload.agent_limits,
     )
     return AcceptedRun(
         run_id=run.id,
@@ -329,6 +327,9 @@ def get_shots(
 
 @router.post("/runs/{run_id}/retry", tags=["workflows"], status_code=202)
 def retry(run_id: UUID, db: Database, actor: Actor) -> RunRead:
+    from arclight.application.model_gateway import lock_gate
+
+    lock_gate(db)
     run = retry_run(db, require_run(db, run_id, actor, lock=True))
     db.flush()
     return RunRead.model_validate(serialize_run(db, run))

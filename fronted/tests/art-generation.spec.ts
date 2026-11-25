@@ -631,7 +631,6 @@ test("AART-03: lost receipt restores the frozen concept plan with the same logic
 }) => {
   const { headers, prefix } = await setup(page);
   await concepts(page, "取消概念图回执恢复");
-  await page.getByLabel("概念图总预算（USD）", { exact: true }).fill("3");
   const keys: string[] = [];
   let dropped = false;
   await page.route(new RegExp(prefix + "/art-runs$"), async (route) => {
@@ -653,9 +652,7 @@ test("AART-03: lost receipt restores the frozen concept plan with the same logic
   await expect(
     page.getByLabel("生成概念图并比较修订", { exact: true }),
   ).toBeChecked();
-  await expect(
-    page.getByLabel("概念图总预算（USD）", { exact: true }),
-  ).toHaveValue("3");
+  await expect(page.getByLabel(/概念图总预算/)).toHaveCount(0);
   await expect(
     page.getByLabel("概念图宽度（像素）", { exact: true }),
   ).toHaveValue("8");

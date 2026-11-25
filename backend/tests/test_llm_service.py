@@ -48,7 +48,6 @@ def turn(service, settings, identity=("SERVER", "fixture-actor")):
         lambda: service.invoke(
             settings,
             [SystemMessage("private-instruction"), HumanMessage("private-input")],
-            max_tokens=20,
             response_format={"type": "json_object"},
         ),
     )
@@ -98,7 +97,7 @@ def test_compatible_models_preserve_roles_and_tool_history_without_name_exceptio
         return httpx.Response(200, json=final_response())
 
     result = stub_llm(handler).invoke(
-        settings, messages, max_tokens=31, response_format={"type": "json_object"}, tools=tools
+        settings, messages, response_format={"type": "json_object"}, tools=tools
     )
     assert result.reason == "stop" and len(sent) == 1
     assert sent[0]["messages"] == [
@@ -120,7 +119,7 @@ def test_compatible_models_preserve_roles_and_tool_history_without_name_exceptio
         },
         {"role": "tool", "content": '{"result":"ok"}', "tool_call_id": "call_1"},
     ]
-    assert sent[0]["max_tokens"] == 31 and "max_completion_tokens" not in sent[0]
+    assert "max_tokens" not in sent[0] and "max_completion_tokens" not in sent[0]
     assert sent[0]["tools"] == tools and sent[0]["tool_choice"] == "auto"
     assert [message.model_dump() for message in messages] == before
 
@@ -128,7 +127,7 @@ def test_compatible_models_preserve_roles_and_tool_history_without_name_exceptio
 def test_dialect_request_parameters_do_not_leak_between_calls(settings):
     settings.llm_supplier = "deepseek"
     messages = [HumanMessage("input")]
-    options = {"max_tokens": 31, "response_format": {"type": "json_object"}, "tools": []}
+    options = {"response_format": {"type": "json_object"}, "tools": []}
     first = invocation_kwargs(settings, messages, **options)
     first["extra_body"]["thinking"]["type"] = "enabled"
     second = invocation_kwargs(settings, messages, **options)
@@ -159,7 +158,6 @@ def test_arbitrary_image_urls_are_not_passed_to_sdks(settings, protocol, stub_ll
                         ]
                     )
                 ],
-                max_tokens=20,
                 response_format={"type": "json_object"},
             ),
         )
@@ -305,7 +303,6 @@ def test_native_vision_preserves_inline_images(protocol, settings, stub_llm):
         assert request.url.path.endswith(llm_transport.QWEN_VISUAL)
         assert body["parameters"] == {
             "enable_thinking": False,
-            "max_tokens": 4096,
             "result_format": "message",
             "response_format": {"type": "json_object"},
         }
@@ -383,7 +380,7 @@ def test_dashscope_200_business_rejection_and_usage(settings, stub_llm, billed):
     with pytest.raises(GatewayFailure) as caught:
         turn(stub_llm(respond), settings)
     error = caught.value
-    assert len(calls) == 1 and error.code == "PROVIDER_QUOTA_EXHAUSTED"
+    assert len(calls) == 1 and error.code == "PROVIDER_INSUFFICIENT_BALANCE"
     assert error.completed is billed and error.not_accepted is not billed
     assert error.usage.input_tokens == (9 if billed else None) and error.usage.actual_cost is None
     assert "private-qwen-error" not in str(error)

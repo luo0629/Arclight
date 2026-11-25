@@ -190,7 +190,7 @@ def test_project_members_roles_and_isolation(client):
         client.patch(f"{PREFIX}/episodes/{episode['id']}", json={"title": "新标题"}).status_code
         == 200
     )
-    assert client.patch(url, json={"budget_limit": "50"}).status_code == 403
+    assert client.patch(url, json={"name": "编辑者不可修改的项目名称"}).status_code == 403
     assert client.get(url + "/audit-events").status_code == 403
     client.headers["Authorization"] = "Bearer " + owner["access_token"]
     assert len(client.get(url + "/audit-events").json()) >= 3

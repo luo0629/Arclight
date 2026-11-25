@@ -1,4 +1,4 @@
-"""Run the real Agent graph using the existing gateway, tools, evidence and limits."""
+"""Run the real Agent graph using the existing gateway, tools, evidence and execution scope."""
 
 import json
 from collections.abc import Callable
@@ -21,7 +21,7 @@ from arclight.application.model_gateway import lock_gate
 from arclight.application.shared_agent_reads import with_project_reads
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentExecutionContext, AgentRunLimits
+from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.agent_model import (
     AgentAssistantMessage,
     AgentModelRequest,
@@ -38,6 +38,10 @@ from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.models import Episode, WorkflowRun
 from arclight.workflows.agent import AgentLoopState, build_agent_graph
 
+MAX_AGENT_LOOP_TURNS = 32
+# Observe, decide, apply tools or finish, and optionally resume a human answer.
+AGENT_GRAPH_RECURSION_LIMIT = MAX_AGENT_LOOP_TURNS * 4 + 10
+
 _FATAL_TOOL_ERRORS = frozenset(
     {
         "USER_NOT_AUTHORIZED",
@@ -47,7 +51,6 @@ _FATAL_TOOL_ERRORS = frozenset(
         "RUN_STATE_INVALID",
         "INVOCATION_RECORD_INVALID",
         "IDEMPOTENCY_CONFLICT",
-        "REFERENCE_LIMIT",
         "FORBIDDEN",
         "PROJECT_ARCHIVED",
     }
@@ -117,7 +120,7 @@ class _AgentRuntime[T: BaseModel]:
             **values,
         ).model_dump(mode="json")
 
-    def prepare(self, limits: AgentRunLimits | None, parent_run_id: UUID | None) -> None:
+    def prepare(self, parent_run_id: UUID | None) -> None:
         self._execution(1)  # Validate the server-owned stage before configuring a run.
         with self.factory.begin() as db:
             run, self.project_id, actor = self._context(db)
@@ -126,13 +129,11 @@ class _AgentRuntime[T: BaseModel]:
                 db,
                 run.id,
                 actor,
-                limits
-                or (AgentRunLimits.model_validate(previous.limits_json) if previous else None),
                 parent_run_id=parent_run_id
                 if parent_run_id is not None
                 else (previous.parent_run_id if previous else None),
             )
-            self.limits = validate_agent_execution(db, run.id, self.seed.stage)
+            validate_agent_execution(db, run.id, self.seed.stage)
 
     def observe(self, state: AgentLoopState) -> AgentLoopState:
         try:
@@ -170,7 +171,7 @@ class _AgentRuntime[T: BaseModel]:
                 )
                 if type(start) is not int or not 0 <= start <= count:
                     raise DomainError("CONTEXT_REFERENCE_INVALID", "操作证据起点无效", 409)
-                # The immutable global trace and quotas still cover all operations.
+                # The immutable global trace covers all operations.
                 # A fresh operation consumes its own evidence plus the required
                 # startup facts; its seed carries prior exact results separately.
                 memory = project_agent_memory(run, trace | {"evidence": trace["evidence"][start:]})
@@ -200,6 +201,8 @@ class _AgentRuntime[T: BaseModel]:
             return self._stop(state, "AGENT_CONTEXT_LIMIT")
 
     def decide(self, state: AgentLoopState) -> AgentLoopState:
+        if state["model_turns"] >= MAX_AGENT_LOOP_TURNS:
+            return self._stop(state, "AGENT_MODEL_CALL_LIMIT")
         turn = state["model_turns"] + 1
         advanced: AgentLoopState = {**state, "model_turns": turn}
         try:
@@ -328,7 +331,6 @@ def run_agent_loop[T: BaseModel](
     registry: AgentToolRegistry,
     result_model: type[T],
     *,
-    limits: AgentRunLimits | None = None,
     parent_run_id: UUID | None = None,
     validate_result: Callable[[Session, T], None] | None = None,
 ) -> AgentLoopResult[T]:
@@ -343,10 +345,10 @@ def run_agent_loop[T: BaseModel](
         raise DomainError("AGENT_HISTORY_INVALID", "新循环不能注入模型或工具历史", 422)
     request = freeze_agent_skills(request)
     runtime = _AgentRuntime(factory, settings, request, registry, result_model, validate_result)
-    runtime.prepare(limits, parent_run_id)
+    runtime.prepare(parent_run_id)
     graph = build_agent_graph(runtime)
     state = graph.invoke(
         AgentLoopState(request=request.model_dump(mode="json"), observed_round=-1, model_turns=0),
-        {"recursion_limit": min(runtime.limits.max_steps, runtime.limits.max_model_calls) * 4 + 10},
+        {"recursion_limit": AGENT_GRAPH_RECURSION_LIMIT},
     )
     return runtime.outcome_model.model_validate(state["outcome"])

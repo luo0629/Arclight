@@ -22,6 +22,7 @@ from arclight.domain.context import (
     ContextRequest,
     check_call,
     check_size,
+    validate_context_metadata,
 )
 from arclight.domain.context_trace import TRACE_VERSION
 from arclight.domain.script_drafts import REWRITE_WORKFLOWS, SCRIPT_DRAFT, SCRIPT_REWRITE_DRAFT
@@ -283,5 +284,5 @@ def read_contexts(db: Session, project_id: UUID, run: WorkflowRun) -> dict[str, 
                 {"manifest_id": str(item.id), **deepcopy(item.snapshot_json["context"])}
                 for item in rounds
             ]
-            check_size(values[task], ContextLimits.model_validate(value["limits"]))
+            validate_context_metadata(values[task])
     return values

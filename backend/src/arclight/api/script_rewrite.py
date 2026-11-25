@@ -40,7 +40,6 @@ def create_rewrite(
         request.app.state.settings,
         purpose=payload.purpose,
         professional=payload.professional,
-        agent_limits=payload.agent_limits,
         revision_rounds=payload.revision_rounds,
         narrative=payload.narrative,
     )

@@ -1,6 +1,5 @@
-"""Evidence admission, selected locks and deadline boundaries of the art adapter."""
+"""Evidence admission, selected locks and authority boundaries of the art adapter."""
 
-from datetime import timedelta
 from uuid import UUID
 
 import pytest
@@ -13,7 +12,7 @@ from test_assets import create as create_asset
 from test_collaboration import create_project
 
 from arclight.application.art_direction import propose_art
-from arclight.persistence.base import utcnow
+from arclight.persistence.models import WorkflowRun
 
 
 def test_metadata_only_reference_reads_do_not_count_as_actual_image_observation(
@@ -79,21 +78,19 @@ def test_selected_locked_asset_changes_are_compared_without_unlock_or_formal_wri
     assert facts(client) == before
 
 
-def test_art_loop_deadline_is_rechecked_after_model_io(
-    client, episode, settings, model_service, monkeypatch
-):
+def test_art_loop_rechecks_cancellation_after_model_io(client, episode, settings, model_service):
     reference_set(client, episode)
     run_id, actor, _, task = prepare_direction(client, episode, settings)
-    future = utcnow() + timedelta(seconds=3600)
 
-    def advance(payload):
-        monkeypatch.setattr("arclight.application.agent_limits.utcnow", lambda: future)
+    def cancel(_):
+        with client.app.state.session_factory.begin() as db:
+            db.get(WorkflowRun, run_id).status = "CANCELLED"
 
-    sent, errors, _ = install_direction_model(model_service, on_http=advance)
+    sent, errors, _ = install_direction_model(model_service, on_http=cancel)
     before = facts(client)
     result = propose_art(client.app.state.session_factory, settings, run_id, actor, task)
     assert not errors, errors
-    assert result.status == "STOPPED" and result.stop_code == "AGENT_DEADLINE_EXCEEDED", (
+    assert result.status == "STOPPED" and result.stop_code == "AGENT_CANCELLED", (
         result.model_dump_json()
     )
     assert len(sent) == 1 and facts(client) == before

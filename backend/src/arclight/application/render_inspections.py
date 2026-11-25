@@ -13,7 +13,6 @@ from arclight.domain.render_inspections import (
 )
 from arclight.domain.render_manifests import RenderOutputProfile
 from arclight.media.execution import MediaExecutionError, MediaObserver, execute_media
-from arclight.media.render_plan import RENDER_TIMEOUT
 
 
 def inspect_candidate(
@@ -25,7 +24,7 @@ def inspect_candidate(
 ) -> RenderInspectionResult:
     measurement, failure = None, None
     try:
-        raw = execute_media("inspect", "render", movie, timeout=RENDER_TIMEOUT, observer=observer)
+        raw = execute_media("inspect", "render", movie, timeout=None, observer=observer)
         measurement = RenderMediaMeasurement.model_validate_json(raw)
     except MediaExecutionError as exc:
         failure = (

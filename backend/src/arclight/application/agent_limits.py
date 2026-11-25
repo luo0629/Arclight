@@ -1,10 +1,8 @@
-"""Atomic Agent admission; billing remains in the shared gateway and GEN ledgers."""
+"""Agent execution scope, action identities and usage reporting."""
 
-from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID
 
-from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -13,12 +11,11 @@ from arclight.application.commands import require_project
 from arclight.application.gateway_accounting import latest_receipt, media_outcome
 from arclight.application.gateway_text import execution_actor
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentExecutionContext, AgentRunLimits
+from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.agent_state import AgentStateError, state_for_scope
 from arclight.domain.agent_tools import AgentName
-from arclight.domain.model_gateway import GatewayRequest, GatewayRoute
+from arclight.domain.model_gateway import GatewayRequest
 from arclight.persistence.agent_limits import AgentAction, AgentRunLimit
-from arclight.persistence.base import utcnow
 from arclight.persistence.model_gateway import GatewayCall
 from arclight.persistence.models import (
     AgentToolGrant,
@@ -27,13 +24,6 @@ from arclight.persistence.models import (
     User,
     WorkflowRun,
 )
-
-
-def _policy(control: AgentRunLimit) -> AgentRunLimits:
-    try:
-        return AgentRunLimits.model_validate(control.limits_json)
-    except ValidationError:
-        raise DomainError("AGENT_LIMITS_INVALID", "Agent 限制记录无效", 409) from None
 
 
 def _enabled_actor(db: Session, actor: str) -> None:
@@ -54,8 +44,7 @@ def _active_chain(
     stage: str | None = None,
     *,
     successor_run: WorkflowRun | None = None,
-) -> AgentRunLimits:
-    from arclight.application.model_gateway import utc
+) -> None:
 
     root_id, project_id, actor = control.root_run_id, control.project_id, control.actor_id
     _enabled_actor(db, actor)
@@ -66,9 +55,8 @@ def _active_chain(
     root = db.get(AgentRunLimit, root_id)
     if root is None:
         raise DomainError("AGENT_LIMITS_INVALID", "Agent 根运行限制缺失", 409)
-    limits = _policy(root)
     while True:
-        if current.run_id in visited or len(visited) > 8:
+        if current.run_id in visited:
             raise DomainError("AGENT_LIMITS_INVALID", "Agent 委派链无效", 409)
         visited.add(current.run_id)
         run = db.get(WorkflowRun, current.run_id, populate_existing=True)
@@ -81,8 +69,6 @@ def _active_chain(
             or current.project_id != project_id
             or current.actor_id != actor
             or execution_actor(db, run) != actor
-            or current.limits_json != root.limits_json
-            or utc(current.deadline_at) != utc(root.deadline_at)
         ):
             raise DomainError("AGENT_SCOPE_INVALID", "Agent 委派作用范围不匹配", 409)
         if run.status == "CANCELLED":
@@ -91,8 +77,6 @@ def _active_chain(
 
         if paused(db, run):
             raise DomainError("PRODUCER_PAUSED", "多集制片已暂停，恢复前不允许新的执行动作", 409)
-        if utcnow() >= utc(root.deadline_at):
-            raise DomainError("AGENT_DEADLINE_EXCEEDED", "Agent 已达到总执行时限", 409)
         completed_review = False
         if child_run is not None and run.status in {"SUCCEEDED", "REJECTED"}:
             from arclight.application.narrative_review_human import completed_review_parent
@@ -121,19 +105,19 @@ def _active_chain(
         if current.parent_run_id is None:
             if current.run_id != root_id or current.depth != 0:
                 raise DomainError("AGENT_LIMITS_INVALID", "Agent 根运行记录无效", 409)
-            return limits
+            return
         parent = db.get(AgentRunLimit, current.parent_run_id)
         if parent is None or parent.depth + 1 != current.depth:
             raise DomainError("AGENT_LIMITS_INVALID", "Agent 父运行记录无效", 409)
         child_run, current = run, parent
 
 
-def validate_agent_execution(db: Session, run_id: UUID, stage: str) -> AgentRunLimits:
+def validate_agent_execution(db: Session, run_id: UUID, stage: str) -> None:
     """Recheck the active scope without reserving another action or charging completion."""
     control = db.get(AgentRunLimit, run_id)
     if control is None:
         raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 调用尚未建立运行限制", 409)
-    return _active_chain(db, control, stage)
+    _active_chain(db, control, stage)
 
 
 def delegation_count(db: Session, root_run_id: UUID) -> int:
@@ -158,11 +142,10 @@ def configure_agent_run(
     db: Session,
     run_id: UUID,
     actor: str,
-    limits: AgentRunLimits | None = None,
     *,
     parent_run_id: UUID | None = None,
 ) -> AgentRunLimit:
-    """Freeze a policy before the first action; delegated runs inherit the root policy."""
+    """Bind the actor and run lineage before the first action."""
     from arclight.application.model_gateway import lock_gate
 
     lock_gate(db)
@@ -175,14 +158,10 @@ def configure_agent_run(
     if execution_actor(db, run) != actor:
         raise DomainError("FORBIDDEN", "Agent 限制须绑定运行发起者", 403)
     parent = db.get(AgentRunLimit, parent_run_id) if parent_run_id else None
-    if parent_run_id is not None:
-        if parent is None or parent.actor_id != actor or parent.project_id != episode.project_id:
-            raise DomainError("AGENT_SCOPE_INVALID", "委派父运行不属于当前作用范围", 409)
-        inherited = _policy(parent)
-        if limits is not None and limits != inherited:
-            raise DomainError("AGENT_LIMITS_CONFLICT", "委派不得更换根运行限制", 409)
-        limits = inherited
-    limits = AgentRunLimits.model_validate((limits or AgentRunLimits()).model_dump(mode="json"))
+    if parent_run_id is not None and (
+        parent is None or parent.actor_id != actor or parent.project_id != episode.project_id
+    ):
+        raise DomainError("AGENT_SCOPE_INVALID", "委派父运行不属于当前作用范围", 409)
     scope = scope_for_run(run, episode.project_id)
     previous = db.get(AgentRunLimit, run.id)
     if previous is not None:
@@ -191,7 +170,6 @@ def configure_agent_run(
             or previous.actor_id != actor
             or previous.project_id != episode.project_id
             or previous.input_sha256 != scope.input_sha256
-            or _policy(previous) != limits
         ):
             raise DomainError("AGENT_LIMITS_CONFLICT", "运行限制不可重新配置或更换父运行", 409)
         return previous
@@ -203,14 +181,10 @@ def configure_agent_run(
         )
     ):
         raise DomainError("AGENT_LIMITS_LATE", "已有调用的运行不能补建限制", 409)
-    root_id, depth, deadline = run.id, 0, utcnow() + timedelta(seconds=limits.max_duration_seconds)
+    root_id, depth = run.id, 0
     if parent is not None:
         _active_chain(db, parent, successor_run=run)
-        root_id, depth, deadline = parent.root_run_id, parent.depth + 1, parent.deadline_at
-        if depth > limits.max_delegation_depth:
-            raise DomainError("AGENT_DELEGATION_DEPTH", "Agent 委派深度已达上限", 409)
-        if delegation_count(db, root_id) >= limits.max_delegations:
-            raise DomainError("AGENT_DELEGATION_LIMIT", "Agent 委派次数已达上限", 409)
+        root_id, depth = parent.root_run_id, parent.depth + 1
     row = AgentRunLimit(
         run_id=run.id,
         project_id=episode.project_id,
@@ -219,8 +193,6 @@ def configure_agent_run(
         actor_id=actor,
         input_sha256=scope.input_sha256,
         depth=depth,
-        limits_json=limits.model_dump(mode="json"),
-        deadline_at=deadline,
     )
     db.add(row)
     db.flush()
@@ -274,48 +246,11 @@ def action_usage(db: Session, root_run_id: UUID) -> dict:
     }
 
 
-def _check_action(
-    db: Session, context: AgentExecutionContext, amount: Decimal = Decimal("0")
-) -> AgentRunLimit:
+def _check_action(db: Session, context: AgentExecutionContext) -> AgentRunLimit:
     control = db.get(AgentRunLimit, context.run_id)
     if control is None:
-        raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 调用尚未建立运行限制", 409)
-    limits = _active_chain(db, control, context.stage)
-    if context.kind == "MODEL" or amount > 0:
-        from arclight.application.producer_series import require_known_costs
-
-        root_run = db.get(WorkflowRun, control.root_run_id)
-        assert root_run is not None
-        require_known_costs(db, root_run, control.actor_id)
-    usage = action_usage(db, control.root_run_id)
-    if limits.maximum_cost is not None and usage["unknown_cost"]:
-        raise DomainError("AGENT_LIMITS_INVALID", "受限调用缺少预算来源", 409)
-    actions: list[AgentAction] = usage["actions"]
-    steps = {(row.run_id, row.step_key) for row in actions}
-    kind_count = sum(row.kind == context.kind for row in actions)
-    kind_maximum = limits.max_model_calls if context.kind == "MODEL" else limits.max_tool_calls
-    kind_code = "AGENT_MODEL_CALL_LIMIT" if context.kind == "MODEL" else "AGENT_TOOL_CALL_LIMIT"
-    checks = (
-        (len(actions), limits.max_calls, "AGENT_CALL_LIMIT", "Agent 总调用次数已达上限"),
-        (kind_count, kind_maximum, kind_code, "Agent 此类调用次数已达上限"),
-        (
-            sum(row.agent_name == context.agent_name for row in actions),
-            limits.max_agent_calls,
-            "AGENT_AGENT_CALL_LIMIT",
-            "此 Agent 调用次数已达上限",
-        ),
-    )
-    for used, maximum, code, message in checks:
-        if used >= maximum:
-            raise DomainError(code, message, 409)
-    if (context.run_id, context.step_key) not in steps and len(steps) >= limits.max_steps:
-        raise DomainError("AGENT_STEP_LIMIT", "Agent 决策步骤已达上限", 409)
-    if (
-        limits.maximum_cost is not None
-        and amount > 0
-        and usage["actual_cost"] + usage["pending_estimate"] + amount > limits.maximum_cost
-    ):
-        raise DomainError("AGENT_BUDGET_EXCEEDED", "Agent 共享预算不足，已停止付费调用", 409)
+        raise DomainError("AGENT_SCOPE_REQUIRED", "Agent 运行未绑定执行范围", 409)
+    _active_chain(db, control, context.stage)
     return control
 
 
@@ -337,11 +272,11 @@ def _gateway_context(db: Session, request: GatewayRequest) -> AgentExecutionCont
     return context
 
 
-def check_gateway_action(db: Session, request: GatewayRequest, route: GatewayRoute) -> None:
+def check_gateway_action(db: Session, request: GatewayRequest) -> None:
     """Called under the existing gateway gate, before its immutable reservation is written."""
     context = _gateway_context(db, request)
     # A safely unaccepted attempt may be retried, but its executor identity is frozen.
-    # This also prevents a media retry from dropping its Agent limits entirely.
+    # A media retry must retain its original Agent identity.
     previous = db.execute(
         select(GatewayCall, AgentAction)
         .outerjoin(AgentAction, AgentAction.gateway_call_id == GatewayCall.id)
@@ -379,14 +314,7 @@ def check_gateway_action(db: Session, request: GatewayRequest, route: GatewayRou
             raise DomainError("GATEWAY_IDEMPOTENCY_CONFLICT", "重试不能更换执行器行动标识", 409)
     if context is None:
         return
-    control = db.get(AgentRunLimit, context.run_id)
-    if control is None:
-        raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 调用尚未建立运行限制", 409)
-    if _policy(control).maximum_cost is not None and (
-        route.maximum_cost is None or route.pricing_version == "unconfigured"
-    ):
-        raise DomainError("BUDGET_QUOTE_UNAVAILABLE", "受限 Agent 调用缺少可信报价", 409)
-    control = _check_action(db, context, route.maximum_cost or Decimal("0"))
+    control = _check_action(db, context)
     if control.project_id != request.project_id or control.actor_id != request.actor:
         raise DomainError("AGENT_SCOPE_INVALID", "Agent 调用者或项目不匹配", 409)
     if context.kind == "MODEL" and request.task != context.stage:
@@ -418,22 +346,12 @@ def record_gateway_action(db: Session, request: GatewayRequest, call_id: UUID) -
         _record_action(db, request.execution, gateway_call_id=call_id)
 
 
-def gateway_dispatch_seconds(db: Session, request: GatewayRequest) -> float | None:
-    """Recheck live cancellation/scope just before I/O, without consuming another slot."""
-    from arclight.application.model_gateway import utc
-
+def validate_gateway_dispatch(db: Session, request: GatewayRequest) -> None:
+    """Recheck live cancellation, scope and paid tool authorization before I/O."""
     context = _gateway_context(db, request)
-    if context is None:
-        return None
-    control = db.get(AgentRunLimit, context.run_id)
-    if control is None:
-        raise DomainError("AGENT_LIMITS_REQUIRED", "Agent 限制记录缺失", 409)
-    _active_chain(db, control, context.stage)
-    _check_paid_tool_grant(db, context, request)
-    remaining = (utc(control.deadline_at) - utcnow()).total_seconds()
-    if remaining <= 0:
-        raise DomainError("AGENT_DEADLINE_EXCEEDED", "Agent 已达到总执行时限", 409)
-    return remaining
+    if context is not None:
+        _check_action(db, context)
+        _check_paid_tool_grant(db, context, request)
 
 
 def check_tool_action(

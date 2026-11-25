@@ -178,8 +178,6 @@ def append_timeline(
         for clip in track.clips
         if clip.audio_version_id
     )
-    if len(sources) > 63:
-        raise DomainError("TIMELINE_INPUT_LIMIT", "时间轴精确媒体输入最多63个", 422)
     manifest, _ = capture_manifest(
         db,
         episode.project_id,

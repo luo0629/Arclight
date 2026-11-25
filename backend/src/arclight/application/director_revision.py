@@ -187,7 +187,6 @@ def _round(
                 result_schema_version=contracts.revision_version,
                 system_instruction=prompt,
                 messages=messages,
-                max_tokens=8000,
             )
             if human:
                 problems = "；".join(issue.message for issue in checks.issues[:5])

@@ -159,7 +159,7 @@ export default function MediaTaskRecovery({
       {mode === "replay" ? (
         <>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            这会沿用原业务输入创建新任务，并重新校验预算。原任务与历史记录保留。
+            新任务沿用原业务输入，费用单独记录。
           </p>
           {pendingReplay && (
             <Notice>
@@ -302,7 +302,7 @@ export default function MediaTaskRecovery({
         <span>
           {mode === "resolve"
             ? "我已核实证据及供应商结果，并确认提交此回执"
-            : "我确认创建新任务，并接受重新校验预算"}
+            : "我确认使用原输入创建新任务"}
         </span>
       </label>
       {error && <Notice tone="error">{error}</Notice>}

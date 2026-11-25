@@ -36,23 +36,30 @@ def raise_for_provider_status(response: httpx.Response, body: dict | None = None
             body = value if isinstance(value, dict) else {}
         except ValueError:
             body = {}
-    error = body.get("error", {})
+    error = body.get("error", body)
     codes = (
         {str(error.get(field, "")).lower() for field in ("code", "type")}
         if isinstance(error, dict)
         else set()
     )
-    quota_codes = {
-        "insufficient_quota",
+    balance_codes = {
+        "credit_balance_exhausted",
         "insufficient_balance",
+        "insufficientbalance",
         "balance_not_enough",
-        "quota_exceeded",
-        "billing_hard_limit_reached",
         "credit_balance_too_low",
         "1113",
         "arrearage",
         "accountoverdueerror",
         "prepaidquotaexhausted",
+    }
+    quota_codes = {
+        "insufficient_quota",
+        "quota_exceeded",
+        "billing_hard_limit_reached",
+        "organization_spend_limit_exceeded",
+        "project_spend_limit_exceeded",
+        "organization_usage_limit_exceeded",
     }
     status = response.status_code
     usage = response_usage(body)
@@ -68,8 +75,13 @@ def raise_for_provider_status(response: httpx.Response, body: dict | None = None
 
     if status == 401:
         raise rejection("PROVIDER_AUTHENTICATION_FAILED")
-    if status == 402 or (status in {400, 403, 429} and codes & quota_codes):
-        raise rejection("PROVIDER_QUOTA_EXHAUSTED")
+    if status in {400, 402, 403, 429}:
+        if codes & balance_codes:
+            raise rejection("PROVIDER_INSUFFICIENT_BALANCE")
+        if codes & quota_codes:
+            raise rejection("PROVIDER_QUOTA_EXHAUSTED")
+    if status == 402:
+        raise rejection("PROVIDER_INSUFFICIENT_BALANCE")
     if status == 429:
         raise rejection("PROVIDER_RATE_LIMITED")
     if status == 403:

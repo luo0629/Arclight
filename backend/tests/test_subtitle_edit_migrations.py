@@ -82,6 +82,7 @@ def test_subtitle_edit_empty_guard_roundtrip_retains_schema(client, migrated):
     assert sorted(inspect(engine).get_table_names()) == head_tables
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_subtitle_edit_guard_roundtrip_preserves_generated_history(client, subtitle_case, migrated):
     engine = client.app.state.session_factory.kw["bind"]
     track = subtitle_case["track"]
@@ -97,6 +98,7 @@ def test_subtitle_edit_guard_roundtrip_preserves_generated_history(client, subti
     assert client.get(url + "/srt").content == original_srt
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_subtitle_edit_history_blocks_downgrade_before_ddl(client, subtitle_case, migrated):
     # The no-DDL guarantee belongs to 0067 itself, not intervening migrations.
     command.downgrade(migrated, "0067")

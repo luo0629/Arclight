@@ -65,7 +65,7 @@ class AgentLoopResult[T: BaseModel](BaseModel):
     agent_name: AgentName
     stage: AgentStepId
     status: Literal["COMPLETED", "HUMAN_REVIEW", "WAITING_EXTERNAL", "STOPPED"]
-    model_turns: int = Field(strict=True, ge=0, le=4096)
+    model_turns: int = Field(strict=True, ge=0)
     loop_id: UUID | None = None
     question_id: UUID | None = None
     input_sha256: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")

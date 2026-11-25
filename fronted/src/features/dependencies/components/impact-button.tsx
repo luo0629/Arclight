@@ -167,9 +167,7 @@ export default function ImpactButton({
               </li>
             ))}
           </ul>
-          <p className="text-sm text-muted-foreground">
-            {impactNote}
-          </p>
+          <p className="text-sm text-muted-foreground">{impactNote}</p>
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"

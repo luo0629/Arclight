@@ -97,7 +97,6 @@ def replay_job(
     lane = db.scalar(select(GenerationLane.lane).where(GenerationLane.job_id == source.id))
     request = GenerationCreate.model_validate(
         {
-            "batch_id": snapshot["context"].get("budget_batch_id"),
             "scheduling_mode": lane or "BATCH",
             "target_type": source.target_type,
             "target_asset_id": source.target_asset_id,

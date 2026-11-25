@@ -5,7 +5,6 @@ import json
 from collections import Counter
 from uuid import UUID
 
-from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -17,14 +16,12 @@ from arclight.application.dependencies import (
     input_usable,
     query_dependencies,
 )
-from arclight.application.generation_budget import policy_for
 from arclight.application.model_gateway import utc
 from arclight.application.production_state import read_production_state
 from arclight.application.project_production import pending_project_reviews
 from arclight.application.project_reads import lock_project_snapshot
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_limits import AgentRunLimits
 from arclight.domain.dependencies import validate_dependency_type
 from arclight.domain.producer_research import (
     InvestigateProjectParameters,
@@ -63,16 +60,10 @@ def _runtime_budget(db: Session, run: WorkflowRun) -> ProducerRuntimeBudget | No
     root = db.get(AgentRunLimit, control.root_run_id, populate_existing=True)
     if root is None or root.project_id != control.project_id:
         raise DomainError("AGENT_LIMITS_INVALID", "Agent 根运行限制无效", 409)
-    try:
-        limits = AgentRunLimits.model_validate(root.limits_json)
-    except ValidationError:
-        raise DomainError("AGENT_LIMITS_INVALID", "Agent 限制记录无效", 409) from None
     usage = action_usage(db, root.run_id)
     actions: list[AgentAction] = usage["actions"]
     return ProducerRuntimeBudget(
         root_run_id=root.run_id,
-        limits=limits,
-        deadline_at=utc(root.deadline_at),
         calls=len(actions),
         model_calls=sum(row.kind == "MODEL" for row in actions),
         tool_calls=sum(row.kind == "TOOL" for row in actions),
@@ -410,7 +401,20 @@ def investigate_project(
         raise DomainError("NOT_FOUND", "剧集不存在", 404)
     read_at = utcnow()
     reads = [
-        ProducerReadVersion(kind="project", id=project.id, updated_at=utc(project.updated_at)),
+        ProducerReadVersion(
+            kind="project",
+            id=project.id,
+            checksum=_digest(
+                {
+                    "name": project.name,
+                    "owner_id": project.owner_id,
+                    "story_settings": project.story_settings,
+                    "style_guide": project.style_guide,
+                    "output_profile": project.output_profile,
+                }
+            ),
+            updated_at=utc(project.updated_at),
+        ),
         ProducerReadVersion(
             kind="episode", id=episode.id, status=episode.status, updated_at=utc(episode.updated_at)
         ),
@@ -449,22 +453,9 @@ def investigate_project(
     if query.path in {"overview", "budget"}:
         project_costs = read_costs(db, project_id, actor)
         episode_costs = read_costs(db, project_id, actor, episode_id=episode.id)
-        policy = policy_for(db, project_id)
-        if policy in db:
-            db.refresh(policy)
         budget = ProducerBudget(
-            project_limit=project.budget_limit,
-            policy_revision=policy.revision,
-            task_limit=policy.task_limit,
-            episode_limit=policy.episode_limit,
-            batch_limit=policy.batch_limit,
-            warning_percent=policy.warning_percent,
-            max_candidates_per_target=policy.max_candidates_per_target,
             project_costs=project_costs.summary,
             episode_costs=episode_costs.summary,
-        )
-        reads.append(
-            ProducerReadVersion(kind="budget_policy", id=project.id, revision=policy.revision)
         )
         if project_costs.summary.unpriced_count:
             _gap(unknown, "UNPRICED_COST", project_id)

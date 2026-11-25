@@ -164,7 +164,7 @@ def test_explicit_history_start_is_idempotent_and_reuses_shared_owner_gate(
         client.post(root, json=body | {"shot_id": reviewer_case["shots"][1]["id"]}).status_code
         == 409
     )
-    assert client.post(root, json=body | {"agent_limits": {"max_steps": 1}}).status_code == 409
+    assert client.post(root, json=body | {"agent_limits": {"max_steps": 1}}).status_code == 422
     current = client.get(root).json()
     case = {"project_id": episode["project_id"], "target": current["work"]["target"]}
     asset, version = target_rows(client, case)

@@ -59,7 +59,7 @@ class ShotRevisionPreview(ProductionContract):
     intent: ShotRevisionIntent
     source: ShotRevisionSource
     mode_description: str = SHOT_REVISION_MODE
-    quote: CostQuote
+    quote: CostQuote | None
     confirmation_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     preserved_constraints: list[str]
 

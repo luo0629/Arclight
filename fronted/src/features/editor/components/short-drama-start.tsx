@@ -3,17 +3,15 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { FormLabel, Notice } from "@/components/ui-kit";
+import { Notice } from "@/components/ui-kit";
 import VoicePicker from "@/features/audio/components/voice-picker";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import SubtitleFontPicker from "@/features/rendering/components/subtitle-font-picker";
 import useRenderDetail from "@/features/rendering/hooks/use-render-detail";
 import { api, ApiError, message } from "@/lib/api/client";
-import { productionDeliveryPath, projectPath } from "@/lib/routes";
+import { productionDeliveryPath } from "@/lib/routes";
 
 type ShortDramaPreflight = {
-  project_budget_limit: string;
   needed_voices: { speaker: string; character_asset_id: string | null }[];
   blocked_voices: { speaker: string; reason: string }[];
 };
@@ -43,7 +41,6 @@ export default function ShortDramaStart({
   onStarted,
   onUnavailable,
 }: Props) {
-  const [cost, setCost] = useState("");
   const [font, setFont] = useState("");
   const [rights, setRights] = useState(false);
   const [pending, setPending] = useState(false);
@@ -61,19 +58,12 @@ export default function ShortDramaStart({
     onUnavailable,
   );
   const readiness = preflight.data;
-  const budget = Number(readiness?.project_budget_limit);
-  const amount = Number(cost);
-  const exceedsBudget = budget > 0 && amount > budget;
   const controlsLocked = disabled || pending || !!intent.current;
   const ready =
     !controlsLocked &&
     !unsavedScript &&
     !!readiness &&
     !preflight.loading &&
-    budget > 0 &&
-    amount >= 0.01 &&
-    Number.isFinite(amount) &&
-    !exceedsBudget &&
     readiness.needed_voices.length === 0 &&
     readiness.blocked_voices.length === 0 &&
     rights &&
@@ -85,7 +75,6 @@ export default function ShortDramaStart({
       key: crypto.randomUUID(),
       body: JSON.stringify({
         script_version_id: scriptId,
-        maximum_cost: cost,
         impact_digest: impactDigest,
         font_file_id: font || null,
         generated_media_rights_confirmed: rights,
@@ -140,31 +129,6 @@ export default function ShortDramaStart({
           </Button>
         </Notice>
       )}
-      {readiness && (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-          <span>项目预算上限（USD）{readiness.project_budget_limit}</span>
-          <Link
-            className="underline underline-offset-4"
-            href={projectPath(projectId, "settings")}
-          >
-            设置项目预算
-          </Link>
-        </div>
-      )}
-      {readiness && budget <= 0 && <Notice>请先设置大于零的项目预算。</Notice>}
-      <FormLabel>
-        本次制作费用上限（USD）
-        <Input
-          type="number"
-          inputMode="decimal"
-          min="0.01"
-          step="0.01"
-          value={cost}
-          onChange={(event) => setCost(event.target.value)}
-          disabled={controlsLocked}
-        />
-      </FormLabel>
-      {exceedsBudget && <Notice>本次制作费用上限不能超过项目预算。</Notice>}
       {readiness?.blocked_voices.map(({ speaker, reason }) => (
         <Notice key={`${speaker}:${reason}`} tone="error">
           {speaker} · {reason}
@@ -254,10 +218,9 @@ const phaseLabel: Record<string, string> = {
 };
 
 const errorLabel: Record<string, string> = {
+  ACCOUNT_BALANCE_INSUFFICIENT: "账户余额不足",
   SHORT_DRAMA_VOICE_REQUIRED: "剧本角色缺少可用的已批准声音。",
   SHORT_DRAMA_SFX_REQUIRED: "分镜所需的音效缺少已选用、已授权的素材。",
-  SHORT_DRAMA_BUDGET_EXCEEDED: "继续制作会超过本次费用上限。",
-  AGENT_COST_LIMIT: "继续制作会超过本次费用上限。",
   SHORT_DRAMA_ART_PROTECTED: "美术设计涉及已批准或锁定的资产。",
   SHORT_DRAMA_INPUT_CHANGED: "定稿剧本或制作规格发生变化。",
   SHORT_DRAMA_VISUAL_SERVICE_REQUIRED: "此账号缺少已配置的短剧图像或视频服务。",
@@ -270,7 +233,6 @@ const errorLabel: Record<string, string> = {
   SHORT_DRAMA_TTS_UNCERTAIN: "供应商的配音结果需要核对。",
   SHORT_DRAMA_AUDIO_DURATION: "部分配音超过了对应镜头的时长。",
   SHORT_DRAMA_EXPORT_WARNINGS: "成片有待核查的渲染警告。",
-  SHORT_DRAMA_DEADLINE: "制作超时，请在任务页查看已完成的环节。",
 };
 
 type Progress = {
@@ -278,6 +240,8 @@ type Progress = {
   status: string;
   phase: string;
   error_code: string | null;
+  revision: number;
+  can_retry_balance: boolean;
   delivery_id?: string;
   render_progress?: number;
   stopped_phase?: string;
@@ -294,6 +258,8 @@ export function ShortDramaProgress({
 }) {
   const [progress, setProgress] = useState<Progress | null>(null);
   const [error, setError] = useState("");
+  const [retrying, setRetrying] = useState(false);
+  const [retryRevision, setRetryRevision] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
     let timer: number | undefined;
@@ -321,9 +287,26 @@ export function ShortDramaProgress({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [episodeId, refreshRevision]);
+  }, [episodeId, refreshRevision, retryRevision]);
 
   if (!progress) return error ? <Notice tone="error">{error}</Notice> : null;
+  async function retryBalance(run: Progress) {
+    setRetrying(true);
+    setError("");
+    try {
+      await api(`/runs/${run.run_id}/short-drama/retry`, {
+        method: "POST",
+        headers: { "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ expected_revision: run.revision }),
+      });
+      setRetryRevision((revision) => revision + 1);
+    } catch (cause) {
+      setError(message(cause));
+    } finally {
+      setRetrying(false);
+    }
+  }
+
   const delivery =
     progress.delivery_id &&
     productionDeliveryPath({
@@ -351,6 +334,16 @@ export function ShortDramaProgress({
           {errorLabel[progress.error_code] ??
             `制作在当前环节停止（${progress.error_code}）。`}
         </span>
+      )}
+      {progress.can_retry_balance && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={retrying}
+          onClick={() => void retryBalance(progress)}
+        >
+          {retrying ? "正在恢复" : "充值后继续制作"}
+        </Button>
       )}
       {delivery && (
         <Button variant="outline" size="sm" asChild>

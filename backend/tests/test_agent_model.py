@@ -302,12 +302,11 @@ def test_history_requires_exact_once_call_feedback_pairing(problem):
         {"messages": [{"role": "system", "data": {}}]},
         {"messages": [{"role": "user", "data": {"image": "data:image/png;base64,YQ=="}}]},
         {"messages": [{"role": "user", "data": {"api_key": "private"}}]},
-        {"messages": [{"role": "user", "data": {"story": "x" * 262144}}]},
         {"evidence_round": True},
         {"max_tokens": "1024"},
     ],
 )
-def test_input_contract_bounds_sensitive_data_and_roles(patch):
+def test_input_contract_rejects_sensitive_data_and_invalid_roles_or_types(patch):
     with pytest.raises(ValidationError):
         model_request(**patch)
 
@@ -384,7 +383,7 @@ def test_completed_failures_preserve_known_usage_and_unknown_money(
     "status,error_code,state",
     [
         (401, "GATEWAY_PROVIDER_AUTHENTICATION_FAILED", "NOT_ACCEPTED"),
-        (402, "GATEWAY_QUOTA_EXHAUSTED", "NOT_ACCEPTED"),
+        (402, "ACCOUNT_BALANCE_INSUFFICIENT", "NOT_ACCEPTED"),
         (403, "GATEWAY_PROVIDER_ACCESS_DENIED", "NOT_ACCEPTED"),
         (429, "GATEWAY_PROVIDER_RATE_LIMITED", "NOT_ACCEPTED"),
         (503, "GATEWAY_RECONCILIATION_REQUIRED", "RESULT_UNKNOWN"),
@@ -509,8 +508,7 @@ def test_wire_dialects_and_strict_final_contract(
 
     def handler(req):
         body = json.loads(req.content)
-        token_parameter = "max_completion_tokens" if supplier == "openai" else "max_tokens"
-        assert body[token_parameter] == 4096
+        assert "max_tokens" not in body and "max_completion_tokens" not in body
         assert body["response_format"]["type"] == response_format
         if supplier == "qwen" and model.startswith("qwen"):
             assert body["enable_thinking"] is False

@@ -35,6 +35,7 @@ const categoryLabels: Record<string, string> = {
   PROVIDER_FAILED: "供应商执行失败",
   PROVIDER_UNAVAILABLE: "供应商不可用",
   STORAGE_FAILED: "文件存储失败",
+  ACCOUNT_BALANCE_INSUFFICIENT: "账户余额不足",
   BUDGET_EXCEEDED: "预算超限",
   QUALITY_FAILED: "质量未通过",
   TRANSIENT: "暂时故障",
@@ -254,25 +255,8 @@ export default function MediaTaskDetail({
               ? "未取得调度信息"
               : "暂无调度记录"}
         </Data>
-        <Data label="执行期限">
-          {detail.schedule
-            ? mediaTime(detail.schedule.deadline_at)
-            : detail.errors.schedule
-              ? "未取得调度信息"
-              : "暂无调度记录"}
-        </Data>
         {detail.schedule?.blocked_code && (
           <Data label="调度阻塞">{category(detail.schedule.blocked_code)}</Data>
-        )}
-        {detail.schedule?.policy.max_attempts !== undefined && (
-          <Data label="最大尝试次数">
-            {detail.schedule.policy.max_attempts}
-          </Data>
-        )}
-        {detail.schedule?.policy.max_elapsed_seconds !== undefined && (
-          <Data label="最大执行时限">
-            {detail.schedule.policy.max_elapsed_seconds} 秒
-          </Data>
         )}
       </dl>
       {detail.deadLetter && (

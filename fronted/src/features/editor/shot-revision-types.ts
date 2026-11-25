@@ -32,7 +32,11 @@ export type RevisionPreview = {
   intent: RevisionIntent;
   source: RevisionSource;
   mode_description: string;
-  quote: { maximum_cost: string; currency: "USD"; pricing_version: string };
+  quote: {
+    maximum_cost: string;
+    currency: "USD";
+    pricing_version: string;
+  } | null;
   confirmation_digest: string;
   preserved_constraints: string[];
 };

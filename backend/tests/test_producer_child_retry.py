@@ -2,7 +2,6 @@
 
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -10,13 +9,11 @@ import pytest
 from sqlalchemy import func, select
 from test_agent_model import model_service as model_service
 from test_collaboration import create_episode, create_project, register
-from test_generation_budget import set_policy
 from test_producer_delegation import delegation_call, dispatched
 from test_producer_planning import completed_plan
 from test_screenwriter_creation import run_once
 from test_screenwriter_revision import critique_operations, install_revision
 
-from arclight.application import agent_limits
 from arclight.application.agent_limits import action_usage
 from arclight.domain.agent_limits import AgentRunLimits
 from arclight.persistence.agent_limits import AgentAction, AgentRunLimit
@@ -197,13 +194,16 @@ def test_original_producer_must_still_be_live_at_retry(
     assert_retry_blocked(client, case, code)
 
 
-def test_absolute_root_deadline_blocks_retry_before_outbox_or_network(
+def test_child_retry_preserves_the_original_unlimited_execution_window(
     client, episode, settings, model_service, monkeypatch
 ):
     case = failed_child(client, episode, settings, model_service, monkeypatch)
-    now = agent_limits.utcnow() + timedelta(hours=2)
-    monkeypatch.setattr(agent_limits, "utcnow", lambda: now)
-    assert_retry_blocked(client, case, "AGENT_DEADLINE_EXCEEDED")
+    response = client.post(f"/api/v1/runs/{case.child_id}/retry")
+    assert response.status_code == 202, response.text
+    with client.app.state.session_factory() as db:
+        assert db.get(AgentRunLimit, case.root_id).deadline_at is None
+        assert db.get(AgentRunLimit, case.child_id).deadline_at is None
+        assert db.get(AgentRunLimit, case.child_id).root_run_id == case.root_id
 
 
 @pytest.mark.parametrize(
@@ -287,10 +287,9 @@ def test_parent_exclusion_requires_same_episode_and_original_actor(
 
 
 @pytest.mark.parametrize("constraint", ["model_calls", "budget"])
-def test_explicit_retry_cannot_reset_shared_root_call_or_cost_limit(
+def test_explicit_retry_keeps_call_and_cost_history_past_retired_limits(
     client, episode, settings, model_service, monkeypatch, constraint
 ):
-    set_policy(client, episode["project_id"], "100")
     limits = AgentRunLimits(
         maximum_cost=Decimal("0.07") if constraint == "budget" else Decimal("0"),
         max_model_calls=7 if constraint == "model_calls" else 32,
@@ -311,19 +310,17 @@ def test_explicit_retry_cannot_reset_shared_root_call_or_cost_limit(
         deadline = db.get(AgentRunLimit, case.root_id).deadline_at
     assert sum(row.kind == "MODEL" for row in usage["actions"]) == 7
     if constraint == "budget":
-        # Two Producer calls and five original child calls exhaust the frozen root budget.
         assert usage["actual_cost"] + usage["pending_estimate"] == Decimal("0.07")
-        code = "AGENT_BUDGET_EXCEEDED"
-    else:
-        code = "AGENT_MODEL_CALL_LIMIT"
     sent = len(case.sent)
     response = client.post(f"/api/v1/runs/{case.child_id}/retry")
     assert response.status_code == 202, response.text
     result = run_once(client, settings, case.child_id)
-    assert result["status"] == "FAILED" and result["error_code"] == code, result
-    assert len(case.sent) == sent and not case.errors and not case.ordinary_errors
+    assert result["status"] == "WAITING_REVIEW", result
+    assert len(case.sent) == sent + 1 and not case.errors and not case.ordinary_errors
     with client.app.state.session_factory() as db:
         current = action_usage(db, case.root_id)
-        assert {row.id for row in current["actions"]} == original_actions
-        assert db.get(AgentRunLimit, case.child_id).deadline_at == deadline
+        assert original_actions < {row.id for row in current["actions"]}
+        assert current["actual_cost"] >= usage["actual_cost"]
+        assert db.get(AgentRunLimit, case.root_id).deadline_at == deadline
+        assert db.get(AgentRunLimit, case.child_id).deadline_at is None
         assert db.get(WorkflowRun, case.root_id).status == "RUNNING"

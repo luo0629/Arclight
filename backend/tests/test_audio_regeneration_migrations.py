@@ -57,6 +57,7 @@ def test_regeneration_empty_schema_roundtrip_matches_metadata(client, migrated):
     assert column["nullable"]
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_regeneration_upgrade_preserves_legacy_request_and_dispatch(client, tts_case, migrated):
     created, _ = create_ok(client, tts_case)
     factory = client.app.state.session_factory
@@ -80,6 +81,7 @@ def test_regeneration_upgrade_preserves_legacy_request_and_dispatch(client, tts_
         validate_tts_dispatch(db, db.get(GenerationJob, UUID(created["job_id"])))
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_regeneration_history_blocks_downgrade_before_ddl(client, regeneration_request, migrated):
     engine = client.app.state.session_factory.kw["bind"]
     before = [

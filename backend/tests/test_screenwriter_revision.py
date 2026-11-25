@@ -166,7 +166,7 @@ def test_creation_critiques_patches_rechecks_and_enters_original_two_reviews(
     client, episode, settings, model_service, monkeypatch
 ):
     sent, errors, ordinary_errors = install_revision(model_service, monkeypatch, settings)
-    run_id = start(client, episode, revision_rounds=2)
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run["error_code"], errors, ordinary_errors)
     assert run["workflow_version"] == "screenwriter/2.0"
@@ -204,7 +204,7 @@ def test_invalid_patch_feedback_is_observed_then_repaired_before_candidate(
     sent, errors, ordinary_errors = install_revision(
         model_service, monkeypatch, settings, invalid_first=invalid
     )
-    run_id = start(client, episode, revision_rounds=2)
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, ordinary_errors)
     with client.app.state.session_factory() as db:
@@ -229,9 +229,9 @@ def test_exhausted_revision_forces_saved_question_without_extra_model_call(
     client, episode, settings, model_service, monkeypatch
 ):
     sent, errors, ordinary_errors = install_revision(
-        model_service, monkeypatch, settings, patches=2
+        model_service, monkeypatch, settings, patches=4
     )
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "RUNNING", (run, errors, ordinary_errors)
     operations = progress(client, run_id)
@@ -240,7 +240,10 @@ def test_exhausted_revision_forces_saved_question_without_extra_model_call(
         waiting["status"] == "WAITING_HUMAN"
         and "送信的动机" in waiting["human_request"]["question"]
     )
-    assert len(sent) == 7
+    assert len(sent) == 11
+    assert [
+        item["revision"]["remaining_patches"] for item in critique_operations(client, run_id)
+    ] == [3, 2, 1, 0, 0]
     with client.app.state.session_factory() as db:
         deadline = db.get(AgentRunLimit, run_id).deadline_at
         assert (
@@ -257,9 +260,9 @@ def test_exhausted_revision_forces_saved_question_without_extra_model_call(
         )
     before = copy.deepcopy(operations)
     run_once(client, settings, run_id)
-    assert len(sent) == 7 and progress(client, run_id) == before
+    assert len(sent) == 11 and progress(client, run_id) == before
     assert client.post(f"/api/v1/runs/{run_id}/cancel").status_code == 200
-    assert run_once(client, settings, run_id)["status"] == "CANCELLED" and len(sent) == 7
+    assert run_once(client, settings, run_id)["status"] == "CANCELLED" and len(sent) == 11
     with client.app.state.session_factory() as db:
         assert db.get(AgentRunLimit, run_id).deadline_at == deadline
 
@@ -293,18 +296,18 @@ def test_independent_rewrite_keeps_original_scope_across_length_changes_and_one_
         },
     }
     target = targets[scope]
-    payload = rewrite_body(base, target) | {"professional": True, "revision_rounds": 2}
+    payload = rewrite_body(base, target) | {"professional": True, "revision_rounds": 3}
     response = start_rewrite(client, episode, payload)
     assert response.status_code == 202, response.text
     run_id = UUID(response.json()["run_id"])
     assert start_rewrite(client, episode, payload).json()["run_id"] == str(run_id)
-    assert start_rewrite(client, episode, payload | {"revision_rounds": 1}).status_code == 409
+    assert start_rewrite(client, episode, payload | {"revision_rounds": 2}).status_code == 422
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, ordinary_errors)
     assert run["workflow_version"] == "screenwriter-rewrite/1.0"
     reports = critique_operations(client, run_id)
     assert [item["result"]["decision"] for item in reports] == ["REVISE", "REVISE", "ACCEPT"]
-    assert [item["revision"]["remaining_patches"] for item in reports] == [3, 2, 1]
+    assert [item["revision"]["remaining_patches"] for item in reports] == [4, 3, 2]
     with client.app.state.session_factory() as db:
         candidate = db.scalar(select(Script).where(Script.run_id == run_id))
         after = candidate.content_json
@@ -351,7 +354,7 @@ def test_all_five_issue_categories_are_located_and_observable(
     _, errors, ordinary_errors = install_revision(
         model_service, monkeypatch, settings, category=category
     )
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "WAITING_REVIEW", (run, errors, ordinary_errors)
     report = critique_operations(client, run_id)[0]
@@ -389,7 +392,7 @@ def test_forged_critique_never_publishes_a_candidate(
     _, errors, ordinary_errors = install_revision(
         model_service, monkeypatch, settings, mutate_report=mutate
     )
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "FAILED" and run["error_code"] == code, (run, errors, ordinary_errors)
     with client.app.state.session_factory() as db:
@@ -413,9 +416,9 @@ def test_exhausted_question_restarts_and_exact_decision_is_idempotent(
     client, episode, settings, model_service, monkeypatch, decision
 ):
     sent, errors, ordinary_errors = install_revision(
-        model_service, monkeypatch, settings, patches=2
+        model_service, monkeypatch, settings, patches=4
     )
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     run_once(client, settings, run_id)
     waiting = progress(client, run_id)[-1]
     original_reports = copy.deepcopy(progress(client, run_id)[:-1])
@@ -425,7 +428,7 @@ def test_exhausted_question_restarts_and_exact_decision_is_idempotent(
     body = answer_body(waiting, decision=decision)
     with TestClient(create_app(settings)) as restarted:
         restarted.headers.update(client.headers)
-        assert run_once(restarted, settings, run_id)["status"] == "RUNNING" and len(sent) == 7
+        assert run_once(restarted, settings, run_id)["status"] == "RUNNING" and len(sent) == 11
         assert restarted.post(endpoint, json=body).status_code == 202
         assert restarted.post(endpoint, json=body).status_code == 202
         conflict = answer_body(waiting, decision="STOP" if decision == "ANSWER" else "ANSWER")
@@ -438,7 +441,7 @@ def test_exhausted_question_restarts_and_exact_decision_is_idempotent(
         )
         assert restarted.post(endpoint, json=body).status_code == 202
         assert progress(restarted, run_id)[:-1] == original_reports
-    assert len(sent) == (8 if decision == "ANSWER" else 7)
+    assert len(sent) == (12 if decision == "ANSWER" else 11)
     with client.app.state.session_factory() as db:
         assert db.get(AgentRunLimit, run_id).deadline_at == deadline
 
@@ -456,7 +459,7 @@ def test_retry_after_saved_patch_replays_completed_round_without_resetting_repai
     sent, errors, ordinary_errors = install_revision(
         model_service, monkeypatch, settings, mutate_report=mutate
     )
-    run_id = start(client, episode, revision_rounds=1)
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["error_code"] == "SCREENWRITER_CRITIQUE_SCOPE", (run, errors, ordinary_errors)
     reports = critique_operations(client, run_id)
@@ -470,27 +473,37 @@ def test_retry_after_saved_patch_replays_completed_round_without_resetting_repai
     assert len(sent) == count + 1
     current = critique_operations(client, run_id)
     assert current[:2] == reports
-    assert current[2]["revision"]["remaining_patches"] == 0
+    assert current[2]["revision"]["remaining_patches"] == 2
     with client.app.state.session_factory() as db:
         assert db.get(AgentRunLimit, run_id).deadline_at == deadline
 
 
-@pytest.mark.parametrize("calls", [4, 5, 6])
-def test_root_call_limit_applies_to_critique_tools_rechecks_and_explicit_retry(
-    client, episode, settings, model_service, monkeypatch, calls
+def test_critique_loop_has_its_own_limit_and_keeps_the_failed_check_receipt(
+    client, episode, settings, model_service, monkeypatch
 ):
-    sent, errors, ordinary_errors = install_revision(model_service, monkeypatch, settings)
-    run_id = start(client, episode, revision_rounds=2, agent_limits={"max_model_calls": calls})
+    def limit_critique(payload):
+        seed = json.loads(payload["messages"][1]["content"]).get("data", {})
+        if seed.get("phase") == "CRITIQUE_SCRIPT":
+            monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+
+    sent, errors, ordinary_errors = install_revision(
+        model_service,
+        monkeypatch,
+        settings,
+        on_http=limit_critique,
+    )
+    run_id = start(client, episode, revision_rounds=3)
     run = run_once(client, settings, run_id)
     assert run["status"] == "FAILED" and run["error_code"] == "AGENT_MODEL_CALL_LIMIT", (
         run,
         errors,
         ordinary_errors,
     )
-    assert len(sent) == calls
-    assert client.post(f"/api/v1/runs/{run_id}/retry").status_code == 202
-    assert run_once(client, settings, run_id)["error_code"] == "AGENT_MODEL_CALL_LIMIT"
-    assert len(sent) == calls
+    saved = critique_operations(client, run_id)
+    assert len(sent) == 5 and len(saved) == 1
+    assert saved[0]["status"] == "STOPPED" and saved[0]["revision"]["patch_checks"]
+    assert run_once(client, settings, run_id) == run
+    assert len(sent) == 5 and critique_operations(client, run_id) == saved
 
 
 @pytest.mark.parametrize(

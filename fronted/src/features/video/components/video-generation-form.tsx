@@ -171,8 +171,10 @@ function Fields(props: Props) {
           className="flex min-w-0 flex-col gap-2 break-all"
         >
           <p>
-            冻结模型：{state.pending.request.spec.model} · 最高费用{" "}
-            {state.pending.maximum_cost} USD
+            冻结模型：{state.pending.request.spec.model} · 费用估算{" "}
+            {state.pending.maximum_cost === null
+              ? "待供应商账单确认"
+              : `${state.pending.maximum_cost} USD`}
           </p>
           <p>
             精确首帧：
@@ -193,7 +195,7 @@ function Fields(props: Props) {
                 disabled={disabled}
                 onChange={(event) => setConfirmed(event.target.checked)}
               />
-              我确认本次视频最高费用 {state.pending.maximum_cost} USD
+              确认使用当前供应商生成视频
             </label>
           )}
           {state.pending.phase !== "ACCEPTED" ? (

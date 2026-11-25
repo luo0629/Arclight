@@ -210,6 +210,7 @@ def test_success_requires_passed_check_of_current_attempt_and_exact_file(
     assert read(client, value)["output_file_id"] is None
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_empty_migration_roundtrip_preserves_jobs_and_metadata(client, job_case, migrated):
     _, value, _ = job_case
     command.downgrade(migrated, "0058")
@@ -219,6 +220,7 @@ def test_empty_migration_roundtrip_preserves_jobs_and_metadata(client, job_case,
     assert read(client, value) == value
 
 
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_nonempty_downgrade_refuses_without_losing_history_or_schema(
     client, inspection_case, migrated
 ):
@@ -238,6 +240,7 @@ def test_nonempty_downgrade_refuses_without_losing_history_or_schema(
 
 
 @pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED"])
+@pytest.mark.usefixtures("legacy_execution_deadlines")
 def test_upgrade_preserves_legacy_attempts_without_fabricating_checks(
     client, job_case, measured_result, migrated, status
 ):
