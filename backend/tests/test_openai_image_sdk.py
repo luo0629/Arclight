@@ -158,7 +158,7 @@ def test_sdk_transport_is_defined_by_protocol_not_quote_policy(
     provider = NativeMediaProvider(settings, connection, transport=httpx.MockTransport(handler))
     with pytest.raises(GatewayFailure) as caught:
         provider.submit(request)
-    assert caught.value.code == "PROVIDER_QUOTA_EXHAUSTED" and caught.value.not_accepted
+    assert caught.value.code == "PROVIDER_INSUFFICIENT_BALANCE" and caught.value.not_accepted
     assert len(calls) == 1 and sdk_calls == [0]
 
 

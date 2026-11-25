@@ -79,7 +79,7 @@ def test_missing_kernel_policy_fails_closed_before_untrusted_work():
 
 def test_real_cpu_limit_terminates_infinite_worker():
     script = (
-        "from arclight.media import limits; limits.CPU_SECONDS=1; limits.restrict_process(); "
+        "from arclight.media.limits import restrict_process; restrict_process(cpu_seconds=1); "
         "from arclight.media.isolation import seal_process; seal_process()\n"
         "while True: pass"
     )

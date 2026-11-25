@@ -135,18 +135,16 @@ def test_create_rejects_unbounded_or_coerced_duration(duration):
         )
 
 
-def test_create_bounds_inputs_and_never_resolves_a_current_pointer_implicitly():
+def test_create_accepts_more_than_63_shots_with_explicit_asset_versions():
     value = {
         "creation_key": str(uuid4()),
         "storyboard_id": str(uuid4()),
         "selected_shots": [
-            {"shot_id": str(uuid4()), "asset_version_id": str(uuid4())} for _ in range(63)
+            {"shot_id": str(uuid4()), "asset_version_id": str(uuid4())} for _ in range(64)
         ],
     }
-    assert len(TimelineCreate.model_validate(value).selected_shots) == 63
-    value["selected_shots"].append({"shot_id": str(uuid4()), "asset_version_id": str(uuid4())})
-    with pytest.raises(ValidationError):
-        TimelineCreate.model_validate(value)
+    selected = TimelineCreate.model_validate(value).selected_shots
+    assert [shot.model_dump(mode="json") for shot in selected] == value["selected_shots"]
     value["selected_shots"] = [{"shot_id": str(uuid4())}]
     with pytest.raises(ValidationError):
         TimelineCreate.model_validate(value)

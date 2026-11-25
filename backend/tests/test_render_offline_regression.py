@@ -284,8 +284,7 @@ def test_actual_encoder_child_failure_is_reaped_unpublished_and_retryable(
         "sys.stderr.write('PRIVATE_RENDER_TOKEN'*8192); "
         "sys.stderr.flush(); time.sleep(30)",
         "cpu_limit": "import sys; sys.stdin.buffer.read(); "
-        "from arclight.media import limits; limits.CPU_SECONDS=1; "
-        "limits.restrict_process(); "
+        "from arclight.media.limits import restrict_process; restrict_process(cpu_seconds=1); "
         "from arclight.media.isolation import seal_process; seal_process()\n"
         "while True: pass",
     }

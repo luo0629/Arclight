@@ -223,6 +223,7 @@ def service_availability(environment: dict[str, str]) -> dict[str, bool]:
         "storage": bool(environment.get("ARCLIGHT_TEST_S3_ENDPOINT")),
         "broker": bool(environment.get("ARCLIGHT_TEST_REDIS_URL")),
         "media": bool(shutil.which("ffprobe")),
+        "linux": sys.platform == "linux",
     }
 
 
@@ -238,6 +239,8 @@ def environment_skip(reason: str, databases: tuple[str, ...], services: dict[str
         "requires dedicated s3": "storage",
         "real redis requires arclight_test_redis_url on dedicated database 15": "broker",
         "independent ffprobe cli unavailable locally; required in final ci": "media",
+        "linux kernel cpu limit": "linux",
+        "linux landlock/seccomp deployment": "linux",
     }
     if service := service_reasons.get(lowered):
         return services.get(service) is False
