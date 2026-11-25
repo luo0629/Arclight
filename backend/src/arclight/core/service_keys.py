@@ -2,7 +2,11 @@
 
 import hashlib
 import json
+import os
+from contextlib import suppress
 from dataclasses import dataclass
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import TYPE_CHECKING
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
@@ -28,6 +32,31 @@ class Keyring:
             ) from None
 
 
+def managed_development_key() -> str:
+    path = Path(".local/service-secrets/master.key")
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        pass
+
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with NamedTemporaryFile(dir=path.parent, prefix=".pending-", delete_on_close=False) as pending:
+        pending.write(Fernet.generate_key())
+        pending.flush()
+        os.fsync(pending.fileno())
+        pending.close()
+        # Publish the complete file without replacing a key created by another process.
+        with suppress(FileExistsError):
+            path.hardlink_to(pending.name)
+        if os.name == "posix":
+            directory = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    return path.read_text(encoding="utf-8").strip()
+
+
 def keyring(settings: "Settings") -> Keyring:
     active = settings.service_encryption_key.get_secret_value()
     previous = [key.get_secret_value() for key in settings.service_encryption_previous_keys]
@@ -36,6 +65,15 @@ def keyring(settings: "Settings") -> Keyring:
             if active:
                 raise ValueError
             active = settings.service_encryption_key_file.read_text(encoding="utf-8").strip()
+        elif (
+            not active
+            and not previous
+            and not settings.service_encryption_previous_keys_file
+            and settings.environment == "development"
+        ):
+            active = managed_development_key()
+            if not active:
+                raise ValueError
         if settings.service_encryption_previous_keys_file:
             if previous:
                 raise ValueError

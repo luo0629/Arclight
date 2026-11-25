@@ -24,11 +24,16 @@ def test_loopback_probe_ignores_system_proxy(monkeypatch):
             "api": {
                 "environment": {},
                 "volumes": [
-                    {"type": "volume", "source": "asset-objects", "target": "/app/asset-objects"}
+                    {"type": "volume", "source": "asset-objects", "target": "/app/asset-objects"},
+                    {
+                        "type": "volume",
+                        "source": "service-secrets",
+                        "target": "/app/.local/service-secrets",
+                    },
                 ],
             },
         },
-        "volumes": {"asset-objects": {}},
+        "volumes": {"asset-objects": {}, "service-secrets": {}},
     }
     generated = []
 
@@ -87,6 +92,8 @@ def test_loopback_probe_ignores_system_proxy(monkeypatch):
     }
     assert isolated["services"]["api"]["environment"]["ARCLIGHT_PROVIDER"] == "mock"
     assert isolated["volumes"]["asset-objects"]["name"].startswith(calls[-1][1] + "_")
+    assert isolated["volumes"]["service-secrets"]["name"].startswith(calls[-1][1] + "_")
+    assert isolated["services"]["api"]["environment"]["ARCLIGHT_SERVICE_ENCRYPTION_KEY"] == ""
 
 
 def test_docker_command_uses_repository_compose(monkeypatch):

@@ -4,7 +4,7 @@ import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from threading import Event
+from threading import Barrier, Event
 from uuid import UUID, uuid4
 
 import pytest
@@ -71,6 +71,55 @@ def test_environment_and_secret_file_injection(monkeypatch, tmp_path):
     previous_file.write_text('{"bad": "not-an-array"}', encoding="utf-8")
     with pytest.raises(DomainError, match="配置无效"):
         keyring(mounted)
+
+
+def test_development_processes_share_one_managed_key(monkeypatch, tmp_path, settings):
+    monkeypatch.chdir(tmp_path)
+    settings.environment = "development"
+    settings.service_encryption_key = SecretStr("")
+    barrier = Barrier(2)
+    generate_key = Fernet.generate_key
+
+    def simultaneous_key():
+        barrier.wait(timeout=5)
+        return generate_key()
+
+    monkeypatch.setattr(Fernet, "generate_key", staticmethod(simultaneous_key))
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(keyring, settings)
+        second = executor.submit(keyring, settings)
+        rings = [first.result(), second.result()]
+    assert rings[0].key_id == rings[1].key_id
+    assert rings[1].decrypt(rings[0].active.encrypt(b"test-value").decode()) == "test-value"
+    path = tmp_path / ".local/service-secrets"
+    assert [file.name for file in path.iterdir()] == ["master.key"]
+    assert keyring(settings.model_copy()).key_id == rings[0].key_id
+
+
+def test_development_account_can_save_without_injected_key(client, settings, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    settings.environment = "development"
+    settings.service_encryption_key = SecretStr("")
+    account(client)
+    config = client.get("/api/v1/me/model-services")
+    assert config.json()["can_store_keys"] is True
+    probe_key = "fixture-provider-key"
+    saved = client.put("/api/v1/me/model-services/text", json=profile(api_key=probe_key))
+    assert saved.status_code == 200
+    assert probe_key not in saved.text
+    ring = keyring(settings.model_copy())
+    with client.app.state.session_factory() as db:
+        row = db.scalar(select(ServiceCredential))
+        assert row and ring.decrypt(row.encrypted_key) == probe_key
+        assert row.key_id == ring.key_id
+
+    invalid = tmp_path / ".local/service-secrets/master.key"
+    invalid.write_text("bad-sensitive-key", encoding="utf-8")
+    blocked = client.get("/api/v1/me/model-services")
+    assert blocked.json()["key_storage"]["code"] == "KEY_STORAGE_INVALID"
+    assert blocked.json()["can_store_keys"] is False
+    assert "bad-sensitive-key" not in blocked.text
+    assert invalid.read_text(encoding="utf-8") == "bad-sensitive-key"
 
 
 @pytest.mark.parametrize("value", ["", "invalid-sensitive-key"])

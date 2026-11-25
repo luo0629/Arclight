@@ -34,6 +34,7 @@ x-app: &app
     ARCLIGHT_SERVICE_ENCRYPTION_KEY_FILE: ${ARCLIGHT_SERVICE_ENCRYPTION_KEY_FILE:-}
     ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS: ${ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS:-[]}
     ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS_FILE: ${ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS_FILE:-}
+  volumes: [ &service-secrets "service-secrets:/app/.local/service-secrets" ]
   restart: unless-stopped
 
 services:
@@ -141,7 +142,7 @@ services:
       # 本地网关覆盖转发头，API 宿主端口仅监听 loopback；公网部署须限制可信代理。
       FORWARDED_ALLOW_IPS: ${ARCLIGHT_TRUSTED_PROXY_IPS:-*}
       ARCLIGHT_ASSET_STORAGE_PATH: /app/asset-objects
-    volumes: ["asset-objects:/app/asset-objects"]
+    volumes: ["asset-objects:/app/asset-objects", *service-secrets]
     ports: ["127.0.0.1:8000:8000"]
     depends_on:
       migrate: {condition: service_completed_successfully}
@@ -204,3 +205,4 @@ volumes:
   redis-data:
   asset-objects:
   media-objects:
+  service-secrets:

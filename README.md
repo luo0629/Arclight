@@ -197,7 +197,7 @@ docker compose up --build -d
 
 - 创作产品：`http://localhost:8080`，首次访问请创建账号。
 - Swagger：`http://localhost:8000/docs`
-- 生成任务使用账号自己的模型配置。把 `ARCLIGHT_SERVICE_ENCRYPTION_KEY` 设为有效的 Fernet 主密钥后，可以在页面保存供应商的 API Key。
+- 默认启动后，即可在「模型服务配置」填写并保存供应商的 API Key。账户凭证由 Arclight 自动加密，Docker Compose 使用 `service-secrets` 数据卷保存加密密钥。
 - Compose 统一启动内网私有 MinIO、启用版本化的桶初始化、独立文件传输网关及应用服务；MinIO 不发布宿主端口。清理按精确对象版本删除，保留所有文件引用。`/health/ready` 会检查已配置的 S3。MinIO 由固定官方版本源码构建，首次构建较慢；既有本机图片卷继续保留。
 - API 调试可使用开发 Service Token：`local-development-token-change-me`，浏览器工作台使用自己的账户会话。
 - 首次启动会执行业务表迁移和 checkpoint 初始化，默认凭据仅适用于本机开发。
@@ -264,7 +264,7 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 失败任务的“重试任务”保留原配置；“使用当前配置重新发起”复用原业务输入并创建新任务。API 为带 `Idempotency-Key` 的 `POST /api/v1/runs/{id}/restart`，原调用结果未知时须先核验。旧任务、产物和凭证绑定保持不变。完整台词生产、音色库和成片流程仍按各自任务推进。
 
 - 部署新版前先备份数据库和独立保管的主密钥，再按既有流程执行 `alembic upgrade head`。迁移 `0041` 增加供应商、独立凭证及审计表；`0052` 增加协议字段、不可变媒体凭证绑定和结果登记。`0071` 将使用服务器默认的旧账号设置重置为待填写的自定义配置，已保存的个人服务、凭证记录、审计和任务快照均保留。有相关历史时拒绝有损降级，旧运行不会自动切换协议。开发代理需保持 `/api/v1` 同源。代码更新不等于已执行业务库迁移。
-- API、初始化进程和全部 Worker 使用相同的 Fernet 主密钥。开发可设置 `ARCLIGHT_SERVICE_ENCRYPTION_KEY`；生产建议使用 `ARCLIGHT_SERVICE_ENCRYPTION_KEY_FILE` 指向容器内只读 Secret 文件，两者二选一。文件只含 `Fernet.generate_key()` 生成的主密钥，挂载由部署环境提供；路径变量不会自动创建或挂载 Secret。开发模式缺少主密钥时无法保存 API Key。生产模式缺少有效主密钥时无法启动。
+- API 和全部 Worker 使用同一把凭证加密密钥。默认开发启动在首次使用凭证时把密钥保存到 `backend/.local/service-secrets/master.key`；Compose 将同一目录挂载到 `service-secrets` 卷。与数据库一起备份对应的密钥文件或卷。已有开发或正式部署继续使用原先注入的密钥。正式部署通过 `ARCLIGHT_SERVICE_ENCRYPTION_KEY` 或 `ARCLIGHT_SERVICE_ENCRYPTION_KEY_FILE` 二选一注入稳定密钥，文件挂载由部署环境提供。
 - 轮换前将数据库与密钥版本分别安全备份，并暂停凭证写入或先部署兼容读密钥。将新密钥设为主密钥，旧密钥通过 `ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS`（JSON 数组）或对应 `_FILE` 注入。在 `backend/` 执行 `uv run python -m arclight.workers.service_keys check`，再执行 `uv run python -m arclight.workers.service_keys rotate --apply --actor <运维身份>`；完成后重启全部进程，以移除旧密钥的配置再次运行 `check`，通过后才撤下旧密钥。轮换原子重加密独立凭证，不改写旧任务输入；旧主密钥进程禁止继续写入。历史备份仍须保留其对应密钥。
 - 自定义地址允许任意合规公网域名，要求 HTTPS／443，禁止 IP 字面量、内网地址、URL 凭证及查询参数。执行时校验全部 DNS 结果并固定连接 IP，保留原域名的 Host／TLS 校验，拒绝重定向及环境代理。部署网络还须阻断内网、云元数据及私网 NAT／代理路由，应用校验不能替代出站防火墙。
 - 配置按账号隔离，revision 防止陈旧覆盖。读取接口只返回密钥是否存在及安全诊断，不返回密钥或密文；浏览器不持久化 API Key。更换供应商或地址须重新填 Key 或清除旧凭证。清除密钥后，账号保留已保存的服务设置，新任务须先重新配置密钥。历史运行使用冻结时的连接与凭证；凭证不进入提示词、checkpoint、公开任务详情或审计事件。个人配置审计可从 `/api/v1/me/model-services/audit` 分页读取。

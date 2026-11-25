@@ -32,7 +32,13 @@ def main() -> None:
     config["networks"] = {"default": {"name": project + "_default"}}
     config["volumes"] = {
         name: {"name": project + "_" + name}
-        for name in ("postgres-data", "redis-data", "asset-objects", "media-objects")
+        for name in (
+            "postgres-data",
+            "redis-data",
+            "asset-objects",
+            "media-objects",
+            "service-secrets",
+        )
     }
     jwt_secret = secrets.token_urlsafe(48)
     for name, service in config["services"].items():
@@ -63,6 +69,10 @@ def main() -> None:
                 ARCLIGHT_ENVIRONMENT="development",
                 ARCLIGHT_PROVIDER="mock",
                 ARCLIGHT_LLM_API_KEY="",
+                ARCLIGHT_SERVICE_ENCRYPTION_KEY="",
+                ARCLIGHT_SERVICE_ENCRYPTION_KEY_FILE="",
+                ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS="[]",
+                ARCLIGHT_SERVICE_ENCRYPTION_PREVIOUS_KEYS_FILE="",
                 ARCLIGHT_JWT_SECRET=jwt_secret,
                 ARCLIGHT_ALLOW_REGISTRATION="true",
                 ARCLIGHT_AUTH_ALLOWED_ORIGINS="[]",
