@@ -97,8 +97,31 @@ def manifest_url(timeline):
     return f"/api/v1/timelines/{timeline['id']}/render-manifests"
 
 
+def fixture_actor(client, db):
+    from arclight.core.security import decode_token, session_user
+
+    settings = client.app.state.settings
+    token = client.headers["Authorization"].removeprefix("Bearer ")
+    if token == settings.api_token.get_secret_value():
+        return "service-owner"
+    return str(session_user(db, decode_token(token, settings, "access")).id)
+
+
 def manifest(client, timeline, **overrides):
     body = {"creation_key": str(uuid4()), **overrides}
+    if body.get("profile") == "FORMAL":
+        from arclight.application.render_manifests import create_render_manifest
+        from arclight.domain.render_manifests import RenderManifestCreate
+
+        with client.app.state.session_factory.begin() as db:
+            value = create_render_manifest(
+                db,
+                client.app.state.settings,
+                UUID(timeline["id"]),
+                fixture_actor(client, db),
+                RenderManifestCreate.model_validate(body),
+            )
+            return value.model_dump(mode="json"), body
     response = client.post(manifest_url(timeline), json=body)
     assert response.status_code == 201, response.text
     return response.json(), body

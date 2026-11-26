@@ -469,14 +469,6 @@ export default function Inspector({
                     versionEditorDraftId(episode.id, "script", version.id)
                   ]
                 }
-                hasDialogue={
-                  Array.isArray(version.content_json.scenes) &&
-                  version.content_json.scenes.some(
-                    (scene) =>
-                      Array.isArray(scene?.dialogue) &&
-                      scene.dialogue.length > 0,
-                  )
-                }
                 disabled={busy || active}
                 onStarted={reload}
                 onUnavailable={onUnavailable}

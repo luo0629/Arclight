@@ -394,7 +394,6 @@ function DeliveryDetail({
             <RenderReviewActions
               key={review.id}
               review={review}
-              purpose="warnings"
               allowed={owner && writable}
               busy={mutation.busy}
               onDecision={decide}

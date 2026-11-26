@@ -6,11 +6,10 @@ from uuid import UUID
 
 import av
 import pytest
-from render_admission_helpers import ready_manifest, request_export
+from render_admission_helpers import approve_export_fixture, ready_manifest
 from render_job_helpers import read, run, submit
 from render_manifest_helpers import render_case, review_case, stored_file, timeline_case
 from render_report_helpers import report_read
-from test_human_reviews import decide, resume
 from test_render_captions import caption_font
 from test_subtitle_edits import require_edit
 from test_subtitle_lifecycle import approve_subtitle
@@ -65,10 +64,7 @@ def test_actual_production_v1_v2_text_timing_and_formal_report_preserve_source_h
     ]
     assert len(plan.audio_clips) == 2 and len(plan.audio_sources) == 2
     assert all("-->" not in cue.text for cue in plan.subtitles.cues)
-    requested = request_export(client, manifest)
-    decision = decide(client, requested)
-    assert decision.status_code == 200, decision.text
-    assert resume(client, requested, decision.json()).status_code == 200
+    assert approve_export_fixture(client, manifest)["result_json"]["status"] == "APPROVED"
     job, _ = submit(client, manifest)
     assert run(client, job) == "SUCCEEDED", read(client, job)
     final = read(client, job)

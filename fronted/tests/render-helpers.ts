@@ -4,7 +4,6 @@ import type {
   DeliveryAcceptance,
   HumanReview,
   MachineReport,
-  RenderAdmission,
   RenderDeliveryDetail,
   RenderDeliveryReport,
   RenderJob,
@@ -178,18 +177,19 @@ export async function renderFixture(page: Page) {
   const manifest = (
     episodeIndex: number,
     profile: Profile,
+    timeline = timelines[episodeIndex],
   ): RenderManifest => ({
     id: id(),
     project_id: project.id,
     created_by: session.user.id,
-    content_sha256: hash(episodes[episodeIndex].id + profile),
+    content_sha256: hash(timeline.id + profile),
     snapshot: {
       schema_version: 1,
-      timeline_id: timelines[episodeIndex].id,
-      timeline_sha256: timelines[episodeIndex].content_sha256,
-      dependency_manifest_id: timelines[episodeIndex].dependency_manifest_id,
+      timeline_id: timeline.id,
+      timeline_sha256: timeline.content_sha256,
+      dependency_manifest_id: timeline.dependency_manifest_id,
       dependency_manifest_sha256: hash("frozen dependencies"),
-      timeline: timelines[episodeIndex].snapshot,
+      timeline: timeline.snapshot,
       visuals: [],
       sources: [source],
       output: output(profile),
@@ -356,6 +356,12 @@ export async function renderFixture(page: Page) {
     readStatus?: number;
     jobNetworkFailure?: boolean;
     jobGate?: Promise<void>;
+    exportPrepareGate?: Promise<void>;
+    exportActionGate?: Promise<void>;
+    exportPrepareLost?: boolean;
+    exportActionLost?: boolean;
+    exportInputMissing?: boolean;
+    exportInputChanged?: boolean;
     warnings: boolean;
     detailGate?: (route: Route, row: Delivery) => Promise<void>;
     reportGate?: (route: Route, row: Delivery) => Promise<void>;
@@ -606,7 +612,8 @@ export async function renderFixture(page: Page) {
       path.includes(`/timelines/${row.id}`),
     );
     if (timeline) {
-      if (path.endsWith("/render-manifests")) {
+      const formal = path.endsWith("/formal-export");
+      if (path.endsWith("/render-manifests") || formal) {
         if (method === "GET")
           return route.fulfill({
             json: paginate(
@@ -617,16 +624,52 @@ export async function renderFixture(page: Page) {
             ),
           });
         const body = request.postDataJSON();
+        if (formal && control.role === "viewer")
+          return fail(
+            route,
+            403,
+            "FORBIDDEN",
+            "发起正式导出需要项目写入权限。",
+          );
+        if (formal && control.exportPrepareGate)
+          await control.exportPrepareGate;
         let frozen = createdManifests.get(body.creation_key);
         if (!frozen) {
           const index = episodes.findIndex(
             (episode) => episode.id === timeline.snapshot.episode_id,
           );
-          frozen = manifest(index, body.profile);
+          frozen = manifest(index, formal ? "FORMAL" : body.profile, timeline);
+          frozen.content_sha256 = hash(JSON.stringify(body));
           frozen.snapshot.line_audio_decisions =
             body.line_audio_decisions ?? [];
           manifests.unshift(frozen);
           createdManifests.set(body.creation_key, frozen);
+        }
+        if (formal) {
+          let record = reviews.find(
+            (row) => row.snapshot.version_id === frozen.id,
+          );
+          if (!record) {
+            if (control.exportInputMissing)
+              return fail(
+                route,
+                409,
+                "OBJECT_UNAVAILABLE",
+                "导出所需的镜头文件不存在。",
+              );
+            record = review("EXPORT", frozen.id);
+            record.snapshot.episode_id = timeline.snapshot.episode_id;
+            record.snapshot.content_sha256 = frozen.content_sha256;
+            reviews.push(record);
+          }
+          if (control.exportPrepareLost) {
+            control.exportPrepareLost = false;
+            return route.abort("failed");
+          }
+          return route.fulfill({
+            status: 201,
+            json: { manifest: frozen, review: record },
+          });
         }
         return route.fulfill({ status: 201, json: frozen });
       }
@@ -636,46 +679,100 @@ export async function renderFixture(page: Page) {
       path.includes(`/render-manifests/${row.id}`),
     );
     if (frozen) {
-      if (path.endsWith("/export-review")) {
-        let record = reviews.find(
+      if (path.endsWith("/formal-export")) {
+        if (control.exportActionGate) await control.exportActionGate;
+        const body = request.postDataJSON();
+        const record = reviews.find(
           (entry) =>
             entry.snapshot.kind === "EXPORT" &&
             entry.snapshot.version_id === frozen.id,
         );
-        if (!record) {
-          record = review("EXPORT", frozen.id);
-          reviews.push(record);
-        }
-        return route.fulfill({ status: 201, json: record });
-      }
-      if (path.endsWith("/admission")) {
-        const approved = reviews.find(
-          (row) =>
-            row.snapshot.kind === "EXPORT" &&
-            row.snapshot.version_id === frozen.id &&
-            row.status === "RESUMED" &&
-            row.decision?.decision_json.decision === "APPROVE",
-        );
-        if (frozen.snapshot.output.name === "FORMAL" && !approved)
+        if (
+          control.role === "viewer" ||
+          (control.role !== "owner" &&
+            (body.action === "APPROVE" ||
+              body.action === "REJECT" ||
+              !record?.resume))
+        )
+          return fail(route, 403, "FORBIDDEN", "正式导出需要项目所有者权限。");
+        if (
+          !record ||
+          (body.action !== "RETRY" &&
+            body.request_sha256 !== record.request_sha256)
+        )
           return fail(
             route,
             409,
-            "EXPORT_REVIEW_REQUIRED",
-            "本次正式清单尚未获拥有者批准并独立恢复。",
+            "REVIEW_INPUT_CHANGED",
+            "确认须引用本次正式导出的精确审核。",
           );
-        return route.fulfill({
-          json: {
-            manifest_id: frozen.id,
-            manifest_sha256: frozen.content_sha256,
-            profile: frozen.snapshot.output.name,
-            review_request_id: approved?.id ?? null,
-            decision_id: approved?.decision?.id ?? null,
-            checked_at: now,
-            admitted: true,
-            requires_recheck: true,
-            is_delivery: false,
-          } satisfies RenderAdmission,
-        });
+        if (
+          !record.decision &&
+          (body.action === "APPROVE" || body.action === "REJECT")
+        ) {
+          record.decision = {
+            id: id(),
+            request_id: record.id,
+            actor_id: session.user.id,
+            created_at: now,
+            updated_at: now,
+            decision_json: {
+              version_id: frozen.id,
+              request_sha256: record.request_sha256,
+              decision: body.action,
+              comment: body.comment ?? "",
+              impact_digest: null,
+            },
+          };
+          record.status = "DECIDED";
+        }
+        const decision = record.decision;
+        if (
+          !decision ||
+          decision.decision_json.decision !==
+            (body.action === "REJECT" ? "REJECT" : "APPROVE")
+        )
+          return fail(
+            route,
+            409,
+            "RENDER_EXPORT_NOT_APPROVED",
+            "这次正式导出未获批准。",
+          );
+        if (body.action !== "REJECT" && control.exportInputChanged)
+          return fail(
+            route,
+            409,
+            "RENDER_INPUT_CHANGED",
+            "导出素材在检查期间已变化，请重新准备。",
+          );
+        record.resume ??= {
+          id: id(),
+          request_id: record.id,
+          decision_id: decision.id,
+          actor_id: session.user.id,
+          created_at: now,
+          updated_at: now,
+          result_json: {
+            status: body.action === "REJECT" ? "REJECTED" : "APPROVED",
+          },
+        };
+        record.status = "RESUMED";
+        let queued: RenderJob | null = null;
+        if (body.action !== "REJECT") {
+          const retryOf = body.action === "RETRY" ? body.retry_of : null;
+          const key = `formal:${record.id}:${retryOf ?? "initial"}`;
+          queued = createdJobs.get(key) ?? null;
+          if (!queued) {
+            queued = { ...job(frozen), retry_of_id: retryOf };
+            jobs.unshift(queued);
+            createdJobs.set(key, queued);
+          }
+        }
+        if (control.exportActionLost) {
+          control.exportActionLost = false;
+          return route.abort("failed");
+        }
+        return route.fulfill({ json: { review: record, job: queued } });
       }
       if (path.endsWith("/jobs")) {
         if (method === "GET")
@@ -738,8 +835,14 @@ export async function renderFixture(page: Page) {
       }
       return route.fulfill({ json: task });
     }
-    if (path === `/api/v1/projects/${project.id}/human-reviews`)
-      return route.fulfill({ json: reviews });
+    if (path === `/api/v1/projects/${project.id}/human-reviews`) {
+      const versionId = url.searchParams.get("version_id");
+      return route.fulfill({
+        json: reviews.filter(
+          (row) => !versionId || row.snapshot.version_id === versionId,
+        ),
+      });
+    }
     const record = reviews.find((row) =>
       path.includes(`/human-reviews/${row.id}`),
     );

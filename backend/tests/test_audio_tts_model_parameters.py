@@ -11,17 +11,25 @@ from sqlalchemy import func, select
 from test_audio_production import wave_bytes
 from test_audio_tts import create_ok, declaration, finish_audio, tts_case
 from test_audio_tts_boundaries import boundary_state
-from test_native_media_integration import attempt_for
+from test_native_media_integration import attempt_for, catalog_version
 
+from arclight.domain.audio_voices import AudioVoiceOption
 from arclight.persistence.audio_voices import AudioVoiceVersion
 from arclight.persistence.models import DependencyManifest, GenerationAttempt
 
 __all__ = ["tts_case"]
 
 
-def configure_model(client, settings, model, protocol="openai_tts"):
+def configure_model(client, settings, model, protocol="openai_tts", *, voice="alloy"):
+    policy = settings.service_model_policies[0]
     settings.service_model_policies = [
-        settings.service_model_policies[0].model_copy(update={"model": model, "protocol": protocol})
+        policy.model_copy(
+            update={
+                "model": model,
+                "protocol": protocol,
+                "speech_voice_options": (AudioVoiceOption(id=voice, label=voice),),
+            }
+        )
     ]
     response = client.put(
         "/api/v1/me/model-services/speech",
@@ -44,6 +52,7 @@ def save_model_voice(client, case, *, output_spec=None, **parameters):
             **case["voice_payload"],
             "creation_key": str(uuid4()),
             "expected_version_no": 1,
+            "model_config_version": catalog_version(client, case["pid"]),
             "parameters": {"voice": "alloy", "speed": 1.1, **parameters},
             "output_spec": output_spec
             if output_spec is not None
@@ -151,9 +160,10 @@ def test_supported_and_unknown_compatible_tts_keep_voice_and_line_instructions(
 def test_siliconflow_known_models_reject_voice_output_before_persistence_or_budget(
     client, settings, tts_case, model, output
 ):
-    configure_model(client, settings, model, protocol="siliconflow_tts")
+    voice = f"{model}:alex"
+    configure_model(client, settings, model, protocol="siliconflow_tts", voice=voice)
     before, count = boundary_state(client), voice_count(client)
-    response = save_model_voice(client, tts_case, voice=f"{model}:alex", output_spec=output)
+    response = save_model_voice(client, tts_case, voice=voice, output_spec=output)
     assert response.status_code == 422, response.text
     assert response.json()["error"]["code"] == "PROVIDER_PARAMETERS_UNSUPPORTED"
     assert voice_count(client) == count
@@ -179,8 +189,9 @@ def test_siliconflow_known_models_reject_voice_output_before_persistence_or_budg
 def test_siliconflow_known_models_admit_valid_frozen_output_to_line_budget(
     client, settings, tts_case, model, output
 ):
-    configure_model(client, settings, model, protocol="siliconflow_tts")
-    response = save_model_voice(client, tts_case, voice=f"{model}:alex", output_spec=output)
+    voice = f"{model}:alex"
+    configure_model(client, settings, model, protocol="siliconflow_tts", voice=voice)
+    response = save_model_voice(client, tts_case, voice=voice, output_spec=output)
     assert response.status_code == 201, response.text
     assert response.json()["output_spec"] == output
     tts_case["payload"]["voice_version_id"] = response.json()["id"]
@@ -203,7 +214,7 @@ def test_siliconflow_known_models_admit_valid_frozen_output_to_line_budget(
 def test_qwen_audio_protocol_downloads_signed_wav_and_keeps_usage(
     client, settings, tts_case, model, voice, streamed
 ):
-    configure_model(client, settings, model, protocol="qwen_audio_tts")
+    configure_model(client, settings, model, protocol="qwen_audio_tts", voice=voice)
     instructions = "Read with restrained urgency."
     invalid = save_model_voice(client, tts_case, voice=voice, speed=2.1)
     assert invalid.status_code == 422, invalid.text

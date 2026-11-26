@@ -16,6 +16,7 @@ from arclight.api.production_versions import VersionRead
 from arclight.application import production_versions as versions
 from arclight.application.production_versions import bind, capture_text, text_settings
 from arclight.core.errors import DomainError
+from arclight.domain.versions import PRIVATE_BINDING_TYPES
 from arclight.persistence.models import (
     GenerationAttempt,
     ProductionVersion,
@@ -39,6 +40,24 @@ def bindings(client, episode, resource_id=None, kind=None):
     response = client.get(url(episode) + "/bindings", params=params)
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def test_private_short_drama_bindings_are_excluded_before_pagination(client, episode):
+    project_id = UUID(episode["project_id"])
+    identities = {kind: uuid4() for kind in PRIVATE_BINDING_TYPES}
+    with client.app.state.session_factory.begin() as db:
+        for kind, identity in identities.items():
+            bind(db, project_id, kind, identity, {"private_route": "synthetic"})
+    run_id = start(client, episode).json()["run_id"]
+
+    for kind, identity in identities.items():
+        assert not bindings(client, episode, identity, kind)
+        assert not bindings(client, episode, identity)
+        assert not bindings(client, episode, kind=kind)
+    public = client.get(url(episode) + "/bindings", params={"limit": 1})
+    assert public.status_code == 200, public.text
+    assert [row["resource_id"] for row in public.json()] == [run_id]
+    assert len(bindings(client, episode)) == 1
 
 
 @pytest.mark.parametrize("family", ["TEXT", "ART", "REVIEW", "MEDIA"])

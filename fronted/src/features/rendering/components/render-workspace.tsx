@@ -6,15 +6,22 @@ import { isResourceId } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
 import { ApiError, message } from "@/lib/api/client";
+import { useAuth } from "@/features/auth/auth-context";
 import type { ContentVersion, Episode } from "@/types/api";
 import { prepareLineAudioDecisions, renderingApi } from "../api";
 import type {
   LineAudioDecision,
+  RenderExportSettings,
   RenderManifest,
   RenderJob,
-  RenderProfile,
   Timeline,
 } from "../types";
+import {
+  matchesExportReview,
+  readFormalExportIntent,
+  writeFormalExportIntent,
+  type FormalExportIntent,
+} from "../formal-export-intent";
 import useRenderList from "../hooks/use-render-list";
 import useRenderDetail from "../hooks/use-render-detail";
 import useRenderMutation, {
@@ -42,6 +49,7 @@ export default function RenderWorkspace(props: {
   boardPagination: ReactNode;
   onOpenAudio?: () => void;
 }) {
+  const { user } = useAuth();
   const search = useSearchParams();
   const [denied, setDenied] = useState("");
   const [epoch, setEpoch] = useState(0);
@@ -68,8 +76,9 @@ export default function RenderWorkspace(props: {
         </Notice>
       ) : (
         <RenderContent
-          key={`${props.episode.id}:${props.owner}:${props.writable}:${epoch}:${search.get("render_job") ?? ""}:${search.get("render_manifest") ?? ""}:${search.get("timeline") ?? ""}`}
+          key={`${user.id}:${props.episode.id}:${props.owner}:${props.writable}:${epoch}:${search.get("render_job") ?? ""}:${search.get("render_manifest") ?? ""}:${search.get("timeline") ?? ""}`}
           {...props}
+          exportScope={`${user.id}:${props.episode.id}`}
           unavailable={unavailable}
         />
       )}
@@ -85,6 +94,7 @@ function RenderContent({
   boardPagination,
   onOpenAudio,
   unavailable,
+  exportScope,
 }: {
   episode: Episode;
   owner: boolean;
@@ -93,6 +103,7 @@ function RenderContent({
   boardPagination: ReactNode;
   onOpenAudio?: () => void;
   unavailable: (cause: unknown) => void;
+  exportScope: string;
 }) {
   const fetchTimelines = useCallback(
     (cursor: number | undefined, signal: AbortSignal) =>
@@ -109,6 +120,10 @@ function RenderContent({
   const requestedJob = search.get("render_job");
   const requestedManifest = search.get("render_manifest");
   const requestedTimeline = search.get("timeline");
+  const [restored, setRestored] = useState<FormalExportIntent>();
+  useEffect(() => {
+    setRestored(readFormalExportIntent(exportScope));
+  }, [exportScope]);
   const exactId =
     requestedJob && isResourceId(requestedJob)
       ? `job:${requestedJob}`
@@ -116,7 +131,11 @@ function RenderContent({
         ? `manifest:${requestedManifest}`
         : requestedTimeline && isResourceId(requestedTimeline)
           ? `timeline:${requestedTimeline}`
-          : "";
+          : restored
+            ? "manifestId" in restored
+              ? `manifest:${restored.manifestId}`
+              : `timeline:${restored.timelineId}`
+            : "";
   const fetchExact = useCallback(
     async (signal: AbortSignal) => {
       if (exactId.startsWith("timeline:")) {
@@ -281,6 +300,7 @@ function RenderContent({
             key={selected.id}
             timeline={selected}
             projectId={episode.project_id}
+            exportScope={exportScope}
             owner={owner}
             writable={writable}
             unavailable={unavailable}
@@ -316,6 +336,7 @@ function RenderContent({
 function TimelineManifests({
   timeline,
   projectId,
+  exportScope,
   owner,
   writable,
   unavailable,
@@ -329,6 +350,7 @@ function TimelineManifests({
 }: {
   timeline: Timeline;
   projectId: string;
+  exportScope: string;
   owner: boolean;
   writable: boolean;
   unavailable: (cause: unknown) => void;
@@ -354,7 +376,20 @@ function TimelineManifests({
   useEffect(() => {
     if (refresh) void manifests.load();
   }, [refresh, manifests.load]);
-  const [profile, setProfile] = useState<RenderProfile>("PREVIEW");
+  const [formalIntent, setFormalIntent] = useState<FormalExportIntent>();
+  useEffect(() => {
+    setFormalIntent(readFormalExportIntent(exportScope, timeline.id));
+  }, [exportScope, timeline.id]);
+  const finishFormalExport = useCallback(
+    (manifestId: string) => {
+      const saved = readFormalExportIntent(exportScope, timeline.id);
+      if (saved && "manifestId" in saved && saved.manifestId === manifestId) {
+        writeFormalExportIntent(exportScope, timeline.id);
+        setFormalIntent(undefined);
+      }
+    },
+    [exportScope, timeline.id],
+  );
   const [draftDirty, setDraftDirty] = useState(false);
   const [fontId, setFontId] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -369,8 +404,7 @@ function TimelineManifests({
   );
   const settingsValid =
     !needsFont ||
-    (!!fontId &&
-      Number.isInteger(fontSize) &&
+    (Number.isInteger(fontSize) &&
       fontSize >= 6 &&
       fontSize <= 144 &&
       Number.isInteger(marginBottom) &&
@@ -419,12 +453,11 @@ function TimelineManifests({
     !!audio.data &&
     !audio.loading &&
     lineAudioDecisions.length === audio.data.lines.length;
-  const manifestBody = {
-    profile,
+  const manifestBody: RenderExportSettings = {
     line_audio_decisions: lineAudioDecisions,
     ...(needsFont
       ? {
-          font_file_id: fontId,
+          ...(fontId ? { font_file_id: fontId } : {}),
           subtitle_style: {
             font_size: fontSize,
             margin_bottom: marginBottom,
@@ -434,16 +467,17 @@ function TimelineManifests({
       : {}),
   };
   const creationScope = `manifest:${timeline.id}:${JSON.stringify(manifestBody)}`;
-  const mutation = useRenderMutation(creationScope, writable, unavailable);
-  async function createManifest() {
-    if (!audioComplete || timeline.stale || draftDirty || !settingsValid)
-      return;
+  const mutation = useRenderMutation(timeline.id, writable, unavailable);
+  const canCreate =
+    audioComplete && !timeline.stale && !draftDirty && settingsValid;
+  async function createPreview() {
+    if (!canCreate) return;
     const pending = pendingCreationKey(creationScope);
     await mutation.mutate(
       async (signal) => {
         const next = await renderingApi.createManifest(
           timeline.id,
-          { creation_key: pending.key, ...manifestBody },
+          { creation_key: pending.key, profile: "PREVIEW", ...manifestBody },
           signal,
         );
         pending.clear();
@@ -454,6 +488,87 @@ function TimelineManifests({
         setSelectedId(next.id);
       },
       "不可变渲染清单已创建。请核对精确输入后提交渲染。",
+    );
+  }
+  async function prepareFormalExport() {
+    if (!writable) return;
+    const previous = readFormalExportIntent(exportScope, timeline.id);
+    if (previous && "manifestId" in previous) {
+      if (manifestRows.some((row) => row.id === previous.manifestId)) {
+        setSelectedId(previous.manifestId);
+        return;
+      }
+      await mutation.mutate(
+        async (signal) => {
+          const manifest = await renderingApi.getManifest(
+            previous.manifestId,
+            signal,
+          );
+          if (
+            manifest.id !== previous.manifestId ||
+            manifest.project_id !== projectId ||
+            manifest.snapshot.timeline_id !== timeline.id ||
+            manifest.snapshot.output.name !== "FORMAL"
+          )
+            throw new Error("导出清单与当前时间轴不一致。");
+          return manifest;
+        },
+        (manifest) => {
+          manifests.prepend(manifest);
+          setSelectedId(manifest.id);
+        },
+        "",
+      );
+      return;
+    }
+    if (!previous && !canCreate) return;
+    await mutation.mutate(
+      async (signal) => {
+        const request = previous?.request ?? {
+          creation_key: crypto.randomUUID(),
+          ...manifestBody,
+        };
+        const pending = { timelineId: timeline.id, request };
+        writeFormalExportIntent(exportScope, timeline.id, pending);
+        setFormalIntent(pending);
+        try {
+          const result = await renderingApi.prepareFormalExport(
+            timeline.id,
+            request,
+            signal,
+          );
+          if (
+            result.manifest.project_id !== projectId ||
+            result.manifest.snapshot.timeline_id !== timeline.id ||
+            result.manifest.snapshot.output.name !== "FORMAL" ||
+            !matchesExportReview(result.review, result.manifest)
+          )
+            throw new Error("导出审核与当前时间轴不一致。");
+          writeFormalExportIntent(exportScope, timeline.id, {
+            timelineId: timeline.id,
+            manifestId: result.manifest.id,
+          });
+          return result;
+        } catch (cause) {
+          if (
+            !signal.aborted &&
+            cause instanceof ApiError &&
+            cause.code !== "NETWORK_ERROR" &&
+            cause.code !== "OBJECT_UNAVAILABLE" &&
+            [400, 409, 422].includes(cause.status)
+          ) {
+            writeFormalExportIntent(exportScope, timeline.id);
+            setFormalIntent(undefined);
+          }
+          throw cause;
+        }
+      },
+      ({ manifest }) => {
+        setFormalIntent({ timelineId: timeline.id, manifestId: manifest.id });
+        manifests.prepend(manifest);
+        setSelectedId(manifest.id);
+      },
+      "已核对本次导出的素材，等待项目所有者确认。",
     );
   }
   const visualCount = timeline.snapshot.tracks
@@ -567,41 +682,26 @@ function TimelineManifests({
               )}
             </details>
           )}
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="flex min-w-0 flex-1 flex-col gap-2 text-sm font-medium sm:max-w-xs">
-              输出用途
-              <select
-                aria-label="输出用途"
-                className={selectClass}
-                value={profile}
-                disabled={mutation.busy}
-                onChange={(event) =>
-                  setProfile(event.target.value as RenderProfile)
-                }
-              >
-                <option value="PREVIEW">预览版</option>
-                <option value="FORMAL">正式版</option>
-              </select>
-            </label>
+          <div className="flex flex-wrap gap-3">
             <Button
-              disabled={
-                mutation.busy ||
-                timeline.stale ||
-                !audioComplete ||
-                draftDirty ||
-                !settingsValid
-              }
-              onClick={() => void createManifest()}
+              disabled={mutation.busy || (!formalIntent && !canCreate)}
+              onClick={() => void prepareFormalExport()}
             >
-              {profile === "PREVIEW" ? "创建预览清单" : "创建正式清单"}
+              {formalIntent && "manifestId" in formalIntent
+                ? "查看本次导出"
+                : formalIntent
+                  ? "继续导出 MP4"
+                  : "导出 MP4"}
+            </Button>
+            <Button
+              variant="outline"
+              disabled={mutation.busy || !canCreate}
+              onClick={() => void createPreview()}
+            >
+              创建预览清单
             </Button>
           </div>
         </>
-      )}
-      {writable && (
-        <p className="text-xs text-muted-foreground">
-          网络结果不明时可原样重试，沿用同一创建标识；创建成功后再次操作会另建清单。
-        </p>
       )}
       {mutation.error && <Notice tone="error">{mutation.error}</Notice>}
       {mutation.notice && <Notice tone="success">{mutation.notice}</Notice>}
@@ -680,6 +780,13 @@ function TimelineManifests({
             unavailable={unavailable}
             refresh={refresh}
             onRendered={onRendered}
+            onExportFinished={finishFormalExport}
+            onExportRetry={(manifestId) => {
+              if (readFormalExportIntent(exportScope, timeline.id)) return;
+              const intent = { timelineId: timeline.id, manifestId };
+              writeFormalExportIntent(exportScope, timeline.id, intent);
+              setFormalIntent(intent);
+            }}
             initialJob={
               initialJob?.manifest_id === selected.id ? initialJob : undefined
             }

@@ -16,12 +16,20 @@ import useRenderDetail from "@/features/rendering/hooks/use-render-detail";
 import useRenderMutation, {
   pendingCreationKey,
 } from "@/features/rendering/hooks/use-render-mutation";
+import { runErrorMessage } from "@/lib/run-errors";
 import { audioApi } from "../api";
 import type { AudioVoice } from "../types";
 import useAudioPage from "../use-audio-page";
 import { AudioFeedback, AudioPagination } from "./audio-fields";
 
 const voiceId = (row: AudioVoice) => row.id;
+
+const catalogStatusMessage = {
+  NOT_CONFIGURED: "请先配置语音服务",
+  UNAVAILABLE:
+    "当前配音模型没有可用的音色目录。请在「模型服务配置」中更换模型。",
+  QUERY_FAILED: "音色目录查询失败。请检查配音服务后重新读取。",
+};
 export default function VoicePicker({
   projectId,
   speaker,
@@ -53,40 +61,57 @@ export default function VoicePicker({
     [projectId, speaker],
   );
   const voices = useAudioPage(scope, fetchVoices, voiceId, unavailable);
-  const fetchConfiguration = useCallback(
-    (signal: AbortSignal) => audioApi.speech(projectId, signal),
+  const [formOpen, setFormOpen] = useState(false);
+  const fetchCatalog = useCallback(
+    (signal: AbortSignal) => audioApi.voiceCatalog(projectId, signal),
     [projectId],
   );
-  const configuration = useRenderDetail(scope, fetchConfiguration, unavailable);
-  const [voiceName, setVoiceName] = useState("");
+  const catalog = useRenderDetail(
+    scope,
+    fetchCatalog,
+    unavailable,
+    writable && formOpen,
+  );
+  const [choice, setChoice] = useState<{
+    version: string;
+    voice: string;
+  } | null>(null);
   const [speed, setSpeed] = useState("");
   const [instructions, setInstructions] = useState("");
   const [language, setLanguage] = useState("");
-  const supported = configuration.data?.supported_parameters ?? [];
-  const speedRange = configuration.data?.parameter_ranges?.speed;
+  const data = catalog.data;
+  const catalogVersion = data?.configuration_version;
+  const options = data?.status === "READY" ? data.options : [];
+  const selectedOption =
+    choice?.version === catalogVersion
+      ? options.find((option) => option.id === choice?.voice)
+      : undefined;
+  const supported = data?.supported_parameters ?? [];
+  const speedRange = data?.parameter_ranges.speed;
   const parameters: Record<string, string | number> = {
-    voice: voiceName.trim(),
+    voice: selectedOption?.id ?? "",
   };
   if (speedRange && speed) parameters.speed = Number(speed);
   if (supported.includes("instructions") && instructions.trim())
     parameters.instructions = instructions.trim();
   if (supported.includes("language_type") && language.trim())
     parameters.language_type = language.trim();
-  const creationScope = `${scope}:voice:${JSON.stringify(parameters)}`;
+  const creationScope = `${scope}:voice:${catalogVersion ?? ""}:${JSON.stringify(parameters)}`;
   const mutation = useRenderMutation(creationScope, writable, unavailable);
+  const canSave =
+    writable &&
+    !mutation.busy &&
+    !voices.loading &&
+    !voices.error &&
+    !catalog.loading &&
+    !!selectedOption &&
+    !!catalogVersion;
   useEffect(() => {
     if (!saveOnly && !selected && voices.rows[0]) onSelected(voices.rows[0]);
   }, [saveOnly, selected, voices.rows, onSelected]);
   const versionNo = Math.max(0, ...voices.rows.map((row) => row.version_no));
   async function save() {
-    if (
-      !writable ||
-      !voiceName.trim() ||
-      !configuration.data?.configured ||
-      voices.loading ||
-      voices.error
-    )
-      return;
+    if (!canSave || !catalogVersion) return;
     const pending = pendingCreationKey(creationScope);
     await mutation.mutate(
       (signal) =>
@@ -97,6 +122,7 @@ export default function VoicePicker({
             speaker,
             ...(characterId ? { character_asset_id: characterId } : {}),
             expected_version_no: versionNo,
+            model_config_version: catalogVersion,
             parameters,
             output_spec: {},
           },
@@ -143,7 +169,10 @@ export default function VoicePicker({
         </p>
       )}
       {writable && (
-        <details className="min-w-0 rounded-lg border p-3">
+        <details
+          className="min-w-0 rounded-lg border p-3"
+          onToggle={(event) => setFormOpen(event.currentTarget.open)}
+        >
           <summary className="cursor-pointer text-sm font-medium">
             为{speaker}保存新音色
           </summary>
@@ -166,42 +195,61 @@ export default function VoicePicker({
                 </Button>
               </Notice>
             )}
-            {configuration.error && (
-              <Notice tone="error">{configuration.error}</Notice>
+            {catalog.loading && <p role="status">正在读取音色目录…</p>}
+            {catalog.error && <Notice tone="error">{catalog.error}</Notice>}
+            {data?.status === "READY" && options.length === 0 && (
+              <Notice>当前配音模型的音色目录为空。</Notice>
             )}
-            {configuration.data && (
-              <Notice>
-                {configuration.data.message}
-                {configuration.data.model
-                  ? ` · ${configuration.data.model}`
-                  : ""}
+            {data && data.status !== "READY" && (
+              <Notice tone={data.status === "QUERY_FAILED" ? "error" : "info"}>
+                {catalogStatusMessage[data.status]}
+                {data.status === "QUERY_FAILED" && data.error_code && (
+                  <p>{runErrorMessage(data.error_code)}</p>
+                )}
               </Notice>
+            )}
+            {data?.model && (
+              <p className="text-sm text-muted-foreground">
+                {[data.supplier, data.model].filter(Boolean).join(" · ")}
+              </p>
             )}
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              disabled={configuration.loading || mutation.busy}
-              onClick={() => void configuration.load()}
+              className="self-start"
+              disabled={catalog.loading || mutation.busy}
+              onClick={() => void catalog.load()}
             >
-              重新读取语音服务
+              重新读取音色目录
             </Button>
             <FieldGroup>
               <Field>
-                <FieldLabel htmlFor={`${fieldId}-name`}>
-                  供应商音色名称或 ID
-                </FieldLabel>
-                <Input
+                <FieldLabel htmlFor={`${fieldId}-name`}>供应商音色</FieldLabel>
+                <ChoiceSelect
                   id={`${fieldId}-name`}
-                  value={voiceName}
-                  required
-                  maxLength={160}
-                  disabled={mutation.busy}
-                  onChange={(event) => setVoiceName(event.target.value)}
+                  aria-describedby={
+                    selectedOption?.description
+                      ? `${fieldId}-description`
+                      : undefined
+                  }
+                  value={selectedOption?.id ?? ""}
+                  placeholder="选择当前模型支持的音色"
+                  disabled={catalog.loading || mutation.busy || !options.length}
+                  options={options.map((option) => ({
+                    value: option.id,
+                    label: option.label,
+                  }))}
+                  onValueChange={(value) => {
+                    if (catalogVersion)
+                      setChoice({ version: catalogVersion, voice: value });
+                  }}
                 />
-                <FieldDescription>
-                  填写所选模型支持的音色。保存不会调用供应商生成配音。
-                </FieldDescription>
+                {selectedOption?.description && (
+                  <FieldDescription id={`${fieldId}-description`}>
+                    {selectedOption.description}
+                  </FieldDescription>
+                )}
               </Field>
               {speedRange && (
                 <Field>
@@ -249,16 +297,7 @@ export default function VoicePicker({
                 </Field>
               )}
             </FieldGroup>
-            <Button
-              type="submit"
-              disabled={
-                mutation.busy ||
-                voices.loading ||
-                !!voices.error ||
-                !configuration.data?.configured ||
-                !voiceName.trim()
-              }
-            >
+            <Button type="submit" disabled={!canSave}>
               {mutation.busy ? "正在保存音色…" : "保存新音色版本"}
             </Button>
             <AudioFeedback {...mutation} />

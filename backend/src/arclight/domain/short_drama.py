@@ -1,5 +1,6 @@
 """The project owner's single authorization to produce an exact script."""
 
+from typing import Literal
 from uuid import UUID
 
 from pydantic import Field
@@ -18,9 +19,24 @@ class BlockedVoice(AgentToolContract):
     reason: str
 
 
+class ShortDramaTask(AgentToolContract):
+    id: UUID
+    family: Literal["WORKFLOW", "GENERATION"]
+
+
+class ShortDramaIssue(AgentToolContract):
+    phase: str
+    code: str
+    service_kind: str | None = None
+    supplier: str | None = None
+    model: str | None = None
+    task: ShortDramaTask | None = Field(default=None, exclude_if=lambda value: value is None)
+
+
 class ShortDramaPreflight(AgentToolContract):
     needed_voices: list[NeededVoice]
     blocked_voices: list[BlockedVoice]
+    issues: list[ShortDramaIssue]
 
 
 class ShortDramaRetry(AgentToolContract):

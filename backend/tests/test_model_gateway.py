@@ -217,6 +217,51 @@ def test_unaccepted_call_cannot_be_rebound_to_another_route(client, episode):
     assert rows[0]["route"]["provider"] == "fake"
 
 
+@pytest.mark.parametrize(
+    ("failure", "code", "status", "cost"),
+    [
+        (GatewayFailure("INPUT_INVALID", not_accepted=True), "INPUT_INVALID", "NOT_ACCEPTED", 0),
+        (
+            GatewayFailure(
+                "INPUT_INVALID", completed=True, usage=GatewayUsage(actual_cost=Decimal("1"))
+            ),
+            "INPUT_INVALID",
+            "FAILED",
+            1,
+        ),
+        (
+            GatewayFailure("INPUT_INVALID"),
+            "GATEWAY_RECONCILIATION_REQUIRED",
+            "RESULT_UNKNOWN",
+            None,
+        ),
+    ],
+)
+def test_input_rejection_preserves_the_exact_model_receipt(
+    client, episode, failure, code, status, cost
+):
+    selected = route()
+    current = request(episode, selected)
+    factory = client.app.state.session_factory
+
+    def reject():
+        raise failure
+
+    with pytest.raises(DomainError) as issued:
+        invoke(factory, current, selected, reject, policy=GatewayPolicy())
+    assert issued.value.code == code
+    with factory() as db:
+        call = db.scalar(
+            select(GatewayCall).where(GatewayCall.operation_key == current.operation_key)
+        )
+        receipt = db.scalar(select(GatewayReceipt).where(GatewayReceipt.call_id == call.id))
+        assert (receipt.status, receipt.error_code, receipt.actual_cost) == (
+            status,
+            "INPUT_INVALID",
+            cost,
+        )
+
+
 def test_safe_nonacceptance_can_retry_in_another_invocation(client, episode):
     selected = route(maximum_cost=Decimal("0"))
     current = request(episode, selected)

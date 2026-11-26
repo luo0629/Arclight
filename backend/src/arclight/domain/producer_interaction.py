@@ -8,6 +8,9 @@ from pydantic import Field, field_validator
 from arclight.domain.agent_tools import AgentToolContract
 from arclight.domain.producer_observation import ProducerObservationRequest
 from arclight.domain.producer_planning import DelegationRequest
+from arclight.domain.workflow_contracts import Checksum
+
+VOICE_CASTING_ACTION: Literal["ASSIGN_VOICES"] = "ASSIGN_VOICES"
 
 
 class ProducerRunCreate(AgentToolContract):
@@ -41,6 +44,13 @@ class ProducerRecoverCommand(AgentToolContract):
 class ProducerCancelCommand(AgentToolContract):
     action: Literal["CANCEL"]
     expected_revision: int = Field(strict=True, ge=0)
+
+
+class ProducerVoiceCastingCommand(AgentToolContract):
+    """The short-drama scheduler alone can enqueue this command."""
+
+    action: Literal["ASSIGN_VOICES"] = VOICE_CASTING_ACTION
+    casting_sha256: Checksum
 
 
 ProducerCommand = Annotated[

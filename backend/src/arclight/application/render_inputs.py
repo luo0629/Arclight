@@ -1,16 +1,26 @@
 """Resolve exact existing registry/file receipts without following mutable selection pointers."""
 
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.application.dependencies import exact_version
+from arclight.application.dependencies import exact_version, lock_dependency_graph
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.file_policy import POLICIES
 from arclight.domain.render_manifests import RenderFileReference, RenderSource
 from arclight.domain.timelines import TimelineSnapshot
+from arclight.media.bundled_font import (
+    BUNDLED_FONT_NAME,
+    BUNDLED_FONT_RIGHTS,
+    BUNDLED_FONT_SHA256,
+    BUNDLED_FONT_SIZE,
+    BUNDLED_FONT_SOURCE,
+    BUNDLED_FONT_TYPE,
+    bundled_subtitle_font,
+    is_bundled_subtitle_font,
+)
 from arclight.media.validation import probe
 from arclight.persistence.models import StoredFile, Storyboard
 from arclight.storage.objects import ObjectStorage
@@ -50,9 +60,67 @@ def file_reference(row: StoredFile) -> RenderFileReference:
     )
 
 
+def bundled_font_receipt(db: Session, settings: Settings, project_id: UUID) -> StoredFile:
+    """Register one immutable receipt per project and published font digest."""
+    lock_dependency_graph(db, project_id)
+    file_id = uuid5(project_id, f"subtitle-font:{BUNDLED_FONT_SHA256}")
+    key = f"validated/{project_id}/{file_id}"
+    row = db.get(StoredFile, file_id)
+    if row is not None:
+        if (
+            row.project_id != project_id
+            or row.object_key != key
+            or row.checksum != BUNDLED_FONT_SHA256
+            or row.byte_size != BUNDLED_FONT_SIZE
+            or row.media_type != BUNDLED_FONT_TYPE
+            or row.source_note != BUNDLED_FONT_SOURCE
+            or row.rights_note != BUNDLED_FONT_RIGHTS
+            or not row.rights_confirmed
+        ):
+            raise DomainError("RENDER_FONT_INVALID", "内置字幕字体的登记记录不一致", 409)
+        file_storage(settings, row).verify(
+            key, BUNDLED_FONT_SIZE, BUNDLED_FONT_SHA256, BUNDLED_FONT_SIZE
+        )
+        return row
+
+    try:
+        data = bundled_subtitle_font()
+    except (OSError, ValueError):
+        raise DomainError("RENDER_FONT_UNAVAILABLE", "内置字幕字体文件不可用", 503) from None
+    store = ObjectStorage(settings)
+    try:
+        store.put(key, data, BUNDLED_FONT_TYPE)
+    except DomainError as exc:
+        if exc.code != "OBJECT_EXISTS":
+            raise
+        # A rolled-back admission may already have written these immutable bytes.
+        store.verify(key, BUNDLED_FONT_SIZE, BUNDLED_FONT_SHA256, BUNDLED_FONT_SIZE)
+    row = StoredFile(
+        id=file_id,
+        project_id=project_id,
+        asset_version_id=None,
+        storage_backend=settings.object_storage_backend.upper(),
+        bucket=settings.s3_bucket if settings.object_storage_backend == "s3" else None,
+        object_key=key,
+        checksum=BUNDLED_FONT_SHA256,
+        byte_size=BUNDLED_FONT_SIZE,
+        media_type=BUNDLED_FONT_TYPE,
+        original_name=BUNDLED_FONT_NAME,
+        source_note=BUNDLED_FONT_SOURCE,
+        rights_note=BUNDLED_FONT_RIGHTS,
+        rights_confirmed=True,
+        created_by="service-owner",
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
 def capture_font(
     db: Session, settings: Settings, project_id: UUID, file_id: UUID | None, *, required: bool
 ) -> RenderFileReference | None:
+    if file_id is None and required:
+        return file_reference(bundled_font_receipt(db, settings, project_id))
     reference = font_facts(db, project_id, file_id, required=required)
     if reference is None:
         return None
@@ -63,7 +131,8 @@ def capture_font(
     )
     if len(data) != row.byte_size:
         raise DomainError("OBJECT_UNAVAILABLE", "字体大小与不可变回执不符", 409)
-    probe(data, row.media_type)
+    if not is_bundled_subtitle_font(data, row.media_type):
+        probe(data, row.media_type)
     return reference
 
 

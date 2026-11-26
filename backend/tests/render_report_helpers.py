@@ -5,7 +5,7 @@ from uuid import UUID
 
 import pytest
 import test_continuity_reviews
-from render_admission_helpers import ready_manifest, request_export
+from render_admission_helpers import approve_export_fixture, ready_manifest
 from render_job_helpers import read, run, submit
 from render_manifest_helpers import render_case, review_case, timeline_case
 from test_human_reviews import decide, resume
@@ -46,11 +46,7 @@ def production_state(client, episode):
 
 def formal_job(client, timeline):
     manifest, _ = ready_manifest(client, timeline, profile="FORMAL")
-    requested = request_export(client, manifest)
-    saved = decide(client, requested)
-    assert saved.status_code == 200, saved.text
-    resumed = resume(client, requested, saved.json())
-    assert resumed.status_code == 200, resumed.text
+    assert approve_export_fixture(client, manifest)["result_json"]["status"] == "APPROVED"
     value, _ = submit(client, manifest)
     return manifest, value
 

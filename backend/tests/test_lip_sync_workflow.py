@@ -9,8 +9,8 @@ from hashlib import sha256
 from uuid import UUID, uuid4
 
 import pytest
-from render_admission_helpers import assert_blocked, ready_manifest, request_export
-from render_job_helpers import read, run, submit
+from render_admission_helpers import assert_blocked, formal_export_command, start_formal_export
+from render_job_helpers import read, run
 from sqlalchemy import select
 from test_asset_selection import choose
 from test_asset_versions import state
@@ -312,11 +312,16 @@ def test_visible_dialogue_resynchronizes_locally_and_survives_formal_render(
         "LIP_SYNC_TIMELINE_MISMATCH",
     )
 
-    formal, _ = ready_manifest(client, timeline, profile="FORMAL")
-    request = request_export(client, formal)
-    saved = ok(decide(client, request), 200)
-    ok(resume(client, request, saved), 200)
-    job, _ = submit(client, formal)
+    started = ok(start_formal_export(client, timeline), 201)
+    job = ok(
+        formal_export_command(
+            client,
+            started["manifest"],
+            "APPROVE",
+            request_sha256=started["review"]["request_sha256"],
+        ),
+        200,
+    )["job"]
     assert run(client, job) == "SUCCEEDED", read(client, job)
     result = read(client, job)
     movie = actual_movie(client, result)

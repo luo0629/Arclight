@@ -5,18 +5,19 @@ from threading import Barrier
 from uuid import UUID
 
 import pytest
-from render_admission_helpers import ready_manifest, render_path, request_export
+from fastapi.testclient import TestClient
+from render_admission_helpers import (
+    record_export_decision,
+    render_path,
+    start_formal_export,
+)
 from render_manifest_helpers import render_case, review_case, timeline_case
 from sqlalchemy import func, select
 from test_concurrency import race, require_postgres
-from test_human_reviews import decide, decision_payload
 
-from arclight.application.human_reviews import submit_decision
-from arclight.core.errors import DomainError
-from arclight.domain.human_reviews import HumanDecision
+from arclight.main import create_app
 from arclight.persistence.human_reviews import (
     HumanReviewDecision,
-    HumanReviewRequest,
     HumanReviewResume,
 )
 from arclight.persistence.models import AuditEvent
@@ -28,42 +29,37 @@ __all__ = ["render_case", "review_case", "timeline_case"]
 def postgres_export(settings, client, request):
     require_postgres(settings)
     timeline = request.getfixturevalue("render_case")
-    return ready_manifest(client, timeline, profile="FORMAL")[0]
+    response = start_formal_export(client, timeline)
+    assert response.status_code == 201, response.text
+    return response.json()["manifest"], response.json()["review"]
 
 
-@pytest.mark.parametrize("operation", ["REQUEST", "DECISION", "RESUME"])
-def test_postgres_export_duplicates_keep_one_record_and_audit(client, postgres_export, operation):
-    if operation == "REQUEST":
-        path, body = render_path(postgres_export, "export-review"), None
-        model, action, status = HumanReviewRequest, "requested", 201
-    else:
-        row = request_export(client, postgres_export)
-        if operation == "DECISION":
-            path = f"/api/v1/human-reviews/{row['id']}/decisions"
-            body = decision_payload(row)
-            model, action, status = HumanReviewDecision, "decided", 200
-        else:
-            decision = decide(client, row)
-            assert decision.status_code == 200, decision.text
-            path = f"/api/v1/human-reviews/{row['id']}/resume"
-            body = {"decision_id": decision.json()["id"], "request_sha256": row["request_sha256"]}
-            model, action, status = HumanReviewResume, "resumed", 200
+def test_postgres_export_duplicate_continue_keeps_one_resume_and_audit(client, postgres_export):
+    manifest, review = postgres_export
+    decision = record_export_decision(client, review)
+    path = render_path(manifest, "formal-export")
+    body = {"action": "CONTINUE", "request_sha256": review["request_sha256"]}
     responses = race(client.app, path, body, dict(client.headers))
-    assert [response.status_code for response in responses] == [status, status], [
+    assert [response.status_code for response in responses] == [200, 200], [
         response.text for response in responses
     ]
     assert responses[0].json() == responses[1].json()
-    request_id = UUID(responses[0].json()["id"] if operation == "REQUEST" else row["id"])
+    assert responses[0].json()["review"]["resume"]["decision_id"] == decision["id"]
+    request_id = UUID(review["id"])
     with client.app.state.session_factory() as db:
-        predicate = (
-            model.id == request_id if operation == "REQUEST" else model.request_id == request_id
+        assert (
+            db.scalar(
+                select(func.count(HumanReviewResume.id)).where(
+                    HumanReviewResume.request_id == request_id
+                )
+            )
+            == 1
         )
-        assert db.scalar(select(func.count(model.id)).where(predicate)) == 1
         assert (
             db.scalar(
                 select(func.count(AuditEvent.id)).where(
                     AuditEvent.resource_id == request_id,
-                    AuditEvent.action == f"human_review.{action}",
+                    AuditEvent.action == "human_review.resumed",
                 )
             )
             == 1
@@ -71,35 +67,36 @@ def test_postgres_export_duplicates_keep_one_record_and_audit(client, postgres_e
 
 
 def test_postgres_conflicting_export_decisions_keep_one_winner(client, postgres_export):
-    row = request_export(client, postgres_export)
+    manifest, review = postgres_export
+    path = render_path(manifest, "formal-export")
+    headers = dict(client.headers)
     barrier = Barrier(2)
 
     def invoke(choice):
-        barrier.wait(timeout=20)
-        try:
-            with client.app.state.session_factory.begin() as db:
-                result = submit_decision(
-                    db,
-                    UUID(row["id"]),
-                    "service-owner",
-                    HumanDecision.model_validate(decision_payload(row, choice)),
-                )
-                return "SAVED", result.decision_json["decision"]
-        except DomainError as error:
-            return error.code, choice
+        with TestClient(create_app(client.app.state.settings)) as connection:
+            barrier.wait(timeout=15)
+            return connection.post(
+                path,
+                json={"action": choice, "request_sha256": review["request_sha256"]},
+                headers=headers,
+            )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
-        results = list(pool.map(invoke, ("APPROVE", "REJECT")))
-    assert sorted(result[0] for result in results) == ["REVIEW_DECISION_CONFLICT", "SAVED"]
-    current = client.get(f"/api/v1/human-reviews/{row['id']}").json()
-    assert current["decision"]["decision_json"]["decision"] == next(
-        choice for status, choice in results if status == "SAVED"
+        approval, rejection = pool.map(invoke, ("APPROVE", "REJECT"))
+    winner, loser = sorted((approval, rejection), key=lambda response: response.status_code)
+    assert [winner.status_code, loser.status_code] == [200, 409], [winner.text, loser.text]
+    assert loser.json()["error"]["code"] == "REVIEW_DECISION_CONFLICT"
+    current = client.get(f"/api/v1/human-reviews/{review['id']}").json()
+    assert current == winner.json()["review"]
+    assert current["decision"]["decision_json"]["decision"] == (
+        "APPROVE" if winner is approval else "REJECT"
     )
+    request_id = UUID(review["id"])
     with client.app.state.session_factory() as db:
         assert (
             db.scalar(
                 select(func.count(HumanReviewDecision.id)).where(
-                    HumanReviewDecision.request_id == UUID(row["id"])
+                    HumanReviewDecision.request_id == request_id
                 )
             )
             == 1
@@ -107,7 +104,7 @@ def test_postgres_conflicting_export_decisions_keep_one_winner(client, postgres_
         assert (
             db.scalar(
                 select(func.count(AuditEvent.id)).where(
-                    AuditEvent.resource_id == UUID(row["id"]),
+                    AuditEvent.resource_id == request_id,
                     AuditEvent.action == "human_review.decided",
                 )
             )

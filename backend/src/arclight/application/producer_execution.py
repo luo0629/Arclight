@@ -22,11 +22,13 @@ from arclight.application.producer_planning import (
     resume_producer_plan,
 )
 from arclight.application.producer_replanning import replan_producer, resume_producer_replan
+from arclight.application.short_drama_diagnostics import ShortDramaFailure
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_runtime import AgentHumanDecision, AgentLoopResult
 from arclight.domain.agent_state import terminate_agent_state
 from arclight.domain.agent_tools import AgentToolCall
+from arclight.domain.producer_interaction import VOICE_CASTING_ACTION
 from arclight.domain.producer_observation import ProducerObservationRequest
 from arclight.domain.producer_planning import DELEGATE_TOOL
 from arclight.domain.producer_series import REPLAN_VERSIONS
@@ -92,6 +94,10 @@ def _invoke(factory: sessionmaker[Session], settings: Settings, command_id: UUID
     outcome: AgentLoopResult
     if action == "PLAN":
         outcome = plan_producer(factory, settings, run_id, actor)
+    elif action == VOICE_CASTING_ACTION:
+        from arclight.application.short_drama_voice_casting import execute_voice_assignment
+
+        outcome = execute_voice_assignment(factory, settings, run_id, actor, command_id)
     elif action == "REPLAN":
         observation = observe_producer(
             factory,
@@ -156,6 +162,7 @@ def execute_producer(
         if command is None or command_receipt(db, episode.project_id, command.resource_id):
             return True
         identity, intent = command.resource_id, command.snapshot_json
+    issue_detail = None
     try:
         status, code = _invoke(factory, settings, identity, intent)
     except DomainError as exc:
@@ -168,6 +175,8 @@ def execute_producer(
             # Unknown external effects await reconciliation and an explicit RECOVER.
             return True
         status, code = "FAILED", exc.code
+        if intent["action"] == VOICE_CASTING_ACTION and isinstance(exc, ShortDramaFailure):
+            issue_detail = {"service_kind": exc.service_kind}
     except WorkflowExecutionDeferred:
         raise
     except Exception as exc:
@@ -193,7 +202,11 @@ def execute_producer(
                 run.error_code = code
             return True
         assert status is not None
-        record_receipt(db, run, episode.project_id, command, status, code)
+        if code is not None and intent["action"] == VOICE_CASTING_ACTION and issue_detail is None:
+            issue_detail = {"service_kind": "TEXT"}
+        record_receipt(
+            db, run, episode.project_id, command, status, code, issue_detail=issue_detail
+        )
         if code == "AGENT_HUMAN_STOPPED" and run.status == "RUNNING":
             assert run.agent_state_json is not None
             run.agent_state_json = terminate_agent_state(

@@ -8,11 +8,13 @@ from render_admission_helpers import (
     assert_blocked,
     edited,
     ready_manifest,
+    record_export_decision,
+    record_export_resume,
     render_path,
     request_export,
+    start_formal_export,
 )
 from render_manifest_helpers import audio_case, render_case, review_case, stored_file, timeline_case
-from test_human_reviews import decide, resume
 from test_media_validation import wave_bytes
 from test_storage_cleanup import gc_setup
 
@@ -45,8 +47,8 @@ def test_matching_file_receipt_does_not_admit_a_truncated_audio_object(
     timeline = edited(client, timeline, snapshot)
     value, _ = ready_manifest(client, timeline, font_file_id=str(font))
     # The real hash and size match the immutable receipt; only decoding exposes damage.
-    for operation in ("admission", "export-review"):
-        assert_blocked(client.post(render_path(value, operation)), "INVALID_FILE")
+    assert_blocked(client.post(render_path(value, "admission")), "INVALID_FILE")
+    assert_blocked(start_formal_export(client, timeline, font_file_id=str(font)), "INVALID_FILE")
 
 
 @pytest.mark.parametrize("target", ["audio", "font"])
@@ -57,10 +59,8 @@ def test_approved_export_rechecks_audio_and_font_objects(
     timeline, font, (audio, _) = object_audio_case
     value, _ = ready_manifest(client, timeline, profile="FORMAL", font_file_id=str(font))
     review = request_export(client, value)
-    decision = decide(client, review)
-    assert decision.status_code == 200, decision.text
-    receipt = resume(client, review, decision.json())
-    assert receipt.status_code == 200, receipt.text
+    decision = record_export_decision(client, review)
+    receipt = record_export_resume(client, review, decision)
     assert client.post(render_path(value, "admission")).status_code == 200
     with client.app.state.session_factory() as db:
         row = db.get(StoredFile, audio if target == "audio" else font)
@@ -82,7 +82,7 @@ def test_approved_export_rechecks_audio_and_font_objects(
     assert_blocked(client.post(render_path(value, "admission")), "OBJECT_UNAVAILABLE")
     assert client.get(f"/api/v1/render-manifests/{value['id']}").json() == value
     current = client.get(f"/api/v1/human-reviews/{review['id']}").json()
-    assert current["resume"]["result_json"] == receipt.json()["result_json"]
+    assert current["resume"]["result_json"] == receipt["result_json"]
 
 
 @pytest.fixture

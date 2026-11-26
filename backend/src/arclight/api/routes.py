@@ -31,6 +31,7 @@ from arclight.application.commands import (
     retry_run,
     start_run,
 )
+from arclight.application.short_drama_diagnostics import DETAIL, PROGRESS_EVENT
 from arclight.application.workflow_contracts import serialize_run
 from arclight.core.errors import DomainError
 from arclight.persistence.models import (
@@ -220,16 +221,22 @@ def get_events(
     run_id: UUID, db: Database, actor: Actor, limit: Limit = 50, offset: Offset = 0
 ) -> list[EventRead]:
     require_run(db, run_id, actor)
-    return [
-        EventRead.model_validate(row)
-        for row in db.scalars(
-            select(WorkflowEvent)
-            .where(WorkflowEvent.run_id == run_id)
-            .order_by(WorkflowEvent.created_at, WorkflowEvent.id)
-            .limit(limit)
-            .offset(offset)
-        )
-    ]
+    events = db.scalars(
+        select(WorkflowEvent)
+        .where(WorkflowEvent.run_id == run_id)
+        .order_by(WorkflowEvent.created_at, WorkflowEvent.id)
+        .limit(limit)
+        .offset(offset)
+    )
+    result = []
+    for row in events:
+        event = EventRead.model_validate(row)
+        if event.event_type == PROGRESS_EVENT:
+            event.payload_json = {
+                key: value for key, value in event.payload_json.items() if key != DETAIL
+            }
+        result.append(event)
+    return result
 
 
 @router.get("/episodes/{episode_id}/scripts", tags=["scripts"])

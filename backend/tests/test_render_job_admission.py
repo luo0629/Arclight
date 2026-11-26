@@ -8,7 +8,13 @@ from uuid import UUID, uuid4
 
 import pytest
 from PIL import Image
-from render_admission_helpers import assert_blocked, edited, ready_manifest, render_path
+from render_admission_helpers import (
+    assert_blocked,
+    edited,
+    ready_manifest,
+    render_path,
+    start_formal_export,
+)
 from render_manifest_helpers import audio_case, render_case, review_case, stored_file, timeline_case
 from sqlalchemy import func, select
 from test_timeline_saves import duration_edit
@@ -147,9 +153,13 @@ def test_public_submission_rejects_frame_or_pixel_workload_before_creating_execu
         assert (output["width"], output["height"]) == (3840, 2160)
         assert frames <= MAX_FRAMES
         assert frames * output["width"] * output["height"] > MAX_PIXEL_FRAMES
+        assert_blocked(start_formal_export(client, timeline), "RENDER_WORK_LIMIT")
+        with client.app.state.session_factory() as db:
+            assert db.scalar(select(func.count()).select_from(RenderJob)) == 0
+            assert db.scalar(select(func.count()).select_from(RenderExecution)) == 0
     else:
         assert frames > MAX_FRAMES
-    rejected(client, manifest, "RENDER_WORK_LIMIT")
+        rejected(client, manifest, "RENDER_WORK_LIMIT")
 
 
 def test_render_plan_preserves_large_images_without_a_total_byte_ceiling(

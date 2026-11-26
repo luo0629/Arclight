@@ -13,11 +13,12 @@ import pytest
 from alembic import command
 from PIL import Image, ImageDraw
 from render_admission_helpers import (
+    approve_export_fixture,
     assert_blocked,
     edited,
     ready_manifest,
     render_path,
-    request_export,
+    start_formal_export,
 )
 from render_job_helpers import read, run, submit
 from render_manifest_helpers import manifest_url, stored_file
@@ -26,7 +27,6 @@ from sqlalchemy import text
 from test_asset_selection import choose
 from test_generation_video_inputs import MODEL
 from test_generation_video_inputs import video_case as video_case  # noqa: F401
-from test_human_reviews import decide, resume
 from test_render_captions import caption_font
 from test_render_encoder import clip, profile
 from test_render_mixing import decoded_audio, rms, sound, tone
@@ -315,12 +315,9 @@ def test_selected_dynamic_video_renders_trimmed_motion_sound_subtitles_and_forma
     assert formal["content_sha256"] == digest(formal["snapshot"])
     assert_blocked(
         client.post(render_path(formal, "jobs"), json={"creation_key": str(uuid4())}),
-        "RENDER_EXPORT_REVIEW_REQUIRED",
+        "RENDER_FORMAL_EXPORT_REQUIRED",
     )
-    approval = request_export(client, formal)
-    answer = decide(client, approval)
-    assert answer.status_code == 200, answer.text
-    assert resume(client, approval, answer.json()).status_code == 200
+    assert approve_export_fixture(client, formal)["result_json"]["status"] == "APPROVED"
     job, _ = submit(client, formal)
     assert run(client, job) == "SUCCEEDED", read(client, job)
     final = read(client, job)
@@ -377,7 +374,7 @@ def test_video_snapshot_rejects_forged_or_superseded_review_and_stale_worker(
         client.post(manifest_url(timeline), json={"creation_key": str(uuid4())}),
         "VIDEO_REVIEW_REQUIRED",
     )
-    assert_blocked(client.post(render_path(manifest, "export-review")), "VIDEO_REVIEW_REQUIRED")
+    assert_blocked(start_formal_export(client, timeline), "VIDEO_REVIEW_REQUIRED")
     assert run(client, job) == "FAILED"
     assert read(client, job)["error_code"] == "VIDEO_REVIEW_REQUIRED"
     with client.app.state.session_factory.begin() as db:

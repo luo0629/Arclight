@@ -19,7 +19,7 @@ from test_audio_version_lifecycle import (
 )
 from test_generation_delivery import deliver, event_for
 from test_model_services import account
-from test_native_media_integration import configure, provider_for
+from test_native_media_integration import catalog_version, configure, provider_for
 from test_script_state_commit import capture, review, save, screenplay
 from test_series_planning import planned_outline as planned_outline
 from test_story_ledger import approve_ledger, save_ledger
@@ -59,6 +59,7 @@ def voice(client, pid, character, speaker, name, expected):
             "speaker": speaker,
             "character_asset_id": character["asset_id"],
             "expected_version_no": expected,
+            "model_config_version": catalog_version(client, pid),
             "parameters": {"voice": name, "speed": 1.0},
             "output_spec": {"format": "wav"},
         },

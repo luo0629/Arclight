@@ -4,7 +4,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from render_admission_helpers import ready_manifest, render_path
-from render_manifest_helpers import render_case, review_case, timeline_case
+from render_manifest_helpers import fixture_actor, render_case, review_case, timeline_case
 
 from arclight.application.render_execution import execute_render
 from arclight.persistence.models import RenderJob
@@ -14,6 +14,19 @@ __all__ = ["render_case", "review_case", "timeline_case", "job_case"]
 
 def submit(client, manifest, **overrides):
     body = {"creation_key": str(uuid4()), **overrides}
+    if manifest["snapshot"]["output"]["name"] == "FORMAL":
+        from arclight.application.render_jobs import create_job
+        from arclight.domain.render_jobs import RenderJobCreate
+
+        with client.app.state.session_factory.begin() as db:
+            value = create_job(
+                db,
+                client.app.state.settings,
+                UUID(manifest["id"]),
+                fixture_actor(client, db),
+                RenderJobCreate.model_validate(body),
+            )
+            return value.model_dump(mode="json"), body
     response = client.post(render_path(manifest, "jobs"), json=body)
     assert response.status_code == 202, response.text
     return response.json(), body

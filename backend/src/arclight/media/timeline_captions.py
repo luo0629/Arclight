@@ -8,6 +8,7 @@ from fractions import Fraction
 from io import BytesIO
 from typing import TYPE_CHECKING
 
+from arclight.media.bundled_font import is_bundled_subtitle_font
 from arclight.media.fonts import inspect_font
 from arclight.media.render_plan import RenderPlan
 
@@ -27,7 +28,8 @@ class SubtitleBurner:
         if self.subtitles is None:
             return
         data = base64.b64decode(self.subtitles.font, validate=True)
-        inspect_font(data, self.subtitles.font_media_type)
+        if not is_bundled_subtitle_font(data, self.subtitles.font_media_type):
+            inspect_font(data, self.subtitles.font_media_type)
         with TTFont(BytesIO(data)) as font:
             supported = set((font.getBestCmap() or {}).keys())
         self.style = self.subtitles.style

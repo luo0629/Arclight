@@ -67,9 +67,13 @@ class _AgentRuntime[T: BaseModel]:
         result_model: type[T],
         validate_result: Callable[[Session, T], None] | None,
         output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
+        *,
+        include_project_reads: bool = True,
     ):
         self.factory, self.settings, self.seed = factory, settings, seed
-        self.registry, self.result_model = with_project_reads(registry), result_model
+        self.include_project_reads = include_project_reads
+        self.registry = with_project_reads(registry) if include_project_reads else registry
+        self.result_model = result_model
         self.decision_model = cast(
             type[AgentDecision[T]], AgentDecision.__class_getitem__(result_model)
         )

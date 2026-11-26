@@ -10,6 +10,7 @@ from arclight.application.service_credentials import read_credential
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelCapabilities
+from arclight.domain.model_suppliers import supplier_by_id
 from arclight.domain.service_models import matching_policy
 from arclight.domain.text_model_catalog import TEXT_MODEL_POLICIES
 from arclight.persistence.models import ModelService, WorkflowRun
@@ -31,7 +32,6 @@ def text_snapshot(db: Session, actor: str) -> dict | None:
         "model": row.model,
         "supplier": row.supplier,
         "supplier_name": row.supplier_name,
-        "response_format": row.response_format,
         "protocol": row.protocol,
         "verified_capabilities": row.verified_capabilities,
         "credential_id": str(row.credential_id),
@@ -44,11 +44,9 @@ def require_text_snapshot(db: Session, actor: str, settings: Settings) -> dict |
         read_credential(db, settings, snapshot)
         capabilities = agent_capabilities(settings, snapshot)
         snapshot.pop("verified_capabilities", None)
+        snapshot["response_format"] = text_response_format(snapshot, capabilities)
         if capabilities is not None:
             snapshot["agent_capabilities"] = capabilities.model_dump(mode="json")
-            snapshot["response_format"] = preferred_response_format(
-                capabilities, snapshot["response_format"]
-            )
     elif settings.provider != "mock":
         raise DomainError("SERVICE_INCOMPLETE", "请先在模型配置中保存账号文字服务", 422)
     return snapshot
@@ -110,7 +108,14 @@ def agent_capabilities(settings: Settings, service: dict | None) -> AgentModelCa
     return None
 
 
-def preferred_response_format(capabilities: AgentModelCapabilities | None, default: str) -> str:
+def text_response_format(service: dict, capabilities: AgentModelCapabilities | None = None) -> str:
+    preset = supplier_by_id(service["supplier"])
+    default = (
+        preset.response_format
+        if preset
+        and (preset.base_url, preset.protocol) == (service["base_url"], service["protocol"])
+        else "json_schema"
+    )
     if (
         capabilities is None
         or not capabilities.response_formats

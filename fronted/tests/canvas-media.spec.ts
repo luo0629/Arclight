@@ -68,6 +68,7 @@ test("剧情场景展开显示精确镜头照片，并定位对应剧本场景",
     (route) =>
       route.fulfill({
         json: {
+          issues: [],
           needed_voices: [],
           blocked_voices: [],
         },

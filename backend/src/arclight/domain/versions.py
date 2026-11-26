@@ -11,6 +11,16 @@ from arclight.domain.generation_requests import safe_metadata
 Family = Literal["TEXT", "ART", "REVIEW", "MEDIA"]
 Kind = Literal["AGENT", "PROMPT", "SCHEMA", "MODEL"]
 
+SHORT_DRAMA_VISUAL_SERVICE = "SHORT_DRAMA_VISUAL_SERVICE"
+SHORT_DRAMA_VOICE_INPUT = "SHORT_DRAMA_VOICE_INPUT"
+SHORT_DRAMA_VOICE_CATALOG = "SHORT_DRAMA_VOICE_CATALOG"
+
+PRIVATE_BINDING_TYPES = (
+    SHORT_DRAMA_VISUAL_SERVICE,
+    SHORT_DRAMA_VOICE_INPUT,
+    SHORT_DRAMA_VOICE_CATALOG,
+)
+
 
 def digest(value: object) -> str:
     return hashlib.sha256(

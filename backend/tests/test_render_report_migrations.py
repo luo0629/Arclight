@@ -9,7 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
-from render_admission_helpers import ready_manifest, request_export
+from render_admission_helpers import approve_export_fixture, ready_manifest
 from render_job_helpers import submit
 from render_manifest_helpers import (
     render_case,
@@ -22,7 +22,6 @@ from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import DBAPIError
 from test_concurrency import require_postgres
 from test_continuity_selection import human_request_fixture
-from test_human_reviews import decide, resume
 from test_render_inspection_migrations import measured_result
 
 from arclight.application.continuity_selection import require_shot_review
@@ -69,10 +68,7 @@ __all__ = [
 def formal_report_case(client, render_case, measured_result):
     """Prepare genuine exact DB receipts; this fixture does not publish a movie or report."""
     manifest, _ = ready_manifest(client, render_case, profile="FORMAL")
-    request = request_export(client, manifest)
-    decision = decide(client, request)
-    assert decision.status_code == 200, decision.text
-    assert resume(client, request, decision.json()).status_code == 200
+    assert approve_export_fixture(client, manifest)["result_json"]["status"] == "APPROVED"
     value, _ = submit(client, manifest)
     factory = client.app.state.session_factory
     token = claim(factory, UUID(value["id"]))

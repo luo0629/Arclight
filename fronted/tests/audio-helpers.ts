@@ -11,6 +11,7 @@ import type {
   AudioSnapshot,
   AudioTask,
   AudioVoice,
+  VoiceCatalog,
   VoiceProfile,
   VoiceProfilePlan,
 } from "../src/features/audio/types";
@@ -124,6 +125,13 @@ export async function audioFixture(page: Page) {
     corruptMedia: false,
     supported: ["voice", "speed", "instructions"],
     configured: true,
+    catalogStatus: "READY" as VoiceCatalog["status"],
+    catalogModel: "gpt-4o-mini-tts",
+    catalogVersion: "voice-config:1",
+    catalogOptions: [
+      { id: "alloy", label: "Alloy", description: null },
+      { id: "nova", label: "Nova", description: "清晰的旁白音色" },
+    ] as VoiceCatalog["options"],
     gate: undefined as Promise<void> | undefined,
     mediaGate: undefined as Promise<void> | undefined,
     voiceConflict: false,
@@ -270,7 +278,7 @@ export async function audioFixture(page: Page) {
       return route.fulfill({ json: [scripts[scriptIndex]] });
     const audioPath =
       /\/(audio-snapshots|audio-voices|files|uploads)(\/|$)/.test(path) ||
-      path.endsWith("/services/speech/configuration") ||
+      path.endsWith("/audio-voice-catalog") ||
       path.endsWith("/story-ledger") ||
       path.endsWith("/voice-profile") ||
       [...assets.keys()].some((value) => path.includes(`/assets/${value}`)) ||
@@ -321,23 +329,29 @@ export async function audioFixture(page: Page) {
       };
       return route.fulfill({ status: 201, json: voiceProfile });
     }
-    if (path.endsWith("/services/speech/configuration"))
+    if (path.endsWith("/audio-voice-catalog")) {
+      const status = control.configured
+        ? control.catalogStatus
+        : "NOT_CONFIGURED";
       return route.fulfill({
         json: {
-          configured: control.configured,
-          enabled: control.configured,
-          message: control.configured ? "已配置" : "请先配置语音服务",
-          ...(control.configured
-            ? {
-                model: "gpt-4o-mini-tts",
-                supported_parameters: control.supported,
-                parameter_ranges: control.supported.includes("speed")
-                  ? { speed: { minimum: 0.5, maximum: 2 } }
-                  : {},
-              }
-            : {}),
-        },
+          status,
+          supplier: control.configured ? "示例配音服务" : null,
+          model: control.configured ? control.catalogModel : null,
+          configuration_version: control.configured
+            ? control.catalogVersion
+            : null,
+          options: status === "READY" ? control.catalogOptions : [],
+          supported_parameters: control.configured ? control.supported : [],
+          parameter_ranges:
+            control.configured && control.supported.includes("speed")
+              ? { speed: { minimum: 0.5, maximum: 2 } }
+              : {},
+          error_code:
+            status === "QUERY_FAILED" ? "GATEWAY_PROVIDER_RATE_LIMITED" : null,
+        } satisfies VoiceCatalog,
       });
+    }
     if (path.endsWith("/audio-voices")) {
       if (method === "GET")
         return route.fulfill({
@@ -366,6 +380,8 @@ export async function audioFixture(page: Page) {
         id: id(),
         speaker: body.speaker,
         character_asset_id: body.character_asset_id ?? null,
+        model: control.catalogModel,
+        model_config_version: body.model_config_version,
         parameters: body.parameters,
         version_no:
           Math.max(

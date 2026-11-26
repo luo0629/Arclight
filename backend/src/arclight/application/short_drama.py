@@ -9,14 +9,28 @@ from arclight.agents.contracts import read_script_content
 from arclight.application.commands import emit, require_episode
 from arclight.application.content_dependencies import content_approval_impact
 from arclight.application.model_gateway import lock_gate
-from arclight.application.producer_diagnostics import public_diagnostic
-from arclight.application.producer_interaction import enqueue_initial_producer_plan
+from arclight.application.model_services import require_text_snapshot, text_snapshot
+from arclight.application.producer_interaction import (
+    enqueue_initial_producer_plan,
+    pending_commands,
+)
 from arclight.application.producer_planning import start_producer
-from arclight.application.render_inputs import font_facts
+from arclight.application.render_inputs import bundled_font_receipt, font_facts
+from arclight.application.render_manifests import output_profile
+from arclight.application.short_drama_diagnostics import (
+    DETAIL,
+    PROGRESS_EVENT,
+    ShortDramaFailure,
+    public_issue,
+    public_short_drama_error,
+    text_failure,
+)
 from arclight.application.text_reviews import complete_manual_review, validate_manual_approval
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.short_drama import ShortDramaCreate, ShortDramaPreflight
+from arclight.domain.agent_model import AgentModelCapabilities
+from arclight.domain.producer_interaction import VOICE_CASTING_ACTION
+from arclight.domain.short_drama import ShortDramaCreate, ShortDramaPreflight, ShortDramaTask
 from arclight.domain.versions import digest
 from arclight.persistence.models import (
     AuditEvent,
@@ -27,37 +41,41 @@ from arclight.persistence.models import (
     WorkflowRun,
 )
 
-PROGRESS_EVENT = "short_drama.progress"
-_PUBLIC_FAILURES = frozenset(
-    {
-        "SHORT_DRAMA_ART_PROTECTED",
-        "SHORT_DRAMA_AUDIO_COVERAGE",
-        "SHORT_DRAMA_AUDIO_DURATION",
-        "SHORT_DRAMA_AUDIO_REQUIRED",
-        "SHORT_DRAMA_BOARD_IMPACT",
-        "SHORT_DRAMA_DELIVERY_QA",
-        "SHORT_DRAMA_EXPORT_WARNINGS",
-        "SHORT_DRAMA_FIRST_FRAME_UNSUPPORTED",
-        "SHORT_DRAMA_INPUT_CHANGED",
-        "SHORT_DRAMA_PERFORMANCE_REVIEW_REQUIRED",
-        "SHORT_DRAMA_PLAN_BLOCKED",
-        "SHORT_DRAMA_PLAN_SCOPE",
-        "SHORT_DRAMA_SFX_REQUIRED",
-        "SHORT_DRAMA_SHOT_LIMIT",
-        "SHORT_DRAMA_SPECIALIST_BLOCKED",
-        "SHORT_DRAMA_TTS_UNCERTAIN",
-        "SHORT_DRAMA_VIDEO_FORMAT_UNSUPPORTED",
-        "SHORT_DRAMA_VISUAL_HUMAN_REQUIRED",
-        "SHORT_DRAMA_VISUAL_RESULT_UNKNOWN",
-        "SHORT_DRAMA_VISUAL_RETRY_EXHAUSTED",
-        "SHORT_DRAMA_VISUAL_SERVICE_REQUIRED",
-        "SHORT_DRAMA_VOICE_REQUIRED",
-    }
-)
 
-
-def public_short_drama_error(code: str | None) -> str | None:
-    return code if code in _PUBLIC_FAILURES else public_diagnostic(code)
+def require_short_drama_text(db: Session, settings: Settings, actor: str) -> None:
+    try:
+        service = require_text_snapshot(db, actor, settings)
+    except DomainError as error:
+        if error.code == "SERVICE_INCOMPLETE":
+            raise text_failure(
+                DomainError("SHORT_DRAMA_TEXT_SERVICE_REQUIRED", "请配置账号文字模型", 422),
+                actor,
+                None,
+            ) from error
+        raise text_failure(error, actor, text_snapshot(db, actor)) from error
+    if service is None:  # The application's deterministic mock has no account configuration.
+        return
+    declaration = service.get("agent_capabilities")
+    capabilities = AgentModelCapabilities.model_validate(declaration) if declaration else None
+    if (
+        capabilities is None
+        or not capabilities.tools
+        or service["response_format"] not in capabilities.response_formats
+    ):
+        raise text_failure(
+            DomainError(
+                "SHORT_DRAMA_TEXT_CAPABILITY_REQUIRED", "短剧编排需要工具调用和结构化输出能力", 422
+            ),
+            actor,
+            service,
+        )
+    if capabilities.max_input_images < 1:
+        raise text_failure(
+            DomainError("SHORT_DRAMA_REVIEW_CAPABILITY_REQUIRED", "镜头质检需要图片理解能力", 422),
+            actor,
+            service,
+            review=True,
+        )
 
 
 def require_exact_inputs(db: Session, episode: Episode, spec: dict) -> Script:
@@ -81,6 +99,7 @@ def short_drama_preflight(
     db: Session, settings: Settings, episode_id: UUID, actor: str, script_version_id: UUID
 ) -> ShortDramaPreflight:
     from arclight.application.short_drama_audio import inspect_dialogue
+    from arclight.application.short_drama_visuals import require_image_service
 
     episode = require_episode(db, episode_id, actor, owner=True, write=True)
     script = db.get(Script, script_version_id)
@@ -90,8 +109,21 @@ def short_drama_preflight(
         raise DomainError("SHORT_DRAMA_SCRIPT_INVALID", "请选择可定稿的剧本", 409)
     project = db.get(Project, episode.project_id)
     assert project is not None
-    needed, blocked = inspect_dialogue(db, settings, project.id, actor, script)
-    return ShortDramaPreflight(needed_voices=needed, blocked_voices=blocked)
+    issues = []
+    try:
+        require_short_drama_text(db, settings, actor)
+    except ShortDramaFailure as error:
+        phase = "SHOTS" if error.service_kind == "REVIEW" else "PLANNING"
+        issues.append(public_issue(error.record(phase), actor))
+    try:
+        require_image_service(
+            db, settings, project.id, actor, output_profile(project.output_profile, "FORMAL")
+        )
+    except ShortDramaFailure as error:
+        issues.append(public_issue(error.record("SHOTS"), actor))
+    needed, blocked, audio_failures = inspect_dialogue(db, settings, project.id, actor, script)
+    issues.extend(public_issue(error.record("AUDIO"), actor) for error in audio_failures)
+    return ShortDramaPreflight(needed_voices=needed, blocked_voices=blocked, issues=issues)
 
 
 def start_short_drama(
@@ -135,14 +167,16 @@ def start_short_drama(
             raise DomainError("SHORT_DRAMA_SCRIPT_INVALID", "请等待编剧完成当前草稿", 409)
     validate_manual_approval(db, script, settings)
     content = read_script_content(script.content_json)
-    font_facts(
-        db,
-        project.id,
-        payload.font_file_id,
-        required=any(scene.dialogue for scene in content.scenes),
-    )
+    font_id = payload.font_file_id
+    font_facts(db, project.id, font_id, required=False)
     if not payload.generated_media_rights_confirmed:
         raise DomainError("SHORT_DRAMA_RIGHTS_REQUIRED", "请确认本次生成素材可用于此短剧", 409)
+    from arclight.application.short_drama_visuals import require_image_service
+
+    require_short_drama_text(db, settings, actor)
+    require_image_service(
+        db, settings, project.id, actor, output_profile(project.output_profile, "FORMAL")
+    )
     if script.status == "READY_FOR_REVIEW":
         impact = content_approval_impact(db, script)
         if impact["affected"] and payload.impact_digest is None:
@@ -156,13 +190,15 @@ def start_short_drama(
             comment="确认此剧本并授权自动制作短剧",
             impact_digest=payload.impact_digest,
         )
+    if font_id is None and any(scene.dialogue for scene in content.scenes):
+        font_id = bundled_font_receipt(db, settings, project.id).id
     frozen = {
         "script_version_id": str(script.id),
         "script_sha256": digest(script.content_json),
         "request_sha256": request_hash,
         "target_duration_ms": episode.target_duration_ms,
         "output_profile": project.output_profile,
-        "font_file_id": str(payload.font_file_id) if payload.font_file_id else None,
+        "font_file_id": str(font_id) if font_id else None,
         "generated_media_rights_confirmed": payload.generated_media_rights_confirmed,
     }
     run = start_producer(
@@ -225,6 +261,32 @@ def read_short_drama(db: Session, episode_id: UUID, actor: str) -> dict | None:
         return None
     from arclight.application.short_drama_production import balance_blocker
 
+    progress = progress_for(db, run).copy()
+    detail = progress.pop(DETAIL, None)
+    code = public_short_drama_error(run.error_code)
+    if detail and detail["code"] == "ACCOUNT_BALANCE_INSUFFICIENT" and code is None:
+        detail = None
+    if detail is None and code is not None:
+        phase = progress.get("stopped_phase", progress["phase"])
+        error = DomainError(code, "制作未完成")
+        casting = (
+            phase == "AUDIO"
+            and code == "ACCOUNT_BALANCE_INSUFFICIENT"
+            and any(
+                command.snapshot_json["action"] == VOICE_CASTING_ACTION
+                for command in pending_commands(db, run, episode.project_id)
+            )
+        )
+        detail = (
+            text_failure(
+                error,
+                run.input_json["created_by"],
+                run.input_json.get("_text_service"),
+                task=ShortDramaTask(id=run.id, family="WORKFLOW"),
+            )
+            if casting or phase in {"PLANNING", "ART", "STORYBOARD"}
+            else ShortDramaFailure(error, service_kind=None)
+        ).record(phase)
     return {
         "run_id": run.id,
         "status": run.status,
@@ -232,6 +294,7 @@ def read_short_drama(db: Session, episode_id: UUID, actor: str) -> dict | None:
         "can_retry_balance": run.input_json.get("created_by") == actor
         and balance_blocker(db, run, episode.project_id) is not None,
         "script_version_id": run.input_json["short_drama"]["script_version_id"],
-        "error_code": public_short_drama_error(run.error_code),
-        **progress_for(db, run),
+        "error_code": code,
+        "issue": public_issue(detail, actor) if detail else None,
+        **progress,
     }

@@ -174,17 +174,20 @@ export type RenderManifest = {
     line_audio_decisions?: LineAudioDecision[];
   };
 };
-export type RenderAdmission = {
-  manifest_id: string;
-  manifest_sha256: string;
-  profile: RenderProfile;
-  review_request_id: string | null;
-  decision_id: string | null;
-  checked_at: string;
-  admitted: true;
-  requires_recheck: true;
-  is_delivery: false;
+export type RenderExportSettings = {
+  line_audio_decisions?: LineAudioDecision[];
+  subtitle_style?: { font_size: number; margin_bottom: number; bold: boolean };
+  font_file_id?: string;
 };
+
+export type FormalExportRequest = RenderExportSettings & {
+  creation_key: string;
+};
+
+export type FormalExportAction =
+  | { action: "APPROVE" | "REJECT"; request_sha256: string; comment?: string }
+  | { action: "CONTINUE"; request_sha256: string }
+  | { action: "RETRY"; retry_of: string };
 export type RenderJob = {
   id: string;
   manifest_id: string;

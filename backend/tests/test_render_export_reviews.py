@@ -6,14 +6,18 @@ import pytest
 from fastapi.testclient import TestClient
 from render_admission_helpers import (
     assert_blocked,
+    formal_export_command,
     ready_manifest,
-    render_path,
+    record_export_decision,
+    record_export_resume,
     request_export,
+    start_formal_export,
 )
 from render_manifest_helpers import render_case, review_case, timeline_case
 from sqlalchemy import func, select
-from test_human_reviews import decide, decision_payload, resume
 
+from arclight.application.render_admission import admit_render
+from arclight.core.errors import DomainError
 from arclight.domain.versions import digest
 from arclight.main import create_app
 from arclight.persistence.human_reviews import (
@@ -21,16 +25,20 @@ from arclight.persistence.human_reviews import (
     HumanReviewRequest,
     HumanReviewResume,
 )
-from arclight.persistence.models import AssetVersion, AuditEvent, OutboxEvent
+from arclight.persistence.models import AssetVersion, AuditEvent, OutboxEvent, RenderJob
 from arclight.persistence.render_manifests import RenderArtifact, RenderReportLink
 
 __all__ = ["render_case", "review_case", "timeline_case"]
 
 
 def test_exact_formal_review_requires_resume_and_survives_restart(client, settings, render_case):
-    value, _ = ready_manifest(client, render_case, profile="FORMAL")
-    row = request_export(client, value)
+    creation_key = str(uuid4())
+    started = start_formal_export(client, render_case, creation_key=creation_key)
+    assert started.status_code == 201, started.text
+    value, row = started.json()["manifest"], started.json()["review"]
     frozen = row["snapshot"]
+    assert row["status"] == "WAITING_REVIEW"
+    assert row["decision"] is None and row["resume"] is None
     assert frozen["kind"] == "EXPORT" and frozen["purpose"] == "PRODUCTION"
     assert frozen["version_id"] == frozen["object_id"] == value["id"]
     assert frozen["content_sha256"] == value["content_sha256"]
@@ -39,28 +47,42 @@ def test_exact_formal_review_requires_resume_and_survives_restart(client, settin
         render_case["id"],
         *(item["asset_version_id"] for item in value["snapshot"]["sources"]),
     }
-    assert row["request_sha256"] == digest(frozen)
-    assert request_export(client, value) == row
-    assert_blocked(client.post(render_path(value, "admission")), "RENDER_EXPORT_REVIEW_REQUIRED")
-    saved = decide(client, row)
-    assert saved.status_code == 200, saved.text
-    assert decide(client, row).json() == saved.json()
-    assert_blocked(decide(client, row, "REJECT"), "REVIEW_DECISION_CONFLICT")
-    assert_blocked(client.post(render_path(value, "admission")), "RENDER_EXPORT_REVIEW_REQUIRED")
+    sha = row["request_sha256"]
+    assert sha == digest(frozen)
+    replay = start_formal_export(client, render_case, creation_key=creation_key)
+    assert replay.status_code == 201, replay.text
+    assert replay.json() == started.json()
+    assert_blocked(
+        formal_export_command(client, value, "CONTINUE", request_sha256=sha),
+        "RENDER_EXPORT_REVIEW_REQUIRED",
+    )
+    saved = record_export_decision(client, row)
     with client.app.state.session_factory() as db:
+        with pytest.raises(DomainError) as pending:
+            admit_render(db, settings, UUID(value["id"]), "service-owner")
+        assert pending.value.code == "RENDER_EXPORT_REVIEW_REQUIRED"
         before = db.scalar(select(func.count(OutboxEvent.id)))
     with TestClient(create_app(settings)) as restarted:
         restarted.headers["Authorization"] = "Bearer test-token"
-        first = resume(restarted, row, saved.json())
+        first = formal_export_command(restarted, value, "CONTINUE", request_sha256=sha)
         assert first.status_code == 200, first.text
-        assert resume(restarted, row, saved.json()).json() == first.json()
-        assert first.json()["result_json"]["status"] == "APPROVED"
-        admitted = restarted.post(render_path(value, "admission"))
-        assert admitted.status_code == 200, admitted.text
-        assert admitted.json()["review_request_id"] == row["id"]
-        assert admitted.json()["decision_id"] == saved.json()["id"]
-        assert admitted.json()["profile"] == "FORMAL"
-        assert admitted.json()["is_delivery"] is False
+        response = first.json()
+        assert response["review"]["id"] == row["id"]
+        assert response["review"]["status"] == "RESUMED"
+        assert response["review"]["decision"] == saved
+        assert response["review"]["resume"]["decision_id"] == saved["id"]
+        assert response["review"]["resume"]["result_json"]["status"] == "APPROVED"
+        assert response["job"]["manifest_id"] == value["id"]
+        assert response["job"]["manifest_sha256"] == value["content_sha256"]
+        assert response["job"]["profile"] == "FORMAL"
+        assert response["job"]["is_delivery"] is False
+        repeated = formal_export_command(restarted, value, "CONTINUE", request_sha256=sha)
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json() == response
+        assert_blocked(
+            formal_export_command(restarted, value, "REJECT", request_sha256=sha),
+            "REVIEW_DECISION_CONFLICT",
+        )
     with client.app.state.session_factory() as db:
         assert db.get(HumanReviewRequest, UUID(row["id"])) is not None
         for model in (HumanReviewDecision, HumanReviewResume):
@@ -68,6 +90,12 @@ def test_exact_formal_review_requires_resume_and_survives_restart(client, settin
                 db.scalar(select(func.count(model.id)).where(model.request_id == UUID(row["id"])))
                 == 1
             )
+        assert (
+            db.scalar(
+                select(func.count(RenderJob.id)).where(RenderJob.manifest_id == UUID(value["id"]))
+            )
+            == 1
+        )
         for model in (RenderArtifact, RenderReportLink):
             assert db.scalar(select(func.count(model.id))) == 0
         assert db.scalar(select(func.count(OutboxEvent.id))) == before
@@ -84,69 +112,118 @@ def test_exact_formal_review_requires_resume_and_survives_restart(client, settin
 
 
 def test_rejected_formal_export_never_passes_admission(client, render_case):
-    value, _ = ready_manifest(client, render_case, profile="FORMAL")
-    row = request_export(client, value)
-    saved = decide(client, row, "REJECT")
-    assert saved.status_code == 200, saved.text
-    receipt = resume(client, row, saved.json())
-    assert receipt.status_code == 200, receipt.text
-    assert receipt.json()["result_json"]["status"] == "REJECTED"
-    assert_blocked(client.post(render_path(value, "admission")), "RENDER_EXPORT_NOT_APPROVED")
+    started = start_formal_export(client, render_case)
+    assert started.status_code == 201, started.text
+    value, row = started.json()["manifest"], started.json()["review"]
+    sha = row["request_sha256"]
+    rejected = formal_export_command(client, value, "REJECT", request_sha256=sha)
+    assert rejected.status_code == 200, rejected.text
+    result = rejected.json()
+    assert result["job"] is None
+    review = result["review"]
+    assert review["id"] == row["id"] and review["status"] == "RESUMED"
+    assert review["decision"]["decision_json"]["decision"] == "REJECT"
+    assert review["resume"]["decision_id"] == review["decision"]["id"]
+    assert review["resume"]["result_json"]["status"] == "REJECTED"
+    assert formal_export_command(client, value, "REJECT", request_sha256=sha).json() == result
+    assert_blocked(
+        formal_export_command(client, value, "CONTINUE", request_sha256=sha),
+        "RENDER_EXPORT_NOT_APPROVED",
+    )
+    assert_blocked(
+        formal_export_command(client, value, "APPROVE", request_sha256=sha),
+        "REVIEW_DECISION_CONFLICT",
+    )
+    with client.app.state.session_factory() as db:
+        assert (
+            db.scalar(select(RenderJob).where(RenderJob.manifest_id == UUID(value["id"]))) is None
+        )
 
 
 def test_preview_cannot_mint_formal_approval_and_cannot_approve_other_manifest(client, render_case):
     preview, _ = ready_manifest(client, render_case)
     row = request_export(client, preview)
     assert row["snapshot"]["purpose"] == "PREVIEW"
-    assert_blocked(decide(client, row), "PREVIEW_APPROVAL_FORBIDDEN")
-    formal, _ = ready_manifest(client, render_case, profile="FORMAL")
-    assert_blocked(client.post(render_path(formal, "admission")), "RENDER_EXPORT_REVIEW_REQUIRED")
-    rejected = decide(client, row, "REJECT")
-    assert rejected.status_code == 200, rejected.text
-    assert resume(client, row, rejected.json()).status_code == 200
-    assert client.post(render_path(preview, "admission")).status_code == 200
+    sha = row["request_sha256"]
+    assert_blocked(
+        formal_export_command(client, preview, "APPROVE", request_sha256=sha),
+        "RENDER_FORMAL_EXPORT_REQUIRED",
+    )
+    with pytest.raises(DomainError) as forbidden:
+        record_export_decision(client, row)
+    assert forbidden.value.code == "PREVIEW_APPROVAL_FORBIDDEN"
+    started = start_formal_export(client, render_case)
+    assert started.status_code == 201, started.text
+    formal = started.json()["manifest"]
+    assert_blocked(
+        formal_export_command(client, formal, "APPROVE", request_sha256=sha),
+        "REVIEW_INPUT_CHANGED",
+    )
+    rejected = record_export_decision(client, row, "REJECT")
+    receipt = record_export_resume(client, row, rejected)
+    assert receipt["result_json"]["status"] == "REJECTED"
+    with client.app.state.session_factory() as db:
+        admitted = admit_render(db, client.app.state.settings, UUID(preview["id"]), "service-owner")
+        assert admitted.profile == "PREVIEW"
+        assert admitted.review_request_id is None and admitted.decision_id is None
 
 
 @pytest.mark.parametrize("field", ["version_id", "request_sha256", "current_snapshot"])
 def test_client_cannot_change_precise_review_inputs(client, render_case, field):
-    value, _ = ready_manifest(client, render_case, profile="FORMAL")
-    row = request_export(client, value)
-    body = decision_payload(row)
-    body[field] = (
+    started = start_formal_export(client, render_case)
+    assert started.status_code == 201, started.text
+    value, row = started.json()["manifest"], started.json()["review"]
+    sha = row["request_sha256"]
+    overrides = {"request_sha256": sha}
+    overrides[field] = (
         str(uuid4())
         if field == "version_id"
         else "e" * 64
         if field == "request_sha256"
         else row["snapshot"]
     )
-    response = client.post(f"/api/v1/human-reviews/{row['id']}/decisions", json=body)
-    assert response.status_code == (422 if field == "current_snapshot" else 409), response.text
-    assert_blocked(resume(client, row, {"id": str(uuid4())}), "REVIEW_DECISION_REQUIRED")
+    response = formal_export_command(client, value, "APPROVE", **overrides)
+    if field == "request_sha256":
+        assert_blocked(response, "REVIEW_INPUT_CHANGED")
+    else:
+        assert response.status_code == 422, response.text
+    forged = formal_export_command(
+        client, value, "CONTINUE", request_sha256=sha, decision_id=str(uuid4())
+    )
+    assert forged.status_code == 422, forged.text
+    assert_blocked(
+        formal_export_command(client, value, "CONTINUE", request_sha256=sha),
+        "RENDER_EXPORT_REVIEW_REQUIRED",
+    )
 
 
 @pytest.mark.parametrize("phase", ["DECISION", "RESUME", "ADMISSION"])
 def test_changed_revision_invalidates_review_even_after_resume(client, render_case, phase):
-    value, _ = ready_manifest(client, render_case, profile="FORMAL")
-    row = request_export(client, value)
-    saved = decide(client, row).json() if phase != "DECISION" else None
-    if phase == "ADMISSION":
-        assert resume(client, row, saved).status_code == 200
+    started = start_formal_export(client, render_case)
+    assert started.status_code == 201, started.text
+    value, row = started.json()["manifest"], started.json()["review"]
+    sha = row["request_sha256"]
+    if phase != "DECISION":
+        saved = record_export_decision(client, row)
+        if phase == "ADMISSION":
+            record_export_resume(client, row, saved)
     source = value["snapshot"]["sources"][0]
     with client.app.state.session_factory.begin() as db:
         db.get(AssetVersion, UUID(source["asset_version_id"])).revision += 1
-    response = (
-        decide(client, row)
-        if phase == "DECISION"
-        else resume(client, row, saved)
-        if phase == "RESUME"
-        else client.post(render_path(value, "admission"))
+    action = "APPROVE" if phase == "DECISION" else "CONTINUE"
+    assert_blocked(
+        formal_export_command(client, value, action, request_sha256=sha), "REVIEW_INPUT_CHANGED"
     )
-    assert_blocked(response, "REVIEW_INPUT_CHANGED")
+    with client.app.state.session_factory() as db:
+        assert (
+            db.scalar(select(RenderJob).where(RenderJob.manifest_id == UUID(value["id"]))) is None
+        )
 
 
 def test_export_handlers_only_read_database_facts(client, render_case, monkeypatch):
-    value, _ = ready_manifest(client, render_case, profile="FORMAL")
-    row = request_export(client, value)
+    started = start_formal_export(client, render_case)
+    assert started.status_code == 201, started.text
+    row = started.json()["review"]
 
     def forbidden(*args, **kwargs):
         raise AssertionError("FLOW-03 handlers cannot perform object or parser I/O")
@@ -154,6 +231,7 @@ def test_export_handlers_only_read_database_facts(client, render_case, monkeypat
     monkeypatch.setattr("arclight.storage.objects.ObjectStorage.read", forbidden)
     monkeypatch.setattr("arclight.media.validation.probe", forbidden)
     monkeypatch.setattr("arclight.application.render_admission.probe", forbidden)
-    saved = decide(client, row)
-    assert saved.status_code == 200, saved.text
-    assert resume(client, row, saved.json()).status_code == 200
+    saved = record_export_decision(client, row)
+    receipt = record_export_resume(client, row, saved)
+    assert receipt["decision_id"] == saved["id"]
+    assert receipt["result_json"]["status"] == "APPROVED"

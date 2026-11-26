@@ -11,6 +11,7 @@ from test_model_services import account
 from test_story_analysis import start
 
 from arclight.api import model_services
+from arclight.application.model_services import require_text_snapshot, run_settings
 from arclight.application.production_versions import text_settings
 from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.model_gateway import GatewayFailure
@@ -44,15 +45,6 @@ def save_custom(client, **changes):
 
 def check(client, revision=1):
     return client.post(CHECK, json={"expected_revision": revision, "confirm_charges": True})
-
-
-def stored_response_format(client, uid):
-    with client.app.state.session_factory() as db:
-        return db.scalar(
-            select(ModelService.response_format).where(
-                ModelService.user_id == UUID(uid), ModelService.kind == "text"
-            )
-        )
 
 
 def test_catalog_routes_work_with_empty_deployment_policy(client, connected_account, settings):
@@ -119,7 +111,6 @@ def test_only_probed_capabilities_are_saved_and_frozen(
     assert verified.status_code == 200, verified.text
     profile = verified.json()
     assert profile["revision"] == 2 and "response_format" not in profile
-    assert stored_response_format(client, connected_account) == "json_object"
     assert profile["key_status"] == "READY"
     assert profile["capability_check"] == {
         "status": "partial",
@@ -141,12 +132,23 @@ def test_only_probed_capabilities_are_saved_and_frozen(
     updated = save_custom(client, expected_revision=2, api_key="changed-account-token")
     assert updated.status_code == 200, updated.text
     assert updated.json()["capability_check"]["status"] == "unverified"
-    assert stored_response_format(client, connected_account) == "json_object"
+    next_project = create_project(client)
+    next_episode = create_episode(client, next_project)
+    next_started = start(client, next_episode)
+    assert next_started.status_code == 202, next_started.text
     with client.app.state.session_factory() as db:
         run = db.get(WorkflowRun, UUID(started.json()["run_id"]))
         prior = text_settings(db, UUID(project["id"]), run, settings)
         assert prior.llm_response_format == "json_object"
         assert prior.llm_agent_capabilities == declaration
+        old_route = run_settings(settings, run.input_json["_text_service"], db)
+        assert old_route.llm_api_key.get_secret_value() == "synthetic-account-token"
+        next_run = db.get(WorkflowRun, UUID(next_started.json()["run_id"]))
+        current = text_settings(db, UUID(next_project["id"]), next_run, settings)
+        assert current.llm_response_format == "json_schema"
+        assert current.llm_agent_capabilities is None
+        current_route = run_settings(settings, next_run.input_json["_text_service"], db)
+        assert current_route.llm_api_key.get_secret_value() == "changed-account-token"
 
 
 def test_provider_failures_do_not_change_the_profile(client, connected_account, monkeypatch):
@@ -189,19 +191,18 @@ def test_same_configuration_verifies_once_at_a_time(client, connected_account, m
     assert calls == 1
 
 
-def test_renaming_an_unverified_service_preserves_stored_response_format(client, connected_account):
+def test_renaming_an_unverified_service_uses_the_route_default(client, connected_account, settings):
     assert save_custom(client).status_code == 200
-    with client.app.state.session_factory.begin() as db:
-        row = db.scalar(select(ModelService).where(ModelService.user_id == UUID(connected_account)))
-        row.response_format = "json_object"
 
     renamed = save_custom(client, supplier_name="New label", expected_revision=1, api_key=None)
     assert renamed.status_code == 200, renamed.text
-    assert stored_response_format(client, connected_account) == "json_object"
 
     changed = save_custom(client, model="another-model", expected_revision=2, api_key=None)
     assert changed.status_code == 200, changed.text
-    assert stored_response_format(client, connected_account) == "json_schema"
+    with client.app.state.session_factory() as db:
+        current = require_text_snapshot(db, connected_account, settings)
+        assert current["model"] == "another-model"
+        assert current["response_format"] == "json_schema"
 
 
 def test_switching_protocol_rechecks_the_key_and_capabilities(client, connected_account):

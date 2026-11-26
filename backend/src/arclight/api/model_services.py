@@ -15,9 +15,9 @@ from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input
 from arclight.application.model_services import (
     agent_capabilities,
-    preferred_response_format,
     run_settings,
     text_credential_identity,
+    text_response_format,
     validate_endpoint,
 )
 from arclight.application.service_credentials import (
@@ -304,27 +304,11 @@ def save_service(
         if row and same_route and not has_new_key and not payload.clear_key
         else None
     )
-    response_format: str = preset.response_format if preset else "json_schema"
-    if kind == "text":
-        if row and same_route:
-            response_format = row.response_format
-        capabilities = agent_capabilities(
-            settings,
-            {
-                "supplier": payload.supplier,
-                "base_url": base,
-                "model": model,
-                "protocol": protocol,
-                "verified_capabilities": verified_capabilities,
-            },
-        )
-        response_format = preferred_response_format(capabilities, response_format)
     values = dict(
         base_url=base,
         model=model,
         supplier=payload.supplier,
         supplier_name=name,
-        response_format=response_format,
         verified_capabilities=verified_capabilities,
         protocol=protocol,
         credential_id=credential_id,
@@ -425,9 +409,6 @@ def _verify_text_service(
                 .where(*claimed_row, ModelService.revision == revision)
                 .values(
                     verified_capabilities=capabilities.model_dump(mode="json"),
-                    response_format=preferred_response_format(
-                        capabilities, probe_settings.llm_response_format
-                    ),
                     revision=revision + 1,
                     capability_probe_id=None,
                     capability_probe_until=None,
@@ -473,8 +454,8 @@ def check_text_capabilities(
     route = {
         **capability_configuration(row),
         "credential_id": str(row.credential_id),
-        "response_format": row.response_format,
     }
+    route["response_format"] = text_response_format(route)
     service_id = row.id
     probe_settings = run_settings(settings, route, db)
     if agent_capabilities(settings, route) is not None:

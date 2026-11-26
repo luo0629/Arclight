@@ -1,5 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
+import type { RenderJob } from "../src/features/rendering/types";
 import {
   checksum,
   mockedVideoFixture,
@@ -719,19 +720,11 @@ test("VIDEO-03：工作区选用视频、另存裁切和原声并播放真实预
     video: { source_end_ms: 2500, keep_audio: true, frame_rate: 24 },
   });
 
-  async function startRender(manifestId: string) {
-    const response = await page.request.post(
-      `/api/v1/render-manifests/${manifestId}/jobs`,
-      {
-        ...call,
-        data: { creation_key: crypto.randomUUID() },
-      },
-    );
-    expect(response.status(), await response.text()).toBe(202);
-    let job = await response.json();
+  async function completedRender(queued: RenderJob) {
+    let job = queued;
     await expect(async () => {
       const read = await page.request.get(
-        `/api/v1/render-jobs/${job.id}`,
+        `/api/v1/render-jobs/${queued.id}`,
         call,
       );
       expect(read.status()).toBe(200);
@@ -750,44 +743,34 @@ test("VIDEO-03：工作区选用视频、另存裁切和原声并播放真实预
     .getByRole("button", { name: "创建预览清单", exact: true })
     .click();
   const preview = await (await previewCreated).json();
-  const previewJob = await startRender(preview.id);
-  const formal = await page.request.post(manifestPath, {
-    ...call,
-    data: { creation_key: crypto.randomUUID(), profile: "FORMAL" },
-  });
-  expect(formal.status(), await formal.text()).toBe(201);
-  const frozen = await formal.json();
-  const reviewResponse = await page.request.post(
-    `/api/v1/render-manifests/${frozen.id}/export-review`,
-    call,
+  const previewQueued = await page.request.post(
+    `/api/v1/render-manifests/${preview.id}/jobs`,
+    { ...call, data: { creation_key: crypto.randomUUID() } },
   );
-  expect(reviewResponse.status(), await reviewResponse.text()).toBe(201);
-  const review = await reviewResponse.json();
+  expect(previewQueued.status(), await previewQueued.text()).toBe(202);
+  const previewJob = await completedRender(await previewQueued.json());
+  const formal = await page.request.post(
+    `/api/v1/timelines/${revised.id}/formal-export`,
+    {
+      ...call,
+      data: { creation_key: crypto.randomUUID() },
+    },
+  );
+  expect(formal.status(), await formal.text()).toBe(201);
+  const { manifest: frozen, review } = await formal.json();
   const accepted = await page.request.post(
-    `/api/v1/human-reviews/${review.id}/decisions`,
+    `/api/v1/render-manifests/${frozen.id}/formal-export`,
     {
       ...call,
       data: {
-        version_id: review.snapshot.version_id,
         request_sha256: review.request_sha256,
-        decision: "APPROVE",
+        action: "APPROVE",
         comment: "验收合成视频的精确裁切与保留原声。",
       },
     },
   );
   expect(accepted.status(), await accepted.text()).toBe(200);
-  const resumed = await page.request.post(
-    `/api/v1/human-reviews/${review.id}/resume`,
-    {
-      ...call,
-      data: {
-        request_sha256: review.request_sha256,
-        decision_id: (await accepted.json()).id,
-      },
-    },
-  );
-  expect(resumed.status(), await resumed.text()).toBe(200);
-  const formalJob = await startRender(frozen.id);
+  const formalJob = await completedRender((await accepted.json()).job);
   expect(formalJob.is_delivery).toBe(false);
   const report = await page.request.get(
     prefix + `/deliveries/${formalJob.artifact_id}/report`,

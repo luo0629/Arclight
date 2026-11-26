@@ -107,7 +107,7 @@ def short_drama_progress(episode_id: UUID, db: Database, actor: Actor) -> dict |
 
 
 @router.get("/episodes/{episode_id}/short-drama/preflight")
-def short_drama_audio_preflight(
+def short_drama_readiness(
     episode_id: UUID, script_version_id: UUID, request: Request, db: Database, actor: Actor
 ) -> ShortDramaPreflight:
     return short_drama_preflight(

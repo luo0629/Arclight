@@ -129,7 +129,7 @@ def submit(
         elif exc.code == "GATEWAY_PROVIDER_FAILED":
             rejection = "PROVIDER_FAILED"
         elif (
-            exc.code in {"MEDIA_CALL_SCOPE_INVALID", "SHORT_DRAMA_INACTIVE"}
+            exc.code in {"INPUT_INVALID", "MEDIA_CALL_SCOPE_INVALID", "SHORT_DRAMA_INACTIVE"}
             or exc.code.startswith("AGENT_")
             or (
                 execution is not None

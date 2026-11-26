@@ -9,7 +9,7 @@ from arclight.application.agent_runtime_state import initialize_run_state
 from arclight.application.audit import audit
 from arclight.application.commands import emit, require_project
 from arclight.application.continuity_revision_store import job_revision, require_revision_target
-from arclight.application.continuity_workflow import require_shot_binding
+from arclight.application.continuity_workflow import FrozenReviewTextService, require_shot_binding
 from arclight.application.model_services import require_text_snapshot
 from arclight.application.production_versions import (
     bind,
@@ -117,6 +117,7 @@ def start_temporal_review(
     *,
     producer_parent_run_id: UUID | None = None,
     producer_context: dict | None = None,
+    frozen_text_service: FrozenReviewTextService | None = None,
 ) -> WorkflowRun:
     # Called by the common intake with the gate and dependency graph held.
     require_project(db, project_id, actor, write=True)
@@ -180,7 +181,11 @@ def start_temporal_review(
                 "video_temporal_review": {},
             },
         )
-        snapshot = require_text_snapshot(db, actor, settings)
+        snapshot = (
+            frozen_text_service.snapshot
+            if frozen_text_service is not None
+            else require_text_snapshot(db, actor, settings)
+        )
         if producer_context is not None:
             run.input_json = run.input_json | {"producer_series_context": producer_context}
         if snapshot:

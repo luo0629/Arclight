@@ -30,7 +30,7 @@ from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.versions import digest
 from arclight.media.versions import renderer_software, video_renderer_software
 from arclight.persistence.base import utcnow
-from arclight.persistence.models import DependencyOutput
+from arclight.persistence.models import DependencyOutput, Episode
 from arclight.persistence.render_manifests import RenderManifest
 from arclight.persistence.timelines import Timeline
 
@@ -108,6 +108,13 @@ def checked_snapshot(row: RenderManifest) -> RenderManifestSnapshot:
     return snapshot
 
 
+def manifest_episode_for_write(db: Session, timeline_id: UUID, actor: str) -> Episode:
+    timeline = db.get(Timeline, timeline_id)
+    if timeline is None or not timeline.sealed:
+        raise DomainError("NOT_FOUND", "时间轴版本不存在", 404)
+    return write_episode(db, timeline.episode_id, actor)
+
+
 def create_render_manifest(
     db: Session,
     settings: Settings,
@@ -115,10 +122,7 @@ def create_render_manifest(
     actor: str,
     payload: RenderManifestCreate,
 ) -> RenderManifestRead:
-    timeline_row = db.get(Timeline, timeline_id)
-    if timeline_row is None or not timeline_row.sealed:
-        raise DomainError("NOT_FOUND", "时间轴版本不存在", 404)
-    episode = write_episode(db, timeline_row.episode_id, actor)
+    episode = manifest_episode_for_write(db, timeline_id, actor)
     decisions = tuple(
         sorted(
             payload.line_audio_decisions,

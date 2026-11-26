@@ -680,7 +680,6 @@ class ModelService(Entity, Base):
     model: Mapped[str] = mapped_column(String(160), default="")
     supplier: Mapped[str] = mapped_column(String(40), default="custom")
     supplier_name: Mapped[str] = mapped_column(String(100), default="")
-    response_format: Mapped[str] = mapped_column(String(20), default="json_schema")
     verified_capabilities: Mapped[dict | None] = mapped_column(JSON_TYPE)
     capability_probe_id: Mapped[UUID | None]
     capability_probe_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

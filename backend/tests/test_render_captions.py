@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from test_render_mixing import audio_plan
 
 from arclight.domain.render_manifests import SubtitleStyle
+from arclight.media.bundled_font import BUNDLED_FONT_TYPE, bundled_subtitle_font
 from arclight.media.execution import execute_media
 from arclight.media.render_plan import RenderCue, RenderSubtitles
 from arclight.media.timeline_captions import SubtitleBurner
@@ -81,6 +82,37 @@ def test_sealed_unicode_caption_pixels_follow_exact_cue_start_end_and_empty_gaps
         *range(15, 20),
     ]
     assert observations[5][3] <= 239
+
+
+def test_bundled_chinese_glyphs_appear_in_mp4_only_during_their_cues():
+    subtitles = RenderSubtitles(
+        font=base64.b64encode(bundled_subtitle_font()).decode(),
+        font_media_type=BUNDLED_FONT_TYPE,
+        style=SubtitleStyle(font_size=54, margin_bottom=20, outline_width=0),
+        cues=(
+            RenderCue(text="田", start_ms=200, duration_ms=200),
+            RenderCue(text="川", start_ms=600, duration_ms=200),
+        ),
+    )
+    plan = audio_plan([], [], subtitles=subtitles)
+    movie = execute_media("render", "timeline", plan.model_dump_json().encode())
+    visible_frames = []
+    widest_row = {}
+    with av.open(BytesIO(movie)) as container:
+        for index, frame in enumerate(container.decode(video=0)):
+            image = frame.to_image().convert("L")
+            box = bright_bounds(image)
+            if box is not None:
+                visible_frames.append(index)
+                if index in {5, 15}:
+                    glyph = image.crop(box)
+                    widest_row[index] = max(
+                        sum(glyph.getpixel((x, y)) > 25 for x in range(glyph.width)) / glyph.width
+                        for y in range(glyph.height)
+                    )
+    assert visible_frames == [*range(5, 10), *range(15, 20)]
+    # 田 has full horizontal strokes. 川 only has narrow, separated vertical strokes.
+    assert widest_row[5] > 0.85 and widest_row[15] < 0.55
 
 
 @pytest.mark.parametrize(

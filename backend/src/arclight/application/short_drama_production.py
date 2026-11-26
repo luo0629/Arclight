@@ -28,23 +28,32 @@ from arclight.application.producer_plan_history import (
 )
 from arclight.application.production_versions import bind, find_binding
 from arclight.application.render_reports import delivery_acceptance
-from arclight.application.short_drama import (
-    PROGRESS_EVENT,
-    progress_for,
-    public_short_drama_error,
-    require_exact_inputs,
-)
+from arclight.application.short_drama import progress_for, require_exact_inputs
 from arclight.application.short_drama_budget import MEDIA_SCOPE
 from arclight.application.short_drama_delivery import (
     queue_short_drama_delivery,
     render_key,
     require_run_authorization,
 )
+from arclight.application.short_drama_diagnostics import (
+    DETAIL,
+    PROGRESS_EVENT,
+    ShortDramaFailure,
+    at_phase,
+    public_short_drama_error,
+    text_failure,
+)
 from arclight.application.short_drama_reviews import apply_art_selection, approve_board
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_state import terminate_agent_state, transition_agent_step
-from arclight.domain.producer_interaction import ProducerDelegateCommand, ProducerRecoverCommand
+from arclight.domain.producer_interaction import (
+    VOICE_CASTING_ACTION,
+    ProducerDelegateCommand,
+    ProducerRecoverCommand,
+)
+from arclight.domain.short_drama import ShortDramaTask
+from arclight.domain.versions import SHORT_DRAMA_VOICE_INPUT
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.base import utcnow
@@ -62,6 +71,25 @@ def set_progress(db: Session, run: WorkflowRun, phase: str, **facts) -> None:
     value = {"phase": phase, **facts}
     if progress_for(db, run) != value:
         emit(db, run, PROGRESS_EVENT, value)
+
+
+def text_reconciliation(db: Session, workflow: WorkflowRun, actor: str) -> ShortDramaFailure | None:
+    if db.scalar(
+        select(AgentLoop.id)
+        .where(
+            AgentLoop.run_id == workflow.id,
+            AgentLoop.status == "RECOVERY_REQUIRED",
+            AgentLoop.outcome_json["stop_code"].as_string() == "GATEWAY_RECONCILIATION_REQUIRED",
+        )
+        .limit(1)
+    ):
+        return text_failure(
+            DomainError("GATEWAY_RECONCILIATION_REQUIRED", "请核对原模型请求"),
+            actor,
+            workflow.input_json.get("_text_service"),
+            task=ShortDramaTask(id=workflow.id, family="WORKFLOW"),
+        )
+    return None
 
 
 def lock_specialists(db: Session, run: WorkflowRun) -> dict[UUID, WorkflowRun]:
@@ -152,11 +180,19 @@ def finish_render(db: Session, run: WorkflowRun, project_id: UUID, render: Rende
 def advance(
     db: Session, settings: Settings, run: WorkflowRun, specialists: dict[UUID, WorkflowRun]
 ) -> None:
+    from arclight.application.producer_interaction import enqueue_short_drama_voice_assignment
+    from arclight.application.short_drama_audio import (
+        DIALOGUE_PLAN,
+        read_voice_casting_input,
+        speech_failure,
+    )
+
     episode, actor, spec = require_run_authorization(db, run)
     project_id = episode.project_id
     script = require_exact_inputs(db, episode, spec)
     if render := render_for(db, run, project_id):
-        finish_render(db, run, project_id, render)
+        with at_phase("RENDERING"):
+            finish_render(db, run, project_id, render)
         return
     control = db.get(AgentRunLimit, run.id)
     if control is None:
@@ -167,18 +203,25 @@ def advance(
     for command in commands:
         completed = command_receipt(db, project_id, command.resource_id)
         if completed is None:
-            if db.scalar(
-                select(AgentLoop.id)
-                .where(AgentLoop.run_id == run.id, AgentLoop.status == "RECOVERY_REQUIRED")
-                .limit(1)
-            ):
-                set_progress(db, run, "RECONCILING")
+            current = progress_for(db, run)
+            phase = (current.get(DETAIL) or {}).get("phase", current["phase"])
+            if issue := text_reconciliation(db, run, actor):
+                set_progress(db, run, "RECONCILING", **{DETAIL: issue.record(phase)})
+            elif current["phase"] == "RECONCILING":
+                set_progress(db, run, phase)
             return
         if completed["status"] != "COMMITTED":
-            raise DomainError(
+            error = DomainError(
                 completed.get("error_code") or "SHORT_DRAMA_PLAN_BLOCKED",
-                "制片规划或专业任务启动未通过制作检查",
+                "制片命令未通过制作检查",
             )
+            if command.snapshot_json["action"] == VOICE_CASTING_ACTION:
+                with at_phase("AUDIO"):
+                    if (completed.get(DETAIL) or {}).get("service_kind") == "SPEECH":
+                        casting = read_voice_casting_input(db, project_id, run.id)
+                        raise speech_failure(error, casting.speech_service)
+                    raise text_failure(error, actor, run.input_json.get("_text_service"))
+            raise text_failure(error, actor, run.input_json.get("_text_service"))
     plan = read_current_plan(db, run, actor)
     director = None
     for planned in plan.plan.tasks:
@@ -217,6 +260,11 @@ def advance(
                     set_progress(db, run, phase, storyboard_id=child.resume_json["version_id"])
                 return
         if child.status in ACTIVE:
+            if issue := text_reconciliation(db, child, actor):
+                set_progress(db, run, "RECONCILING", **{DETAIL: issue.record(phase)})
+                return
+            if progress_for(db, run)["phase"] == "RECONCILING":
+                set_progress(db, run, phase)
             if db.scalar(
                 select(AgentLoop.id)
                 .where(
@@ -230,9 +278,14 @@ def advance(
                 )
             return
         if child.status != "SUCCEEDED":
-            raise DomainError(
-                child.error_code or "SHORT_DRAMA_SPECIALIST_FAILED", "专业任务未成功完成", 409
-            )
+            with at_phase(phase):
+                raise text_failure(
+                    DomainError(
+                        child.error_code or "SHORT_DRAMA_SPECIALIST_FAILED", "专业任务未成功完成"
+                    ),
+                    actor,
+                    child.input_json.get("_text_service"),
+                )
         if phase == "STORYBOARD":
             director = child
     if director is None:
@@ -247,34 +300,58 @@ def advance(
     if board is None:
         raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "找不到本次制作的已检查分镜", 409)
 
-    from arclight.application.short_drama_audio import advance_short_drama_audio
+    from arclight.application.short_drama_audio import (
+        SOUND_PLAN,
+        advance_short_drama_audio,
+        dialogue_reconciliation,
+    )
+    from arclight.application.short_drama_visuals import (
+        advance_short_drama_visuals,
+        preflight_visuals,
+        visual_reconciliation,
+    )
 
     facts = {"storyboard_id": str(board.id)}
-    sound = advance_short_drama_audio(db, settings, run, board.id)
-    if sound is None:
+    if find_binding(db, project_id, SOUND_PLAN, run.id) is None:
+        with at_phase("SHOTS"):
+            preflight_visuals(db, settings, run, board.id)
+    if (
+        find_binding(db, project_id, SHORT_DRAMA_VOICE_INPUT, run.id) is not None
+        and find_binding(db, project_id, DIALOGUE_PLAN, run.id) is None
+    ):
+        with at_phase("AUDIO"):
+            enqueue_short_drama_voice_assignment(db, run, episode, actor)
         set_progress(db, run, "AUDIO", **facts)
         return
-
-    from arclight.application.short_drama_visuals import advance_short_drama_visuals
-
-    shots = advance_short_drama_visuals(
-        db,
-        settings,
-        run,
-        board.id,
-    )
-    if shots is None:
-        set_progress(db, run, "SHOTS", **facts)
+    with at_phase("AUDIO"):
+        sound = advance_short_drama_audio(db, settings, run, board.id)
+    if sound is None:
+        issue = dialogue_reconciliation(db, project_id, run.id)
+        if issue is None:
+            set_progress(db, run, "AUDIO", **facts)
+        else:
+            set_progress(db, run, "RECONCILING", **facts, **{DETAIL: issue.record("AUDIO")})
         return
-    render_result = queue_short_drama_delivery(
-        db,
-        settings,
-        run,
-        board.id,
-        shots,
-        voice_asset_versions=sound.voice_asset_versions,
-        sound_clips=sound.sound_clips,
-    )
+
+    with at_phase("SHOTS"):
+        shots = advance_short_drama_visuals(db, settings, run, board.id)
+    if shots is None:
+        issue = visual_reconciliation(db, run, board.id)
+        if issue is None:
+            set_progress(db, run, "SHOTS", **facts)
+        else:
+            set_progress(db, run, "RECONCILING", **facts, **{DETAIL: issue.record("SHOTS")})
+        return
+    with at_phase("RENDERING"):
+        render_result = queue_short_drama_delivery(
+            db,
+            settings,
+            run,
+            board.id,
+            shots,
+            voice_asset_versions=sound.voice_asset_versions,
+            sound_clips=sound.sound_clips,
+        )
     set_progress(
         db, run, "RENDERING", **facts, render_job_id=str(render_result.id), render_progress=0
     )
@@ -391,8 +468,23 @@ def advance_pending(factory: sessionmaker[Session], settings: Settings) -> None:
                     with db.begin_nested():
                         advance(db, settings, run, specialists)
                 except DomainError as exc:
+                    previous = progress_for(db, run)
+                    previous_issue = previous.get(DETAIL) or {}
+                    previous_phase = previous_issue.get("phase", previous["phase"])
+                    error = (
+                        exc
+                        if isinstance(exc, ShortDramaFailure)
+                        else ShortDramaFailure(exc, service_kind=None)
+                    )
+                    issue = error.record(previous_phase)
+                    facts = {
+                        key: value
+                        for key, value in previous.items()
+                        if key not in {"phase", DETAIL}
+                    }
                     if exc.code == "ACCOUNT_BALANCE_INSUFFICIENT":
                         run.error_code = exc.code
+                        set_progress(db, run, issue["phase"], **facts, **{DETAIL: issue})
                         continue
                     if exc.status_code >= 500:
                         raise
@@ -409,13 +501,13 @@ def advance_pending(factory: sessionmaker[Session], settings: Settings) -> None:
                     ).model_dump(mode="json")
                     run.status, run.error_code = "FAILED", exc.code
                     run.revision += 1
-                    previous = progress_for(db, run)
                     set_progress(
                         db,
                         run,
                         "FAILED",
-                        stopped_phase=previous["phase"],
-                        **{key: value for key, value in previous.items() if key != "phase"},
+                        stopped_phase=issue["phase"],
+                        **facts,
+                        **{DETAIL: issue},
                     )
                     emit(db, run, "workflow.failed", {"code": public_short_drama_error(exc.code)})
                 run.updated_at = utcnow()

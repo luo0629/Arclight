@@ -34,14 +34,15 @@ export type AudioVoice = {
 };
 type ParameterRanges = Record<string, { minimum: number; maximum: number }>;
 
-export type SpeechConfiguration = {
-  configured: boolean;
-  enabled: boolean;
-  message: string;
-  provider?: string;
-  model?: string;
-  supported_parameters?: string[];
-  parameter_ranges?: ParameterRanges;
+export type VoiceCatalog = {
+  status: "READY" | "NOT_CONFIGURED" | "UNAVAILABLE" | "QUERY_FAILED";
+  supplier: string | null;
+  model: string | null;
+  configuration_version: string | null;
+  options: { id: string; label: string; description: string | null }[];
+  supported_parameters: string[];
+  parameter_ranges: ParameterRanges;
+  error_code: string | null;
 };
 export type AudioBinding = {
   id: string;

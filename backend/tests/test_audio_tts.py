@@ -11,7 +11,13 @@ from sqlalchemy import func, select
 from test_audio_production import snapshot, wave_bytes
 from test_generation_delivery import deliver
 from test_model_services import account
-from test_native_media_integration import attempt_for, configure, project, provider_for
+from test_native_media_integration import (
+    attempt_for,
+    catalog_version,
+    configure,
+    project,
+    provider_for,
+)
 from test_text_contract_v2 import save_script
 
 from arclight.application.generation_artifacts import import_attempt
@@ -50,6 +56,7 @@ def tts_case(client, settings):
         "creation_key": str(uuid4()),
         "speaker": lines[0]["speaker"],
         "expected_version_no": 0,
+        "model_config_version": catalog_version(client, pid),
         "parameters": {"voice": "test-voice", "speed": 1.0},
         "output_spec": {"format": "wav"},
     }
@@ -172,6 +179,7 @@ def test_tts_creation_replay_keeps_budget_and_frozen_voice_after_new_defaults(
             **tts_case["voice_payload"],
             "creation_key": str(uuid4()),
             "expected_version_no": 1,
+            "model_config_version": catalog_version(client, tts_case["pid"]),
             "parameters": {"voice": "another-voice"},
         },
     )
@@ -258,6 +266,7 @@ def test_native_dialogue_flow_reuses_each_existing_tts_protocol(
             **tts_case["voice_payload"],
             "creation_key": str(uuid4()),
             "expected_version_no": 1,
+            "model_config_version": catalog_version(client, tts_case["pid"]),
             "parameters": {"voice": "test-voice"},
         },
     )

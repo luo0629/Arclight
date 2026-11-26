@@ -50,9 +50,8 @@ class LineAudioDecision(RenderContract):
         return value.strip()
 
 
-class RenderManifestCreate(RenderContract):
+class RenderManifestSettings(RenderContract):
     creation_key: UUID
-    profile: RenderProfile = "PREVIEW"
     subtitle_style: SubtitleStyle = Field(default_factory=SubtitleStyle)
     font_file_id: UUID | None = None
     line_audio_decisions: tuple[LineAudioDecision, ...] = Field(
@@ -65,6 +64,31 @@ class RenderManifestCreate(RenderContract):
         if len(set(identities)) != len(identities):
             raise ValueError("每条精确台词只能设置一次声音决定")
         return self
+
+
+class RenderManifestCreate(RenderManifestSettings):
+    profile: RenderProfile = "PREVIEW"
+
+
+class FormalExportDecision(RenderContract):
+    action: Literal["APPROVE", "REJECT"]
+    request_sha256: Sha256
+    comment: str = Field(default="", max_length=2000)
+
+
+class FormalExportContinue(RenderContract):
+    action: Literal["CONTINUE"]
+    request_sha256: Sha256
+
+
+class FormalExportRetry(RenderContract):
+    action: Literal["RETRY"]
+    retry_of: UUID
+
+
+FormalExportCommand = Annotated[
+    FormalExportDecision | FormalExportContinue | FormalExportRetry, Field(discriminator="action")
+]
 
 
 class OutputGeometry(RenderContract):

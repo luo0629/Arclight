@@ -1,7 +1,7 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import type { ContentVersion, Episode, Project } from "../src/types/api";
 
-test("从空剧集起稿、修改和准备配音后，只确认一次定稿制作", async ({ page }) => {
+async function createEpisode(page: Page) {
   const registration = await page.request.post("/api/v1/auth/register", {
     data: {
       email: `short-drama-${crypto.randomUUID()}@example.test`,
@@ -25,14 +25,24 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
   });
   expect(createdEpisode.status()).toBe(201);
   const episode: Episode = await createdEpisode.json();
-  const episodeApi = `/api/v1/episodes/${episode.id}`;
-  const episodePath = `/projects/${project.id}/episodes/${episode.id}`;
+  return {
+    headers,
+    project,
+    projectApi,
+    episodeApi: `/api/v1/episodes/${episode.id}`,
+    episodePath: `/projects/${project.id}/episodes/${episode.id}`,
+  };
+}
+
+test("从空剧集起稿、修改和准备配音后，只确认一次定稿制作", async ({ page }) => {
+  const { headers, projectApi, episodeApi, episodePath } =
+    await createEpisode(page);
   const speaker = "主角";
   const characterId = crypto.randomUUID();
-  const fontId = crypto.randomUUID();
   const runId = crypto.randomUUID();
   let savedScriptId: string | undefined;
   let savedVoice = false;
+  let checkBlocked = true;
   const preflightScripts: (string | null)[] = [];
   const approvals: string[] = [];
   const submissions: { body: Record<string, unknown>; key: string }[] = [];
@@ -57,6 +67,17 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
       preflightScripts.push(script);
       await route.fulfill({
         json: {
+          issues: checkBlocked
+            ? [
+                {
+                  phase: "PLANNING",
+                  code: "SHORT_DRAMA_TEXT_SERVICE_REQUIRED",
+                  service_kind: "TEXT",
+                  supplier: null,
+                  model: null,
+                },
+              ]
+            : [],
           needed_voices:
             script === savedScriptId && !savedVoice
               ? [{ speaker, character_asset_id: characterId }]
@@ -66,29 +87,19 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
       });
     },
   );
-  await page.route(`**${projectApi}/files?**`, (route) =>
+  await page.route(`**${projectApi}/audio-voice-catalog`, (route) =>
     route.fulfill({
-      json: [
-        {
-          id: fontId,
-          project_id: project.id,
-          original_name: "字幕字体.ttf",
-          media_type: "font/ttf",
-          rights_confirmed: true,
-        },
-      ],
+      json: {
+        status: "READY",
+        supplier: "测试供应商",
+        model: "test-tts",
+        configuration_version: "test-config:1",
+        options: [{ id: "test-voice", label: "测试音色", description: null }],
+        supported_parameters: ["voice"],
+        parameter_ranges: {},
+        error_code: null,
+      },
     }),
-  );
-  await page.route(
-    `**${projectApi}/generation-jobs/services/speech/configuration`,
-    (route) =>
-      route.fulfill({
-        json: {
-          configured: true,
-          message: "已配置语音服务",
-          supported_parameters: ["voice"],
-        },
-      }),
   );
   await page.route(`**${projectApi}/audio-voices**`, async (route) => {
     if (route.request().method() === "GET") {
@@ -100,6 +111,7 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
       speaker,
       character_asset_id: characterId,
       expected_version_no: 0,
+      model_config_version: "test-config:1",
       parameters: { voice: "test-voice" },
     });
     savedVoice = true;
@@ -118,6 +130,9 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
               status: "RUNNING",
               phase: "PLANNING",
               error_code: null,
+              issue: null,
+              revision: 1,
+              can_retry_balance: false,
             }
           : null,
       });
@@ -183,6 +198,18 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
   });
   await expect(confirm).toBeDisabled();
   await rights.check();
+  const blocker = production.getByRole("alert").filter({
+    hasText: "请配置用于制作规划和分镜的文字模型。",
+  });
+  await expect(blocker).toHaveText(/制作规划 · 文字模型/);
+  await expect(blocker).toContainText("模型服务配置");
+  await expect(confirm).toBeDisabled();
+  expect(submissions).toHaveLength(0);
+  checkBlocked = false;
+  await production
+    .getByRole("button", { name: "重新检查制作准备", exact: true })
+    .click();
+  await expect(blocker).toHaveCount(0);
   await expect(confirm).toBeEnabled();
 
   await page
@@ -215,17 +242,20 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
   expect(savedScriptId).not.toBe(scripts[0].id);
   await expect(production.getByText(/使用剧本 v2/)).toBeVisible();
   await rights.check();
-  await production.getByLabel("字幕字体", { exact: true }).selectOption(fontId);
-  await expect(confirm).toBeDisabled();
+  await expect(production.getByLabel("字幕字体", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(production.getByText(/自动分配/)).toBeVisible();
+  await expect(confirm).toBeEnabled();
 
+  await production.getByText("手动选择音色", { exact: true }).click();
   const voice = production.getByRole("region", {
     name: `${speaker}的音色`,
     exact: true,
   });
   await voice.getByText(`为${speaker}保存新音色`, { exact: true }).click();
-  await voice
-    .getByLabel("供应商音色名称或 ID", { exact: true })
-    .fill("test-voice");
+  await voice.getByLabel("供应商音色", { exact: true }).click();
+  await page.getByRole("option", { name: "测试音色", exact: true }).click();
   await voice
     .getByRole("button", { name: "保存新音色版本", exact: true })
     .click();
@@ -243,7 +273,6 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
     {
       body: {
         script_version_id: savedScriptId,
-        font_file_id: fontId,
         generated_media_rights_confirmed: true,
         impact_digest: expect.stringMatching(/^[a-f0-9]{64}$/),
       },
@@ -251,4 +280,80 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
     },
   ]);
   expect(approvals).toEqual([]);
+});
+
+test("短剧进度显示不兼容模型，并引导核对原单或余额恢复", async ({ page }) => {
+  const { episodeApi, episodePath } = await createEpisode(page);
+  const runId = crypto.randomUUID();
+  const generationId = crypto.randomUUID();
+  const retryPath = `/api/v1/runs/${runId}/short-drama/retry`;
+  const retryRequests: unknown[] = [];
+  let issue = {
+    phase: "SHOTS",
+    code: "SHORT_DRAMA_FIRST_FRAME_UNSUPPORTED",
+    service_kind: "VIDEO",
+    supplier: "示例供应商",
+    model: "test-video",
+    task: { id: generationId, family: "GENERATION" },
+  };
+  let queued = false;
+  await page.route(`**${episodeApi}/short-drama`, (route) => {
+    const reconciling = issue.code === "SHORT_DRAMA_VISUAL_RESULT_UNKNOWN";
+    return route.fulfill({
+      json: {
+        run_id: runId,
+        status: queued ? "QUEUED" : reconciling ? "RUNNING" : "FAILED",
+        phase: queued ? "PLANNING" : reconciling ? "RECONCILING" : "FAILED",
+        error_code: queued || reconciling ? null : issue.code,
+        issue: queued ? null : issue,
+        revision: 7,
+        can_retry_balance:
+          !queued && issue.code === "ACCOUNT_BALANCE_INSUFFICIENT",
+      },
+    });
+  });
+  await page.route(`**${retryPath}`, async (route) => {
+    expect(route.request().headers()["idempotency-key"]).toMatch(
+      /^[a-f0-9-]{36}$/,
+    );
+    retryRequests.push(route.request().postDataJSON());
+    queued = true;
+    await route.fulfill({
+      status: 202,
+      json: { run_id: runId, status: "QUEUED" },
+    });
+  });
+
+  await page.goto(episodePath);
+  const progress = page.getByRole("region", {
+    name: "短剧制作进度",
+    exact: true,
+  });
+  const diagnosis = progress.getByRole("alert");
+  await expect(diagnosis).toContainText(
+    "镜头制作 · 视频模型 · 示例供应商 · test-video",
+  );
+  await expect(diagnosis).toContainText("不支持使用镜头照片作为首帧");
+  await expect(diagnosis).toContainText("模型服务配置");
+
+  issue = { ...issue, code: "SHORT_DRAMA_VISUAL_RESULT_UNKNOWN" };
+  await page.reload();
+  await expect(diagnosis).toContainText("在供应商后台核对原请求");
+  await expect(
+    progress.getByRole("link", { name: "查看原任务" }),
+  ).toHaveAttribute(
+    "href",
+    `${episodePath}?view=tasks&generation_job=${generationId}`,
+  );
+  const resume = progress.getByRole("button", { name: "充值后继续制作" });
+  await expect(resume).toHaveCount(0);
+
+  issue = { ...issue, code: "ACCOUNT_BALANCE_INSUFFICIENT" };
+  await page.reload();
+  await expect(
+    diagnosis.getByText("账户余额不足", { exact: true }),
+  ).toBeVisible();
+  await resume.click();
+  await expect(progress).toContainText("正在规划制作");
+  expect(retryRequests).toEqual([{ expected_revision: 7 }]);
 });

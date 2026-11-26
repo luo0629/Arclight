@@ -72,7 +72,7 @@ export default function SubtitleFontPicker({
           disabled={disabled || mutation.busy || files.loading}
           onChange={(e) => onChange(e.target.value)}
         >
-          <option value="">请选择已授权字体</option>
+          <option value="">内置中文黑体（默认）</option>
           {fonts.map((font) => (
             <option key={font.id} value={font.id}>
               {font.original_name}

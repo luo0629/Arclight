@@ -313,6 +313,7 @@ def test_three_authorized_original_tts_lines(settings, client):
                     protocol=inputs.protocol,
                     maximum_cost_per_output=inputs.quote,
                     pricing_version=inputs.pricing_version,
+                    speech_voice_options=({"id": inputs.voice, "label": inputs.voice},),
                 )
             ]
             key = SecretStr(inputs.key_file.read_text(encoding="utf-8").strip())
@@ -370,6 +371,9 @@ def test_three_authorized_original_tts_lines(settings, client):
             assert response.status_code == 200
             lines = response.json()
             assert tuple((line["speaker"], line["text"]) for line in lines) == ORIGINAL_LINES
+            catalog = client.get(f"/api/v1/projects/{report['project_id']}/audio-voice-catalog")
+            assert catalog.status_code == 200 and catalog.json()["status"] == "READY"
+            model_config_version = catalog.json()["configuration_version"]
             voices = {}
             for speaker in dict.fromkeys(speaker for speaker, _ in ORIGINAL_LINES):
                 response = client.post(
@@ -378,6 +382,7 @@ def test_three_authorized_original_tts_lines(settings, client):
                         "creation_key": str(uuid4()),
                         "speaker": speaker,
                         "expected_version_no": 0,
+                        "model_config_version": model_config_version,
                         "parameters": {"voice": inputs.voice},
                         "output_spec": {"format": "wav"},
                     },

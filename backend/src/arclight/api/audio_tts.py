@@ -6,7 +6,7 @@ from uuid import UUID
 from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import func, select, tuple_
 
-from arclight.api.dependencies import Actor, Database
+from arclight.api.dependencies import Actor, Database, ShortSessionActor
 from arclight.application.audio_production import require_line, require_snapshot
 from arclight.application.audio_tts import (
     create_tts,
@@ -16,6 +16,7 @@ from arclight.application.audio_tts import (
     register_result,
     require_tts,
 )
+from arclight.application.audio_voice_catalog import query_voice_catalog, read_voice_catalog_source
 from arclight.application.audio_voice_profiles import (
     character_asset,
     get_profile,
@@ -36,13 +37,22 @@ from arclight.domain.audio_voice_profiles import (
     VoiceProfileCreate,
     VoiceProfileRead,
 )
-from arclight.domain.audio_voices import AudioVoiceCreate, AudioVoiceRead
+from arclight.domain.audio_voices import AudioVoiceCatalogRead, AudioVoiceCreate, AudioVoiceRead
 from arclight.persistence.audio_tts import AudioTTSRequest
 from arclight.persistence.audio_voices import AudioVoiceVersion
 
 router = APIRouter(tags=["audio-production"])
 Limit = Annotated[int, Query(ge=1, le=100)]
 Offset = Annotated[int, Query(ge=0, le=100000)]
+
+
+@router.get("/projects/{project_id}/audio-voice-catalog")
+def voice_catalog(
+    project_id: UUID, request: Request, actor: ShortSessionActor
+) -> AudioVoiceCatalogRead:
+    with request.app.state.session_factory() as db:
+        source = read_voice_catalog_source(db, request.app.state.settings, project_id, actor)
+    return query_voice_catalog(source)
 
 
 @router.post("/projects/{project_id}/audio-voices", status_code=201)

@@ -11,7 +11,7 @@ from sqlalchemy.engine import Connection
 from test_model_services import account
 from test_service_credentials import new_key
 
-from arclight.application.model_services import require_text_snapshot
+from arclight.application.model_services import require_text_snapshot, run_settings
 from arclight.application.service_credentials import read_credential, store_credential
 from arclight.core.service_keys import keyring
 from arclight.persistence.models import ModelService, ServiceCredential, WorkflowRun
@@ -41,6 +41,7 @@ def test_migrate_active_credentials_and_explicit_text_protocol(client, settings,
         "base_url": "https://legacy.example/v1",
         "model": "text-model",
         "encrypted_key": token,
+        "response_format": "json_object",
     }
     command.downgrade(migrated, "0073")
 
@@ -87,7 +88,7 @@ def test_migrate_active_credentials_and_explicit_text_protocol(client, settings,
                     model=frozen["model"],
                     supplier="custom",
                     supplier_name="",
-                    response_format="json_schema",
+                    response_format="json_object",
                     revision=4,
                 )
                 for owner, kind, protocol, ciphertext, credential_id in rows
@@ -96,9 +97,10 @@ def test_migrate_active_credentials_and_explicit_text_protocol(client, settings,
 
     command.upgrade(migrated, "head")
     with factory() as db:
-        assert "encrypted_key" not in {
+        active_columns = {
             column["name"] for column in inspect(db.connection()).get_columns("model_services")
         }
+        assert {"encrypted_key", "response_format"}.isdisjoint(active_columns)
         text_profile = db.get(ModelService, ids[user_id, "text"])
         image_profile = db.get(ModelService, ids[user_id, "image"])
         speech_profile = db.get(ModelService, ids[user_id, "speech"])
@@ -120,8 +122,10 @@ def test_migrate_active_credentials_and_explicit_text_protocol(client, settings,
         assert db.execute(frozen_input).scalar_one() == original_input
         old_snapshot = db.get(WorkflowRun, run_id).input_json["_text_service"]
         assert read_credential(db, settings, old_snapshot) == "legacy-secret"
+        assert run_settings(settings, old_snapshot, db).llm_response_format == "json_object"
         current = require_text_snapshot(db, str(user_id), settings)
         assert current["protocol"] == "openai_chat"
+        assert current["response_format"] == "json_schema"
         assert current["credential_id"] == str(credential.id)
         assert "encrypted_key" not in current
         assert read_credential(db, settings, current) == "legacy-secret"
@@ -142,5 +146,6 @@ def test_migrate_active_credentials_and_explicit_text_protocol(client, settings,
         )
         assert row["encrypted_key"] is None
         assert row["credential_id"] == credential.id and row["protocol"] == "openai_chat"
+        assert row["response_format"] == "json_schema"
         assert db.execute(frozen_input).scalar_one() == original_input
         assert read_credential(db, settings, current) == read_credential(db, settings, frozen)

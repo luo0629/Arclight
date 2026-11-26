@@ -6,13 +6,12 @@ from uuid import UUID, uuid4
 
 import httpx
 import pytest
-from render_admission_helpers import ready_manifest, request_export
+from render_admission_helpers import approve_export_fixture, ready_manifest
 from render_job_helpers import job_case, read, render_case, review_case, run, submit, timeline_case
 from render_manifest_helpers import result_case
 from sqlalchemy import select
 from test_collaboration import create_episode, create_project, register
 from test_file_transfers import transfer_setup
-from test_human_reviews import decide, resume
 
 from arclight.persistence.models import AuditEvent, StoredFile
 from arclight.storage.objects import ObjectStorage
@@ -153,10 +152,7 @@ def test_formal_render_history_keeps_profile_without_claiming_final_delivery(
     client, episode, render_case
 ):
     manifest, _ = ready_manifest(client, render_case, profile="FORMAL")
-    review = request_export(client, manifest)
-    decision = decide(client, review)
-    assert decision.status_code == 200, decision.text
-    assert resume(client, review, decision.json()).status_code == 200
+    assert approve_export_fixture(client, manifest)["result_json"]["status"] == "APPROVED"
     value, _ = submit(client, manifest)
     assert run(client, value) == "SUCCEEDED"
     final = read(client, value)

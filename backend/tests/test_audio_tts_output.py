@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 from test_audio_import import compressed_voice
 from test_audio_tts import declaration, finish_audio, tts_case
 from test_audio_tts_boundaries import boundary_state
-from test_native_media_integration import configure
+from test_native_media_integration import catalog_version, configure
 
 from arclight.application.render_inputs import file_storage
 from arclight.media.audio import inspect_audio
@@ -96,6 +96,7 @@ def output_voice(client, settings, case, output_spec):
             **case["voice_payload"],
             "creation_key": str(uuid4()),
             "expected_version_no": 1,
+            "model_config_version": catalog_version(client, case["pid"]),
             "output_spec": output_spec,
         },
     )

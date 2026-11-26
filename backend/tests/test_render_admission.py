@@ -5,18 +5,17 @@ from uuid import UUID, uuid4
 
 import pytest
 from render_admission_helpers import (
+    approve_export_fixture,
     assert_blocked,
     edited,
     ready_manifest,
     render_path,
-    request_export,
 )
 from render_manifest_helpers import manifest, render_case, review_case, timeline_case
 from sqlalchemy.exc import DBAPIError
 from test_continuity_review_contracts import with_issue
 from test_continuity_reviews import saved
 from test_continuity_selection import admission_fixture
-from test_human_reviews import decide, resume
 
 from arclight.domain.versions import digest
 from arclight.persistence.models import AssetVersion, Project, Script, Shot, StoredFile, VisualAsset
@@ -136,10 +135,7 @@ def test_actual_objects_are_rechecked_even_after_approved_resume(
 ):
     value, _ = ready_manifest(client, render_case, profile=profile)
     if profile == "FORMAL":
-        row = request_export(client, value)
-        decision = decide(client, row)
-        assert decision.status_code == 200, decision.text
-        assert resume(client, row, decision.json()).status_code == 200
+        assert approve_export_fixture(client, value)["result_json"]["status"] == "APPROVED"
     assert client.post(render_path(value, "admission")).status_code == 200
     source = next(item["file"] for item in value["snapshot"]["sources"] if item["file"])
     with client.app.state.session_factory() as db:

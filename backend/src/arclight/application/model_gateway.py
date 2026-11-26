@@ -303,6 +303,11 @@ def invoke[T](
                 "Adapter execution crashed; call retained for reconciliation"
             ) from None
         rejections = {
+            "INPUT_INVALID": (
+                "INPUT_INVALID",
+                "模型供应商拒绝了请求，请核对模型 ID、接口协议及输入能力",
+                422,
+            ),
             "PROVIDER_INSUFFICIENT_BALANCE": (
                 "ACCOUNT_BALANCE_INSUFFICIENT",
                 "账户余额不足",

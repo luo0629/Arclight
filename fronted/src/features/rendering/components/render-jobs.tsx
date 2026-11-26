@@ -5,20 +5,15 @@ import { useSearchParams } from "next/navigation";
 import { isResourceId } from "@/lib/routes";
 import { Button } from "@/components/ui/button";
 import { Notice } from "@/components/ui-kit";
-import { message } from "@/lib/api/client";
+import { ApiError } from "@/lib/api/client";
 import { renderingApi } from "../api";
-import type {
-  HumanReview,
-  RenderAdmission,
-  RenderJob,
-  RenderManifest,
-} from "../types";
+import type { FormalExportAction, RenderJob, RenderManifest } from "../types";
+import { matchesExportReview } from "../formal-export-intent";
 import useRenderList from "../hooks/use-render-list";
 import useRenderDetail from "../hooks/use-render-detail";
 import useRenderMutation, {
   pendingCreationKey,
 } from "../hooks/use-render-mutation";
-import RenderReviewActions from "./render-review-actions";
 import { cleanupLabel, date, renderLabel } from "./render-format";
 
 const idOf = (row: { id: string }) => row.id;
@@ -31,6 +26,8 @@ export default function RenderJobs({
   unavailable,
   refresh,
   onRendered,
+  onExportFinished,
+  onExportRetry,
   initialJob,
 }: {
   manifest: RenderManifest;
@@ -39,6 +36,8 @@ export default function RenderJobs({
   unavailable: (cause: unknown) => void;
   refresh: number;
   onRendered: () => void;
+  onExportFinished: (manifestId: string) => void;
+  onExportRetry: (manifestId: string) => void;
   initialJob?: RenderJob;
 }) {
   const fetchJobs = useCallback(
@@ -80,39 +79,41 @@ export default function RenderJobs({
     },
     [jobs.replace],
   );
-  const [review, setReview] = useState<HumanReview | null>(null);
-  const requestedReview = useSearchParams().get("review");
-  const [reviewError, setReviewError] = useState("");
-  useEffect(() => {
-    if (!requestedReview || !isResourceId(requestedReview)) return;
-    const controller = new AbortController();
-    setReview(null);
-    setReviewError("");
-    void renderingApi
-      .getHumanReview(requestedReview, controller.signal)
-      .then((next) => {
-        if (controller.signal.aborted) return;
-        if (
-          next.id !== requestedReview ||
-          next.snapshot.kind !== "EXPORT" ||
-          next.snapshot.object_id !== manifest.id ||
-          next.snapshot.project_id !== manifest.project_id
-        )
-          throw new Error("审核请求与当前渲染清单不一致。");
-        setReview(next);
-      })
-      .catch((cause: unknown) => {
-        if (!controller.signal.aborted) {
-          setReviewError(message(cause));
-          unavailable(cause);
-        }
-      });
-    return () => controller.abort();
-  }, [requestedReview, manifest.id, manifest.project_id, unavailable]);
-  const [admission, setAdmission] = useState<RenderAdmission | null>(null);
-  const [admissionError, setAdmissionError] = useState("");
   const mutation = useRenderMutation(manifest.id, writable, unavailable);
   const formal = manifest.snapshot.output.name === "FORMAL";
+  const search = useSearchParams();
+  const requestedReview = search.get("review");
+  const pinnedReview =
+    requestedReview &&
+    isResourceId(requestedReview) &&
+    (search.get("render_manifest") === manifest.id ||
+      initialJob?.manifest_id === manifest.id)
+      ? requestedReview
+      : null;
+  const readReview = useCallback(
+    async (signal: AbortSignal) => {
+      if (pinnedReview) {
+        const next = await renderingApi.getHumanReview(pinnedReview, signal);
+        if (next.id !== pinnedReview || !matchesExportReview(next, manifest))
+          throw new Error("审核请求与当前渲染清单不一致。");
+        return next;
+      }
+      const rows = await renderingApi.listManifestReviews(
+        manifest.project_id,
+        manifest.id,
+        signal,
+      );
+      return rows.find((next) => matchesExportReview(next, manifest)) ?? null;
+    },
+    [manifest, pinnedReview],
+  );
+  const reviewState = useRenderDetail(
+    manifest.id,
+    readReview,
+    unavailable,
+    formal,
+  );
+  const review = reviewState.data;
   const seen = useRef(new Set<string>());
   const pollGeneration = useRef(0);
   const rowsRef = useRef(jobs.rows);
@@ -125,6 +126,27 @@ export default function RenderJobs({
       }
   }, [jobRows, onRendered]);
   const hasActive = jobRows.some((job) => activeStatuses.includes(job.status));
+  const rejected = review?.decision?.decision_json.decision === "REJECT";
+  const approved = review?.decision?.decision_json.decision === "APPROVE";
+  useEffect(() => {
+    if (
+      formal &&
+      !mutation.busy &&
+      !jobs.loading &&
+      (rejected || (!hasActive && jobRows.length > 0))
+    ) {
+      onExportFinished(manifest.id);
+    }
+  }, [
+    formal,
+    hasActive,
+    jobRows.length,
+    jobs.loading,
+    manifest.id,
+    mutation.busy,
+    onExportFinished,
+    rejected,
+  ]);
   useEffect(() => {
     if (!hasActive) return;
     const controller = new AbortController();
@@ -164,29 +186,23 @@ export default function RenderJobs({
       document.removeEventListener("visibilitychange", poll);
     };
   }, [hasActive, manifest.id, replaceJob, jobs.load, unavailable]);
-  async function submit(retryOf?: string) {
-    if (formal && (!admission || (review && review.status !== "RESUMED")))
-      return;
+  async function submitPreview(retryOf?: string) {
+    if (formal) return;
     const pending = pendingCreationKey(
       `job:${manifest.id}:${retryOf ?? "new"}`,
     );
     await mutation.mutate(
       async (signal) => {
-        try {
-          const job = await renderingApi.createJob(
-            manifest.id,
-            {
-              creation_key: pending.key,
-              ...(retryOf ? { retry_of: retryOf } : {}),
-            },
-            signal,
-          );
-          pending.clear();
-          return job;
-        } catch (cause) {
-          if (!signal.aborted && formal) setAdmission(null);
-          throw cause;
-        }
+        const job = await renderingApi.createJob(
+          manifest.id,
+          {
+            creation_key: pending.key,
+            ...(retryOf ? { retry_of: retryOf } : {}),
+          },
+          signal,
+        );
+        pending.clear();
+        return job;
       },
       (job) => {
         jobs.prepend(job);
@@ -195,76 +211,67 @@ export default function RenderJobs({
       "渲染已提交。刷新页面后仍可从本清单的任务记录继续查看。",
     );
   }
-  async function checkAdmission() {
-    setAdmissionError("");
+  const canActOnFormal =
+    writable && !!review && !review.automatic_production_id;
+  const canResumeFormal =
+    canActOnFormal && approved && (owner || !!review?.resume);
+  async function performFormal(body: FormalExportAction) {
+    if (!canActOnFormal || !review) return;
+    if (body.action === "APPROVE" || body.action === "REJECT") {
+      if (!owner) return;
+    } else if (!canResumeFormal) return;
     await mutation.mutate(
       async (signal) => {
+        if (body.action === "RETRY") onExportRetry(manifest.id);
         try {
-          return await renderingApi.getAdmission(manifest.id, signal);
+          const result = await renderingApi.performFormalExport(
+            manifest.id,
+            body,
+            signal,
+          );
+          if (
+            result.review.id !== review.id ||
+            result.review.request_sha256 !== review.request_sha256 ||
+            !matchesExportReview(result.review, manifest) ||
+            (result.job &&
+              (result.job.manifest_id !== manifest.id ||
+                result.job.manifest_sha256 !== manifest.content_sha256 ||
+                result.job.profile !== "FORMAL"))
+          )
+            throw new Error("导出结果与当前渲染清单不一致。");
+          return result;
         } catch (cause) {
-          if (!signal.aborted) {
-            setAdmission(null);
-            setAdmissionError(message(cause));
+          if (
+            !signal.aborted &&
+            !(
+              cause instanceof ApiError &&
+              [401, 403, 404].includes(cause.status)
+            )
+          ) {
+            if (
+              cause instanceof ApiError &&
+              ["RENDER_INPUT_CHANGED", "REVIEW_INPUT_CHANGED"].includes(
+                cause.code,
+              )
+            ) {
+              onExportFinished(manifest.id);
+            }
+            reviewState.refresh();
+            void jobs.load();
           }
           throw cause;
         }
       },
-      setAdmission,
-      "本清单当前准入检查通过，实际执行时仍会再次复验。",
-      false,
-    );
-  }
-  async function requestExport() {
-    if (!owner) return;
-    setAdmission(null);
-    await mutation.mutate(
-      (signal) => renderingApi.exportReview(manifest.id, signal),
-      setReview,
-      "正式导出审核已登记，请核对精确清单后作出决定。",
-    );
-  }
-  async function decide(decision: "APPROVE" | "REJECT", comment: string) {
-    if (!review || !owner) return;
-    setAdmission(null);
-    await mutation.mutate(
-      async (signal) => {
-        await renderingApi.decideReview(review, decision, comment, signal);
-        return renderingApi.getHumanReview(review.id, signal);
-      },
-      setReview,
-      "正式导出决定已保存，请单独恢复本次导出。",
-    );
-  }
-  async function resume() {
-    if (!review || !owner) return;
-    await mutation.mutate(
-      async (signal) => {
-        await renderingApi.resumeReview(review, signal);
-        const nextReview = await renderingApi.getHumanReview(review.id, signal);
-        let nextAdmission: RenderAdmission | null = null;
-        let nextError = "";
-        if (
-          nextReview.status === "RESUMED" &&
-          nextReview.decision?.decision_json.decision === "APPROVE"
-        ) {
-          try {
-            nextAdmission = await renderingApi.getAdmission(
-              manifest.id,
-              signal,
-            );
-          } catch (cause) {
-            if (signal.aborted) throw cause;
-            nextError = message(cause);
-          }
+      (result) => {
+        reviewState.setData(result.review);
+        if (result.job) {
+          jobs.prepend(result.job);
+          setSelectedId(result.job.id);
         }
-        return { nextReview, nextAdmission, nextError };
       },
-      (next) => {
-        setReview(next.nextReview);
-        setAdmission(next.nextAdmission);
-        setAdmissionError(next.nextError);
-      },
-      "正式导出审核已恢复，当前准入结论已重新核对。",
+      body.action === "REJECT"
+        ? "已拒绝本次导出。"
+        : "已提交导出，正在等待渲染。",
     );
   }
   async function cancel(job: RenderJob) {
@@ -275,71 +282,101 @@ export default function RenderJobs({
       "取消请求已保存，执行器会在安全边界停止并记录清理状态。",
     );
   }
-  const canSubmit =
-    writable &&
-    !mutation.busy &&
-    (!formal || !!admission) &&
-    (!review ||
-      (review.status === "RESUMED" &&
-        review.decision?.decision_json.decision === "APPROVE"));
+  const canDecide =
+    owner &&
+    canActOnFormal &&
+    review?.status === "WAITING_REVIEW" &&
+    !review.decision;
+  const canContinue =
+    canResumeFormal &&
+    !review?.blocking_code &&
+    !jobs.loading &&
+    !jobs.error &&
+    jobRows.length === 0;
   return (
     <section aria-label="渲染任务" className="flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap gap-2">
-        <Button disabled={!canSubmit} onClick={() => void submit()}>
-          提交渲染
-        </Button>
-        {formal && writable && (
+        {!formal && (
           <Button
-            variant="outline"
-            disabled={mutation.busy}
-            onClick={() => void checkAdmission()}
+            disabled={!writable || mutation.busy}
+            onClick={() => void submitPreview()}
           >
-            检查正式导出条件
-          </Button>
-        )}
-        {formal && owner && writable && (
-          <Button
-            variant="outline"
-            disabled={mutation.busy}
-            onClick={() => void requestExport()}
-          >
-            申请正式导出审核
+            提交渲染
           </Button>
         )}
         <Button
           variant="ghost"
-          disabled={jobs.loading || mutation.busy}
-          onClick={() => void jobs.load()}
+          disabled={jobs.loading || mutation.busy || reviewState.loading}
+          onClick={() => {
+            void jobs.load();
+            if (formal) reviewState.refresh();
+          }}
         >
           刷新渲染任务
         </Button>
       </div>
-      {formal && (
-        <p className="text-sm text-muted-foreground">
-          正式渲染需要拥有者批准此精确清单并独立恢复。准入检查通过只允许执行，正式交付还需成片机器报告与必要的警告确认。
-        </p>
-      )}
-      {admission && (
-        <Notice tone="success">
-          本清单当前准入已通过。执行时仍将复验素材、批准与权限。
-        </Notice>
-      )}
-      {admissionError && (
-        <Notice tone="error">正式导出条件未满足：{admissionError}</Notice>
-      )}
       {mutation.error && <Notice tone="error">{mutation.error}</Notice>}
       {mutation.notice && <Notice tone="success">{mutation.notice}</Notice>}
-      {reviewError && <Notice tone="error">{reviewError}</Notice>}
-      {review && (
-        <RenderReviewActions
-          key={review.id}
-          review={review}
-          purpose="export"
-          allowed={owner && writable}
-          busy={mutation.busy}
-          onDecision={decide}
-          onResume={resume}
-        />
+      {reviewState.error && <Notice tone="error">{reviewState.error}</Notice>}
+      {review && !review.automatic_production_id && !jobRows.length && (
+        <section
+          aria-label="正式导出审核"
+          className="flex flex-col gap-3 rounded-xl border p-4"
+        >
+          {rejected ? (
+            <p>本次导出已拒绝。</p>
+          ) : (
+            <>
+              <h4>{approved ? "本次导出已确认" : "等待项目所有者确认导出"}</h4>
+              {review.blocking_code && (
+                <Notice tone="error">
+                  本次导出受阻：{review.blocking_code}。
+                </Notice>
+              )}
+              {canDecide && (
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    disabled={mutation.busy || !!review.blocking_code}
+                    onClick={() =>
+                      void performFormal({
+                        action: "APPROVE",
+                        request_sha256: review.request_sha256,
+                      })
+                    }
+                  >
+                    确认并导出 MP4
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={mutation.busy}
+                    onClick={() =>
+                      void performFormal({
+                        action: "REJECT",
+                        request_sha256: review.request_sha256,
+                      })
+                    }
+                  >
+                    拒绝本次导出
+                  </Button>
+                </div>
+              )}
+              {canContinue && (
+                <Button
+                  className="self-start"
+                  disabled={mutation.busy}
+                  onClick={() =>
+                    void performFormal({
+                      action: "CONTINUE",
+                      request_sha256: review.request_sha256,
+                    })
+                  }
+                >
+                  继续提交本次导出
+                </Button>
+              )}
+            </>
+          )}
+        </section>
       )}
       <h4>本清单的渲染记录</h4>
       {selectedId && !selected && !jobs.loading && jobRows.length > 0 && (
@@ -390,10 +427,14 @@ export default function RenderJobs({
           job={selected}
           writable={writable}
           busy={mutation.busy}
-          canRetry={canSubmit}
+          canRetry={!formal || canResumeFormal}
           unavailable={unavailable}
           onCancel={cancel}
-          onRetry={() => submit(selected.id)}
+          onRetry={() =>
+            formal
+              ? performFormal({ action: "RETRY", retry_of: selected.id })
+              : submitPreview(selected.id)
+          }
         />
       )}
     </section>

@@ -8,10 +8,12 @@ from art_direction_support import install_direction_model, reference_set
 from sqlalchemy import select
 from test_collaboration import create_episode, create_project, register
 from test_director_revision import install_revision
+from test_native_media_integration import catalog_version, configure
 from test_producer_planning import install_plan_model
 from test_producer_planning import model_service as model_service
 from test_short_drama_delivery import (
     approve_recordings,
+    authorized_run,
     bind_delivery_visuals,
     delivery_font,
 )
@@ -25,14 +27,25 @@ from test_text_contract_v2 import legacy_script, save_script
 
 from arclight.application.agent_limits import action_usage
 from arclight.application.agent_workflows import WorkflowRecoveryFailed
+from arclight.application.audio_voice_catalog import query_voice_catalog, read_voice_catalog_source
 from arclight.application.producer_interaction import command_rows
+from arclight.application.production_versions import find_binding
 from arclight.application.render_execution import execute_render
 from arclight.application.runtime import execute_run
+from arclight.application.short_drama_audio import (
+    DIALOGUE_PLAN,
+    publish_voice_casting,
+    read_voice_casting_input,
+)
 from arclight.application.short_drama_delivery import queue_short_drama_delivery
+from arclight.application.short_drama_diagnostics import DETAIL, ShortDramaFailure
 from arclight.application.short_drama_production import advance_pending, set_progress
+from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.timelines import TimelineCreate
+from arclight.domain.versions import SHORT_DRAMA_VOICE_INPUT
 from arclight.persistence.agent_limits import AgentRunLimit
+from arclight.persistence.audio_voices import AudioVoiceVersion
 from arclight.persistence.base import utcnow
 from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
 from arclight.persistence.models import (
@@ -65,7 +78,89 @@ def progress(client, episode):
     return client.get(f"/api/v1/episodes/{episode['id']}/short-drama").json()
 
 
-def test_confirmation_is_atomic_and_replay_preserves_exact_grant(client, episode, settings):
+@pytest.fixture
+def configured_episode(client, settings):
+    register(client, "short-drama-configured@example.com")
+    episode = create_episode(client, create_project(client))
+    configure(client, settings)
+    return episode
+
+
+def test_preflight_identifies_missing_models_before_any_work(client, settings):
+    register(client, "short-drama-preflight@example.com")
+    episode = create_episode(client, create_project(client))
+    content = legacy_script()
+    content["scenes"][0]["dialogue"] = []
+    script = save_script(client, episode, content=content, approve=False)
+    settings.provider = "account"
+
+    readiness = client.get(
+        f"/api/v1/episodes/{episode['id']}/short-drama/preflight",
+        params={"script_version_id": script["id"]},
+    )
+    assert readiness.status_code == 200, readiness.text
+    assert [
+        (issue["phase"], issue["service_kind"], issue["code"])
+        for issue in readiness.json()["issues"]
+    ] == [
+        ("PLANNING", "TEXT", "SHORT_DRAMA_TEXT_SERVICE_REQUIRED"),
+        ("SHOTS", "IMAGE", "SHORT_DRAMA_VISUAL_SERVICE_REQUIRED"),
+    ]
+    denied = create_short_drama(client, episode, script)
+    assert denied.status_code == 422, denied.text
+    assert denied.json()["error"]["code"] == "SHORT_DRAMA_TEXT_SERVICE_REQUIRED"
+    assert progress(client, episode) is None
+    with client.app.state.session_factory() as db:
+        assert db.get(Script, UUID(script["id"])).status == "READY_FOR_REVIEW"
+
+
+def test_saved_failure_details_are_visible_only_to_the_service_owner(client, configured_episode):
+    episode = configured_episode
+    auth = client.headers["Authorization"]
+    content = legacy_script()
+    content["scenes"][0]["dialogue"] = []
+    script = save_script(client, episode, content=content)
+    queued = create_short_drama(client, episode, script)
+    assert queued.status_code == 202, queued.text
+    run_id = UUID(queued.json()["run_id"])
+    with client.app.state.session_factory.begin() as db:
+        run = db.get(WorkflowRun, run_id)
+        issue = ShortDramaFailure(
+            DomainError("GATEWAY_PROVIDER_AUTHENTICATION_FAILED", "internal provider details"),
+            service_kind="IMAGE",
+            service={"supplier": "private-supplier", "model": "private-model"},
+            service_owner=run.input_json["created_by"],
+        )
+        run.status, run.error_code = "FAILED", issue.code
+        set_progress(db, run, "FAILED", stopped_phase="SHOTS", **{DETAIL: issue.record("SHOTS")})
+    assert progress(client, episode)["issue"] == {
+        "phase": "SHOTS",
+        "code": "GATEWAY_PROVIDER_AUTHENTICATION_FAILED",
+        "service_kind": "IMAGE",
+        "supplier": "private-supplier",
+        "model": "private-model",
+    }
+    member_email = "short-drama-diagnostic-viewer@example.com"
+    member = register(client, member_email)
+    client.headers["Authorization"] = auth
+    added = client.post(
+        f"/api/v1/projects/{episode['project_id']}/members",
+        json={"email": member_email, "role": "viewer"},
+    )
+    assert added.status_code == 201, added.text
+    client.headers["Authorization"] = "Bearer " + member["access_token"]
+    issue = progress(client, episode)["issue"]
+    assert issue["code"] == "GATEWAY_PROVIDER_AUTHENTICATION_FAILED"
+    assert issue["supplier"] is None and issue["model"] is None
+    events = client.get(f"/api/v1/runs/{run_id}/events")
+    assert events.status_code == 200, events.text
+    assert "private-model" not in events.text and DETAIL not in events.text
+
+
+def test_confirmation_is_atomic_and_replay_preserves_exact_grant(
+    client, configured_episode, settings
+):
+    episode = configured_episode
     script = save_script(client, episode, approve=False)
     font_id = delivery_font(client, episode, script)
     options = {"font_file_id": str(font_id)}
@@ -76,7 +171,7 @@ def test_confirmation_is_atomic_and_replay_preserves_exact_grant(client, episode
     assert denied.json()["error"]["code"] == "SHORT_DRAMA_RIGHTS_REQUIRED"
     denied = create_short_drama(client, episode, script, **options)
     assert denied.status_code == 409, denied.text
-    assert denied.json()["error"]["code"] == "SHORT_DRAMA_VOICE_REQUIRED"
+    assert denied.json()["error"]["code"] == "SHORT_DRAMA_SPEECH_SERVICE_REQUIRED"
     assert progress(client, episode) is None
     factory = client.app.state.session_factory
     with factory() as db:
@@ -111,6 +206,93 @@ def test_confirmation_is_atomic_and_replay_preserves_exact_grant(client, episode
     assert progress(client, episode)["phase"] == "PLANNING"
 
 
+def test_admission_freezes_only_missing_voice_roles(client, configured_episode, settings):
+    episode = configured_episode
+    project_id = UUID(episode["project_id"])
+    configure(client, settings, "speech", "openai_tts")
+    content = legacy_script()
+    content["characters"].append("访客")
+    content["scenes"][0]["dialogue"].append({"speaker": "访客", "text": "等候多时。"})
+    script = save_script(client, episode, content=content, approve=False)
+
+    def save_voice(speaker, voice):
+        saved = client.post(
+            f"/api/v1/projects/{project_id}/audio-voices",
+            json={
+                "creation_key": str(uuid4()),
+                "speaker": speaker,
+                "expected_version_no": 0,
+                "model_config_version": catalog_version(client, project_id),
+                "parameters": {"voice": voice},
+            },
+        )
+        assert saved.status_code == 201, saved.text
+        return saved.json()["id"]
+
+    existing = save_voice("主角", "test-voice")
+    key = uuid4().hex
+    queued = create_short_drama(client, episode, script, key=key)
+    assert queued.status_code == 202, queued.text
+    replay = create_short_drama(client, episode, script, key=key)
+    assert replay.json() == queued.json()
+    run_id = UUID(queued.json()["run_id"])
+    factory = client.app.state.session_factory
+    with factory() as db:
+        run = db.get(WorkflowRun, run_id)
+        casting = read_voice_casting_input(db, project_id, run_id)
+        assert {(role.speaker, role.character_asset_id) for role in casting.roles} == {
+            ("旁白", None),
+            ("访客", None),
+        }
+        binding = find_binding(db, project_id, SHORT_DRAMA_VOICE_INPUT, run_id)
+        assert binding is not None
+        frozen = binding.snapshot_json["dialogue"]
+        assert {voice["voice_version_id"] for voice in frozen["voices"].values()} == {existing}
+        assert find_binding(db, project_id, DIALOGUE_PLAN, run_id) is None
+        assert [row.snapshot_json["action"] for row in command_rows(db, run, project_id)] == [
+            "PLAN"
+        ]
+        catalog = query_voice_catalog(
+            read_voice_catalog_source(db, settings, project_id, run.input_json["created_by"])
+        )
+
+    private = client.get(
+        f"/api/v1/projects/{project_id}/production-versions/bindings",
+        params={"resource_id": str(run_id), "resource_type": SHORT_DRAMA_VOICE_INPUT},
+    )
+    assert private.status_code == 200, private.text
+    assert private.json() == []
+
+    configure(client, settings, "speech", "openai_tts", revision=1, key="rotated-casting-test")
+    manual = save_voice("旁白", "test-voice")
+    choices = {role.role_id: "another-voice" for role in casting.roles}
+    for _ in range(2):
+        with factory.begin() as db:
+            run = db.get(WorkflowRun, run_id, with_for_update=True)
+            publish_voice_casting(db, settings, run, choices, catalog=catalog)
+            versions = {
+                row.speaker: row
+                for row in db.scalars(
+                    select(AudioVoiceVersion).where(AudioVoiceVersion.project_id == project_id)
+                )
+            }
+            assert set(versions) == {"主角", "旁白", "访客"}
+            assert {row.version_no for row in versions.values()} == {1}
+            assert str(versions["主角"].id) == existing
+            assert str(versions["旁白"].id) == manual
+            assert versions["访客"].configuration_json["parameters"] == {"voice": "another-voice"}
+            assert (
+                versions["访客"].configuration_json["model_config_version"]
+                == catalog.configuration_version
+            )
+            exact = find_binding(db, project_id, DIALOGUE_PLAN, run_id).snapshot_json
+            for scene in script["content_json"]["scenes"]:
+                for line in scene["dialogue"]:
+                    assert exact["voices"][line["line_id"]]["voice_version_id"] == str(
+                        versions[line["speaker"]].id
+                    )
+
+
 def test_only_project_owner_can_authorize_short_drama(client):
     owner = register(client, "short-drama-owner@example.com")
     project = create_project(client)
@@ -130,10 +312,11 @@ def test_only_project_owner_can_authorize_short_drama(client):
 
 
 def test_repeated_recovery_failures_pause_original_delivery_across_broker_messages(
-    client, episode, settings, monkeypatch
+    client, configured_episode, settings, monkeypatch
 ):
     from arclight.application import producer_execution
 
+    episode = configured_episode
     content = legacy_script()
     content["scenes"][0]["dialogue"] = []
     script = save_script(client, episode, content=content)
@@ -185,8 +368,9 @@ def test_repeated_recovery_failures_pause_original_delivery_across_broker_messag
 
 
 def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
-    client, episode, settings, model_service, monkeypatch
+    client, configured_episode, settings, model_service, monkeypatch
 ):
+    episode = configured_episode
     reference_set(client, episode)
     content = legacy_script()
     content["scenes"][0]["dialogue"] = []
@@ -386,10 +570,7 @@ def test_scheduler_delivers_only_after_exact_formal_render(
             "fps": 24,
         }
     voices = approve_recordings(client, episode, script)
-    font_id = delivery_font(client, episode, script)
-    queued = create_short_drama(client, episode, script, font_file_id=str(font_id))
-    assert queued.status_code == 202, queued.text
-    root = UUID(queued.json()["run_id"])
+    root, _ = authorized_run(client, episode, request.storyboard_id, generated_rights=True)
     bind_delivery_visuals(client, root, request.selected_shots)
     with factory.begin() as db:
         run = db.get(WorkflowRun, root)

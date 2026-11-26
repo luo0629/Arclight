@@ -1,0 +1,11 @@
+Noto Sans SC Regular, version 2.004
+© 2014-2021 Adobe (http://www.adobe.com/).
+
+This unmodified font is distributed under the SIL Open Font License 1.1.
+See LICENSE for the license distributed with the official release archive.
+
+Release: https://github.com/notofonts/noto-cjk/releases/tag/Sans2.004
+Archive: 18_NotoSansSC.zip
+Source commit: 523d033d6cb47f4a80c58a35753646f5c3608a78
+Source file: Sans/SubsetOTF/SC/NotoSansSC-Regular.otf
+Font SHA-256: faa6c9df652116dde789d351359f3d7e5d2285a2b2a1f04a2d7244df706d5ea9

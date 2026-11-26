@@ -38,3 +38,15 @@ def current_actor(
 
 
 Actor = Annotated[str, Depends(current_actor)]
+
+
+def read_actor(
+    request: Request,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(security)],
+) -> str:
+    """Release the authentication connection before independently committed operations."""
+    with request.app.state.session_factory() as db:
+        return current_actor(request, db, credentials)
+
+
+ShortSessionActor = Annotated[str, Depends(read_actor)]

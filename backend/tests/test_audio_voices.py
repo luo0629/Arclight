@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, text
 from sqlalchemy.exc import DBAPIError
 from test_model_services import account
-from test_native_media_integration import configure, project
+from test_native_media_integration import catalog_version, configure, project
 
 from arclight.application.audio_voices import (
     create_voice_version,
@@ -30,12 +30,14 @@ def voice_case(client, settings):
     return actor, UUID(project(client))
 
 
-def voice_payload(**changes):
+def voice_payload(client=None, project_id=None, **changes):
+    version = catalog_version(client, project_id) if client is not None else "0" * 64
     return AudioVoiceCreate.model_validate(
         {
             "creation_key": str(uuid4()),
             "speaker": "林川",
             "expected_version_no": 0,
+            "model_config_version": version,
             "parameters": {"voice": "test-voice", "speed": 1.1},
             "output_spec": {"format": "wav", "channels": 1},
             **changes,
@@ -53,7 +55,7 @@ def test_voice_versions_freeze_the_exact_service_and_never_expose_credential(
     client, settings, voice_case
 ):
     actor, project_id = voice_case
-    payload = voice_payload()
+    payload = voice_payload(client, project_id)
     first, created = save_voice(client, actor, project_id, payload)
     assert created and first.version_no == 1
     assert first.provider == "openai_tts" and first.model == "native-model"
@@ -65,7 +67,9 @@ def test_voice_versions_freeze_the_exact_service_and_never_expose_credential(
         client, actor, project_id, payload.model_copy(update={"expected_version_no": 999})
     )
     assert not created and replay == first
-    second, created = save_voice(client, actor, project_id, voice_payload(expected_version_no=1))
+    second, created = save_voice(
+        client, actor, project_id, voice_payload(client, project_id, expected_version_no=1)
+    )
     assert created and second.version_no == 2 and second.provider == "siliconflow_tts"
     assert second.model_config_version != first.model_config_version
     with client.app.state.session_factory() as db:
@@ -78,7 +82,7 @@ def test_voice_versions_freeze_the_exact_service_and_never_expose_credential(
 
 def test_voice_creation_rejects_changed_parameters_speaker_actor_and_stale_cas(client, voice_case):
     actor, project_id = voice_case
-    payload = voice_payload()
+    payload = voice_payload(client, project_id)
     save_voice(client, actor, project_id, payload)
     for changes in [
         {"speaker": "旁白"},
@@ -89,7 +93,7 @@ def test_voice_creation_rejects_changed_parameters_speaker_actor_and_stale_cas(c
             save_voice(client, actor, project_id, payload.model_copy(update=changes))
         assert error.value.code == "IDEMPOTENCY_CONFLICT"
     with pytest.raises(DomainError) as error:
-        save_voice(client, actor, project_id, voice_payload())
+        save_voice(client, actor, project_id, voice_payload(client, project_id))
     assert error.value.code == "AUDIO_VOICE_CONFLICT"
     member = account(client)
     with client.app.state.session_factory.begin() as db:
@@ -122,7 +126,10 @@ def test_voice_configuration_uses_native_supported_parameters(
     configure(client, settings, "speech", protocol)
     project_id = UUID(project(client))
     saved, created = save_voice(
-        client, actor, project_id, voice_payload(parameters=parameters, output_spec=output)
+        client,
+        actor,
+        project_id,
+        voice_payload(client, project_id, parameters=parameters, output_spec=output),
     )
     assert created and saved.parameters == parameters and saved.output_spec == output
 
@@ -164,7 +171,10 @@ def test_invalid_voice_configuration_never_persists(
     project_id = UUID(project(client))
     with pytest.raises(DomainError) as error:
         save_voice(
-            client, actor, project_id, voice_payload(parameters=parameters, output_spec=output)
+            client,
+            actor,
+            project_id,
+            voice_payload(client, project_id, parameters=parameters, output_spec=output),
         )
     assert error.value.code == code
     with client.app.state.session_factory() as db:
@@ -173,7 +183,7 @@ def test_invalid_voice_configuration_never_persists(
 
 def test_line_performance_can_change_delivery_without_changing_frozen_voice(client, voice_case):
     actor, project_id = voice_case
-    saved, _ = save_voice(client, actor, project_id, voice_payload())
+    saved, _ = save_voice(client, actor, project_id, voice_payload(client, project_id))
     with client.app.state.session_factory() as db:
         row = require_voice(db, project_id, saved.id, actor)
         spec = voice_spec(
@@ -197,7 +207,7 @@ def test_line_performance_can_change_delivery_without_changing_frozen_voice(clie
 
 def test_voice_scopes_permissions_current_membership_and_project_lifecycle(client, voice_case):
     actor, project_id = voice_case
-    payload = voice_payload(speaker="旁白")
+    payload = voice_payload(client, project_id, speaker="旁白")
     saved, _ = save_voice(client, actor, project_id, payload)
     member = account(client)
     with pytest.raises(DomainError) as error, client.app.state.session_factory() as db:
@@ -240,7 +250,10 @@ def test_voice_character_link_requires_usable_same_project_character(client, voi
         db.flush()
         character_id, wrong_id = character.id, wrong_kind.id
     saved, _ = save_voice(
-        client, actor, project_id, voice_payload(character_asset_id=str(character_id))
+        client,
+        actor,
+        project_id,
+        voice_payload(client, project_id, character_asset_id=str(character_id)),
     )
     assert saved.character_asset_id == character_id
     with pytest.raises(DomainError) as error:
@@ -248,7 +261,7 @@ def test_voice_character_link_requires_usable_same_project_character(client, voi
             client,
             actor,
             project_id,
-            voice_payload(speaker="新角色", character_asset_id=str(wrong_id)),
+            voice_payload(client, project_id, speaker="新角色", character_asset_id=str(wrong_id)),
         )
     assert error.value.code == "AUDIO_CHARACTER_INVALID"
     with client.app.state.session_factory.begin() as db:
@@ -258,13 +271,18 @@ def test_voice_character_link_requires_usable_same_project_character(client, voi
             client,
             actor,
             project_id,
-            voice_payload(expected_version_no=1, character_asset_id=str(character_id)),
+            voice_payload(
+                client, project_id, expected_version_no=1, character_asset_id=str(character_id)
+            ),
         )
     assert error.value.code == "ASSET_NOT_USABLE"
     other_project = UUID(project(client))
     with pytest.raises(DomainError) as error:
         save_voice(
-            client, actor, other_project, voice_payload(character_asset_id=str(character_id))
+            client,
+            actor,
+            other_project,
+            voice_payload(client, project_id, character_asset_id=str(character_id)),
         )
     assert error.value.status_code == 404
 
@@ -284,7 +302,7 @@ def test_voice_speaker_cannot_be_empty_or_whitespace(speaker):
 
 def test_voice_history_rejects_update_delete_and_replace(client, voice_case):
     actor, project_id = voice_case
-    saved, _ = save_voice(client, actor, project_id, voice_payload())
+    saved, _ = save_voice(client, actor, project_id, voice_payload(client, project_id))
     with client.app.state.session_factory() as db:
         postgres = db.bind.dialect.name == "postgresql"
         original = db.get(AudioVoiceVersion, saved.id)
@@ -321,7 +339,7 @@ def test_postgres_same_voice_creation_is_serialized_and_new_version_cas_conflict
     if client.app.state.session_factory.kw["bind"].dialect.name != "postgresql":
         pytest.skip("PostgreSQL voice version row locking required")
     actor, project_id = voice_case
-    payload = voice_payload()
+    payload = voice_payload(client, project_id)
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: save_voice(client, actor, project_id, payload), range(2)))
     assert sorted(created for _, created in results) == [False, True]
@@ -329,7 +347,9 @@ def test_postgres_same_voice_creation_is_serialized_and_new_version_cas_conflict
 
     def append(_):
         try:
-            return save_voice(client, actor, project_id, voice_payload(expected_version_no=1))[0]
+            return save_voice(
+                client, actor, project_id, voice_payload(client, project_id, expected_version_no=1)
+            )[0]
         except DomainError as error:
             return error.code
 

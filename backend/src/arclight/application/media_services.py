@@ -48,9 +48,9 @@ def account_selection(db: Session, actor: str, task_type: str) -> MediaSelection
     if actor == "service-owner" or task_type not in SERVICE_KINDS:
         return None
     row = db.scalar(
-        select(ModelService).where(
-            ModelService.user_id == UUID(actor), ModelService.kind == SERVICE_KINDS[task_type]
-        )
+        select(ModelService)
+        .where(ModelService.user_id == UUID(actor), ModelService.kind == SERVICE_KINDS[task_type])
+        .execution_options(populate_existing=True)
     )
     if row is None or row.credential_id is None:
         return None

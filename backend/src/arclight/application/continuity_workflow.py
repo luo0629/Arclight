@@ -1,6 +1,7 @@
 """Bind checked candidates to the existing durable Reviewer and revision runtime."""
 
 import logging
+from dataclasses import dataclass
 from uuid import UUID, uuid5
 
 from pydantic import ValidationError
@@ -118,6 +119,11 @@ def read_work(db: Session, project_id: UUID, candidate_id: UUID) -> CandidateRev
     return CandidateReviewWork.model_validate(checked_snapshot(db, row)["continuity_work"])
 
 
+@dataclass(frozen=True)
+class FrozenReviewTextService:
+    snapshot: dict | None
+
+
 def start_candidate_review(
     db: Session,
     settings: Settings,
@@ -128,6 +134,7 @@ def start_candidate_review(
     *,
     producer_parent_run_id: UUID | None = None,
     producer_context: dict | None = None,
+    frozen_text_service: FrozenReviewTextService | None = None,
 ) -> WorkflowRun:
     lock_gate(db)
     lock_dependency_graph(db, project_id)
@@ -146,6 +153,10 @@ def start_candidate_review(
         and producer_parent_run_id != automatic.id
     ):
         raise DomainError("SHORT_DRAMA_REVIEW_SCOPE", "短剧制作运行正在负责审查本镜头候选", 409)
+    if frozen_text_service is not None and (
+        automatic is None or producer_parent_run_id != automatic.id
+    ):
+        raise DomainError("SHORT_DRAMA_REVIEW_SCOPE", "冻结审查服务仅适用于本次短剧制作", 409)
     if job.target_type == "VIDEO":
         from arclight.application.video_review_work import start_temporal_review
 
@@ -158,6 +169,7 @@ def start_candidate_review(
             payload,
             producer_parent_run_id=producer_parent_run_id,
             producer_context=producer_context,
+            frozen_text_service=frozen_text_service,
         )
     checked = require_candidate_media_check(db, project_id, candidate.id)
     manifest = db.get(DependencyManifest, candidate.input_manifest_id)
@@ -288,7 +300,11 @@ def start_candidate_review(
                 },
             },
         )
-        snapshot = require_text_snapshot(db, actor, settings)
+        snapshot = (
+            frozen_text_service.snapshot
+            if frozen_text_service is not None
+            else require_text_snapshot(db, actor, settings)
+        )
         if producer_context is not None:
             run.input_json = run.input_json | {"producer_series_context": producer_context}
         if snapshot:

@@ -6,14 +6,8 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.application.human_reviews import ReviewHandler, request_review, require_review_actor
-from arclight.application.render_admission import (
-    RenderFacts,
-    admission_facts,
-    validate_render_objects,
-)
-from arclight.application.render_manifests import manifest_row
-from arclight.core.config import Settings
+from arclight.application.human_reviews import ReviewHandler, require_review_actor
+from arclight.application.render_admission import RenderFacts, admission_facts
 from arclight.core.errors import DomainError
 from arclight.domain.human_reviews import HumanDecision, ReviewHandoff, ReviewSnapshot
 from arclight.domain.versions import digest
@@ -26,6 +20,14 @@ from arclight.persistence.models import AssetVersion
 from arclight.persistence.render_manifests import RenderManifest
 
 EXPORT_HANDLER = "RENDER_EXPORT"
+
+
+def export_review_id(row: RenderManifest) -> UUID:
+    return uuid5(row.project_id, f"human-review/1:render:{row.id}")
+
+
+def formal_export_required() -> DomainError:
+    return DomainError("RENDER_FORMAL_EXPORT_REQUIRED", "请使用导出 MP4 操作处理正式成片", 409)
 
 
 def export_snapshot(row: RenderManifest, facts: RenderFacts) -> ReviewSnapshot:
@@ -63,17 +65,16 @@ def apply_export(
 EXPORT_HANDLERS = {EXPORT_HANDLER: ReviewHandler(read_export, apply_export)}
 
 
-def request_export_review(
-    db: Session, settings: Settings, manifest_id: UUID, actor: str
-) -> HumanReviewRequest:
-    row = manifest_row(db, manifest_id, actor, write=True)
-    facts = admission_facts(db, row)
-    # Object I/O stays outside the handler; request_review/decide/resume only
-    # compare current DB facts. Execution always repeats object validation.
-    validate_render_objects(db, settings, facts)
-    return request_review(
-        db, actor, f"render:{row.id}", EXPORT_HANDLER, export_snapshot(row, facts)
-    )
+def require_manual_export_audio(db: Session, facts: RenderFacts) -> None:
+    from arclight.application.short_drama_delivery import audio_in_scope
+
+    for source in facts.snapshot.sources:
+        if source.asset_type == "AUDIO":
+            version = db.get(AssetVersion, source.asset_version_id)
+            if version is None or not audio_in_scope(db, version, None):
+                raise DomainError(
+                    "SHORT_DRAMA_AUDIO_RIGHTS", "该配音的使用授权限于已确认的自动短剧", 409
+                )
 
 
 def require_export_approval(
@@ -86,7 +87,6 @@ def require_export_approval(
     if facts.snapshot.output.name == "PREVIEW":
         return None, None
     from arclight.application.short_drama_delivery import (
-        audio_in_scope,
         render_key,
         require_automatic_export,
     )
@@ -98,14 +98,8 @@ def require_export_approval(
                 "SHORT_DRAMA_EXPORT_SCOPE", "本清单的自动导出仅用于获授权的短剧任务", 409
             )
         return None, None
-    for source in facts.snapshot.sources:
-        if source.asset_type == "AUDIO":
-            version = db.get(AssetVersion, source.asset_version_id)
-            if version is None or not audio_in_scope(db, version, None):
-                raise DomainError(
-                    "SHORT_DRAMA_AUDIO_RIGHTS", "该配音的使用授权限于已确认的自动短剧", 409
-                )
-    identity = uuid5(row.project_id, f"human-review/1:render:{row.id}")
+    require_manual_export_audio(db, facts)
+    identity = export_review_id(row)
     request = db.get(HumanReviewRequest, identity, populate_existing=True)
     if request is None:
         raise DomainError("RENDER_EXPORT_REVIEW_REQUIRED", "正式导出须先审核本精确渲染清单", 409)

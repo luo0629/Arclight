@@ -16,7 +16,7 @@ from arclight.application.commands import require_project
 from arclight.application.dependencies import lock_dependency_graph
 from arclight.application.production_versions import register
 from arclight.core.errors import DomainError
-from arclight.domain.versions import Family, Kind, VersionRegistration
+from arclight.domain.versions import PRIVATE_BINDING_TYPES, Family, Kind, VersionRegistration
 from arclight.persistence.models import ProductionVersion, VersionBinding
 
 router = APIRouter(prefix="/api/v1/projects/{project_id}/production-versions", tags=["versions"])
@@ -102,7 +102,10 @@ def list_bindings(
     resource_type: Annotated[str | None, Query(max_length=32)] = None,
 ) -> list[BindingRead]:
     require_project(db, project_id, actor)
-    statement = select(VersionBinding).where(VersionBinding.project_id == project_id)
+    statement = select(VersionBinding).where(
+        VersionBinding.project_id == project_id,
+        VersionBinding.resource_type.not_in(PRIVATE_BINDING_TYPES),
+    )
     if resource_id is not None:
         statement = statement.where(VersionBinding.resource_id == resource_id)
     if resource_type is not None:

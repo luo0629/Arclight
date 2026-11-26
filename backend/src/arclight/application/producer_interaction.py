@@ -20,7 +20,11 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_runtime import AgentHumanDecision
 from arclight.domain.agent_state import terminate_agent_state
-from arclight.domain.producer_interaction import ProducerCommand, ProducerRunCreate
+from arclight.domain.producer_interaction import (
+    ProducerCommand,
+    ProducerRunCreate,
+    ProducerVoiceCastingCommand,
+)
 from arclight.domain.producer_planning import DELEGATE_TOOL, DelegationRequest
 from arclight.domain.producer_series import (
     PRODUCER_VERSIONS,
@@ -98,6 +102,8 @@ def record_receipt(
     command: VersionBinding,
     status: str,
     error_code: str | None = None,
+    *,
+    issue_detail: dict | None = None,
 ) -> None:
     """Recording an already executed result needs no new admission or paid action."""
     if command_receipt(db, project_id, command.resource_id) is not None:
@@ -114,6 +120,7 @@ def record_receipt(
             "revision": command.snapshot_json["revision"],
             "status": status,
             "error_code": error_code,
+            **({"issue_detail": issue_detail} if issue_detail is not None else {}),
         },
     )
     emit(
@@ -210,6 +217,16 @@ def enqueue_initial_producer_plan(
     # An HTTP retry after completion must not create another operation.
     if not command_rows(db, run, episode.project_id):
         _enqueue(db, run, episode, actor, "initial-plan", {"action": "PLAN"})
+
+
+def enqueue_short_drama_voice_assignment(
+    db: Session, run: WorkflowRun, episode: Episode, actor: str
+) -> None:
+    from arclight.application.short_drama_audio import read_voice_casting_input
+
+    casting = read_voice_casting_input(db, episode.project_id, run.id)
+    command = ProducerVoiceCastingCommand(casting_sha256=digest(casting.model_dump(mode="json")))
+    _enqueue(db, run, episode, actor, "short-drama:assign-voices", command.model_dump(mode="json"))
 
 
 def validate_delegation(

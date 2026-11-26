@@ -144,89 +144,221 @@ test("RENDER-12：存储受限时提交结果未知仍同键重试，刷新恢�
   await expect(page).toHaveURL(env.href());
 });
 
-test("RENDER-12：正式出口需精确 Owner 决定与独立恢复，再提交同一清单", async ({
+test("RENDER-12：导出 MP4 绑定精确清单，刷新和重复确认仍只提交一个任务", async ({
   page,
 }) => {
   const env = await renderFixture(page);
   const panel = await env.open();
-  await panel.getByLabel("输出用途", { exact: true }).selectOption("FORMAL");
-  await panel
-    .getByRole("button", { name: "创建正式清单", exact: true })
-    .click();
-  await expect
-    .poll(
-      () =>
-        env.mutations.filter((row) => row.path.endsWith("/render-manifests"))
-          .length,
-    )
-    .toBe(1);
+  const actions = () =>
+    env.mutations.filter((row) => row.path.endsWith("/formal-export"));
+  const prepare = panel.getByRole("button", { name: "导出 MP4", exact: true });
+  const prepareGate = deferred();
+  env.control.exportPrepareGate = prepareGate.promise;
+  await expect(prepare).toBeEnabled();
+  await prepare.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
+  });
+  try {
+    await expect.poll(() => actions().length).toBe(1);
+    expect(actions()[0].path).toBe(
+      "/api/v1/timelines/" + env.timelines[0].id + "/formal-export",
+    );
+    expect(actions()[0].body).toEqual({
+      creation_key: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      line_audio_decisions: [],
+    });
+    await expect(
+      panel.getByRole("button", { name: "继续导出 MP4", exact: true }),
+    ).toBeDisabled();
+  } finally {
+    prepareGate.release();
+  }
+  await expect.poll(() => env.reviews.length).toBe(1);
   const frozen = env.manifests[0];
   expect(frozen.snapshot.output.name).toBe("FORMAL");
-  await expect(
-    panel.getByRole("button", { name: "提交渲染", exact: true }),
-  ).toBeDisabled();
-  await panel
-    .getByRole("button", { name: "检查正式导出条件", exact: true })
-    .click();
-  await expect(
-    panel.getByRole("alert").filter({ hasText: "尚未获拥有者批准" }).first(),
-  ).toBeVisible();
-  expect(
-    env.mutations.filter((row) => row.path.endsWith("/jobs")),
-  ).toHaveLength(0);
-  await panel
-    .getByRole("button", { name: "申请正式导出审核", exact: true })
-    .click();
-  await expect.poll(() => env.reviews.length).toBe(1);
-  const review = env.reviews[0];
-  const decide = panel.getByRole("button", {
-    name: "确认接受本次导出",
+  const approve = panel.getByRole("button", {
+    name: "确认并导出 MP4",
     exact: true,
   });
-  await expect(decide).toBeDisabled();
-  await panel
-    .getByLabel("人工处理意见", { exact: true })
-    .fill("已核对本次精确清单及输入版本。");
-  await expect(decide).toBeDisabled();
-  await panel
-    .getByRole("checkbox", { name: "我已核对本次精确清单", exact: true })
-    .check();
-  await decide.click();
-  await expect.poll(() => review.status).toBe("DECIDED");
-  const mutation = env.mutations.find((row) =>
-    row.path.endsWith("/decisions"),
-  )!;
-  expect(mutation.body).toMatchObject({
-    version_id: frozen.id,
-    request_sha256: review.request_sha256,
-    decision: "APPROVE",
-    comment: "已核对本次精确清单及输入版本。",
-  });
-  expect(
-    env.mutations.filter((row) => row.path.endsWith("/resume")),
-  ).toHaveLength(0);
+  await expect(approve).toBeEnabled();
   await expect(
     panel.getByRole("button", { name: "提交渲染", exact: true }),
-  ).toBeDisabled();
-  await panel
-    .getByRole("button", { name: "恢复本次导出", exact: true })
-    .click();
-  await expect(
-    panel.getByRole("button", { name: "提交渲染", exact: true }),
-  ).toBeEnabled();
-  expect(
-    env.mutations.find((row) => row.path.endsWith("/resume"))?.body,
-  ).toEqual({
-    decision_id: review.decision!.id,
-    request_sha256: review.request_sha256,
+  ).toHaveCount(0);
+  expect(env.jobs).toHaveLength(0);
+  await page.reload();
+  await expect(panel.getByLabel("渲染清单", { exact: true })).toHaveValue(
+    frozen.id,
+  );
+  await expect(approve).toBeEnabled();
+  const review = env.reviews[0];
+  expect(review.snapshot.version_id).toBe(frozen.id);
+  expect(review.snapshot.content_sha256).toBe(frozen.content_sha256);
+  const approveGate = deferred();
+  env.control.exportActionGate = approveGate.promise;
+  env.control.exportActionLost = true;
+  await approve.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+    (button as HTMLButtonElement).click();
   });
-  await panel.getByRole("button", { name: "提交渲染", exact: true }).click();
-  await expect.poll(() => env.jobs.length).toBe(1);
-  expect(
-    env.mutations.filter((row) => row.path.endsWith("/jobs")),
-  ).toHaveLength(1);
+  try {
+    await expect.poll(() => actions().length).toBe(2);
+    expect(actions()[1]).toEqual({
+      path: "/api/v1/render-manifests/" + frozen.id + "/formal-export",
+      body: { action: "APPROVE", request_sha256: review.request_sha256 },
+    });
+    await expect(approve).toBeDisabled();
+  } finally {
+    approveGate.release();
+  }
+  const heading = panel
+    .getByLabel("当前渲染任务", { exact: true })
+    .getByRole("heading", { level: 4 });
+  await expect(heading).toHaveText("排队中 · 0%");
+  expect(env.jobs).toHaveLength(1);
   expect(env.jobs[0].manifest_id).toBe(frozen.id);
   expect(env.jobs[0].profile).toBe("FORMAL");
+  expect(review.status).toBe("RESUMED");
+  expect(
+    env.mutations.filter((row) => /\/(jobs|decisions|resume)$/.test(row.path)),
+  ).toEqual([]);
+  await page.reload();
+  await expect(heading).toHaveText("排队中 · 0%");
+  expect(actions()).toHaveLength(2);
+});
+
+test("RENDER-12：导出准备回执丢失可同键恢复，拒绝无需创建任务", async ({
+  page,
+}) => {
+  const env = await renderFixture(page);
+  const panel = await env.open();
+  const originalManifests = env.manifests.length;
+  env.control.exportPrepareLost = true;
+  await panel.getByRole("button", { name: "导出 MP4", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText("网络");
+  expect(env.reviews).toHaveLength(1);
+  expect(env.manifests).toHaveLength(originalManifests + 1);
+  const frozen = env.manifests[0];
+  await page.reload();
+  await panel
+    .getByRole("button", { name: "继续导出 MP4", exact: true })
+    .click();
+  await expect.poll(() => env.mutations[1]).toEqual(env.mutations[0]);
+  await expect(panel.getByLabel("渲染清单", { exact: true })).toHaveValue(
+    frozen.id,
+  );
+  await panel
+    .getByRole("button", { name: "拒绝本次导出", exact: true })
+    .click();
+  await expect(
+    panel.getByRole("region", { name: "正式导出审核", exact: true }),
+  ).toContainText("本次导出已拒绝。");
+  expect(env.mutations[2]).toEqual({
+    path: "/api/v1/render-manifests/" + frozen.id + "/formal-export",
+    body: { action: "REJECT", request_sha256: env.reviews[0].request_sha256 },
+  });
+  expect(env.jobs).toHaveLength(0);
+  expect(env.reviews).toHaveLength(1);
+  expect(env.manifests).toHaveLength(originalManifests + 1);
+  await expect(
+    panel.getByRole("button", { name: "导出 MP4", exact: true }),
+  ).toBeEnabled();
+});
+
+test("RENDER-12：素材缺失与输入变化显示原因，已确认导出可恢复提交及重试", async ({
+  page,
+}) => {
+  const env = await renderFixture(page);
+  const panel = await env.open();
+  env.control.exportInputMissing = true;
+  await panel.getByRole("button", { name: "导出 MP4", exact: true }).click();
+  await expect(panel.getByRole("alert")).toContainText(
+    "导出所需的镜头文件不存在",
+  );
+  expect(env.reviews).toHaveLength(0);
+  expect(env.jobs).toHaveLength(0);
+  env.control.exportInputMissing = false;
+  await panel
+    .getByRole("button", { name: "继续导出 MP4", exact: true })
+    .click();
+  const approve = panel.getByRole("button", {
+    name: "确认并导出 MP4",
+    exact: true,
+  });
+  await expect(approve).toBeEnabled();
+  expect(env.mutations[1]).toEqual(env.mutations[0]);
+  const [frozen] = env.manifests;
+  env.control.exportInputChanged = true;
+  await approve.click();
+  await expect(panel.getByRole("alert")).toContainText(
+    "导出素材在检查期间已变化",
+  );
+  expect(env.jobs).toHaveLength(0);
+  await expect(
+    panel.getByRole("button", { name: "导出 MP4", exact: true }),
+  ).toBeEnabled();
+  env.control.exportInputChanged = false;
+  await panel
+    .getByRole("button", { name: "继续提交本次导出", exact: true })
+    .click();
+  const detail = panel.getByLabel("当前渲染任务", { exact: true });
+  await expect(detail.getByRole("heading", { level: 4 })).toHaveText(
+    "排队中 · 0%",
+  );
+  expect(env.mutations[3]).toEqual({
+    path: "/api/v1/render-manifests/" + frozen.id + "/formal-export",
+    body: { action: "CONTINUE", request_sha256: env.reviews[0].request_sha256 },
+  });
+  const original = env.jobs[0];
+  await detail.getByRole("button", { name: "取消渲染", exact: true }).click();
+  await expect(detail.getByRole("heading", { level: 4 })).toHaveText(
+    "已取消 · 0%",
+  );
+  await detail.getByRole("button", { name: "重新渲染", exact: true }).click();
+  await expect.poll(() => env.jobs.length).toBe(2);
+  expect(env.mutations.at(-1)).toEqual({
+    path: "/api/v1/render-manifests/" + frozen.id + "/formal-export",
+    body: { action: "RETRY", retry_of: original.id },
+  });
+  expect(env.jobs[0].retry_of_id).toBe(original.id);
+  await page.reload();
+  await expect(detail.getByRole("heading", { level: 4 })).toHaveText(
+    "排队中 · 0%",
+  );
+});
+
+test("RENDER-12：编辑者可发起导出，等待所有者确认", async ({ page }) => {
+  const env = await renderFixture(page);
+  env.control.role = "editor";
+  const panel = await env.open();
+  await panel.getByRole("button", { name: "导出 MP4", exact: true }).click();
+  await expect(
+    panel.getByText("等待项目所有者确认导出", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "确认并导出 MP4", exact: true }),
+  ).toHaveCount(0);
+  expect(env.jobs).toHaveLength(0);
+});
+
+test("RENDER-12：确认导出时重新校验角色权限并清除旧操作", async ({ page }) => {
+  const env = await renderFixture(page);
+  const panel = await env.open();
+  await panel.getByRole("button", { name: "导出 MP4", exact: true }).click();
+  const approve = panel.getByRole("button", {
+    name: "确认并导出 MP4",
+    exact: true,
+  });
+  await expect(approve).toBeEnabled();
+  env.control.role = "editor";
+  await approve.click();
+  await expect(panel.getByRole("alert")).toContainText(
+    "正式导出需要项目所有者权限",
+  );
+  await expect(approve).toHaveCount(0);
+  await expect(panel.getByLabel("渲染清单", { exact: true })).toHaveCount(0);
+  expect(env.jobs).toHaveLength(0);
+  expect(env.reviews[0].status).toBe("WAITING_REVIEW");
 });
 
 test("RENDER-12：真实任务进度轮询，取消使用最新 revision", async ({ page }) => {
@@ -562,7 +694,7 @@ test("RENDER-12：Viewer 可查报告与下载，没有生产或人工确认写�
     panel.getByRole("button", { name: "创建预览清单", exact: true }),
   ).toHaveCount(0);
   await expect(
-    panel.getByRole("button", { name: "申请正式导出审核", exact: true }),
+    panel.getByRole("button", { name: "导出 MP4", exact: true }),
   ).toHaveCount(0);
   await panel
     .getByLabel("渲染清单", { exact: true })
@@ -574,7 +706,7 @@ test("RENDER-12：Viewer 可查报告与下载，没有生产或人工确认写�
       )!.id,
     );
   await expect(
-    panel.getByRole("button", { name: "检查正式导出条件", exact: true }),
+    panel.getByRole("button", { name: "确认并导出 MP4", exact: true }),
   ).toHaveCount(0);
   const detail = panel.getByLabel("当前成片版本", { exact: true });
   const previewButton = detail.getByRole("button", {
@@ -615,6 +747,9 @@ test("RENDER-12：归档剧集保持成片只读，禁止创建与提交", async
   ).toBeDisabled();
   await expect(
     panel.getByRole("button", { name: "创建预览清单", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    panel.getByRole("button", { name: "导出 MP4", exact: true }),
   ).toHaveCount(0);
   await expect(
     panel.getByRole("button", { name: "下载 MP4", exact: true }),
@@ -878,11 +1013,14 @@ test("RENDER-12：Editor 不能作 Owner 正式出口或交付警告决定", asy
       )!.id,
     );
   await expect(
-    panel.getByRole("button", { name: "申请正式导出审核", exact: true }),
+    panel.getByRole("button", { name: "导出 MP4", exact: true }),
+  ).toBeVisible();
+  await expect(
+    panel.getByRole("button", { name: "确认并导出 MP4", exact: true }),
   ).toHaveCount(0);
   await expect(
     panel.getByRole("button", { name: "提交渲染", exact: true }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
   await panel.getByRole("button", { name: "查看报告", exact: true }).click();
   await expect(
     panel.getByRole("region", { name: "机器验收报告", exact: true }),
@@ -1224,9 +1362,14 @@ test("RENDER-12：精确来源台词不得默认静音，每句显式处理及�
   await panel
     .getByLabel("台词 1 的处理原因", { exact: true })
     .fill("  本版叙事停顿，明确无声。  ");
-  await expect(create).toBeDisabled();
+  await expect(create).toBeEnabled();
   await panel.getByText("字幕渲染设置与授权字体", { exact: true }).click();
-  await panel.getByLabel("字幕字体", { exact: true }).selectOption(fontId);
+  const subtitleFont = panel.getByLabel("字幕字体", { exact: true });
+  await expect(subtitleFont).toHaveValue("");
+  await expect(subtitleFont.locator("option:checked")).toHaveText(
+    "内置中文黑体（默认）",
+  );
+  await subtitleFont.selectOption(fontId);
   await expect(create).toBeEnabled();
   await create.click();
   await expect

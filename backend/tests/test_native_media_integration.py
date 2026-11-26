@@ -37,7 +37,29 @@ from arclight.persistence.models import (
 from arclight.providers.native_media import NativeMediaProvider
 
 
-def configure(client, settings, kind="image", protocol="cogview", revision=0, key="first-key"):
+def configure(
+    client,
+    settings,
+    kind="image",
+    protocol="cogview",
+    revision=0,
+    key="first-key",
+    *,
+    voice_options=(
+        "test-voice",
+        "another-voice",
+        "new-default",
+        "new-voice",
+        "alloy",
+        "nova",
+        "Cherry",
+        "model:anna",
+        "v",
+        "hoarse-test-voice",
+        "wrong-role",
+        "wrong-speaker",
+    ),
+):
     if not settings.service_encryption_key.get_secret_value():
         settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
     model = "wan2.7-t2v" if protocol == "wan" else "native-model"
@@ -50,6 +72,9 @@ def configure(client, settings, kind="image", protocol="cogview", revision=0, ke
             base_url="https://native.example/v1",
             maximum_cost_per_output=Decimal("1"),
             pricing_version="test-native:1",
+            speech_voice_options=tuple({"id": voice, "label": voice} for voice in voice_options)
+            if kind == "speech"
+            else (),
         )
     ]
     response = client.put(
@@ -65,6 +90,14 @@ def configure(client, settings, kind="image", protocol="cogview", revision=0, ke
     )
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def catalog_version(client, project_id):
+    response = client.get(f"/api/v1/projects/{project_id}/audio-voice-catalog")
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["status"] == "READY", result
+    return result["configuration_version"]
 
 
 def project(client):

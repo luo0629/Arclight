@@ -5,18 +5,17 @@ import type { Graph } from "@/types/api";
 import type { ContinuityComparison } from "@/features/continuity/types";
 import { readVideoAsset, readVideoCandidate } from "@/features/video/api";
 import type {
+  FormalExportAction,
+  FormalExportRequest,
   HumanReview,
-  LineAudioDecision,
   LineAudioPreparation,
   MachineReport,
-  RenderAdmission,
   RenderAttempt,
   RenderDelivery,
   RenderDeliveryDetail,
   RenderDeliveryReport,
   RenderJob,
   RenderManifest,
-  RenderProfile,
   ReviewDecision,
   ReviewResume,
   Timeline,
@@ -79,13 +78,7 @@ export const renderingApi = {
     read<RenderManifest>(`/render-manifests/${id(manifestId)}`, signal),
   createManifest: (
     timelineId: string,
-    body: {
-      creation_key: string;
-      profile: RenderProfile;
-      line_audio_decisions?: LineAudioDecision[];
-      subtitle_style?: Record<string, unknown>;
-      font_file_id?: string;
-    },
+    body: FormalExportRequest & { profile: "PREVIEW" },
     signal?: AbortSignal,
   ) =>
     write<RenderManifest>(
@@ -93,16 +86,33 @@ export const renderingApi = {
       body,
       signal,
     ),
-  exportReview: (manifestId: string, signal?: AbortSignal) =>
-    write<HumanReview>(
-      `/render-manifests/${id(manifestId)}/export-review`,
-      undefined,
+  prepareFormalExport: (
+    timelineId: string,
+    body: FormalExportRequest,
+    signal?: AbortSignal,
+  ) =>
+    write<{ manifest: RenderManifest; review: HumanReview }>(
+      `/timelines/${id(timelineId)}/formal-export`,
+      body,
       signal,
     ),
-  getAdmission: (manifestId: string, signal?: AbortSignal) =>
-    write<RenderAdmission>(
-      `/render-manifests/${id(manifestId)}/admission`,
-      undefined,
+  performFormalExport: (
+    manifestId: string,
+    body: FormalExportAction,
+    signal?: AbortSignal,
+  ) =>
+    write<{ review: HumanReview; job: RenderJob | null }>(
+      `/render-manifests/${id(manifestId)}/formal-export`,
+      body,
+      signal,
+    ),
+  listManifestReviews: (
+    projectId: string,
+    manifestId: string,
+    signal?: AbortSignal,
+  ) =>
+    read<HumanReview[]>(
+      `/projects/${id(projectId)}/human-reviews?version_id=${id(manifestId)}`,
       signal,
     ),
   listJobs: (manifestId: string, beforeId?: string, signal?: AbortSignal) =>

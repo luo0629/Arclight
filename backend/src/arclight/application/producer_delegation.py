@@ -369,10 +369,9 @@ def _delegate(context: AgentToolContext, request: DelegationRequest, settings: S
         )
     elif task.kind == "director":
         source = db.get(Script, task.script_version_id)
+        script = read_script_content(source.content_json) if source is not None else None
         performance = has_series_scope(root) or bool(
-            root.input_json.get("short_drama")
-            and source is not None
-            and source.content_json.get("schema_version") == "3.0"
+            root.input_json.get("short_drama") and getattr(script, "narrative_context", None)
         )
         child = start_run(
             db,

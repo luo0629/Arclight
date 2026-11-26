@@ -20,10 +20,12 @@ from test_media_validation import font_bytes
 from test_timeline_saves import saved_case, saved_timeline
 from test_timeline_visuals import configured_body
 
+from arclight.application.render_inputs import bundled_font_receipt
 from arclight.application.render_manifests import output_profile
 from arclight.core.errors import DomainError
 from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.versions import digest
+from arclight.media.bundled_font import BUNDLED_FONT_SHA256, BUNDLED_FONT_SOURCE
 from arclight.media.versions import renderer_software
 from arclight.persistence.models import (
     AssetVersion,
@@ -98,9 +100,6 @@ def test_schema2_order_crop_motion_fades_and_history_remain_exact(client, saved_
 
 def test_all_five_tracks_and_font_capture_exact_audio_subtitle_and_stable_line(client, audio_case):
     timeline, font_id, _ = audio_case
-    missing = client.post(manifest_url(timeline), json={"creation_key": str(uuid4())})
-    assert missing.status_code == 409
-    assert missing.json()["error"]["code"] == "RENDER_FONT_REQUIRED"
     value, _ = manifest(
         client,
         timeline,
@@ -127,6 +126,39 @@ def test_all_five_tracks_and_font_capture_exact_audio_subtitle_and_stable_line(c
         source["asset_version_id"] for source in snapshot["sources"]
     }
     assert subtitle["line_id"] and snapshot["subtitle_style"]["bold"] is True
+
+
+def test_manifest_defaults_to_bundled_font_and_preserves_the_exact_previous_font(
+    client, audio_case
+):
+    timeline, font_id, _ = audio_case
+    explicit, explicit_request = manifest(client, timeline, font_file_id=str(font_id))
+    implicit, request = manifest(client, timeline)
+    font = implicit["snapshot"]["font"]
+    assert font["file_id"] != explicit["snapshot"]["font"]["file_id"]
+    assert font["sha256"] == BUNDLED_FONT_SHA256
+    assert font["media_type"] == "font/otf"
+    assert font["source_note"] == BUNDLED_FONT_SOURCE
+    assert "SIL Open Font License 1.1" in font["rights_note"] and font["rights_confirmed"]
+    assert client.post(manifest_url(timeline), json=request).json() == implicit
+    assert client.post(manifest_url(timeline), json=explicit_request).json() == explicit
+    assert client.get(f"/api/v1/render-manifests/{explicit['id']}").json() == explicit
+    another, _ = manifest(client, timeline, profile="FORMAL")
+    assert another["snapshot"]["font"] == font
+
+
+def test_bundled_font_receipt_reuses_verified_object_after_transaction_rollback(client, episode):
+    factory = client.app.state.session_factory
+    settings = client.app.state.settings
+    project_id = UUID(episode["project_id"])
+    with factory() as db:
+        file_id = bundled_font_receipt(db, settings, project_id).id
+        db.rollback()
+    with factory.begin() as db:
+        assert db.get(StoredFile, file_id) is None
+        assert bundled_font_receipt(db, settings, project_id).id == file_id
+    with factory() as db:
+        assert db.get(StoredFile, file_id).checksum == BUNDLED_FONT_SHA256
 
 
 def test_distinct_profiles_replay_pagination_and_project_profile_changes(client, render_case):

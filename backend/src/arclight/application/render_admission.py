@@ -28,6 +28,7 @@ from arclight.domain.render_manifests import (
 )
 from arclight.domain.timeline_visuals import ClipVisual
 from arclight.domain.versions import digest
+from arclight.media.bundled_font import is_bundled_subtitle_font
 from arclight.media.execution import MediaObserver
 from arclight.media.validation import probe
 from arclight.persistence.base import utcnow
@@ -227,6 +228,8 @@ def validate_render_objects(
         )
         if len(data) != reference.byte_size:
             raise DomainError("OBJECT_UNAVAILABLE", "素材大小与不可变文件回执不符", 409)
+        if is_bundled_subtitle_font(data, file.media_type):
+            continue
         details = (
             probe(data, file.media_type)
             if observer is None

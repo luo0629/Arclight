@@ -6,6 +6,7 @@ from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
 
+from arclight.application.model_services import require_text_snapshot
 from arclight.application.runtime import execute_run
 from arclight.domain.model_suppliers import SUPPLIERS
 from arclight.persistence.models import ModelService, ServiceCredential, WorkflowRun
@@ -257,8 +258,8 @@ def test_official_supplier_needs_explicit_model_and_key(client, settings, preset
     assert saved.json()["model"] == model
     assert "response_format" not in saved.json()
     with client.app.state.session_factory() as db:
-        row = db.scalar(select(ModelService).where(ModelService.user_id == UUID(uid)))
-        assert row.response_format == preset.response_format
+        current = require_text_snapshot(db, uid, settings)
+        assert current["response_format"] == preset.response_format
     assert saved.json()["supplier_name"] == preset.name
     assert client.get("/api/v1/me/model-services").json()["services"][0]["key_status"] == "READY"
     payload = {"supplier": preset.id, "model": model, "expected_revision": 1}

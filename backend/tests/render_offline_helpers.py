@@ -10,11 +10,10 @@ from uuid import UUID, uuid4
 import av
 import pytest
 from PIL import Image
-from render_admission_helpers import ready_manifest, request_export
+from render_admission_helpers import approve_export_fixture, ready_manifest
 from render_job_helpers import read, run, submit
 from render_manifest_helpers import audio_case, render_case, review_case, stored_file, timeline_case
 from render_report_helpers import report_bytes, report_read
-from test_human_reviews import decide, resume
 from test_render_captions import caption_font
 from test_render_mixing import tone
 from test_timeline_saves import saved_timeline
@@ -107,10 +106,7 @@ def rendered_offline(client, episode, offline_case):
     timeline, font = offline_case
     manifest, _ = ready_manifest(client, timeline, profile="FORMAL", font_file_id=font)
     inputs = input_state(client, manifest)
-    requested = request_export(client, manifest)
-    decision = decide(client, requested)
-    assert decision.status_code == 200, decision.text
-    assert resume(client, requested, decision.json()).status_code == 200
+    assert approve_export_fixture(client, manifest)["result_json"]["status"] == "APPROVED"
     results = []
     for _ in range(2):
         job, _ = submit(client, manifest)

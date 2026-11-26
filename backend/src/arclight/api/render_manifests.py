@@ -3,33 +3,74 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 from sqlalchemy import and_, or_, select
 
-from arclight.api.dependencies import Actor, Database
+from arclight.api.dependencies import Actor, Database, ShortSessionActor
 from arclight.api.human_reviews import HumanReviewRead, serialize
+from arclight.application.formal_export import apply_formal_export, prepare_formal_export
+from arclight.application.human_reviews import require_review
 from arclight.application.render_admission import admit_render
-from arclight.application.render_manifests import create_render_manifest, read_render_manifest
+from arclight.application.render_manifests import (
+    create_render_manifest,
+    manifest_episode_for_write,
+    read_render_manifest,
+)
 from arclight.application.render_results import read_render_results
-from arclight.application.render_reviews import request_export_review
+from arclight.application.render_reviews import formal_export_required
 from arclight.application.timeline_store import read_timeline
 from arclight.core.errors import DomainError
+from arclight.domain.render_jobs import RenderJobRead
 from arclight.domain.render_manifests import (
+    FormalExportCommand,
     RenderAdmissionRead,
+    RenderContract,
     RenderManifestCreate,
     RenderManifestRead,
     RenderManifestResults,
+    RenderManifestSettings,
 )
 from arclight.persistence.render_manifests import RenderManifest
 
 router = APIRouter(prefix="/api/v1", tags=["render-manifests"])
 
 
+class FormalExportPreparation(RenderContract):
+    manifest: RenderManifestRead
+    review: HumanReviewRead
+
+
+class FormalExportProgress(RenderContract):
+    review: HumanReviewRead
+    job: RenderJobRead | None
+
+
 @router.post("/timelines/{timeline_id}/render-manifests", status_code=201)
 def create(
     timeline_id: UUID, payload: RenderManifestCreate, request: Request, db: Database, actor: Actor
 ) -> RenderManifestRead:
+    if payload.profile == "FORMAL":
+        manifest_episode_for_write(db, timeline_id, actor)
+        raise formal_export_required()
     return create_render_manifest(db, request.app.state.settings, timeline_id, actor, payload)
+
+
+@router.post("/timelines/{timeline_id}/formal-export", status_code=201)
+def prepare_export(
+    timeline_id: UUID,
+    payload: RenderManifestSettings,
+    request: Request,
+    response: Response,
+    actor: ShortSessionActor,
+) -> FormalExportPreparation:
+    response.headers["Cache-Control"] = "no-store"
+    manifest, review_id = prepare_formal_export(
+        request.app.state.session_factory, request.app.state.settings, timeline_id, actor, payload
+    )
+    with request.app.state.session_factory() as db:
+        return FormalExportPreparation(
+            manifest=manifest, review=serialize(db, require_review(db, review_id, actor))
+        )
 
 
 @router.get("/timelines/{timeline_id}/render-manifests")
@@ -68,11 +109,22 @@ def results(manifest_id: UUID, db: Database, actor: Actor) -> RenderManifestResu
     return read_render_results(db, manifest_id, actor)
 
 
-@router.post("/render-manifests/{manifest_id}/export-review", status_code=201)
-def export_review(
-    manifest_id: UUID, request: Request, db: Database, actor: Actor
-) -> HumanReviewRead:
-    return serialize(db, request_export_review(db, request.app.state.settings, manifest_id, actor))
+@router.post("/render-manifests/{manifest_id}/formal-export")
+def export_command(
+    manifest_id: UUID,
+    payload: FormalExportCommand,
+    request: Request,
+    response: Response,
+    actor: ShortSessionActor,
+) -> FormalExportProgress:
+    response.headers["Cache-Control"] = "no-store"
+    review_id, job = apply_formal_export(
+        request.app.state.session_factory, request.app.state.settings, manifest_id, actor, payload
+    )
+    with request.app.state.session_factory() as db:
+        return FormalExportProgress(
+            review=serialize(db, require_review(db, review_id, actor)), job=job
+        )
 
 
 @router.post("/render-manifests/{manifest_id}/admission")

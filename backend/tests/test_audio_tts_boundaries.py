@@ -11,7 +11,7 @@ from test_generation_delivery import deliver
 from test_generation_jobs import base, capture_ok
 from test_media_validation import wave_bytes as silent_wave
 from test_model_services import account
-from test_native_media_integration import body_for, configure, provider_for
+from test_native_media_integration import body_for, catalog_version, configure, provider_for
 from test_text_contract_v2 import save_script
 
 from arclight.application.generation_artifacts import import_attempt
@@ -47,6 +47,7 @@ def voice_version(client, project_id, speaker, **changes):
             "creation_key": str(uuid4()),
             "speaker": speaker,
             "expected_version_no": 0,
+            "model_config_version": catalog_version(client, project_id),
             "parameters": {"voice": "alloy", "speed": 1.0},
             "output_spec": {"format": "wav"},
             **changes,

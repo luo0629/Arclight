@@ -17,7 +17,7 @@ import type {
   RightsDeclaration,
   VoiceProfile,
   VoiceProfilePlan,
-  SpeechConfiguration,
+  VoiceCatalog,
 } from "./types";
 
 const id = encodeURIComponent;
@@ -99,11 +99,11 @@ export const audioApi = {
       body,
       signal,
     ),
-  speech: (projectId: string, signal: AbortSignal) =>
-    read<SpeechConfiguration>(
-      `${project(projectId)}/generation-jobs/services/speech/configuration`,
+  voiceCatalog: (projectId: string, signal: AbortSignal) =>
+    api<VoiceCatalog>(`${project(projectId)}/audio-voice-catalog`, {
       signal,
-    ),
+      cache: "no-store",
+    }),
   createVoice: (projectId: string, body: unknown, signal: AbortSignal) =>
     write<AudioVoice>(`${project(projectId)}/audio-voices`, body, signal),
   history: (

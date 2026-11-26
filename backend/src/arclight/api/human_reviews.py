@@ -13,6 +13,7 @@ from arclight.api.schemas import Resource
 from arclight.application.commands import require_project
 from arclight.application.human_reviews import (
     require_review,
+    require_review_authority,
     resume_review,
     review_blocker,
     submit_decision,
@@ -132,11 +133,22 @@ def get_review(request_id: UUID, db: Database, actor: Actor) -> HumanReviewRead:
     return serialize(db, require_review(db, request_id, actor))
 
 
+def require_generic_review_command(db: Database, request_id: UUID, actor: str) -> None:
+    from arclight.application.render_reviews import EXPORT_HANDLER, formal_export_required
+
+    row = require_review(db, request_id, actor)
+    if row.handler == EXPORT_HANDLER:
+        require_review_authority(db, row, actor, owner=True)
+        raise formal_export_required()
+
+
 @router.post("/human-reviews/{request_id}/decisions")
 def decide(request_id: UUID, payload: HumanDecision, db: Database, actor: Actor) -> DecisionRead:
+    require_generic_review_command(db, request_id, actor)
     return DecisionRead.model_validate(submit_decision(db, request_id, actor, payload))
 
 
 @router.post("/human-reviews/{request_id}/resume")
 def resume(request_id: UUID, payload: ReviewResume, db: Database, actor: Actor) -> ResumeRead:
+    require_generic_review_command(db, request_id, actor)
     return ResumeRead.model_validate(resume_review(db, request_id, actor, payload))

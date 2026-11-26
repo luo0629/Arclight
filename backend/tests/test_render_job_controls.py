@@ -3,7 +3,13 @@
 from uuid import UUID, uuid4
 
 import pytest
-from render_admission_helpers import assert_blocked, ready_manifest, render_path, request_export
+from render_admission_helpers import (
+    assert_blocked,
+    formal_export_command,
+    ready_manifest,
+    render_path,
+    start_formal_export,
+)
 from render_job_helpers import (
     cancel,
     job_case,
@@ -15,7 +21,6 @@ from render_job_helpers import (
     timeline_case,
 )
 from test_collaboration import register
-from test_human_reviews import decide, resume
 
 from arclight.application import render_execution
 from arclight.persistence.human_reviews import HumanReviewResume
@@ -139,21 +144,24 @@ def test_archival_blocks_new_work_and_worker_rechecks_scope(client, job_case):
     assert final["output_file_id"] is None and final["cleanup_status"] == "CLEANED"
 
 
-def test_formal_job_needs_exact_approval_and_independent_resume(client, render_case):
-    manifest, _ = ready_manifest(client, render_case, profile="FORMAL")
+def test_formal_job_needs_exact_approval_and_durable_resume(client, render_case):
+    started = start_formal_export(client, render_case)
+    assert started.status_code == 201, started.text
+    manifest, review = (started.json()[key] for key in ("manifest", "review"))
     path = render_path(manifest, "jobs")
-    body = {"creation_key": str(uuid4())}
-    response = client.post(path, json=body)
-    assert response.status_code == 409
-    request = request_export(client, manifest)
-    decision = decide(client, request)
-    assert decision.status_code == 200
-    assert client.post(path, json=body).status_code == 409
-    assert resume(client, request, decision.json()).status_code == 200
-    response = client.post(path, json=body)
-    assert response.status_code == 202 and response.json()["profile"] == "FORMAL"
-    assert not response.json()["is_delivery"]
-    value = response.json()
+    assert_blocked(
+        client.post(path, json={"creation_key": str(uuid4())}), "RENDER_FORMAL_EXPORT_REQUIRED"
+    )
+    command = {"request_sha256": review["request_sha256"]}
+    assert_blocked(
+        formal_export_command(client, manifest, "CONTINUE", **command),
+        "RENDER_EXPORT_REVIEW_REQUIRED",
+    )
+    response = formal_export_command(client, manifest, "APPROVE", **command)
+    assert response.status_code == 200, response.text
+    assert response.json()["review"]["resume"]
+    value = response.json()["job"]
+    assert value["profile"] == "FORMAL" and not value["is_delivery"]
     assert run(client, value) == "SUCCEEDED"
     final = read(client, value)
     assert final["profile"] == "FORMAL" and final["output_file_id"]
@@ -163,19 +171,22 @@ def test_formal_job_needs_exact_approval_and_independent_resume(client, render_c
 @pytest.mark.parametrize("revoke_at", ["queued", "encoding"])
 @pytest.mark.parametrize("change", ["owner_changed", "disabled"])
 def test_formal_worker_rechecks_original_approver_without_changing_review_history(
-    client, render_case, monkeypatch, revoke_at, change
+    client, episode, render_case, monkeypatch, revoke_at, change
 ):
-    manifest, _ = ready_manifest(client, render_case, profile="FORMAL")
     owner = register(client, "render-formal-owner@example.com")
     owner_id = owner["user"]["id"]
     factory = client.app.state.session_factory
     with factory.begin() as db:
-        db.get(Project, UUID(manifest["project_id"])).owner_id = owner_id
-    request = request_export(client, manifest)
-    decision = decide(client, request)
-    assert decision.status_code == 200, decision.text
-    receipt = resume(client, request, decision.json())
-    assert receipt.status_code == 200, receipt.text
+        db.get(Project, UUID(episode["project_id"])).owner_id = owner_id
+    started = start_formal_export(client, render_case)
+    assert started.status_code == 201, started.text
+    manifest, review = (started.json()[key] for key in ("manifest", "review"))
+    approved = formal_export_command(
+        client, manifest, "APPROVE", request_sha256=review["request_sha256"]
+    )
+    assert approved.status_code == 200, approved.text
+    receipt = approved.json()["review"]["resume"]
+    value = approved.json()["job"]
     editor = register(client, "render-formal-successor@example.com")
     with factory.begin() as db:
         db.add(
@@ -185,7 +196,6 @@ def test_formal_worker_rechecks_original_approver_without_changing_review_histor
                 role="editor",
             )
         )
-    value, _ = submit(client, manifest)
 
     def revoke():
         with factory.begin() as db:
@@ -210,7 +220,4 @@ def test_formal_worker_rechecks_original_approver_without_changing_review_histor
     assert final["output_file_id"] is None and final["cleanup_status"] == "CLEANED"
     assert bool(encodes) == (revoke_at == "encoding")
     with factory() as db:
-        assert (
-            db.get(HumanReviewResume, UUID(receipt.json()["id"])).result_json
-            == receipt.json()["result_json"]
-        )
+        assert db.get(HumanReviewResume, UUID(receipt["id"])).result_json == receipt["result_json"]

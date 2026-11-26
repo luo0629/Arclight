@@ -93,7 +93,7 @@ test("AUDIO-07：音色仅提交模型支持项与最新版本CAS，旧版保留
   await expect(
     panel.getByLabel("语气与情绪说明（可选）", { exact: true }),
   ).toHaveCount(0);
-  await panel.getByLabel("供应商音色名称或 ID", { exact: true }).fill("nova");
+  await choose(page, panel.getByLabel("供应商音色", { exact: true }), "Nova");
   await panel.getByLabel("默认语速（可选）", { exact: true }).fill("0.95");
   await panel
     .getByRole("button", { name: "保存新音色版本", exact: true })
@@ -104,6 +104,7 @@ test("AUDIO-07：音色仅提交模型支持项与最新版本CAS，旧版保留
   expect(env.audioMutations[0].body).toMatchObject({
     speaker: "林舟",
     expected_version_no: 1,
+    model_config_version: "voice-config:1",
     parameters: { voice: "nova", speed: 0.95 },
     output_spec: {},
   });
@@ -118,7 +119,8 @@ test("AUDIO-07：语音服务未配置及音色并发冲突保留输入可重试
   env.controlAudio.configured = false;
   const panel = await env.open();
   await panel.getByText("为林舟保存新音色", { exact: true }).click();
-  await panel.getByLabel("供应商音色名称或 ID", { exact: true }).fill("nova");
+  const voice = panel.getByLabel("供应商音色", { exact: true });
+  await expect(voice).toBeDisabled();
   await expect(
     panel.getByRole("button", { name: "保存新音色版本", exact: true }),
   ).toBeDisabled();
@@ -128,8 +130,9 @@ test("AUDIO-07：语音服务未配置及音色并发冲突保留输入可重试
   env.controlAudio.configured = true;
   env.controlAudio.voiceConflict = true;
   await panel
-    .getByRole("button", { name: "重新读取语音服务", exact: true })
+    .getByRole("button", { name: "重新读取音色目录", exact: true })
     .click();
+  await choose(page, voice, "Nova");
   const save = panel.getByRole("button", {
     name: "保存新音色版本",
     exact: true,
@@ -139,10 +142,65 @@ test("AUDIO-07：语音服务未配置及音色并发冲突保留输入可重试
   await expect(
     panel.getByText("音色已由其他成员更新，请刷新音色版本。", { exact: true }),
   ).toBeVisible();
-  await expect(
-    panel.getByLabel("供应商音色名称或 ID", { exact: true }),
-  ).toHaveValue("nova");
+  await expect(voice).toContainText("Nova");
   expect(env.voices.filter((row) => row.speaker === "林舟")).toHaveLength(1);
+});
+
+test("音色目录区分没有目录、空目录及查询失败，切换模型后重新选择", async ({
+  page,
+}) => {
+  const env = await audioFixture(page);
+  const options = env.controlAudio.catalogOptions;
+  env.controlAudio.catalogStatus = "UNAVAILABLE";
+  const panel = await env.open();
+  await panel.getByText("为林舟保存新音色", { exact: true }).click();
+  const voice = panel.getByLabel("供应商音色", { exact: true });
+  const refresh = panel.getByRole("button", {
+    name: "重新读取音色目录",
+    exact: true,
+  });
+  const save = panel.getByRole("button", {
+    name: "保存新音色版本",
+    exact: true,
+  });
+
+  await expect(panel.getByText(/当前配音模型没有可用的音色目录/)).toBeVisible();
+  await expect(voice).toBeDisabled();
+  env.controlAudio.catalogStatus = "QUERY_FAILED";
+  await refresh.click();
+  await expect(panel.getByText(/音色目录查询失败/)).toBeVisible();
+  await expect(voice).toBeDisabled();
+  env.controlAudio.catalogStatus = "READY";
+  env.controlAudio.catalogOptions = [];
+  await refresh.click();
+  await expect(panel.getByText("当前配音模型的音色目录为空。")).toBeVisible();
+  await expect(save).toBeDisabled();
+
+  env.controlAudio.catalogOptions = options;
+  await refresh.click();
+  await choose(page, voice, "Nova");
+  await expect(save).toBeEnabled();
+  env.controlAudio.catalogModel = "other-tts";
+  env.controlAudio.catalogVersion = "voice-config:2";
+  env.controlAudio.catalogOptions = [
+    { id: "nova", label: "新模型音色", description: null },
+  ];
+  await refresh.click();
+  await expect(
+    panel.getByText("示例配音服务 · other-tts", { exact: true }),
+  ).toBeVisible();
+  await expect(voice).toContainText("选择当前模型支持的音色");
+  await expect(save).toBeDisabled();
+  await choose(page, voice, "新模型音色");
+  await save.click();
+  await expect(
+    panel.getByLabel("林舟的音色版本", { exact: true }),
+  ).toContainText("v2");
+  expect(env.audioMutations).toHaveLength(1);
+  expect(env.audioMutations[0].body).toMatchObject({
+    model_config_version: "voice-config:2",
+    parameters: { voice: "nova" },
+  });
 });
 
 test("AUDIO-07：单句提交去重，未知网络回执同键重试并刷新恢复", async ({

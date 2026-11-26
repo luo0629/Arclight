@@ -6,7 +6,7 @@ from uuid import UUID, uuid5
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ShotContent, ShotContentV3, read_shot_content
+from arclight.agents.contracts import ShotContent, read_shot_content
 from arclight.application import asset_objects
 from arclight.application.audit import audit
 from arclight.application.candidate_checks import require_candidate_media_check
@@ -15,37 +15,59 @@ from arclight.application.continuity_completion import (
     complete_selected_video_review,
 )
 from arclight.application.continuity_selection import require_shot_review
-from arclight.application.continuity_workflow import read_work, start_candidate_review
+from arclight.application.continuity_workflow import (
+    FrozenReviewTextService,
+    read_work,
+    start_candidate_review,
+)
 from arclight.application.dependencies import exact_version, require_manifest
 from arclight.application.generation_jobs import create_job
-from arclight.application.media_services import MediaSelection, account_selection
+from arclight.application.generation_scheduling import latest_media_receipt
+from arclight.application.media_services import (
+    MediaSelection,
+    account_selection,
+    credential_for_selection,
+    restore_selection,
+    selection_for_job,
+)
+from arclight.application.model_services import require_text_snapshot, run_settings, text_snapshot
 from arclight.application.production_versions import bind, find_binding
 from arclight.application.render_manifests import output_profile
-from arclight.application.short_drama_budget import root_for_job, root_for_workflow
+from arclight.application.short_drama_budget import MEDIA_SCOPE, root_for_job, root_for_workflow
+from arclight.application.short_drama_diagnostics import (
+    ShortDramaFailure,
+    media_failure_code,
+    text_failure,
+)
 from arclight.application.shot_production import generation_request
 from arclight.application.timelines import approved_board, selected_clip_facts, verify_visual_object
 from arclight.application.video_review import video_review_facts
 from arclight.application.video_review_work import read_temporal_work
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.asset_versions import next_status
 from arclight.domain.continuity_workflow import CandidateReviewCreate
 from arclight.domain.dependencies import DependencyInput
-from arclight.domain.generation import ACTIVE_STATUSES
+from arclight.domain.generation import ACTIVE_STATUSES, UNCERTAIN_STATUSES
 from arclight.domain.generation_requests import GenerationCreate, GenerationSpec, ShotReviewBinding
-from arclight.domain.render_manifests import RenderOutputProfile
+from arclight.domain.render_manifests import OutputGeometry, RenderOutputProfile
+from arclight.domain.short_drama import ShortDramaTask
 from arclight.domain.timelines import ShotSelection, VideoTrim
-from arclight.domain.versions import digest
+from arclight.domain.versions import SHORT_DRAMA_VISUAL_SERVICE, digest
 from arclight.persistence.agent_limits import AgentRunLimit
+from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.generation import GenerationAttempt
 from arclight.persistence.models import (
     AssetVersion,
+    DependencyManifest,
     Episode,
     GenerationCandidate,
     GenerationJob,
     Shot,
     StoredFile,
     Storyboard,
+    VersionBinding,
     VisualAsset,
     WorkflowRun,
 )
@@ -60,6 +82,7 @@ RETRYABLE_REVIEW_CODES = {
     "VIDEO_REVISION_REQUIRED",
     "SHORT_DRAMA_VIDEO_TOO_SHORT",
 }
+RECONCILIATION_REQUIRED = "GATEWAY_RECONCILIATION_REQUIRED"
 
 
 def visual_authorized(
@@ -154,34 +177,148 @@ def bind_visual_rights(
     )
 
 
-def service_for(db: Session, actor: str, task: str) -> MediaSelection:
-    service = account_selection(db, actor, task)
-    if service is None:
-        raise DomainError(
-            "SHORT_DRAMA_VISUAL_SERVICE_REQUIRED", "请配置短剧所需的图像和视频服务", 409
-        )
+def service_failure(
+    error: DomainError,
+    service_kind: str,
+    actor: str,
+    service: MediaSelection | None,
+    *,
+    task: ShortDramaTask | None = None,
+) -> ShortDramaFailure:
+    return ShortDramaFailure(
+        error,
+        service_kind=service_kind,
+        service=service.configuration if service else None,
+        service_owner=service.created_by if service else actor,
+        task=task,
+    )
+
+
+def service_for(
+    db: Session, settings: Settings, project_id: UUID, actor: str, task: str
+) -> MediaSelection:
+    service = None
+    try:
+        service = account_selection(db, actor, task)
+        if service is None:
+            kind = "图像" if task == "IMAGE" else "视频"
+            raise DomainError(
+                "SHORT_DRAMA_VISUAL_SERVICE_REQUIRED",
+                f"请在模型配置中保存{kind}服务和 API Key",
+                409,
+            )
+        credential_for_selection(db, settings, project_id, service)
+    except DomainError as error:
+        raise service_failure(error, task, actor, service) from error
     return service
 
 
-def require_motion_service(db: Session, actor: str, shots: list[Shot], portrait: bool) -> None:
-    service = service_for(db, actor, "VIDEO")
+def _visual_service_id(run_id: UUID, storyboard_id: UUID, task: str) -> UUID:
+    return uuid5(run_id, f"short-drama-visual-service:{storyboard_id}:{task}")
+
+
+def _visual_service_scope(run: WorkflowRun, storyboard_id: UUID, task: str) -> dict:
+    return {
+        "run_id": str(run.id),
+        "storyboard_id": str(storyboard_id),
+        "authorization_sha256": digest(run.input_json["short_drama"]),
+        "task": task,
+    }
+
+
+def read_visual_service(
+    db: Session, run: WorkflowRun, project_id: UUID, storyboard_id: UUID, task: str
+) -> dict | None:
+    row = find_binding(
+        db, project_id, SHORT_DRAMA_VISUAL_SERVICE, _visual_service_id(run.id, storyboard_id, task)
+    )
+    if row is None:
+        return None
+    snapshot = row.snapshot_json
+    scope = _visual_service_scope(run, storyboard_id, task)
+    if "service" not in snapshot or any(snapshot.get(key) != value for key, value in scope.items()):
+        raise DomainError("SHORT_DRAMA_VISUAL_SCOPE", "镜头服务与本次制作授权或分镜不一致", 409)
+    return snapshot
+
+
+def save_visual_service(
+    db: Session,
+    run: WorkflowRun,
+    project_id: UUID,
+    storyboard_id: UUID,
+    task: str,
+    service: dict | None,
+) -> None:
+    bind(
+        db,
+        project_id,
+        SHORT_DRAMA_VISUAL_SERVICE,
+        _visual_service_id(run.id, storyboard_id, task),
+        {**_visual_service_scope(run, storyboard_id, task), "service": service},
+    )
+
+
+def frozen_media_service(
+    db: Session,
+    settings: Settings,
+    run: WorkflowRun,
+    project_id: UUID,
+    storyboard_id: UUID,
+    task: str,
+) -> MediaSelection:
+    actor = run.input_json["created_by"]
+    frozen = read_visual_service(db, run, project_id, storyboard_id, task)
+    if frozen is None:
+        selected = service_for(db, settings, project_id, actor, task)
+        save_visual_service(db, run, project_id, storyboard_id, task, selected.private_snapshot())
+        return selected
+    service: MediaSelection | None = None
+    try:
+        service = restore_selection(frozen["service"])
+        credential_for_selection(db, settings, project_id, service)
+    except DomainError as error:
+        raise service_failure(error, task, actor, service) from error
+    return service
+
+
+def image_output(geometry: OutputGeometry) -> dict:
+    width, height = (720, 1280) if geometry.height > geometry.width else (1280, 720)
+    return {"width": width, "height": height, "format": "png"}
+
+
+def generation_spec(service: MediaSelection, prompt: str, output: dict) -> GenerationSpec:
     config = service.configuration
-    if resolve_capabilities(config["provider"], config["model"]).max_reference_images < 1:
-        raise DomainError(
-            "SHORT_DRAMA_FIRST_FRAME_UNSUPPORTED", "当前视频服务不支持冻结镜头图作为首帧", 409
-        )
-    probe = GenerationSpec(
+    return GenerationSpec(
         provider=config["provider"],
         model=config["model"],
         model_config_version=config["configuration_version"],
-        prompt="镜头制作能力检查",
+        prompt=prompt,
         prompt_version="short-drama-shots/1",
-        output_spec={},
+        output_spec=output,
     )
-    fitting_video_spec(
-        probe,
-        min_seconds=ceil(max(shot.duration_ms for shot in shots) / 1000),
-        portrait=portrait,
+
+
+def require_image_service(
+    db: Session, settings: Settings, project_id: UUID, actor: str, geometry: OutputGeometry
+) -> MediaSelection:
+    service = service_for(db, settings, project_id, actor, "IMAGE")
+    try:
+        validate_spec(generation_spec(service, "镜头制作能力检查", image_output(geometry)))
+    except DomainError as error:
+        raise service_failure(error, "IMAGE", actor, service) from error
+    return service
+
+
+def motion_spec(
+    service: MediaSelection, prompt: str, shot: Shot, geometry: OutputGeometry
+) -> GenerationSpec:
+    spec = generation_spec(service, prompt, {})
+    if resolve_capabilities(spec.provider, spec.model).max_reference_images < 1:
+        raise DomainError(
+            "SHORT_DRAMA_FIRST_FRAME_UNSUPPORTED", "当前视频服务不支持冻结镜头图作为首帧", 409
+        )
+    return fitting_video_spec(
+        spec, min_seconds=ceil(shot.duration_ms / 1000), portrait=geometry.height > geometry.width
     )
 
 
@@ -200,7 +337,6 @@ def visual_request(
         raise DomainError(
             "SHORT_DRAMA_SHOT_PRESELECTED", "自动制作要求使用尚未选用素材的精确分镜", 409
         )
-    config = service.configuration
     prompt = "\n".join(
         [
             image.spec.prompt,
@@ -216,22 +352,9 @@ def visual_request(
             content.notes,
         ]
     )[:10000]
-    spec = GenerationSpec(
-        provider=config["provider"],
-        model=config["model"],
-        model_config_version=config["configuration_version"],
-        prompt=prompt,
-        prompt_version="short-drama-shots/1",
-        output_spec={"width": geometry.width, "height": geometry.height, "format": "png"},
-    )
-    capabilities = resolve_capabilities(spec.provider, spec.model)
     if first_frame is None:
         # Keep the frame's aspect ratio compatible with the video and retain the
         # exact storyboard dependency when an adapter cannot accept reference assets.
-        width, height = (720, 1280) if geometry.height > geometry.width else (1280, 720)
-        spec = spec.model_copy(
-            update={"output_spec": {"width": width, "height": height, "format": "png"}}
-        )
         references = image.inputs[1:]
         for source in references:
             version, asset = exact_version(db, project_id, source.source_asset_version_id)
@@ -240,9 +363,8 @@ def visual_request(
             prompt += f"\n美术设计：{asset.name}" + (
                 f"。{value[:300]}" if isinstance(value, str) else ""
             )
-        spec = GenerationSpec.model_validate(
-            spec.model_dump(mode="json") | {"prompt": prompt[:18000]}
-        )
+        spec = generation_spec(service, prompt[:18000], image_output(geometry))
+        capabilities = resolve_capabilities(spec.provider, spec.model)
         validate_spec(spec, min(len(references), capabilities.max_reference_images))
         return image.model_copy(
             update={
@@ -250,15 +372,6 @@ def visual_request(
                 "inputs": [image.inputs[0], *references[: capabilities.max_reference_images]],
             }
         )
-    if capabilities.max_reference_images < 1:
-        raise DomainError(
-            "SHORT_DRAMA_FIRST_FRAME_UNSUPPORTED", "当前视频服务不支持冻结镜头图作为首帧", 409
-        )
-    spec = fitting_video_spec(
-        spec,
-        min_seconds=ceil(shot.duration_ms / 1000),
-        portrait=geometry.height > geometry.width,
-    )
     return GenerationCreate(
         episode_id=board.episode_id,
         target_type="VIDEO",
@@ -271,7 +384,232 @@ def visual_request(
                 source_asset_version_id=first_frame, dependency_type="REFERENCE_DEPENDENCY"
             ),
         ],
-        spec=spec,
+        spec=motion_spec(service, prompt, shot, geometry),
+    )
+
+
+def authorized_visual_board(
+    db: Session, run: WorkflowRun, storyboard_id: UUID
+) -> tuple[Episode, str, Storyboard, list[Shot], RenderOutputProfile]:
+    from arclight.application.short_drama_delivery import require_run_authorization
+
+    episode, actor, grant = require_run_authorization(db, run)
+    if run.status != "RUNNING" or grant.get("generated_media_rights_confirmed") is not True:
+        raise DomainError("SHORT_DRAMA_GRANT_REQUIRED", "缺少本次短剧媒体制作授权", 409)
+    board, shots = approved_board(db, episode, storyboard_id)
+    if str(board.script_version_id) != grant["script_version_id"]:
+        raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "分镜须来自本次确认的精确剧本", 409)
+    if not shots:
+        raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "自动制作需要有镜头的分镜", 422)
+    return episode, actor, board, shots, output_profile(grant["output_profile"], "FORMAL")
+
+
+def shot_production_plan(shots: list[Shot]) -> list[tuple[Shot, ShotContent, bool]]:
+    plan = []
+    for shot in shots:
+        content = read_shot_content(shot.content_json)
+        performance = getattr(content, "performance", None)
+        if performance is not None and performance.motion_requirement == "dynamic_required":
+            raise DomainError(
+                "SHORT_DRAMA_PERFORMANCE_REVIEW_REQUIRED",
+                f"镜头 {shot.shot_no} 要求动态或口型核验，需要人工确认制作方式",
+                409,
+            )
+        # Retained boards without performance directions use the first-frame video route.
+        plan.append((shot, content, performance is None))
+    return plan
+
+
+def require_review_service(
+    db: Session, settings: Settings, actor: str, min_images: int, *, tools: bool
+) -> dict | None:
+    try:
+        service = require_text_snapshot(db, actor, settings)
+    except DomainError as error:
+        raise text_failure(error, actor, text_snapshot(db, actor), review=True) from error
+    if service is None:
+        capabilities = settings.llm_agent_capabilities
+        response_format = settings.llm_response_format
+    else:
+        facts = service.get("agent_capabilities")
+        capabilities = AgentModelCapabilities.model_validate(facts) if facts else None
+        response_format = service["response_format"]
+    if (
+        capabilities is None
+        or response_format not in capabilities.response_formats
+        or capabilities.max_input_images < min_images
+        or (tools and not capabilities.tools)
+    ):
+        feature = "、工具调用" if tools else ""
+        unsupported = DomainError(
+            "SHORT_DRAMA_REVIEW_CAPABILITY_REQUIRED",
+            f"镜头审查要求文字模型支持结构化输出{feature}和至少 {min_images} 张输入图片",
+            422,
+        )
+        raise text_failure(unsupported, actor, service, review=True)
+    return service
+
+
+def frozen_review_service(
+    db: Session,
+    settings: Settings,
+    run: WorkflowRun,
+    project_id: UUID,
+    storyboard_id: UUID,
+    plan: list[tuple[Shot, ShotContent, bool]] | None = None,
+) -> dict | None:
+    actor = run.input_json["created_by"]
+    frozen = read_visual_service(db, run, project_id, storyboard_id, "REVIEW")
+    if frozen is not None:
+        service = frozen["service"]
+        try:
+            run_settings(settings, service, db)
+        except DomainError as error:
+            raise text_failure(error, actor, service, review=True) from error
+        return service
+    if plan is None:
+        # A review can be admitted after its media job has already frozen its own route.
+        _, _, _, shots, _ = authorized_visual_board(db, run, storyboard_id)
+        plan = shot_production_plan(shots)
+    service = require_review_service(
+        db,
+        settings,
+        actor,
+        2 if any(needs_motion for _, _, needs_motion in plan) else 1,
+        tools=any(not needs_motion for _, _, needs_motion in plan),
+    )
+    save_visual_service(db, run, project_id, storyboard_id, "REVIEW", service)
+    return service
+
+
+def preflight_visuals(
+    db: Session, settings: Settings, run: WorkflowRun, storyboard_id: UUID
+) -> None:
+    """Check the exact approved shot sources and configured routes before paid media work."""
+    episode, actor, board, shots, geometry = authorized_visual_board(db, run, storyboard_id)
+    plan = shot_production_plan(shots)
+    image = frozen_media_service(db, settings, run, episode.project_id, board.id, "IMAGE")
+    motion_shots = []
+    for shot, content, needs_motion in plan:
+        try:
+            visual_request(db, episode.project_id, board, shot, content, geometry, image, None)
+        except DomainError as error:
+            raise service_failure(error, "IMAGE", actor, image) from error
+        if needs_motion:
+            motion_shots.append(shot)
+    if motion_shots:
+        video = frozen_media_service(db, settings, run, episode.project_id, board.id, "VIDEO")
+        try:
+            for shot in motion_shots:
+                motion_spec(video, "镜头制作能力检查", shot, geometry)
+        except DomainError as error:
+            raise service_failure(error, "VIDEO", actor, video) from error
+    # Temporal review submits one contact sheet and the exact first frame.
+    frozen_review_service(db, settings, run, episode.project_id, board.id, plan)
+
+
+def visual_job_failure(db: Session, job: GenerationJob, error: DomainError) -> ShortDramaFailure:
+    try:
+        service = selection_for_job(db, job)
+    except DomainError:
+        service = None
+    return service_failure(
+        error,
+        job.task_type,
+        job.created_by,
+        service,
+        task=ShortDramaTask(id=job.id, family="GENERATION"),
+    )
+
+
+def failed_media(db: Session, job: GenerationJob) -> ShortDramaFailure:
+    receipt = latest_media_receipt(db, job)
+    receipt_code = receipt.error_code if receipt else None
+    if receipt_code == "PROVIDER_INSUFFICIENT_BALANCE":
+        error = DomainError("ACCOUNT_BALANCE_INSUFFICIENT", "账户余额不足", 402)
+    else:
+        operation_code = db.scalar(
+            select(GenerationAttempt.error_code).where(
+                GenerationAttempt.job_id == job.id,
+                GenerationAttempt.attempt_no == job.attempt_count,
+            )
+        )
+        code = media_failure_code(receipt_code, operation_code)
+        if not code or code == "ACCOUNT_BALANCE_INSUFFICIENT":
+            code = "SHORT_DRAMA_VISUAL_FAILED"
+        error = DomainError(code, "镜头媒体任务未能生成可交付结果", 409)
+    return visual_job_failure(db, job, error)
+
+
+def review_reconciling(db: Session, review: WorkflowRun) -> bool:
+    return (
+        db.scalar(
+            select(AgentLoop.id)
+            .where(
+                AgentLoop.run_id == review.id,
+                AgentLoop.status == "RECOVERY_REQUIRED",
+                AgentLoop.outcome_json["stop_code"].as_string() == RECONCILIATION_REQUIRED,
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def visual_reconciliation(
+    db: Session, run: WorkflowRun, storyboard_id: UUID
+) -> ShortDramaFailure | None:
+    job = db.scalar(
+        select(GenerationJob)
+        .join(VersionBinding, VersionBinding.resource_id == GenerationJob.id)
+        .join(DependencyManifest, DependencyManifest.id == GenerationJob.input_manifest_id)
+        .where(
+            VersionBinding.project_id == GenerationJob.project_id,
+            VersionBinding.resource_type == MEDIA_SCOPE,
+            VersionBinding.snapshot_json["run_id"].as_string() == str(run.id),
+            GenerationJob.episode_id == run.episode_id,
+            GenerationJob.task_type.in_({"IMAGE", "VIDEO"}),
+            GenerationJob.status.in_(UNCERTAIN_STATUSES),
+            DependencyManifest.snapshot_json["context"]["continuity_review"][
+                "storyboard_id"
+            ].as_string()
+            == str(storyboard_id),
+        )
+        .order_by(GenerationJob.created_at, GenerationJob.id)
+        .limit(1)
+    )
+    if job is not None:
+        return visual_job_failure(
+            db,
+            job,
+            DomainError("SHORT_DRAMA_VISUAL_RESULT_UNKNOWN", "请先对账原媒体订单", 409),
+        )
+    review = db.scalar(
+        select(WorkflowRun)
+        .join(AgentRunLimit, AgentRunLimit.run_id == WorkflowRun.id)
+        .join(AgentLoop, AgentLoop.run_id == WorkflowRun.id)
+        .where(
+            AgentRunLimit.parent_run_id == run.id,
+            AgentRunLimit.root_run_id == run.id,
+            WorkflowRun.episode_id == run.episode_id,
+            WorkflowRun.workflow_type == "continuity_review",
+            WorkflowRun.status.in_({"QUEUED", "RUNNING", "WAITING_REVIEW"}),
+            AgentLoop.status == "RECOVERY_REQUIRED",
+            AgentLoop.outcome_json["stop_code"].as_string() == RECONCILIATION_REQUIRED,
+            AgentLoop.seed_json["messages"][0]["data"]["target"]["storyboard_id"].as_string()
+            == str(storyboard_id),
+        )
+        .order_by(WorkflowRun.created_at, WorkflowRun.id)
+        .limit(1)
+    )
+    if review is None:
+        return None
+    return text_failure(
+        DomainError(RECONCILIATION_REQUIRED, "请先对账原审查模型调用", 409),
+        review.input_json["created_by"],
+        review.input_json.get("_text_service"),
+        review=True,
+        task=ShortDramaTask(id=review.id, family="WORKFLOW"),
     )
 
 
@@ -304,18 +642,23 @@ def reviewed_version(
         control = db.get(AgentRunLimit, run.id)
         if control is None:
             raise DomainError("SHORT_DRAMA_REVIEW_SCOPE", "缺少本次制作的执行范围", 409)
-        start_candidate_review(
-            db,
-            settings,
-            project_id,
-            candidate.id,
-            actor,
-            CandidateReviewCreate(
-                storyboard_id=shot.storyboard_id,
-                shot_id=shot.id,
-            ),
-            producer_parent_run_id=run.id,
-        )
+        service = frozen_review_service(db, settings, run, project_id, shot.storyboard_id)
+        try:
+            start_candidate_review(
+                db,
+                settings,
+                project_id,
+                candidate.id,
+                actor,
+                CandidateReviewCreate(
+                    storyboard_id=shot.storyboard_id,
+                    shot_id=shot.id,
+                ),
+                producer_parent_run_id=run.id,
+                frozen_text_service=FrozenReviewTextService(service),
+            )
+        except DomainError as error:
+            raise text_failure(error, actor, service, review=True) from error
         return None
     review = db.scalar(
         select(WorkflowRun)
@@ -327,18 +670,34 @@ def reviewed_version(
         return None
     if root_for_workflow(db, review.id) != run:
         raise DomainError("SHORT_DRAMA_REVIEW_SCOPE", "镜头审查不属于本次制作授权", 409)
+    owner = review.input_json["created_by"]
+    service = review.input_json.get("_text_service")
+    if review.status == "WAITING_REVIEW" and review_reconciling(db, review):
+        return None
     progress = review.pending_review or {}
     if progress.get("question_id") or progress.get("conclusion") == "HUMAN_REVIEW":
-        raise DomainError(
-            "SHORT_DRAMA_VISUAL_HUMAN_REQUIRED", f"镜头 {shot.shot_no} 需要人工核验", 409
+        raise text_failure(
+            DomainError(
+                "SHORT_DRAMA_VISUAL_HUMAN_REQUIRED", f"镜头 {shot.shot_no} 需要人工核验", 409
+            ),
+            owner,
+            service,
+            review=True,
         )
     if review.status in {"QUEUED", "RUNNING"}:
         return None
     if review.status not in {"WAITING_REVIEW", "SUCCEEDED"}:
-        raise DomainError(
-            review.error_code or "SHORT_DRAMA_VISUAL_REVIEW_FAILED",
-            f"镜头 {shot.shot_no} 的质量审查已停止",
-            409,
+        code = review.error_code or "SHORT_DRAMA_VISUAL_REVIEW_FAILED"
+        message = (
+            "请先对账原审查模型调用"
+            if code == RECONCILIATION_REQUIRED
+            else f"镜头 {shot.shot_no} 的质量审查已停止"
+        )
+        raise text_failure(
+            DomainError(code, message, 402 if code == "ACCOUNT_BALANCE_INSUFFICIENT" else 409),
+            owner,
+            service,
+            review=True,
         )
     version = db.get(AssetVersion, candidate.asset_version_id, populate_existing=True)
     if version is None:
@@ -506,42 +865,34 @@ def advance_shot(
         )
         if job is None:
             actor = run.input_json["created_by"]
-            service = service_for(db, actor, task)
-            payload = visual_request(
-                db, episode.project_id, board, shot, content, geometry, service, first_frame
-            )
-            create_job(
-                db,
-                episode.project_id,
-                actor,
-                key,
-                payload,
-                frozen_service=service.private_snapshot(),
-                short_drama_run_id=run.id,
-                execution_policy=settings.media_execution_policy,
-            )
+            service = frozen_media_service(db, settings, run, episode.project_id, board.id, task)
+            try:
+                payload = visual_request(
+                    db, episode.project_id, board, shot, content, geometry, service, first_frame
+                )
+                create_job(
+                    db,
+                    episode.project_id,
+                    actor,
+                    key,
+                    payload,
+                    frozen_service=service.private_snapshot(),
+                    short_drama_run_id=run.id,
+                    execution_policy=settings.media_execution_policy,
+                )
+            except DomainError as error:
+                raise service_failure(error, task, actor, service) from error
             return None
         if root_for_job(db, job) != run or job.task_type != task:
             raise DomainError("SHORT_DRAMA_VISUAL_SCOPE", "媒体任务不属于本次镜头生产", 409)
-        if job.status == "MANUAL_REVIEW":
-            raise DomainError("SHORT_DRAMA_VISUAL_RESULT_UNKNOWN", "媒体结果需先对账", 409)
-        if job.status in ACTIVE_STATUSES:
+        if job.status in ACTIVE_STATUSES or job.status in UNCERTAIN_STATUSES:
             return None
         if job.status == "CANCELLED":
-            raise DomainError("SHORT_DRAMA_VISUAL_CANCELLED", "镜头媒体任务已取消", 409)
+            raise visual_job_failure(
+                db, job, DomainError("SHORT_DRAMA_VISUAL_CANCELLED", "镜头媒体任务已取消", 409)
+            )
         if job.status == "FAILED":
-            latest = db.scalar(
-                select(GenerationAttempt)
-                .where(GenerationAttempt.job_id == job.id)
-                .order_by(GenerationAttempt.attempt_no.desc())
-                .limit(1)
-            )
-            error_code = latest.error_code if latest else None
-            if error_code == "ACCOUNT_BALANCE_INSUFFICIENT":
-                raise DomainError(error_code, "账户余额不足", 402)
-            raise DomainError(
-                error_code or "SHORT_DRAMA_VISUAL_FAILED", "镜头媒体任务未能生成可交付结果", 409
-            )
+            raise failed_media(db, job)
         candidate = newest_candidate(db, job)
         if candidate is None:
             return None
@@ -606,37 +957,9 @@ def advance_short_drama_visuals(
     run: WorkflowRun,
     storyboard_id: UUID,
 ) -> list[ShotSelection] | None:
-    from arclight.application.short_drama_delivery import require_run_authorization
-
-    episode, actor, grant = require_run_authorization(db, run)
-    if run.status != "RUNNING" or grant.get("generated_media_rights_confirmed") is not True:
-        raise DomainError("SHORT_DRAMA_GRANT_REQUIRED", "缺少本次短剧媒体制作授权", 409)
-    board, shots = approved_board(db, episode, storyboard_id)
-    if str(board.script_version_id) != grant["script_version_id"]:
-        raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "分镜须来自本次确认的精确剧本", 409)
-    if not shots:
-        raise DomainError("SHORT_DRAMA_BOARD_SCOPE", "自动制作需要有镜头的分镜", 422)
-    geometry = output_profile(grant["output_profile"], "FORMAL")
-    contents = [read_shot_content(shot.content_json) for shot in shots]
-    if any(
-        isinstance(content, ShotContentV3)
-        and content.performance.motion_requirement == "dynamic_required"
-        for content in contents
-    ):
-        raise DomainError(
-            "SHORT_DRAMA_PERFORMANCE_REVIEW_REQUIRED",
-            "此表演分镜要求动态或口型核验，超出当前自动制作可审查范围",
-            409,
-        )
-    motion = [
-        shot
-        for shot, content in zip(shots, contents, strict=True)
-        if not isinstance(content, ShotContentV3)
-    ]
-    if motion:
-        require_motion_service(db, actor, motion, geometry.height > geometry.width)
+    episode, _, board, shots, geometry = authorized_visual_board(db, run, storyboard_id)
     selected = []
-    for shot, content in zip(shots, contents, strict=True):
+    for shot, content, needs_motion in shot_production_plan(shots):
         selection = advance_shot(
             db,
             settings,
@@ -646,11 +969,11 @@ def advance_short_drama_visuals(
             shot,
             content,
             geometry,
-            prepare_frame=not isinstance(content, ShotContentV3),
+            prepare_frame=needs_motion,
         )
         if selection is None:
             continue
-        if not isinstance(content, ShotContentV3):
+        if needs_motion:
             selection = advance_shot(
                 db,
                 settings,

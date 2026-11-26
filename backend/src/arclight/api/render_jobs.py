@@ -9,7 +9,8 @@ from sqlalchemy import and_, or_, select
 from arclight.api.dependencies import Actor, Database
 from arclight.application.render_job_store import read_attempts, read_job
 from arclight.application.render_jobs import cancel_job, create_job
-from arclight.application.render_manifests import manifest_row
+from arclight.application.render_manifests import checked_snapshot, manifest_row
+from arclight.application.render_reviews import formal_export_required
 from arclight.core.errors import DomainError
 from arclight.domain.render_jobs import (
     RenderAttemptRead,
@@ -32,6 +33,9 @@ def create(
     actor: Actor,
 ) -> RenderJobRead:
     response.headers["Cache-Control"] = "no-store"
+    row = manifest_row(db, manifest_id, actor, write=True)
+    if checked_snapshot(row).output.name == "FORMAL":
+        raise formal_export_required()
     return create_job(db, request.app.state.settings, manifest_id, actor, payload)
 
 

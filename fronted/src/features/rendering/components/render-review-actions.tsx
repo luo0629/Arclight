@@ -9,14 +9,12 @@ import { renderLabel } from "./render-format";
 
 export default function RenderReviewActions({
   review,
-  purpose,
   allowed,
   busy,
   onDecision,
   onResume,
 }: {
   review: HumanReview;
-  purpose: "export" | "warnings";
   allowed: boolean;
   busy: boolean;
   onDecision: (
@@ -28,7 +26,6 @@ export default function RenderReviewActions({
   const input = useId();
   const [comment, setComment] = useState("");
   const [confirmed, setConfirmed] = useState(false);
-  const warnings = purpose === "warnings";
   const automatic = Boolean(review.automatic_production_id);
   const canDecide =
     !automatic &&
@@ -38,27 +35,13 @@ export default function RenderReviewActions({
   return (
     <section
       className="flex min-w-0 flex-col gap-3 rounded-xl border p-4"
-      aria-label={
-        automatic
-          ? "短剧制作检查"
-          : warnings
-            ? "交付警告人工确认"
-            : "正式导出人工审核"
-      }
+      aria-label={automatic ? "短剧制作检查" : "交付警告人工确认"}
     >
-      <h4>
-        {automatic
-          ? "短剧制作检查"
-          : warnings
-            ? "确认本次交付例外"
-            : "审核本次正式导出"}
-      </h4>
+      <h4>{automatic ? "短剧制作检查" : "确认本次交付例外"}</h4>
       <p className="text-sm text-muted-foreground">
         {automatic
           ? "本环节由短剧制作流程处理。"
-          : warnings
-            ? "决定仅对应当前报告中的全部警告，不适用于其他成片版本。"
-            : "批准仅对应当前清单的精确时间轴与素材版本。"}
+          : "决定仅对应当前报告中的全部警告，不适用于其他成片版本。"}
       </p>
       <p className="text-sm">审核状态：{renderLabel(review.status)}</p>
       {review.blocking_code &&
@@ -106,9 +89,7 @@ export default function RenderReviewActions({
               disabled={busy}
               className="mt-1 size-4 shrink-0 accent-primary"
             />
-            <span>
-              {warnings ? "我已核对并接受全部警告" : "我已核对本次精确清单"}
-            </span>
+            <span>我已核对并接受全部警告</span>
           </label>
           <div className="flex flex-wrap gap-2">
             <Button
@@ -117,14 +98,14 @@ export default function RenderReviewActions({
               }
               onClick={() => void onDecision("APPROVE", comment.trim())}
             >
-              {warnings ? "确认接受全部警告" : "确认接受本次导出"}
+              确认接受全部警告
             </Button>
             <Button
               variant="outline"
               disabled={busy || !comment.trim()}
               onClick={() => void onDecision("REJECT", comment.trim())}
             >
-              {warnings ? "拒绝本次警告" : "拒绝本次导出"}
+              拒绝本次警告
             </Button>
           </div>
           {review.blocking_code && (
@@ -144,7 +125,7 @@ export default function RenderReviewActions({
             disabled={busy || !allowed}
             onClick={() => void onResume()}
           >
-            {warnings ? "恢复交付确认" : "恢复本次导出"}
+            恢复交付确认
           </Button>
         </>
       )}
