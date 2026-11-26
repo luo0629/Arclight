@@ -681,6 +681,9 @@ class ModelService(Entity, Base):
     supplier: Mapped[str] = mapped_column(String(40), default="custom")
     supplier_name: Mapped[str] = mapped_column(String(100), default="")
     response_format: Mapped[str] = mapped_column(String(20), default="json_schema")
+    verified_capabilities: Mapped[dict | None] = mapped_column(JSON_TYPE)
+    capability_probe_id: Mapped[UUID | None]
+    capability_probe_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     protocol: Mapped[str] = mapped_column(String(40), default="", server_default="")
     credential_id: Mapped[UUID | None] = mapped_column(ForeignKey("service_credentials.id"))
     encrypted_key: Mapped[str | None] = mapped_column(String(8192), nullable=True)

@@ -357,10 +357,9 @@ test("新版：官方供应商填写密钥与模型 ID、自定义地址与目�
     .getByLabel("供应商名称（选填）", { exact: true })
     .fill("我的供应商");
   await dialog.getByLabel("模型 ID", { exact: true }).fill("my-text-model");
-  await dialog
-    .getByRole("combobox", { name: "结构化输出格式", exact: true })
-    .click();
-  await page.getByRole("option", { name: "JSON 对象", exact: true }).click();
+  await expect(
+    dialog.getByRole("combobox", { name: "结构化输出格式", exact: true }),
+  ).toHaveCount(0);
   await expect(
     dialog.getByText("服务商或地址已更改，请填写对应密钥", { exact: true }),
   ).toBeVisible();
@@ -382,9 +381,9 @@ test("新版：官方供应商填写密钥与模型 ID、自定义地址与目�
   await expect(
     dialog.getByLabel("供应商名称（选填）", { exact: true }),
   ).toHaveValue("我的供应商");
-  await expect(
-    dialog.getByRole("combobox", { name: "结构化输出格式", exact: true }),
-  ).toContainText("JSON 对象");
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
+    "my-text-model",
+  );
   await expect(key).toHaveValue("");
   expect(
     await page.evaluate(() => JSON.stringify([localStorage, sessionStorage])),

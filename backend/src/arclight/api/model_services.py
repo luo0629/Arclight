@@ -1,15 +1,25 @@
+from datetime import UTC, datetime, timedelta
+from functools import partial
+from threading import BoundedSemaphore
+from time import monotonic
 from typing import Annotated, Literal, cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Query, Request, Response
 from pydantic import Field, SecretStr
-from sqlalchemy import select, tuple_, update
+from sqlalchemy import or_, select, tuple_, update
 from sqlalchemy.engine import CursorResult
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.api.dependencies import Actor, Database
 from arclight.api.schemas import Input
-from arclight.application.model_services import validate_endpoint
+from arclight.application.model_services import (
+    agent_capabilities,
+    preferred_response_format,
+    run_settings,
+    text_credential_identity,
+    validate_endpoint,
+)
 from arclight.application.service_credentials import (
     check_writer,
     credential_snapshot,
@@ -18,8 +28,10 @@ from arclight.application.service_credentials import (
     storage_status,
     store_credential,
 )
+from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.core.service_keys import keyring
+from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.model_suppliers import (
     PROTOCOLS,
     SPEECH_MODEL_PRESETS,
@@ -27,11 +39,16 @@ from arclight.domain.model_suppliers import (
     Supplier,
     supplier_by_id,
 )
+from arclight.domain.text_model_catalog import TEXT_MODELS
 from arclight.persistence.models import ModelService, ServiceAudit
+from arclight.providers.media_io import bounded_call
+from arclight.providers.model_capability_probe import probe_model_capabilities
 from arclight.providers.service_connection import ConnectionCheck, probe_connection
 
 Kind = Literal["text", "image", "video", "speech"]
 router = APIRouter(prefix="/api/v1/me/model-services", tags=["model-services"])
+_CAPABILITY_PROBE_SLOTS = BoundedSemaphore(2)
+_CAPABILITY_PROBE_LEASE = timedelta(minutes=2)
 
 
 class ServiceConnectionInput(Input):
@@ -45,7 +62,6 @@ class ServiceConnectionInput(Input):
 
 class ServiceInput(ServiceConnectionInput):
     supplier_name: str = Field(default="", max_length=100)
-    response_format: Literal["json_schema", "json_object"] = "json_schema"
     clear_key: bool = False
 
 
@@ -55,18 +71,55 @@ def user_id(actor: str) -> UUID:
     return UUID(actor)
 
 
-def public(row: ModelService) -> dict:
+class CapabilityCheckInput(Input):
+    expected_revision: int = Field(ge=1)
+    confirm_charges: Literal[True]
+
+
+def stored_protocol(row: ModelService) -> str:
+    return row.protocol or ("openai_chat" if row.kind == "text" else "")
+
+
+def capability_configuration(row: ModelService) -> dict:
     return {
+        "base_url": row.base_url,
+        "model": row.model,
+        "supplier": row.supplier,
+        "protocol": stored_protocol(row),
+        "verified_capabilities": row.verified_capabilities,
+    }
+
+
+def public(row: ModelService, settings: Settings, key_status: str) -> dict:
+    result = {
         "kind": row.kind,
         "base_url": row.base_url,
         "model": row.model,
         "supplier": row.supplier,
         "supplier_name": row.supplier_name,
         "response_format": row.response_format,
-        "protocol": row.protocol,
+        "protocol": stored_protocol(row),
         "has_key": bool(row.encrypted_key or row.credential_id),
+        "key_status": key_status,
         "revision": row.revision,
     }
+    if row.kind == "text":
+        capabilities = agent_capabilities(settings, capability_configuration(row))
+        tools = capabilities.tools if capabilities else False
+        images = capabilities.max_input_images if capabilities else 0
+        format_supported = bool(capabilities and capabilities.response_formats)
+        result["response_format"] = preferred_response_format(capabilities, row.response_format)
+        result["capability_check"] = {
+            "status": "ready"
+            if format_supported and tools and images == 8
+            else "partial"
+            if format_supported
+            else "unverified",
+            "tools": tools,
+            "max_input_images": images,
+            "can_check": capabilities is None and key_status == "READY",
+        }
+    return result
 
 
 @router.get("")
@@ -82,21 +135,23 @@ def list_services(
     status = storage_status(db, settings)
     profiles = []
     for row in rows:
-        value = public(row)
-        value["key_status"] = "MISSING"
-        if value["has_key"]:
+        key_status = "MISSING"
+        if row.encrypted_key or row.credential_id:
             try:
                 read_credential(db, settings, credential_snapshot(row))
-                value["key_status"] = "READY"
+                key_status = "READY"
             except DomainError as exc:
-                value["key_status"] = exc.code
-        profiles.append(value)
+                key_status = exc.code
+        profiles.append(public(row, settings, key_status))
     return {
         "services": profiles,
         "can_store_keys": status["code"] == "READY",
         "key_storage": status,
-        "catalog_version": 2,
         "protocols": PROTOCOLS,
+        "text_models": [
+            {"supplier": supplier, "model": model, "name": name}
+            for supplier, model, name, _, _ in TEXT_MODELS
+        ],
         "speech_models": [preset.model_dump() for preset in SPEECH_MODEL_PRESETS],
         "suppliers": [preset.model_dump() for preset in SUPPLIERS],
     }
@@ -188,8 +243,7 @@ def check_connection(
     if not key:
         if row is None or not (row.credential_id or row.encrypted_key):
             raise DomainError("SERVICE_INCOMPLETE", "请填写当前服务的 API Key", 422)
-        stored_protocol = row.protocol or ("openai_chat" if kind == "text" else "")
-        if (row.base_url, row.supplier, stored_protocol) != (base, payload.supplier, protocol):
+        if (row.base_url, row.supplier, stored_protocol(row)) != (base, payload.supplier, protocol):
             raise DomainError(
                 "SERVICE_KEY_REENTRY_REQUIRED", "服务地址或协议已改变，请重新填写 API Key", 422
             )
@@ -216,13 +270,6 @@ def save_service(
     row = current_service(db, uid, kind, payload.expected_revision)
     settings = request.app.state.settings
     preset, base, protocol = service_destination(kind, payload)
-    response_format = (
-        preset.response_format
-        if preset and "response_format" not in payload.model_fields_set
-        else payload.response_format
-    )
-    if preset and response_format != preset.response_format:
-        raise DomainError("SUPPLIER_MISMATCH", "预设地址或输出格式已变化，请切换自定义供应商", 422)
     name = preset.name if preset else payload.supplier_name.strip()
     model = payload.model.strip()
     if not model:
@@ -235,7 +282,7 @@ def save_service(
         and (
             row.base_url != base
             or row.supplier != payload.supplier
-            or (row.protocol and row.protocol != protocol)
+            or stored_protocol(row) != protocol
         )
     )
     if (
@@ -272,12 +319,34 @@ def save_service(
             if credential_id
             else {"encrypted_key": encrypted},
         )
+    same_route = row is not None and not destination_changed and row.model == model
+    verified_capabilities = (
+        row.verified_capabilities
+        if row and same_route and not has_new_key and not payload.clear_key
+        else None
+    )
+    response_format: str = preset.response_format if preset else "json_schema"
+    if kind == "text":
+        if row and same_route:
+            response_format = row.response_format
+        capabilities = agent_capabilities(
+            settings,
+            {
+                "supplier": payload.supplier,
+                "base_url": base,
+                "model": model,
+                "protocol": protocol,
+                "verified_capabilities": verified_capabilities,
+            },
+        )
+        response_format = preferred_response_format(capabilities, response_format)
     values = dict(
         base_url=base,
         model=model,
         supplier=payload.supplier,
         supplier_name=name,
         response_format=response_format,
+        verified_capabilities=verified_capabilities,
         protocol=protocol,
         credential_id=credential_id,
         encrypted_key=encrypted,
@@ -315,4 +384,152 @@ def save_service(
         )
     )
     response.headers["Cache-Control"] = "no-store"
-    return public(row)
+    return public(row, settings, "READY" if credential_id or encrypted else "MISSING")
+
+
+_PROBE_ERRORS = {
+    "PROVIDER_AUTHENTICATION_FAILED": ("服务拒绝了 API Key，请检查凭证。", 422),
+    "PROVIDER_ACCESS_DENIED": ("当前账号没有使用此模型的权限。", 422),
+    "PROVIDER_INSUFFICIENT_BALANCE": ("账户余额不足", 402),
+    "PROVIDER_QUOTA_EXHAUSTED": ("供应商报告账号配额已用完，请检查供应商账号。", 422),
+    "PROVIDER_RATE_LIMITED": ("供应商限制了请求频率，请稍后再试。", 429),
+    "SERVICE_ADDRESS_BLOCKED": ("此模型服务地址无法通过公网访问校验。", 422),
+    "SERVICE_DNS_UNAVAILABLE": ("无法解析模型服务地址。", 502),
+    "SERVICE_REDIRECT_BLOCKED": ("模型服务返回重定向，请检查服务地址。", 422),
+}
+
+
+def _verify_text_service(
+    session_factory: sessionmaker[Session],
+    service_id: UUID,
+    revision: int,
+    actor: str,
+    settings: Settings,
+    probe_settings: Settings,
+    credential_identity: tuple[str, ...],
+    deadline: float,
+) -> dict:
+    claim = uuid4()
+    now = datetime.now(UTC)
+    with session_factory.begin() as writer:
+        result = writer.execute(
+            update(ModelService)
+            .where(
+                ModelService.id == service_id,
+                ModelService.revision == revision,
+                or_(
+                    ModelService.capability_probe_until.is_(None),
+                    ModelService.capability_probe_until <= now,
+                ),
+            )
+            .values(capability_probe_id=claim, capability_probe_until=now + _CAPABILITY_PROBE_LEASE)
+        )
+        if cast(CursorResult, result).rowcount != 1:
+            current_service(writer, user_id(actor), "text", revision)
+            raise DomainError("SERVICE_CAPABILITY_CHECK_RUNNING", "当前模型正在验证，请稍候。", 409)
+
+    claimed_row = (ModelService.id == service_id, ModelService.capability_probe_id == claim)
+    try:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        bounded_settings = probe_settings.model_copy(update={"llm_timeout_seconds": remaining})
+        capabilities = probe_model_capabilities(bounded_settings, credential_identity)
+        if capabilities is None:
+            raise DomainError(
+                "SERVICE_CAPABILITY_UNSUPPORTED",
+                "此模型未通过结构化输出验证，请核对协议或更换模型。",
+                422,
+            )
+        with session_factory.begin() as writer:
+            result = writer.execute(
+                update(ModelService)
+                .where(*claimed_row, ModelService.revision == revision)
+                .values(
+                    verified_capabilities=capabilities.model_dump(mode="json"),
+                    response_format=preferred_response_format(
+                        capabilities, probe_settings.llm_response_format
+                    ),
+                    revision=revision + 1,
+                    capability_probe_id=None,
+                    capability_probe_until=None,
+                )
+            )
+            if cast(CursorResult, result).rowcount != 1:
+                raise DomainError("SERVICE_CONFLICT", "配置已更新，请重新打开后再验证", 409)
+            row = writer.get(ModelService, service_id)
+            assert row is not None
+            writer.add(
+                ServiceAudit(
+                    user_id=row.user_id,
+                    actor=actor,
+                    action="service.capabilities_verified",
+                    details_json={"kind": "text", "config_revision": row.revision},
+                )
+            )
+            return public(row, settings, "READY")
+    except Exception:
+        with session_factory.begin() as writer:
+            writer.execute(
+                update(ModelService)
+                .where(*claimed_row)
+                .values(capability_probe_id=None, capability_probe_until=None)
+            )
+        raise
+
+
+@router.post("/text/capabilities")
+def check_text_capabilities(
+    payload: CapabilityCheckInput,
+    db: Database,
+    actor: Actor,
+    request: Request,
+    response: Response,
+) -> dict:
+    uid = user_id(actor)
+    settings = request.app.state.settings
+    row = current_service(db, uid, "text", payload.expected_revision)
+    if row is None or not (row.credential_id or row.encrypted_key):
+        raise DomainError("SERVICE_INCOMPLETE", "请先在网页保存文字模型和 API Key", 422)
+    response.headers["Cache-Control"] = "no-store"
+    route = {
+        **capability_configuration(row),
+        **credential_snapshot(row),
+        "response_format": row.response_format,
+    }
+    service_id = row.id
+    probe_settings = run_settings(settings, route, db)
+    if agent_capabilities(settings, route) is not None:
+        return public(row, settings, "READY")
+    credential_identity = text_credential_identity(actor, route)
+    timeout = min(settings.llm_timeout_seconds, 45)
+    db.rollback()
+    try:
+        # The provider thread owns the claim even if the HTTP request stops waiting.
+        return bounded_call(
+            partial(
+                _verify_text_service,
+                request.app.state.session_factory,
+                service_id,
+                payload.expected_revision,
+                actor,
+                settings,
+                probe_settings,
+                credential_identity,
+                monotonic() + timeout,
+            ),
+            timeout + 2,
+            slots=_CAPABILITY_PROBE_SLOTS,
+        )
+    except TimeoutError:
+        raise DomainError(
+            "SERVICE_CAPABILITY_CHECK_TIMEOUT", "能力检查超时或繁忙，请先核对供应商调用记录。", 503
+        ) from None
+    except GatewayFailure as exc:
+        message, status = _PROBE_ERRORS.get(
+            exc.code, ("未能确认验证结果，请检查供应商调用记录和模型设置。", 502)
+        )
+        code = (
+            "ACCOUNT_BALANCE_INSUFFICIENT" if status == 402 else "SERVICE_CAPABILITY_CHECK_FAILED"
+        )
+        raise DomainError(code, message, status) from None

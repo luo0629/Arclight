@@ -19,7 +19,6 @@ from arclight.domain.screenwriter_revision import (
     REVISION_WORKFLOWS,
     SERIES_PATCH_TOOL,
 )
-from arclight.domain.service_models import ServiceModelPolicy
 from arclight.persistence.models import WorkflowRun
 from arclight.providers import llm_transport, text
 
@@ -506,18 +505,6 @@ def install(credential_id: UUID):
         if run.workflow_version in professional_versions and not run.input_json.get(
             "_text_service"
         ):
-            run.input_json = {
-                **run.input_json,
-                "_text_service": {
-                    **destination,
-                    "credential_id": str(credential_id),
-                    "response_format": "json_schema",
-                },
-            }
-
-    def capture(db, project_id, run, settings, *, actor=None):
-        service = run.input_json.get("_text_service") or {}
-        if service.get("credential_id") == str(credential_id):
             supports_images = run.workflow_type == "art_proposal" or run.input_json.get(
                 "director", {}
             ).get("art_collaboration")
@@ -529,14 +516,21 @@ def install(credential_id: UUID):
                 max_input_images=4 if supports_images else 0,
                 response_formats=frozenset({"json_schema", "json_object"}),
             )
+            run.input_json = {
+                **run.input_json,
+                "_text_service": {
+                    **destination,
+                    "credential_id": str(credential_id),
+                    "response_format": "json_schema",
+                    "agent_capabilities": capabilities.model_dump(mode="json"),
+                },
+            }
+
+    def capture(db, project_id, run, settings, *, actor=None):
+        service = run.input_json.get("_text_service") or {}
+        if service.get("credential_id") == str(credential_id):
             settings = settings.model_copy(
                 update={
-                    "service_model_policies": [
-                        *settings.service_model_policies,
-                        ServiceModelPolicy(
-                            **destination, kind="text", agent_capabilities=capabilities
-                        ),
-                    ],
                     "model_gateway_policy": GatewayPolicy(
                         text_maximum_cost="0", pricing_version="offline:1"
                     ),

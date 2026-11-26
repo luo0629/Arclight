@@ -123,8 +123,8 @@ def test_current_catalog_lists_speech_models_without_automatic_configuration(cli
     response = client.get("/api/v1/me/model-services")
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
-    assert client.get("/api/v1/me/model-services?catalog_version=1").json() == response.json()
     catalog = response.json()
+    assert "catalog_version" not in catalog
     assert catalog["services"] == []
     assert all("model" not in row for row in catalog["suppliers"])
     models = catalog["speech_models"]

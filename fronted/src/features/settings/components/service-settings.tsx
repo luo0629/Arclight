@@ -17,7 +17,6 @@ import Dialog from "@/components/shared/app-dialog";
 import ServiceProviders, {
   type ServiceKind as Kind,
   type ServicePreset,
-  type ResponseFormat,
 } from "./service-providers";
 import { api, json, message } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
@@ -36,32 +35,39 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Spinner } from "@/components/ui/spinner";
 
+type CapabilityCheck = {
+  status: "ready" | "partial" | "unverified";
+  tools: boolean;
+  max_input_images: number;
+  can_check: boolean;
+};
 type Profile = {
   kind: Kind;
   supplier: string;
   supplier_name: string;
-  response_format: ResponseFormat;
   protocol: string;
   base_url: string;
   model: string;
   has_key: boolean;
   revision: number;
   key_status?: string;
+  capability_check?: CapabilityCheck;
 };
 type Draft = Profile & { api_key: string; clear_key: boolean; dirty: boolean };
 type ConnectionResult = {
   status: "model_found" | "reachable" | "failed";
   message: string;
 };
-type SpeechModelPreset = {
+type ModelPreset = {
   supplier: string;
   model: string;
   name: string;
-  description: string;
 };
+type SpeechModelPreset = ModelPreset & { description: string };
 type Configuration = {
   services: Profile[];
   speech_models?: SpeechModelPreset[];
+  text_models?: ModelPreset[];
   suppliers: ServicePreset[];
   protocols: Record<Kind, string[]>;
   can_store_keys: boolean;
@@ -77,7 +83,6 @@ const empty = (kind: Kind): Draft => ({
   kind,
   supplier: "custom",
   supplier_name: "",
-  response_format: "json_schema",
   protocol: "",
   base_url: "",
   model: "",
@@ -95,6 +100,11 @@ const initialDrafts = (): Record<Kind, Draft> => ({
 });
 const endpoint = (url: string) => url.trim().replace(/\/+$/, "");
 const CUSTOM_TTS_MODEL = "__custom_tts__";
+const capabilityLabels: Record<CapabilityCheck["status"], string> = {
+  ready: "模型支持智能创作",
+  partial: "仅通过部分能力检查",
+  unverified: "智能创作能力尚未验证",
+};
 const protocolNames: Record<string, string> = {
   openai_chat: "OpenAI Chat Completions",
   gemini: "Google Gemini",
@@ -124,7 +134,10 @@ export default function ServiceSettings({
   const [config, setConfig] = useState<Configuration | null>(null);
   const [drafts, setDrafts] = useState(initialDrafts);
   const [kind, setKind] = useState<Kind>("text");
-  const [busy, setBusy] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"save" | "verify" | null>(
+    null,
+  );
+  const busy = pendingAction !== null;
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
   const [confirmClose, setConfirmClose] = useState(false);
@@ -190,12 +203,20 @@ export default function ServiceSettings({
         )
       : [];
   const speechModel = speechModels.find((row) => row.model === draft.model);
+  const textModels =
+    kind === "text" && preset
+      ? (config?.text_models ?? []).filter((row) => row.supplier === preset.id)
+      : [];
   const stored = config?.services.find((row) => row.kind === kind);
   const hasStoredKey =
     !!stored?.has_key &&
     stored.supplier === draft.supplier &&
     endpoint(stored.base_url) === endpoint(draft.base_url) &&
     (!stored.protocol || stored.protocol === draft.protocol);
+  const capability =
+    kind === "text" && !draft.dirty ? stored?.capability_check : undefined;
+  const keyReady = hasStoredKey && stored?.key_status === "READY";
+  const canVerify = !!capability?.can_check && keyReady;
   const checking = connection === "checking";
   const canCheck =
     !!draft.model.trim() &&
@@ -233,8 +254,6 @@ export default function ServiceSettings({
         "",
       base_url: next?.base_url ?? previous?.base_url ?? "",
       model: previous?.model ?? "",
-      response_format:
-        next?.response_format ?? previous?.response_format ?? "json_schema",
       api_key: "",
       clear_key: false,
     });
@@ -272,6 +291,44 @@ export default function ServiceSettings({
       if (probe.current === request) probe.current = null;
     }
   }
+  function applyProfile(profile: Profile) {
+    setDrafts((current) => ({
+      ...current,
+      [profile.kind]: { ...empty(profile.kind), ...profile },
+    }));
+    setConfig((current) =>
+      current
+        ? {
+            ...current,
+            services: [
+              ...current.services.filter((row) => row.kind !== profile.kind),
+              profile,
+            ],
+          }
+        : current,
+    );
+  }
+  async function verifyCapabilities() {
+    if (!canVerify || !stored || busy) return;
+    resetConnection();
+    setPendingAction("verify");
+    setError("");
+    setSaved("");
+    try {
+      const profile = await api<Profile>(
+        "/me/model-services/text/capabilities",
+        json("POST", {
+          expected_revision: stored.revision,
+          confirm_charges: true,
+        }),
+      );
+      applyProfile(profile);
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setPendingAction(null);
+    }
+  }
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if (busy || !draft.dirty) return;
@@ -281,7 +338,7 @@ export default function ServiceSettings({
       return;
     }
     resetConnection();
-    setBusy(true);
+    setPendingAction("save");
     setError("");
     setSaved("");
     try {
@@ -290,7 +347,6 @@ export default function ServiceSettings({
         json("PUT", {
           supplier: draft.supplier,
           supplier_name: draft.supplier_name,
-          response_format: draft.response_format,
           protocol: draft.protocol || config?.protocols[kind][0],
           base_url: preset ? undefined : draft.base_url,
           model: draft.model,
@@ -299,21 +355,7 @@ export default function ServiceSettings({
           expected_revision: draft.revision,
         }),
       );
-      setDrafts((current) => ({
-        ...current,
-        [kind]: { ...empty(kind), ...profile },
-      }));
-      setConfig((current) =>
-        current
-          ? {
-              ...current,
-              services: [
-                ...current.services.filter((row) => row.kind !== kind),
-                profile,
-              ],
-            }
-          : current,
-      );
+      applyProfile(profile);
       setSaved(
         draft.clear_key
           ? "已清除 API Key。重新配置此服务后才能用于新任务。"
@@ -322,7 +364,7 @@ export default function ServiceSettings({
     } catch (err) {
       setError(message(err));
     } finally {
-      setBusy(false);
+      setPendingAction(null);
     }
   }
   return (
@@ -600,6 +642,28 @@ export default function ServiceSettings({
                     </FieldDescription>
                   </Field>
                 )}
+                {textModels.length > 0 && (
+                  <Field data-disabled={busy}>
+                    <FieldLabel htmlFor="service-text-model-preset">
+                      推荐模型
+                    </FieldLabel>
+                    <ChoiceSelect
+                      id="service-text-model-preset"
+                      aria-label="推荐模型"
+                      placeholder="选择推荐模型"
+                      value={
+                        textModels.find((row) => row.model === draft.model)
+                          ?.model ?? ""
+                      }
+                      disabled={busy}
+                      onValueChange={(model) => change({ model })}
+                      options={textModels.map((row) => ({
+                        value: row.model,
+                        label: row.name,
+                      }))}
+                    />
+                  </Field>
+                )}
                 <Field data-invalid={!!modelError} data-disabled={busy}>
                   <FieldLabel htmlFor="service-model">
                     模型 ID
@@ -626,7 +690,9 @@ export default function ServiceSettings({
                   <FieldDescription id="service-model-hint">
                     {speechModels.length > 0
                       ? "可选择 TTS 预设，或填写当前服务商支持的模型 ID。"
-                      : "请手动填写当前服务商支持的模型 ID。"}
+                      : textModels.length > 0
+                        ? "可选择推荐模型，或填写当前服务商支持的模型 ID。"
+                        : "请手动填写当前服务商支持的模型 ID。"}
                   </FieldDescription>
                   {modelError && (
                     <FieldError id="service-model-error">
@@ -657,25 +723,61 @@ export default function ServiceSettings({
                   />
                 </FormLabel>
               )}
-              {kind === "text" && !preset && (
-                <FormLabel>
-                  结构化输出格式
-                  <ChoiceSelect
-                    aria-label="结构化输出格式"
-                    value={draft.response_format}
-                    disabled={busy}
-                    onValueChange={(value) =>
-                      change({ response_format: value as ResponseFormat })
-                    }
-                    options={[
-                      { value: "json_schema", label: "JSON Schema" },
-                      {
-                        value: "json_object",
-                        label: "JSON 对象",
-                      },
-                    ]}
-                  />
-                </FormLabel>
+              {capability && (
+                <section
+                  aria-label="智能创作能力"
+                  className="flex flex-col items-start gap-2 rounded-lg border p-3"
+                >
+                  <div aria-live="polite">
+                    <p className="text-sm font-medium">
+                      {capabilityLabels[capability.status]}
+                    </p>
+                    {capability.status !== "unverified" && (
+                      <p className="text-xs text-muted-foreground">
+                        {capability.tools ? "支持工具调用" : "工具调用待确认"}
+                        {capability.max_input_images > 0 && " · 支持参考图"}
+                      </p>
+                    )}
+                  </div>
+                  {capability.status === "partial" && (
+                    <p className="text-xs text-muted-foreground">
+                      {canVerify ? "可更换模型或再验证一次。" : "可更换模型。"}
+                    </p>
+                  )}
+                  {capability.status === "unverified" &&
+                    keyReady &&
+                    !canVerify && (
+                      <p className="text-xs text-muted-foreground">
+                        可选择已确认支持智能创作的模型。
+                      </p>
+                    )}
+                  {canVerify && (
+                    <>
+                      <p
+                        id="service-capability-check-hint"
+                        className="text-xs text-muted-foreground"
+                      >
+                        验证只发送合成测试内容，供应商可能收费。
+                      </p>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        aria-busy={pendingAction === "verify"}
+                        aria-describedby="service-capability-check-hint"
+                        onClick={verifyCapabilities}
+                      >
+                        {pendingAction === "verify" && (
+                          <Spinner aria-hidden="true" />
+                        )}
+                        {pendingAction === "verify"
+                          ? "验证中…"
+                          : "同意并验证模型"}
+                      </Button>
+                    </>
+                  )}
+                </section>
               )}
               {!config.can_store_keys && (
                 <Notice tone="info">
@@ -777,8 +879,8 @@ export default function ServiceSettings({
                     {checking ? "检测中…" : "检测连接"}
                   </Button>
                   <Button disabled={busy || !draft.dirty}>
-                    {busy && <Spinner aria-hidden="true" />}
-                    {busy ? "保存中…" : "保存此服务"}
+                    {pendingAction === "save" && <Spinner aria-hidden="true" />}
+                    {pendingAction === "save" ? "保存中…" : "保存此服务"}
                   </Button>
                 </div>
               </div>

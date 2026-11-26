@@ -2,7 +2,6 @@ import { Check, Ellipsis } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
 export type ServiceKind = "text" | "image" | "video" | "speech";
-export type ResponseFormat = "json_schema" | "json_object";
 export type ServicePreset = {
   id: string;
   kind: ServiceKind;
@@ -11,7 +10,6 @@ export type ServicePreset = {
   description: string;
   base_url: string;
   protocol: string;
-  response_format: ResponseFormat;
 };
 
 export default function ServiceProviders({

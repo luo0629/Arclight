@@ -96,7 +96,7 @@ def test_account_cards_dispatch_exact_old_and_new_snapshots(
     key = "synthetic-personal-key-v1"
     profile = {"supplier": supplier}
     if supplier == "custom":
-        profile.update(base_url=endpoint, protocol=protocol, response_format=output_format)
+        profile.update(base_url=endpoint, protocol=protocol)
     sent = []
 
     def respond(request):
@@ -124,7 +124,22 @@ def test_account_cards_dispatch_exact_old_and_new_snapshots(
     new_endpoint, new_format = endpoint, output_format
     if supplier == "custom":
         new_endpoint, new_format = "https://other.example/updated/v1", "json_object"
-        profile.update(base_url=new_endpoint, response_format=new_format)
+        profile.update(base_url=new_endpoint)
+        settings.service_model_policies = [
+            ServiceModelPolicy(
+                kind="text",
+                supplier=supplier,
+                protocol=protocol,
+                base_url=new_endpoint,
+                model=new_model,
+                agent_capabilities=AgentModelCapabilities(
+                    version="test/1",
+                    supplier=supplier,
+                    model=new_model,
+                    response_formats={new_format},
+                ),
+            )
+        ]
     saved = client.put(
         service_path,
         json={

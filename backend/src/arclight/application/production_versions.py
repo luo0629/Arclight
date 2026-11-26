@@ -604,8 +604,10 @@ def capture_text(
     }
     from arclight.application.model_services import agent_capabilities
 
-    capabilities = agent_capabilities(settings, service)
-    if capabilities is not None:
+    if service:
+        if declaration := service.get("agent_capabilities"):
+            model["agent_capabilities"] = declaration
+    elif (capabilities := agent_capabilities(settings, None)) is not None:
         model["agent_capabilities"] = capabilities.model_dump(mode="json")
     parameters = {
         "timeout_seconds": settings.llm_timeout_seconds,

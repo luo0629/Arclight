@@ -9,7 +9,9 @@ from sqlalchemy.orm import Session
 from arclight.application.service_credentials import credential_snapshot, read_credential
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
+from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.service_models import matching_policy
+from arclight.domain.text_model_catalog import TEXT_MODEL_POLICIES
 from arclight.persistence.models import ModelService, WorkflowRun
 from arclight.providers.network import validate_endpoint
 
@@ -31,6 +33,7 @@ def text_snapshot(db: Session, actor: str) -> dict | None:
         "supplier_name": row.supplier_name,
         "response_format": row.response_format,
         "protocol": row.protocol or "openai_chat",
+        "verified_capabilities": row.verified_capabilities,
         **credential_snapshot(row),
     }
 
@@ -39,6 +42,13 @@ def require_text_snapshot(db: Session, actor: str, settings: Settings) -> dict |
     snapshot = text_snapshot(db, actor)
     if snapshot is not None:
         read_credential(db, settings, snapshot)
+        capabilities = agent_capabilities(settings, snapshot)
+        snapshot.pop("verified_capabilities", None)
+        if capabilities is not None:
+            snapshot["agent_capabilities"] = capabilities.model_dump(mode="json")
+            snapshot["response_format"] = preferred_response_format(
+                capabilities, snapshot["response_format"]
+            )
     elif settings.provider != "mock":
         raise DomainError("SERVICE_INCOMPLETE", "请先在模型配置中保存账号文字服务", 422)
     return snapshot
@@ -87,8 +97,24 @@ def recheck_text_credential(
         raise DomainError("GATEWAY_ROUTE_FORBIDDEN", "文字模型凭证已改变", 409)
 
 
-def agent_capabilities(settings: Settings, service: dict | None):
+def agent_capabilities(settings: Settings, service: dict | None) -> AgentModelCapabilities | None:
     if service is None:
         return settings.llm_agent_capabilities if settings.provider == "mock" else None
-    policy = matching_policy(settings.service_model_policies, {"kind": "text", **service})
-    return policy.agent_capabilities if policy else None
+    configuration = {"kind": "text", **service}
+    for policies in (settings.service_model_policies, TEXT_MODEL_POLICIES):
+        policy = matching_policy(policies, configuration)
+        if policy and policy.agent_capabilities is not None:
+            return policy.agent_capabilities
+    if evidence := service.get("verified_capabilities"):
+        return AgentModelCapabilities.model_validate(evidence)
+    return None
+
+
+def preferred_response_format(capabilities: AgentModelCapabilities | None, default: str) -> str:
+    if (
+        capabilities is None
+        or not capabilities.response_formats
+        or default in capabilities.response_formats
+    ):
+        return default
+    return "json_schema" if "json_schema" in capabilities.response_formats else "json_object"

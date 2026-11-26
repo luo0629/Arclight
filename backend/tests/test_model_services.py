@@ -258,20 +258,11 @@ def test_official_supplier_needs_explicit_model_and_key(client, settings, preset
     assert saved.json()["response_format"] == preset.response_format
     assert saved.json()["supplier_name"] == preset.name
     assert client.get("/api/v1/me/model-services").json()["services"][0]["key_status"] == "READY"
-    for change in (
-        {"base_url": "https://different.example/v1"},
-        {
-            "response_format": "json_object"
-            if preset.response_format == "json_schema"
-            else "json_schema"
-        },
-    ):
-        rejected = client.put(
-            "/api/v1/me/model-services/text",
-            json={"supplier": preset.id, "expected_revision": 1, **change},
-        )
-        assert rejected.status_code == 422
-        assert rejected.json()["error"]["code"] == "SUPPLIER_MISMATCH"
+    payload = {"supplier": preset.id, "model": model, "expected_revision": 1}
+    rejected = client.put(path, json=payload | {"base_url": "https://different.example/v1"})
+    assert rejected.status_code == 422
+    assert rejected.json()["error"]["code"] == "SUPPLIER_MISMATCH"
+    assert client.put(path, json=payload | {"response_format": "json_schema"}).status_code == 422
 
 
 def test_destination_change_requires_new_key_and_audit_is_private(client, settings):
@@ -296,7 +287,6 @@ def test_destination_change_requires_new_key_and_audit_is_private(client, settin
         json=profile(
             expected_revision=1,
             supplier_name="自定义服务",
-            response_format="json_object",
             base_url="https://new.example/v1",
             api_key="new-private-key",
         ),

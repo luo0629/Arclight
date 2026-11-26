@@ -116,8 +116,12 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   page.on("pageerror", (error) => crashes.push(error.message));
   await dialog.getByRole("radio", { name: "DeepSeek", exact: true }).click();
   await expect(dialog.getByLabel("Base URL", { exact: true })).toHaveCount(0);
-  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue("");
-  await dialog.getByLabel("模型 ID", { exact: true }).fill("exact-deepseek-id");
+  const model = dialog.getByLabel("模型 ID", { exact: true });
+  await expect(model).toHaveValue("");
+  await expect(
+    dialog.getByRole("combobox", { name: "推荐模型", exact: true }),
+  ).toHaveCount(0);
+  await model.fill("exact-deepseek-id");
   await dialog
     .getByLabel("API Key", { exact: true })
     .fill("my-private-deepseek-key");
@@ -143,6 +147,7 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
     model: "exact-deepseek-id",
     base_url: "https://api.deepseek.com",
     has_key: true,
+    capability_check: { status: "unverified", tools: false },
   });
   await page.reload();
   await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
@@ -183,6 +188,46 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   expect(crashes).toEqual([]);
 });
 
+test("OpenAI 推荐模型保存后直接使用已登记能力", async ({ page }) => {
+  const { dialog, headers } = await openSettings(page);
+  await dialog.getByRole("radio", { name: "OpenAI", exact: true }).click();
+  const model = dialog.getByLabel("模型 ID", { exact: true });
+  await expect(model).toHaveValue("");
+  await dialog.getByRole("combobox", { name: "推荐模型", exact: true }).click();
+  await page.getByRole("option", { name: "GPT-5.4 mini", exact: true }).click();
+  await expect(model).toHaveValue("gpt-5.4-mini");
+  await dialog
+    .getByLabel("API Key", { exact: true })
+    .fill("synthetic-catalog-test-key");
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+
+  const capabilities = dialog.getByRole("region", { name: "智能创作能力" });
+  await expect(capabilities).toContainText("模型支持智能创作");
+  await expect(capabilities).toContainText("支持工具调用");
+  await expect(capabilities).toContainText("支持参考图");
+  await expect(
+    dialog.getByRole("button", { name: "同意并验证模型" }),
+  ).toHaveCount(0);
+
+  const fetched = await page.request.get("/api/v1/me/model-services", {
+    headers,
+  });
+  expect(fetched.ok()).toBeTruthy();
+  const [profile] = (await fetched.json()).services;
+  expect(profile).toMatchObject({
+    supplier: "openai",
+    model: "gpt-5.4-mini",
+    base_url: "https://api.openai.com/v1",
+    protocol: "openai_chat",
+    capability_check: {
+      status: "ready",
+      tools: true,
+      max_input_images: 8,
+      can_check: false,
+    },
+  });
+});
+
 test("切换供应商不复用旧密钥，自定义支持手填及兼容协议", async ({ page }) => {
   const { dialog } = await openSettings(page);
   await dialog.getByRole("radio", { name: "OpenAI", exact: true }).click();
@@ -215,10 +260,9 @@ test("切换供应商不复用旧密钥，自定义支持手填及兼容协议",
     .fill("https://my-provider.example/v1");
   await dialog.getByLabel("模型 ID", { exact: true }).fill("my-story-model");
   await dialog.getByLabel("API Key", { exact: true }).fill("custom-only-key");
-  await dialog
-    .getByRole("combobox", { name: "结构化输出格式", exact: true })
-    .click();
-  await page.getByRole("option", { name: "JSON 对象", exact: true }).click();
+  await expect(
+    dialog.getByRole("combobox", { name: "结构化输出格式", exact: true }),
+  ).toHaveCount(0);
   await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
   await expect(dialog.getByRole("status")).toContainText("已保存到当前账号");
   await page.reload();
@@ -229,9 +273,98 @@ test("切换供应商不复用旧密钥，自定义支持手填及兼容协议",
   await expect(dialog.getByLabel("Base URL", { exact: true })).toHaveValue(
     "https://my-provider.example/v1",
   );
-  await expect(
-    dialog.getByRole("combobox", { name: "结构化输出格式", exact: true }),
-  ).toContainText("JSON 对象");
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
+    "my-story-model",
+  );
+});
+
+test("保存文字模型后由用户选择验证能力，并继续使用返回的配置修订", async ({
+  page,
+}) => {
+  const { dialog, headers } = await openSettings(page);
+  const verify = dialog.getByRole("button", { name: "同意并验证模型" });
+  await expect(verify).toHaveCount(0);
+
+  await page.route("**/api/v1/me/model-services/text", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    expect(route.request().postDataJSON()).not.toHaveProperty(
+      "response_format",
+    );
+    await route.continue();
+  });
+  await dialog
+    .getByLabel("Base URL", { exact: true })
+    .fill("https://probe.example/v1");
+  const model = dialog.getByLabel("模型 ID", { exact: true });
+  await model.fill("custom-agent-model");
+  await dialog
+    .getByLabel("API Key", { exact: true })
+    .fill("test-capability-key");
+  await expect(verify).toHaveCount(0);
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+
+  const capabilities = dialog.getByRole("region", { name: "智能创作能力" });
+  await expect(capabilities).toContainText("智能创作能力尚未验证");
+  await expect(verify).toHaveAccessibleDescription(
+    "验证只发送合成测试内容，供应商可能收费。",
+  );
+
+  const response = await page.request.get("/api/v1/me/model-services", {
+    headers,
+  });
+  expect(response.ok()).toBeTruthy();
+  const [profile] = (await response.json()).services;
+  const checks: unknown[] = [];
+  await page.route(
+    "**/api/v1/me/model-services/text/capabilities",
+    async (route) => {
+      expect(route.request().method()).toBe("POST");
+      checks.push(route.request().postDataJSON());
+      await route.fulfill({
+        json: {
+          ...profile,
+          revision: profile.revision + 1,
+          capability_check: {
+            status: "partial",
+            tools: false,
+            max_input_images: 0,
+            can_check: false,
+          },
+        },
+      });
+    },
+  );
+
+  await verify.click();
+  await expect(capabilities).toContainText("仅通过部分能力检查");
+  await expect(verify).toHaveCount(0);
+  expect(checks).toEqual([
+    { expected_revision: profile.revision, confirm_charges: true },
+  ]);
+
+  const servicePath = "**/api/v1/me/model-services/text";
+  await page.unroute(servicePath);
+  await page.route(servicePath, async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("PUT");
+    expect(request.postDataJSON()).toMatchObject({
+      model: "other-model",
+      expected_revision: profile.revision + 1,
+    });
+    await route.fulfill({
+      json: {
+        ...profile,
+        model: "other-model",
+        revision: profile.revision + 2,
+        capability_check: profile.capability_check,
+      },
+    });
+  });
+
+  await model.fill("other-model");
+  await expect(capabilities).toHaveCount(0);
+  await dialog.getByRole("button", { name: "保存此服务", exact: true }).click();
+  await expect(capabilities).toContainText("智能创作能力尚未验证");
 });
 
 test("媒体配置单独保存，切分类保留草稿，手机无溢出且关闭保护可见", async ({
