@@ -46,6 +46,15 @@ def check(client, revision=1):
     return client.post(CHECK, json={"expected_revision": revision, "confirm_charges": True})
 
 
+def stored_response_format(client, uid):
+    with client.app.state.session_factory() as db:
+        return db.scalar(
+            select(ModelService.response_format).where(
+                ModelService.user_id == UUID(uid), ModelService.kind == "text"
+            )
+        )
+
+
 def test_catalog_routes_work_with_empty_deployment_policy(client, connected_account, settings):
     saved = client.put(
         PATH,
@@ -109,7 +118,8 @@ def test_only_probed_capabilities_are_saved_and_frozen(
     verified = check(client)
     assert verified.status_code == 200, verified.text
     profile = verified.json()
-    assert profile["revision"] == 2 and profile["response_format"] == "json_object"
+    assert profile["revision"] == 2 and "response_format" not in profile
+    assert stored_response_format(client, connected_account) == "json_object"
     assert profile["key_status"] == "READY"
     assert profile["capability_check"] == {
         "status": "partial",
@@ -131,7 +141,7 @@ def test_only_probed_capabilities_are_saved_and_frozen(
     updated = save_custom(client, expected_revision=2, api_key="changed-account-token")
     assert updated.status_code == 200, updated.text
     assert updated.json()["capability_check"]["status"] == "unverified"
-    assert updated.json()["response_format"] == "json_object"
+    assert stored_response_format(client, connected_account) == "json_object"
     with client.app.state.session_factory() as db:
         run = db.get(WorkflowRun, UUID(started.json()["run_id"]))
         prior = text_settings(db, UUID(project["id"]), run, settings)
@@ -187,20 +197,18 @@ def test_renaming_an_unverified_service_preserves_stored_response_format(client,
 
     renamed = save_custom(client, supplier_name="New label", expected_revision=1, api_key=None)
     assert renamed.status_code == 200, renamed.text
-    assert renamed.json()["response_format"] == "json_object"
+    assert stored_response_format(client, connected_account) == "json_object"
 
     changed = save_custom(client, model="another-model", expected_revision=2, api_key=None)
     assert changed.status_code == 200, changed.text
-    assert changed.json()["response_format"] == "json_schema"
+    assert stored_response_format(client, connected_account) == "json_schema"
 
 
-def test_switching_an_implicit_chat_protocol_rechecks_the_key_and_capabilities(
-    client, connected_account
-):
+def test_switching_protocol_rechecks_the_key_and_capabilities(client, connected_account):
     assert save_custom(client).status_code == 200
     with client.app.state.session_factory.begin() as db:
         row = db.scalar(select(ModelService).where(ModelService.user_id == UUID(connected_account)))
-        row.protocol = ""
+        assert row.protocol == "openai_chat"
         row.verified_capabilities = AgentModelCapabilities(
             version="synthetic-test/1",
             supplier="custom",

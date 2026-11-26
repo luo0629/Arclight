@@ -177,9 +177,8 @@ export default function ServiceSettings({
             ...(changedEndpoint ? { supplier: "custom" } : {}),
             protocol:
               profile.protocol ||
-              (profile.kind === "text"
-                ? "openai_chat"
-                : official?.protocol || result.protocols[profile.kind][0]),
+              official?.protocol ||
+              result.protocols[profile.kind][0],
           };
         }
         setDrafts(next);
@@ -212,7 +211,7 @@ export default function ServiceSettings({
     !!stored?.has_key &&
     stored.supplier === draft.supplier &&
     endpoint(stored.base_url) === endpoint(draft.base_url) &&
-    (!stored.protocol || stored.protocol === draft.protocol);
+    stored.protocol === draft.protocol;
   const capability =
     kind === "text" && !draft.dirty ? stored?.capability_check : undefined;
   const keyReady = hasStoredKey && stored?.key_status === "READY";

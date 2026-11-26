@@ -3,6 +3,7 @@
 import json
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from hashlib import sha256
 from pathlib import Path
 from threading import Barrier, Event
 from uuid import UUID, uuid4
@@ -28,7 +29,6 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.core.service_keys import keyring
 from arclight.persistence.models import (
-    ModelService,
     ServiceAudit,
     ServiceCredential,
     ServiceKeyState,
@@ -159,8 +159,6 @@ def test_rotation_preserves_current_and_legacy_task_snapshots(client, settings, 
         db.add(run)
         db.flush()
         run_id, original_input = run.id, json.dumps(run.input_json, sort_keys=True)
-        # Simulate an existing 0003 profile without mutating any workflow input.
-        db.add(ModelService(user_id=UUID(uid), kind="image", encrypted_key=token))
     rotated = settings.model_copy(
         update={
             "service_encryption_key": new_key(),
@@ -169,7 +167,7 @@ def test_rotation_preserves_current_and_legacy_task_snapshots(client, settings, 
     )
     with factory.begin() as db:
         report = rotate_credentials(db, rotated, "rotation-test")
-    assert report["rewrapped"] == 1 and report["migrated_profiles"] == 1
+    assert report["rewrapped"] == 1
     retired = rotated.model_copy(update={"service_encryption_previous_keys": []})
     with factory() as db:
         assert json.dumps(db.get(WorkflowRun, run_id).input_json, sort_keys=True) == original_input
@@ -179,8 +177,13 @@ def test_rotation_preserves_current_and_legacy_task_snapshots(client, settings, 
             == "legacy-secret"
         )
         assert verify_credentials(db, retired)["legacy_tokens"] == 1
-        migrated = db.scalar(select(ModelService).where(ModelService.kind == "image"))
-        assert migrated.encrypted_key is None and migrated.credential_id
+        legacy_credential = db.scalar(
+            select(ServiceCredential).where(
+                ServiceCredential.legacy_digest == sha256(token.encode()).hexdigest()
+            )
+        )
+        assert legacy_credential.encrypted_key != token
+        assert legacy_credential.key_id == keyring(retired).key_id
         audit = db.scalar(select(ServiceAudit).where(ServiceAudit.action == "key.rotated"))
         assert audit.actor == "rotation-test" and "secret" not in json.dumps(audit.details_json)
     with factory.begin() as db, pytest.raises(DBAPIError, match="IMMUTABLE_HISTORY"):

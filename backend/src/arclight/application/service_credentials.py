@@ -11,7 +11,6 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.core.service_keys import Keyring, keyring
 from arclight.persistence.models import (
-    ModelService,
     ServiceAudit,
     ServiceCredential,
     ServiceKeyState,
@@ -93,23 +92,10 @@ def storage_status(db: Session, settings: Settings) -> dict:
     return {"code": "READY", "message": "服务凭证加密存储可用"}
 
 
-def credential_snapshot(row: ModelService) -> dict:
-    return (
-        {"credential_id": str(row.credential_id)}
-        if row.credential_id
-        else {"encrypted_key": row.encrypted_key}
-    )
-
-
 def legacy_tokens(db: Session):
     # Query only the credential member, never copy story content into operator reports.
     token = WorkflowRun.input_json["_text_service"]["encrypted_key"].as_string()
     for value in db.scalars(select(token).where(token.is_not(None))).yield_per(100):
-        if value:
-            yield value
-    for value in db.scalars(
-        select(ModelService.encrypted_key).where(ModelService.encrypted_key.is_not(None))
-    ):
         if value:
             yield value
 
@@ -149,28 +135,11 @@ def rotate_credentials(db: Session, settings: Settings, actor: str) -> dict:
             row.key_id = ring.key_id
             row.revision += 1
             changed += 1
-    migrated = 0
-    for profile in db.scalars(
-        select(ModelService).where(ModelService.encrypted_key.is_not(None)).with_for_update()
-    ):
-        if profile.encrypted_key:
-            credential = db.scalar(
-                select(ServiceCredential).where(
-                    ServiceCredential.legacy_digest
-                    == sha256(profile.encrypted_key.encode()).hexdigest()
-                )
-            )
-            assert credential is not None
-            profile.credential_id = credential.id
-            profile.encrypted_key = None
-            profile.revision += 1
-            migrated += 1
     state.active_key_id = ring.key_id
     result = {
         "key_id": ring.key_id,
         "previous_key_id": before,
         "rewrapped": changed,
-        "migrated_profiles": migrated,
     }
     db.add(ServiceAudit(actor=actor, action="key.rotated", details_json=result))
     db.flush()

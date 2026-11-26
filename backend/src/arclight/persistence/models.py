@@ -686,7 +686,6 @@ class ModelService(Entity, Base):
     capability_probe_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     protocol: Mapped[str] = mapped_column(String(40), default="", server_default="")
     credential_id: Mapped[UUID | None] = mapped_column(ForeignKey("service_credentials.id"))
-    encrypted_key: Mapped[str | None] = mapped_column(String(8192), nullable=True)
     revision: Mapped[int] = mapped_column(default=1)
     __table_args__ = (UniqueConstraint("user_id", "kind"),)
 

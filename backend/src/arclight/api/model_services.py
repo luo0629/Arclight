@@ -22,7 +22,6 @@ from arclight.application.model_services import (
 )
 from arclight.application.service_credentials import (
     check_writer,
-    credential_snapshot,
     key_state,
     read_credential,
     storage_status,
@@ -76,16 +75,12 @@ class CapabilityCheckInput(Input):
     confirm_charges: Literal[True]
 
 
-def stored_protocol(row: ModelService) -> str:
-    return row.protocol or ("openai_chat" if row.kind == "text" else "")
-
-
 def capability_configuration(row: ModelService) -> dict:
     return {
         "base_url": row.base_url,
         "model": row.model,
         "supplier": row.supplier,
-        "protocol": stored_protocol(row),
+        "protocol": row.protocol,
         "verified_capabilities": row.verified_capabilities,
     }
 
@@ -97,9 +92,8 @@ def public(row: ModelService, settings: Settings, key_status: str) -> dict:
         "model": row.model,
         "supplier": row.supplier,
         "supplier_name": row.supplier_name,
-        "response_format": row.response_format,
-        "protocol": stored_protocol(row),
-        "has_key": bool(row.encrypted_key or row.credential_id),
+        "protocol": row.protocol,
+        "has_key": row.credential_id is not None,
         "key_status": key_status,
         "revision": row.revision,
     }
@@ -108,7 +102,6 @@ def public(row: ModelService, settings: Settings, key_status: str) -> dict:
         tools = capabilities.tools if capabilities else False
         images = capabilities.max_input_images if capabilities else 0
         format_supported = bool(capabilities and capabilities.response_formats)
-        result["response_format"] = preferred_response_format(capabilities, row.response_format)
         result["capability_check"] = {
             "status": "ready"
             if format_supported and tools and images == 8
@@ -136,9 +129,9 @@ def list_services(
     profiles = []
     for row in rows:
         key_status = "MISSING"
-        if row.encrypted_key or row.credential_id:
+        if row.credential_id is not None:
             try:
-                read_credential(db, settings, credential_snapshot(row))
+                read_credential(db, settings, {"credential_id": str(row.credential_id)})
                 key_status = "READY"
             except DomainError as exc:
                 key_status = exc.code
@@ -153,7 +146,7 @@ def list_services(
             for supplier, model, name, _, _ in TEXT_MODELS
         ],
         "speech_models": [preset.model_dump() for preset in SPEECH_MODEL_PRESETS],
-        "suppliers": [preset.model_dump() for preset in SUPPLIERS],
+        "suppliers": [preset.model_dump(exclude={"response_format"}) for preset in SUPPLIERS],
     }
 
 
@@ -241,13 +234,13 @@ def check_connection(
     settings = request.app.state.settings
     key = payload.api_key.get_secret_value() if payload.api_key else ""
     if not key:
-        if row is None or not (row.credential_id or row.encrypted_key):
+        if row is None or row.credential_id is None:
             raise DomainError("SERVICE_INCOMPLETE", "请填写当前服务的 API Key", 422)
-        if (row.base_url, row.supplier, stored_protocol(row)) != (base, payload.supplier, protocol):
+        if (row.base_url, row.supplier, row.protocol) != (base, payload.supplier, protocol):
             raise DomainError(
                 "SERVICE_KEY_REENTRY_REQUIRED", "服务地址或协议已改变，请重新填写 API Key", 422
             )
-        key = read_credential(db, settings, credential_snapshot(row))
+        key = read_credential(db, settings, {"credential_id": str(row.credential_id)})
 
     # This endpoint only reads account configuration. Release the DB transaction before I/O.
     db.rollback()
@@ -278,16 +271,11 @@ def save_service(
     if payload.clear_key and has_new_key:
         raise DomainError("INVALID_KEY_CHANGE", "清除和替换密钥不能同时进行", 422)
     destination_changed = bool(
-        row
-        and (
-            row.base_url != base
-            or row.supplier != payload.supplier
-            or stored_protocol(row) != protocol
-        )
+        row and (row.base_url, row.supplier, row.protocol) != (base, payload.supplier, protocol)
     )
     if (
         row
-        and (row.credential_id or row.encrypted_key)
+        and row.credential_id is not None
         and destination_changed
         and not (has_new_key or payload.clear_key)
     ):
@@ -296,29 +284,20 @@ def save_service(
             "供应商或服务地址已改变，请重新填写 API Key 或清除原密钥",
             422,
         )
-    encrypted = row.encrypted_key if row else None
     credential_id = row.credential_id if row else None
-    if (encrypted or credential_id) and not payload.clear_key:
+    if credential_id and not payload.clear_key:
         check_writer(state, keyring(settings))
     if payload.clear_key:
-        encrypted = None
         credential_id = None
     if has_new_key:
         assert payload.api_key is not None
         credential_id = store_credential(db, settings, payload.api_key.get_secret_value()).id
-        encrypted = None
-    if not base or (not (encrypted or credential_id) and not (payload.clear_key and row)):
+    if not base or (credential_id is None and not (payload.clear_key and row)):
         raise DomainError(
             "SERVICE_INCOMPLETE", "请填写 API Key 和模型 ID；自定义服务还需 Base URL", 422
         )
-    if encrypted or credential_id:
-        read_credential(
-            db,
-            settings,
-            {"credential_id": str(credential_id)}
-            if credential_id
-            else {"encrypted_key": encrypted},
-        )
+    if credential_id is not None:
+        read_credential(db, settings, {"credential_id": str(credential_id)})
     same_route = row is not None and not destination_changed and row.model == model
     verified_capabilities = (
         row.verified_capabilities
@@ -349,7 +328,6 @@ def save_service(
         verified_capabilities=verified_capabilities,
         protocol=protocol,
         credential_id=credential_id,
-        encrypted_key=encrypted,
         revision=payload.expected_revision + 1,
     )
     if row:
@@ -384,7 +362,7 @@ def save_service(
         )
     )
     response.headers["Cache-Control"] = "no-store"
-    return public(row, settings, "READY" if credential_id or encrypted else "MISSING")
+    return public(row, settings, "READY" if credential_id is not None else "MISSING")
 
 
 _PROBE_ERRORS = {
@@ -489,12 +467,12 @@ def check_text_capabilities(
     uid = user_id(actor)
     settings = request.app.state.settings
     row = current_service(db, uid, "text", payload.expected_revision)
-    if row is None or not (row.credential_id or row.encrypted_key):
+    if row is None or row.credential_id is None:
         raise DomainError("SERVICE_INCOMPLETE", "请先在网页保存文字模型和 API Key", 422)
     response.headers["Cache-Control"] = "no-store"
     route = {
         **capability_configuration(row),
-        **credential_snapshot(row),
+        "credential_id": str(row.credential_id),
         "response_format": row.response_format,
     }
     service_id = row.id

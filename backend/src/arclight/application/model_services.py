@@ -6,7 +6,7 @@ from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.application.service_credentials import credential_snapshot, read_credential
+from arclight.application.service_credentials import read_credential
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelCapabilities
@@ -24,7 +24,7 @@ def text_snapshot(db: Session, actor: str) -> dict | None:
     row = db.scalar(
         select(ModelService).where(ModelService.user_id == UUID(actor), ModelService.kind == "text")
     )
-    if row is None or not (row.base_url and row.model and (row.credential_id or row.encrypted_key)):
+    if row is None or not (row.base_url and row.model and row.credential_id):
         return None
     return {
         "base_url": row.base_url,
@@ -32,9 +32,9 @@ def text_snapshot(db: Session, actor: str) -> dict | None:
         "supplier": row.supplier,
         "supplier_name": row.supplier_name,
         "response_format": row.response_format,
-        "protocol": row.protocol or "openai_chat",
+        "protocol": row.protocol,
         "verified_capabilities": row.verified_capabilities,
-        **credential_snapshot(row),
+        "credential_id": str(row.credential_id),
     }
 
 

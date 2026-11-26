@@ -50,7 +50,7 @@ def test_account_isolation_encryption_and_revision(client, settings):
     with client.app.state.session_factory() as db:
         row = db.scalar(select(ModelService).where(ModelService.user_id == UUID(uid)))
         credential = db.get(ServiceCredential, row.credential_id)
-        assert row.encrypted_key is None
+        assert row.protocol == "openai_chat"
         assert secret not in credential.encrypted_key
         assert (
             Fernet(settings.service_encryption_key.get_secret_value())
@@ -239,10 +239,10 @@ def test_service_config_requires_personal_session(client):
 )
 def test_official_supplier_needs_explicit_model_and_key(client, settings, preset):
     settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
-    account(client)
+    uid = account(client)
     path = "/api/v1/me/model-services/text"
     catalog = client.get("/api/v1/me/model-services").json()
-    assert preset.model_dump() in catalog["suppliers"]
+    assert preset.model_dump(exclude={"response_format"}) in catalog["suppliers"]
     configuration = {
         "supplier": preset.id,
         "api_key": "test-key",
@@ -255,7 +255,10 @@ def test_official_supplier_needs_explicit_model_and_key(client, settings, preset
     assert saved.status_code == 200, saved.text
     assert saved.json()["base_url"] == preset.base_url
     assert saved.json()["model"] == model
-    assert saved.json()["response_format"] == preset.response_format
+    assert "response_format" not in saved.json()
+    with client.app.state.session_factory() as db:
+        row = db.scalar(select(ModelService).where(ModelService.user_id == UUID(uid)))
+        assert row.response_format == preset.response_format
     assert saved.json()["supplier_name"] == preset.name
     assert client.get("/api/v1/me/model-services").json()["services"][0]["key_status"] == "READY"
     payload = {"supplier": preset.id, "model": model, "expected_revision": 1}

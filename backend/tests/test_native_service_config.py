@@ -27,7 +27,7 @@ def test_named_provider_key_model_and_official_endpoint(client, settings, preset
         "video": 5,
         "speech": 3,
     }
-    assert preset.model_dump() in catalog["suppliers"]
+    assert preset.model_dump(exclude={"response_format"}) in catalog["suppliers"]
     assert all("model" not in p for p in catalog["suppliers"])
     body = {
         "supplier": preset.id,
