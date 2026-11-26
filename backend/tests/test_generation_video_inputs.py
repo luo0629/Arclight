@@ -522,11 +522,17 @@ def test_provider_error_cannot_persist_inline_first_frame_or_credential(
             json={"error": {"message": image["image_url"]["url"] + " Bearer " + KEY}},
         )
 
-    assert deliver(client, job, provider_for(client, settings, job, handler)) == "RETRY_WAIT"
-    response = client.get(base(case["project_id"]) + "/" + job["id"])
+    assert deliver(client, job, provider_for(client, settings, job, handler)) == "FAILED"
+    url = base(case["project_id"]) + "/" + job["id"]
+    response = client.get(url)
     assert response.status_code == 200
+    assert response.json()["status"] == "FAILED"
+    attempts = client.get(url + "/attempts")
+    assert attempts.status_code == 200
+    (attempt,) = attempts.json()
+    assert attempt["error_code"] == "INPUT_INVALID"
     _, persisted = frozen_history(client, job)
-    assert_no_transport_media(persisted + response.text + caplog.text, case["data"])
+    assert_no_transport_media(persisted + response.text + attempts.text + caplog.text, case["data"])
 
 
 def test_approved_concept_reference_reuses_its_actual_rights_approval(

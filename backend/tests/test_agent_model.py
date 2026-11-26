@@ -601,6 +601,7 @@ def test_multiple_images_use_pinned_controlled_references_and_never_persist_byte
         update={
             "supplier": supplier,
             "model": settings.llm_model,
+            "response_formats": frozenset({response_format}),
             "structured_output_with_visual_tools": combined_format,
         }
     )

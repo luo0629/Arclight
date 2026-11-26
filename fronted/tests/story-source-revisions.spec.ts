@@ -121,10 +121,35 @@ test("saves original text, appends a revision, opens old bytes and exact writer 
     headers: env.headers,
   });
   expect(await original.body()).toEqual(Buffer.from("原稿😀\n第一段保留。"));
+  const draftResponse = page.waitForResponse(
+    (response) =>
+      new URL(response.url()).pathname ===
+        `/api/v1/episodes/${env.episode.id}/script-runs` &&
+      response.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "从此版本编剧", exact: true }).click();
+  const accepted = await draftResponse;
+  expect(accepted.status()).toBe(202);
+  expect(accepted.request().postDataJSON()).toMatchObject({
+    source_id: first.id,
+    purpose: "EDITABLE_DRAFT",
+  });
+  const { run_id: runId } = await accepted.json();
   await expect(
     page.getByRole("radio", { name: "任务与审核", exact: true }),
   ).toHaveAttribute("aria-checked", "true");
+  await expect
+    .poll(
+      async () => {
+        const run = await page.request.get(`/api/v1/runs/${runId}`, {
+          headers: env.headers,
+        });
+        expect(run.status()).toBe(200);
+        return (await run.json()).status;
+      },
+      { timeout: 20000 },
+    )
+    .toBe("SUCCEEDED");
   await openSources(page);
   await page
     .getByRole("button", { name: "导入 1 · 故事.txt", exact: true })

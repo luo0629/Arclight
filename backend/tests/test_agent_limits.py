@@ -1004,7 +1004,7 @@ def test_safe_retry_cannot_rebind_executor_identity(client, episode, change):
     policy = GatewayPolicy()
 
     def not_accepted():
-        raise GatewayFailure("INPUT_INVALID", not_accepted=True)
+        raise GatewayFailure("PROVIDER_UNAVAILABLE", not_accepted=True)
 
     with pytest.raises(DomainError) as failed:
         invoke(client.app.state.session_factory, call, selected, not_accepted, policy=policy)

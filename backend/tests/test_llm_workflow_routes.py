@@ -13,7 +13,7 @@ from test_llm_service import PROTOCOLS, response
 from test_model_services import account
 from test_story_analysis import content, execute, path, start
 
-from arclight.application import model_services
+from arclight.application import model_services, story_analysis
 from arclight.application.service_credentials import rotate_credentials
 from arclight.domain.agent_model import AgentModelCapabilities
 from arclight.domain.model_suppliers import SUPPLIERS
@@ -293,7 +293,6 @@ def test_legacy_encrypted_snapshot_dispatches_after_original_key_is_retired(
         "model": "legacy-exact-model",
         "encrypted_key": encryption.encrypt(key.encode()).decode(),
     }
-    monkeypatch.setattr(model_services, "text_snapshot", lambda *_: snapshot)
     sent = []
 
     def respond(request):
@@ -301,7 +300,10 @@ def test_legacy_encrypted_snapshot_dispatches_after_original_key_is_retired(
         return httpx.Response(200, json=response("openai_chat", json.dumps(content())))
 
     stub_llm(respond)
-    planned = start(client, episode)
+    # Seed the original input before the workflow and its provenance are frozen.
+    with monkeypatch.context() as historic_capture:
+        historic_capture.setattr(story_analysis, "require_text_snapshot", lambda *_: snapshot)
+        planned = start(client, episode)
     assert planned.status_code == 202, planned.text
     run_id = planned.json()["run_id"]
     rotated = settings.model_copy(

@@ -377,11 +377,13 @@ test("RENDER-05：授权字体和字幕设置随新清单冻结", async ({ page 
     name: "创建预览清单",
     exact: true,
   });
-  await expect(create).toBeDisabled();
+  await expect(create).toBeEnabled();
   await panel.getByText("字幕渲染设置与授权字体", { exact: true }).click();
-  await panel
-    .getByLabel("字幕字体", { exact: true })
-    .selectOption(env.fonts[0].id);
+  const font = panel.getByLabel("字幕字体", { exact: true });
+  await expect(font.locator("option:checked")).toHaveText(
+    "内置中文黑体（默认）",
+  );
+  await font.selectOption(env.fonts[0].id);
   await panel.getByLabel("字幕字号", { exact: true }).fill("36");
   await panel.getByLabel("字幕底部边距", { exact: true }).fill("40");
   await panel.getByLabel("字幕加粗", { exact: true }).check();

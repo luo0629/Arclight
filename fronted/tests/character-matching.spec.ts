@@ -182,8 +182,10 @@ test("aliases reuse stable identities; response loss retries do not create anoth
     .getByRole("button", { name: "确认角色 小青", exact: true })
     .click();
   await expect(
-    page.getByRole("alert").and(page.locator('[data-slot="alert"]')),
-  ).toContainText("网络连接失败");
+    page
+      .getByRole("alert")
+      .filter({ hasText: /^网络连接失败，请检查网络后重试$/ }),
+  ).toBeVisible();
   await page
     .getByRole("button", { name: "确认角色 小青", exact: true })
     .click();
