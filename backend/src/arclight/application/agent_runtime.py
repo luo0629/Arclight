@@ -245,7 +245,9 @@ class _AgentRuntime[T: BaseModel]:
                 rejected=rejected,
             )
 
-    def _declarations(self, request: AgentModelRequest) -> tuple[AgentToolDeclaration, ...]:
+    def _declarations(
+        self, request: AgentModelRequest, *, replaying: bool
+    ) -> tuple[AgentToolDeclaration, ...]:
         with self.factory.begin() as db:
             _, _, actor = self._context(db)
             return agent_tool_declarations(
@@ -316,7 +318,7 @@ class _AgentRuntime[T: BaseModel]:
                                     len(request.messages) :
                                 ]
                             ]
-                        self.declarations = self._declarations(request)
+                        self.declarations = self._declarations(request, replaying=replaying)
                         self.pi.prepare(self.declarations, additions)
                     elif kind == "model" and prepared_round is not None:
                         messages = self.pi.model_messages(event, self.declarations)

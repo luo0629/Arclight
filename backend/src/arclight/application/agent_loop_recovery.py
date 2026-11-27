@@ -31,7 +31,12 @@ from arclight.application.gateway_agent import AgentOutputProjection, invoke_age
 from arclight.application.generation_leases import DEFAULT_POLICY, LeasePolicy
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_model import AgentModelRequest, AgentModelResponse, AgentUserMessage
+from arclight.domain.agent_model import (
+    AgentModelRequest,
+    AgentModelResponse,
+    AgentToolDeclaration,
+    AgentUserMessage,
+)
 from arclight.domain.agent_runtime import (
     AgentDecision,
     AgentHumanDecision,
@@ -170,6 +175,39 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
             identity = self.store.question(state["model_turns"], outcome["human_request"])
             changes["outcome"] = outcome | {"question_id": str(identity)}
         return changes
+
+    def _declarations(
+        self, request: AgentModelRequest, *, replaying: bool
+    ) -> tuple[AgentToolDeclaration, ...]:
+        if replaying:
+            with self.factory.begin() as db:
+                self.store.guard(db)
+                action = db.scalar(
+                    select(AgentLoopAction).where(
+                        AgentLoopAction.loop_id == self.store.loop_id,
+                        AgentLoopAction.action_key == request.operation_key,
+                        AgentLoopAction.kind == "MODEL",
+                    )
+                )
+                if action is not None and action.result_json is not None:
+                    planned = action.request_json
+                    if planned["request"] != request.model_dump(mode="json"):
+                        raise DomainError(
+                            "AGENT_ACTION_CONFLICT", "逻辑行动不能更换输入或合同", 409
+                        )
+                    # Only replay a settled response with its original schemas. Each tool
+                    # callback and each new model request still uses live Python authorization.
+                    return tuple(
+                        AgentToolDeclaration(
+                            name=tool["name"],
+                            description=tool["name"],
+                            parameters=json.loads(tool["parameters"])
+                            if isinstance(tool["parameters"], str)
+                            else tool["parameters"],
+                        )
+                        for tool in planned["tools"]
+                    )
+        return super()._declarations(request, replaying=replaying)
 
     def invoke_model(
         self, request: AgentModelRequest, turn: int
