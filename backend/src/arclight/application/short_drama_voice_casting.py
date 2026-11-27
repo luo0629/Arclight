@@ -5,7 +5,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.application.agent_tools import AgentToolRegistry
 from arclight.application.audio_voice_catalog import query_voice_catalog, read_voice_catalog_source
 from arclight.application.gateway_agent import AgentOutputProjection

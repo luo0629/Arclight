@@ -5,7 +5,7 @@ from sqlalchemy import select
 from test_agent_model import model_service as model_service
 from test_screenwriter_creation import install, run_once, start
 
-from arclight.application.pi_agent import PiAgent, PiRuntimeError
+from arclight.application.agent_runtime.pi_bridge import PiAgent, PiRuntimeError
 from arclight.application.runtime import execute_run
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.base import utcnow

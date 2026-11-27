@@ -82,7 +82,7 @@ def require_review_authority(
         lock_gate(db)
     snapshot = ReviewSnapshot.model_validate(row.snapshot_json)
     if snapshot.loop_id is not None:
-        from arclight.application.agent_loop_store import checked_loop
+        from arclight.application.agent_runtime.store import checked_loop
 
         # Reuse ARUN-05's initiator, frozen-input and root-limit checks, retaining
         # its gateway -> run -> project lock order before taking other locks.

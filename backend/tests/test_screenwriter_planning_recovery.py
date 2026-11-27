@@ -17,7 +17,7 @@ from test_context_trace import trace
 from test_screenwriter_planning import install_model, plan_value, prepare
 
 from arclight.application import screenwriter_planning as planning
-from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.core.errors import DomainError
 from arclight.domain.screenwriter_planning import ScreenwriterPlan
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision
@@ -235,7 +235,7 @@ def test_revoked_investigation_grant_blocks_further_research_without_appending_e
 def test_planning_resume_does_not_reset_original_model_allowance(
     client, episode, settings, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 2)
     run_id, actor = prepare(client, episode, settings)
     sent, errors = install_model(model_service, human_reason="USER_DECISION")
     factory = client.app.state.session_factory

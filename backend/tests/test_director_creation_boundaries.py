@@ -145,7 +145,7 @@ def test_working_progress_and_answers_recheck_authority_and_exact_question(
 def test_loop_allowance_is_independent_for_each_director_scene(
     client, episode, settings, model_service, monkeypatch, combined
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 2)
     sent, errors = install(model_service, monkeypatch, settings)
     if combined:
         run_id = start_writer(client, episode, professional_director=True)

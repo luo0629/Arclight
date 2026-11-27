@@ -254,7 +254,7 @@ def test_new_exhaustion_blocks_old_result_even_before_request_repair_and_valid_r
 
     with monkeypatch.context() as patch:
         patch.setattr(escalations, "request_escalation", crash)
-        patch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+        patch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
         with pytest.raises(RuntimeError, match="stop persisted"):
             run_review(client, settings, next_case)
     assert len(sent) == 1 and not errors

@@ -7,7 +7,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_limits import _enabled_actor
-from arclight.application.agent_loop_store import submit_agent_decision
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.commands import emit, require_run
 from arclight.application.gateway_text import validate_publication
@@ -207,6 +206,7 @@ def queue_answer(
     agent_name: str = "screenwriter",
 ) -> WorkflowRun:
     # Preserve the shared gateway -> run lock order used by loop execution.
+    from arclight.application.agent_runtime.store import submit_agent_decision
     from arclight.application.model_gateway import lock_gate
 
     lock_gate(db)

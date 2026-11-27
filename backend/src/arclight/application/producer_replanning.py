@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_store import checked_loop, submit_agent_decision
+from arclight.application.agent_runtime.store import checked_loop, submit_agent_decision
 from arclight.application.agent_tools import AgentToolRegistry, available_agent_tools
 from arclight.application.commands import emit, require_run
 from arclight.application.gateway_text import execution_actor, validate_publication
@@ -490,7 +490,7 @@ def replan_producer(
     actor: str,
     observation_id: UUID,
 ) -> AgentLoopResult[ProducerReplan]:
-    from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+    from arclight.application.agent_runtime import run_persistent_agent_loop
     from arclight.application.producer_delegation import require_producer_parent
     from arclight.application.producer_observation import (
         read_observation,
@@ -575,7 +575,7 @@ def resume_producer_replan(
     *,
     decision: AgentHumanDecision | None = None,
 ) -> AgentLoopResult[ProducerReplan]:
-    from arclight.application.agent_loop_recovery import resume_agent_loop
+    from arclight.application.agent_runtime import resume_agent_loop
     from arclight.application.producer_observation import validate_observation_current
 
     with factory.begin() as db:

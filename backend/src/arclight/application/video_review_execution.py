@@ -8,7 +8,7 @@ from pydantic import JsonValue
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolRegistry
 from arclight.application.agent_workflows import (

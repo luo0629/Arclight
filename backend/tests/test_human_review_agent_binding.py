@@ -8,7 +8,7 @@ from test_agent_runtime import final, setup_loop
 from test_human_reviews import contract_registry as contract_registry
 from test_human_reviews import contract_review, count, decide, resume
 
-from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopDecision
 from arclight.persistence.human_reviews import HumanReviewResume
 from arclight.persistence.models import WorkflowRun

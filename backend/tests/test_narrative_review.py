@@ -500,7 +500,7 @@ def test_loop_guard_escalates_without_another_model_call(
     )
     calls = []
     model(lambda req: calls.append(req) or httpx.Response(500))
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 0)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 0)
     run_id = start(client, writing_case, payload(writing_case, saved, content))
     execute(client, settings, run_id)
     value = progress(client, writing_case, run_id)
@@ -699,7 +699,7 @@ def test_rereview_rejects_retired_quotas_and_keeps_the_root_scope(client, writin
 def test_rereview_has_its_own_loop_and_preserves_both_reports(
     client, writing_case, settings, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
     saved, content = prepare(client, writing_case)
     settings.model_gateway_policy = GatewayPolicy(
         text_maximum_cost=Decimal("0"), pricing_version="narrative-test:1"

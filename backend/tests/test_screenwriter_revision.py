@@ -484,7 +484,9 @@ def test_critique_loop_has_its_own_limit_and_keeps_the_failed_check_receipt(
     def limit_critique(payload):
         seed = json.loads(payload["messages"][1]["content"]).get("data", {})
         if seed.get("phase") == "CRITIQUE_SCRIPT":
-            monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+            monkeypatch.setattr(
+                "arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1
+            )
 
     sent, errors, ordinary_errors = install_revision(
         model_service,

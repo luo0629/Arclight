@@ -27,7 +27,7 @@ from arclight.domain.agent_model import (
 from arclight.domain.agent_tools import AgentToolFeedback
 from arclight.domain.model_gateway import GatewayUsage
 
-_RUNNER = Path(__file__).resolve().parents[3] / "pi_runtime" / "runner.mjs"
+_RUNNER = Path(__file__).resolve().parents[4] / "pi_runtime" / "runner.mjs"
 _MAX_FRAME_BYTES = 16 * 1024 * 1024
 _EVENT_TIMEOUT = 20.0
 _NODE_ENV = ("PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL")

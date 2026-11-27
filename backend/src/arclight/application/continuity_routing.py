@@ -7,7 +7,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from arclight.application.agent_loop_store import checked_loop
+from arclight.application.agent_runtime.store import checked_loop
 from arclight.application.audit import audit
 from arclight.application.commands import require_project
 from arclight.application.continuity_review_store import (

@@ -1,16 +1,7 @@
 import { Check, Ellipsis } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 
-export type ServiceKind = "text" | "image" | "video" | "speech";
-export type ServicePreset = {
-  id: string;
-  kind: ServiceKind;
-  name: string;
-  group: "domestic" | "international";
-  description: string;
-  base_url: string;
-  protocol: string;
-};
+import type { ServicePreset } from "../service-settings-api";
 
 export default function ServiceProviders({
   presets,

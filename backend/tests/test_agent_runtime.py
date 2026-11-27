@@ -507,7 +507,7 @@ def test_missing_quote_and_unknown_result_preserve_accounting(
 def test_agent_loop_enforces_the_turn_limit_without_losing_tool_receipts(
     client, episode, settings, model_service, monkeypatch, deliver
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 2)
     run_id, _, registry = setup_loop(client, episode, settings)
     entry = create_entry(client, episode["project_id"])
     sent = []

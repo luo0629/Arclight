@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_store import checked_loop
+from arclight.application.agent_runtime.store import checked_loop
 from arclight.application.art_direction import propose_art, validate_art_direction
 from arclight.application.art_direction_evidence import direction_loop, operation_sha256
 from arclight.application.art_proposal_store import save_proposal

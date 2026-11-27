@@ -177,7 +177,7 @@ def test_owner_decision_and_resume_preserve_review_and_explicit_asset_controls(
 def test_real_exhaustion_is_durable_cannot_be_approved_and_never_resets_limits(
     client, settings, model_service, reviewer_case, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
     sent, errors, _ = install_reviewer_model(model_service)
     outcome = run_review(client, settings, reviewer_case)
     assert outcome.status == "STOPPED" and outcome.stop_code == "AGENT_MODEL_CALL_LIMIT"

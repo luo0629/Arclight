@@ -12,14 +12,15 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agent_skills import freeze_agent_skills
-from arclight.application.agent_loop_store import (
+from arclight.application.agent_runtime.loop_state import AgentLoopState
+from arclight.application.agent_runtime.runtime import MAX_AGENT_LOOP_TURNS, _AgentRuntime
+from arclight.application.agent_runtime.store import (
     AgentLoopStore,
     checked_loop,
     claim_loop,
     keep_loop_alive,
     submit_agent_decision,
 )
-from arclight.application.agent_runtime import MAX_AGENT_LOOP_TURNS, _AgentRuntime
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import (
     AgentToolRegistry,
@@ -48,7 +49,6 @@ from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.model_gateway import GatewayUsage
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
-from arclight.workflows.agent import AgentLoopState
 from arclight.workflows.checkpoints import open_checkpointer
 
 _INITIAL_QUESTION = "_server_initial_question"

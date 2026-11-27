@@ -27,16 +27,16 @@ from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
 
 from arclight.agent_skills import freeze_agent_skills
-from arclight.application import agent_loop_recovery as recovery
-from arclight.application.agent_loop_recovery import resume_agent_loop, run_persistent_agent_loop
-from arclight.application.agent_loop_store import (
+from arclight.application.agent_memory import read_agent_memory
+from arclight.application.agent_runtime import recovery as recovery
+from arclight.application.agent_runtime import resume_agent_loop, run_persistent_agent_loop
+from arclight.application.agent_runtime.store import (
     AgentLoopStore,
     checked_loop,
     claim_loop,
     keep_loop_alive,
     submit_agent_decision,
 )
-from arclight.application.agent_memory import read_agent_memory
 from arclight.application.agent_tools import AgentToolRegistry
 from arclight.application.audit import audit
 from arclight.application.context_evidence import read_trace
@@ -164,7 +164,7 @@ def test_human_question_survives_app_restart_and_answer_continues_same_thread(
 def test_turn_limit_survives_repeated_human_waits_and_restart(
     client, episode, settings, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 2)
     run_id, actor, registry = setup_loop(client, episode, settings)
     sent = []
 
@@ -628,7 +628,7 @@ def test_real_process_exit_after_response_replays_without_calling_provider_again
         """import json, os, sys, httpx
 from arclight.core.config import Settings
 from arclight.persistence.session import build_engine, session_factory
-from arclight.application import agent_loop_recovery as r
+from arclight.application.agent_runtime import recovery as r
 from arclight.application.agent_tools import build_agent_tool_registry
 from arclight.application.generation_leases import LeasePolicy
 from arclight.domain.agent_model import AgentModelRequest

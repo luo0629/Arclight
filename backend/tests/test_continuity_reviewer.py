@@ -17,8 +17,8 @@ from test_continuity_rules import ANNOTATIONS
 from test_continuity_rules import rules_case as fixed_rules_case
 from test_continuity_rules import rules_storage as rules_storage
 
-from arclight.application import agent_loop_recovery as recovery
 from arclight.application import continuity_reviewer
+from arclight.application.agent_runtime import recovery as recovery
 from arclight.application.continuity_reviewer import (
     resume_reviewer,
     review_candidate,

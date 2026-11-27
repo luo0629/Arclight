@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.application.agent_limits import configure_agent_run, validate_agent_execution
-from arclight.application.agent_loop_store import checked_loop
+from arclight.application.agent_runtime.store import checked_loop
 from arclight.application.agent_runtime_state import initialize_run_state, scope_for_run
 from arclight.application.agent_tools import (
     AgentToolRegistry,
@@ -333,7 +333,7 @@ def _save(
 def plan_producer(
     factory: sessionmaker[Session], settings: Settings, run_id: UUID, actor: str
 ) -> AgentLoopResult[ProducerPlan]:
-    from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+    from arclight.application.agent_runtime import run_persistent_agent_loop
 
     with factory.begin() as db:
         lock_gate(db)
@@ -408,7 +408,7 @@ def resume_producer_plan(
     *,
     decision: AgentHumanDecision | None = None,
 ) -> AgentLoopResult[ProducerPlan]:
-    from arclight.application.agent_loop_recovery import resume_agent_loop
+    from arclight.application.agent_runtime import resume_agent_loop
 
     with factory.begin() as db:
         loop = checked_loop(db, plan_id, actor=actor)

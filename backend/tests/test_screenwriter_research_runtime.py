@@ -20,8 +20,11 @@ from test_agent_tools import create_entry
 from test_context_trace import trace
 from test_screenwriter_research import exact
 
-from arclight.application.agent_loop_recovery import resume_agent_loop, run_persistent_agent_loop
-from arclight.application.agent_runtime import run_agent_loop
+from arclight.application.agent_runtime import (
+    resume_agent_loop,
+    run_agent_loop,
+    run_persistent_agent_loop,
+)
 from arclight.application.agent_tools import build_agent_tool_registry
 from arclight.application.gateway_accounting import latest_receipt, reconcile
 from arclight.domain.model_gateway import GatewayUsage

@@ -37,7 +37,7 @@ from test_screenwriter_revision import install_revision as install_writer
 from arclight.application import producer_observation as observing
 from arclight.application import producer_planning as planning
 from arclight.application import producer_replanning as replanning
-from arclight.application.agent_loop_store import submit_agent_decision
+from arclight.application.agent_runtime.store import submit_agent_decision
 from arclight.application.agent_tools import grant_agent_tools
 from arclight.application.art_workflow import delivered
 from arclight.application.continuity_review_store import require_review_record

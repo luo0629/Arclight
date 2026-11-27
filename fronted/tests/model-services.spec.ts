@@ -106,6 +106,53 @@ test("检测连接使用未保存的输入，显示结果且编辑后清除（�
   );
 });
 
+test("切换服务类型会中止正在进行的连接检测并保留草稿", async ({ page }) => {
+  const { dialog } = await openSettings(page);
+  await dialog.getByRole("radio", { name: "DeepSeek", exact: true }).click();
+  await dialog.getByLabel("模型 ID", { exact: true }).fill("draft-model");
+  await dialog
+    .getByLabel("API Key", { exact: true })
+    .fill("ephemeral-browser-key");
+
+  const path = "**/api/v1/me/model-services/text/connection";
+  let release = () => {};
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(path, async (route) => {
+    await pending;
+    await route.fulfill({
+      json: { status: "model_found", message: "旧的检测结果" },
+    });
+  });
+
+  try {
+    const check = dialog.getByRole("button", { name: "检测连接", exact: true });
+    await Promise.all([page.waitForRequest(path), check.click()]);
+    await expect(
+      dialog.getByRole("button", { name: "检测中…" }),
+    ).toBeDisabled();
+
+    const [canceled] = await Promise.all([
+      page.waitForEvent("requestfailed", {
+        predicate: (request) => request.url().endsWith("/text/connection"),
+        timeout: 5000,
+      }),
+      dialog.getByRole("radio", { name: "图片模型", exact: true }).click(),
+    ]);
+    expect(canceled.failure()?.errorText).toContain("ERR_ABORTED");
+    await expect(dialog.getByText("旧的检测结果")).toHaveCount(0);
+
+    await dialog.getByRole("radio", { name: "文字模型", exact: true }).click();
+    await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
+      "draft-model",
+    );
+    await expect(check).toBeEnabled();
+  } finally {
+    release();
+  }
+});
+
 test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   page,
   browser,

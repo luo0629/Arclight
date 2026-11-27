@@ -6,7 +6,7 @@ from uuid import UUID
 from langgraph.types import Command
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_store import AgentLoopStore, claim_loop, keep_loop_alive
+from arclight.application.agent_runtime.store import AgentLoopStore, claim_loop, keep_loop_alive
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_workflows import (
     WorkflowExecutionDeferred,

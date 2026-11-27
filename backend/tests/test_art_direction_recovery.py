@@ -18,8 +18,8 @@ from test_assets import rename
 from test_collaboration import create_episode, create_project, register
 from test_concurrency import require_postgres
 
-from arclight.application import agent_loop_recovery as recovery
 from arclight.application import art_direction
+from arclight.application.agent_runtime import recovery as recovery
 from arclight.application.art_direction import propose_art, resume_art_direction
 from arclight.core.errors import DomainError
 from arclight.persistence.agent_limits import AgentRunLimit
@@ -109,7 +109,7 @@ def test_human_response_cannot_replace_missing_approved_image_evidence(
 def test_art_loop_stops_at_the_runtime_turn_limit_without_formal_writes(
     client, episode, settings, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
     reference_set(client, episode)
     run_id, actor, _, task = prepare_direction(client, episode, settings)
     sent, errors, _ = install_direction_model(model_service)

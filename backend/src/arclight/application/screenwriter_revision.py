@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agents.contracts import ScriptContent, ScriptContentV3, read_script_content
 from arclight.agents.script_rewrite import RewriteRequest
-from arclight.application.agent_loop_recovery import (
+from arclight.application.agent_runtime import (
     run_persistent_agent_loop,
     with_initial_question,
 )

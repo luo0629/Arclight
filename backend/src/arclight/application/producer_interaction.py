@@ -6,7 +6,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from arclight.application.agent_limits import validate_agent_execution
-from arclight.application.agent_loop_store import submit_agent_decision
+from arclight.application.agent_runtime.store import submit_agent_decision
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolContext, available_agent_tools
 from arclight.application.agent_workflows import creation_loops

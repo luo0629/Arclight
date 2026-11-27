@@ -5,8 +5,8 @@ from uuid import UUID, uuid5
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_recovery import resume_agent_loop, run_persistent_agent_loop
-from arclight.application.agent_loop_store import checked_loop
+from arclight.application.agent_runtime import resume_agent_loop, run_persistent_agent_loop
+from arclight.application.agent_runtime.store import checked_loop
 from arclight.application.agent_tools import (
     AgentToolContext,
     AgentToolDefinition,

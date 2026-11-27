@@ -37,7 +37,7 @@ def test_incomplete_direction_creates_no_candidate_or_review(
         model_service, human=mode == "human", include_images=mode != "missing-images"
     )
     if mode == "limit":
-        monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+        monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
     if mode == "model-error":
         import httpx
 

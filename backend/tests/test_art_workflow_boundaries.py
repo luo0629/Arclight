@@ -229,7 +229,7 @@ def test_generic_saved_decision_and_resume_keep_original_art_run(
 def test_art_runtime_honors_turn_limit_without_blind_retry(
     client, episode, settings, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
     reference_set(client, episode)
     sent, errors, _ = install_direction_model(model_service)
     run_id, _, _ = start_art(client, episode, settings)

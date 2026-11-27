@@ -14,11 +14,11 @@ import {
   PlugZap,
 } from "lucide-react";
 import Dialog from "@/components/shared/app-dialog";
-import ServiceProviders, {
-  type ServiceKind as Kind,
-  type ServicePreset,
-} from "./service-providers";
-import { api, json, message } from "@/lib/api/client";
+import ServiceProviders from "./service-providers";
+import useServiceSettings, {
+  type ServiceDraft,
+} from "../hooks/use-service-settings";
+import type { CapabilityCheck, ServiceKind } from "../service-settings-api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -35,72 +35,12 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ChoiceSelect } from "@/components/choice-select";
 import { Spinner } from "@/components/ui/spinner";
 
-type CapabilityCheck = {
-  status: "ready" | "partial" | "unverified";
-  tools: boolean;
-  max_input_images: number;
-  can_check: boolean;
-};
-type Profile = {
-  kind: Kind;
-  supplier: string;
-  supplier_name: string;
-  protocol: string;
-  base_url: string;
-  model: string;
-  has_key: boolean;
-  revision: number;
-  key_status?: string;
-  capability_check?: CapabilityCheck;
-};
-type Draft = Profile & { api_key: string; clear_key: boolean; dirty: boolean };
-type ConnectionResult = {
-  status: "model_found" | "reachable" | "failed";
-  message: string;
-};
-type ModelPreset = {
-  supplier: string;
-  model: string;
-  name: string;
-};
-type SpeechModelPreset = ModelPreset & { description: string };
-type VisualModelPreset = ModelPreset & { kind: "image" | "video" };
-type Configuration = {
-  services: Profile[];
-  speech_models?: SpeechModelPreset[];
-  text_models?: ModelPreset[];
-  visual_models: VisualModelPreset[];
-  suppliers: ServicePreset[];
-  protocols: Record<Kind, string[]>;
-  can_store_keys: boolean;
-  key_storage: { code: string; message: string };
-};
 const services = [
   { kind: "text" as const, label: "文字模型", icon: Type },
   { kind: "image" as const, label: "图片模型", icon: Image },
   { kind: "video" as const, label: "视频模型", icon: Video },
   { kind: "speech" as const, label: "语音服务", icon: AudioLines },
 ];
-const empty = (kind: Kind): Draft => ({
-  kind,
-  supplier: "custom",
-  supplier_name: "",
-  protocol: "",
-  base_url: "",
-  model: "",
-  has_key: false,
-  revision: 0,
-  api_key: "",
-  clear_key: false,
-  dirty: false,
-});
-const initialDrafts = (): Record<Kind, Draft> => ({
-  text: empty("text"),
-  image: empty("image"),
-  video: empty("video"),
-  speech: empty("speech"),
-});
-const endpoint = (url: string) => url.trim().replace(/\/+$/, "");
 const CUSTOM_TTS_MODEL = "__custom_tts__";
 const capabilityLabels: Record<CapabilityCheck["status"], string> = {
   ready: "模型支持智能创作",
@@ -133,205 +73,70 @@ export default function ServiceSettings({
 }: {
   onDismiss: () => void;
 }) {
-  const [config, setConfig] = useState<Configuration | null>(null);
-  const [drafts, setDrafts] = useState(initialDrafts);
-  const [kind, setKind] = useState<Kind>("text");
-  const [pendingAction, setPendingAction] = useState<"save" | "verify" | null>(
-    null,
-  );
-  const busy = pendingAction !== null;
-  const [error, setError] = useState("");
-  const [saved, setSaved] = useState("");
+  const {
+    config,
+    drafts,
+    kind,
+    draft,
+    presets,
+    preset,
+    speechModels,
+    speechModel,
+    modelSuggestions,
+    stored,
+    hasStoredKey,
+    capability,
+    keyReady,
+    canVerify,
+    canCheck,
+    checking,
+    connection,
+    pendingAction,
+    busy,
+    error,
+    saved,
+    changeDraft,
+    checkConnection,
+    retryLoad,
+    saveDraft,
+    selectKind,
+    selectProvider,
+    verifyCapabilities,
+  } = useServiceSettings();
   const [confirmClose, setConfirmClose] = useState(false);
   const confirmation = useRef<HTMLDivElement>(null);
   const modelInput = useRef<HTMLInputElement>(null);
   const [modelError, setModelError] = useState("");
-  const [attempt, setAttempt] = useState(0);
-  const [connection, setConnection] = useState<
-    ConnectionResult | "checking" | null
-  >(null);
-  const probe = useRef<AbortController | null>(null);
-  useEffect(() => () => probe.current?.abort(), []);
+
   useEffect(() => {
     if (confirmClose) {
       confirmation.current?.scrollIntoView({ block: "nearest" });
       confirmation.current?.focus();
     }
   }, [confirmClose]);
-  useEffect(() => {
-    let live = true;
-    setError("");
-    void api<Configuration>("/me/model-services")
-      .then((result) => {
-        if (!live) return;
-        const next = initialDrafts();
-        for (const profile of result.services) {
-          const official = result.suppliers.find(
-            (item) =>
-              item.kind === profile.kind && item.id === profile.supplier,
-          );
-          const changedEndpoint =
-            official &&
-            endpoint(profile.base_url) !== endpoint(official.base_url);
-          next[profile.kind] = {
-            ...empty(profile.kind),
-            ...profile,
-            ...(changedEndpoint ? { supplier: "custom" } : {}),
-            protocol:
-              profile.protocol ||
-              official?.protocol ||
-              result.protocols[profile.kind][0],
-          };
-        }
-        setDrafts(next);
-        setConfig(result);
-      })
-      .catch((err) => {
-        if (live) setError(message(err));
-      });
-    return () => {
-      live = false;
-    };
-  }, [attempt]);
-  const draft = drafts[kind];
-  const presets =
-    config?.suppliers.filter((supplier) => supplier.kind === kind) ?? [];
-  const preset = presets.find((row) => row.id === draft.supplier);
-  const speechModels =
-    kind === "speech"
-      ? (config?.speech_models ?? []).filter(
-          (row) => row.supplier === draft.supplier,
-        )
-      : [];
-  const speechModel = speechModels.find((row) => row.model === draft.model);
-  const modelSuggestions = (
-    kind === "text"
-      ? (config?.text_models ?? [])
-      : (config?.visual_models ?? []).filter((row) => row.kind === kind)
-  ).filter((row) => row.supplier === preset?.id);
-  const stored = config?.services.find((row) => row.kind === kind);
-  const hasStoredKey =
-    !!stored?.has_key &&
-    stored.supplier === draft.supplier &&
-    endpoint(stored.base_url) === endpoint(draft.base_url) &&
-    stored.protocol === draft.protocol;
-  const capability =
-    kind === "text" && !draft.dirty ? stored?.capability_check : undefined;
-  const keyReady = hasStoredKey && stored?.key_status === "READY";
-  const canVerify = !!capability?.can_check && keyReady;
-  const checking = connection === "checking";
-  const canCheck =
-    !!draft.model.trim() &&
-    (preset || !!draft.base_url.trim()) &&
-    !draft.clear_key &&
-    (!!draft.api_key.trim() || hasStoredKey);
 
-  function resetConnection() {
-    probe.current?.abort();
-    probe.current = null;
-    setConnection(null);
-  }
-  function change(patch: Partial<Draft>) {
-    setDrafts((current) => ({
-      ...current,
-      [kind]: { ...current[kind], ...patch, dirty: true },
-    }));
-    setSaved("");
-    setError("");
+  function clearFormFeedback() {
     setModelError("");
     setConfirmClose(false);
-    resetConnection();
   }
-  function selectProvider(id: string) {
+
+  function change(patch: Partial<ServiceDraft>) {
+    changeDraft(patch);
+    clearFormFeedback();
+  }
+
+  function changeProvider(id: string) {
     if (id === draft.supplier) return;
-    const next = presets.find((row) => row.id === id);
-    const previous = stored?.supplier === id ? stored : null;
-    change({
-      supplier: id,
-      supplier_name: next?.name ?? previous?.supplier_name ?? "",
-      protocol:
-        next?.protocol ??
-        previous?.protocol ??
-        config?.protocols[kind][0] ??
-        "",
-      base_url: next?.base_url ?? previous?.base_url ?? "",
-      model: previous?.model ?? "",
-      api_key: "",
-      clear_key: false,
-    });
+    selectProvider(id);
+    clearFormFeedback();
   }
+
   function dismiss() {
     if (Object.values(drafts).some((row) => row.dirty)) setConfirmClose(true);
     else onDismiss();
   }
-  async function checkConnection() {
-    if (!canCheck || busy || probe.current) return;
-    const request = new AbortController();
-    probe.current = request;
-    setConnection("checking");
-    try {
-      const result = await api<ConnectionResult>(
-        `/me/model-services/${kind}/connection`,
-        {
-          ...json("POST", {
-            supplier: draft.supplier,
-            protocol: draft.protocol || config?.protocols[kind][0],
-            base_url: preset ? undefined : draft.base_url,
-            model: draft.model,
-            api_key: draft.api_key || null,
-            expected_revision: draft.revision,
-          }),
-          signal: request.signal,
-          cache: "no-store",
-        },
-      );
-      if (probe.current === request) setConnection(result);
-    } catch (err) {
-      if (probe.current === request)
-        setConnection({ status: "failed", message: message(err) });
-    } finally {
-      if (probe.current === request) probe.current = null;
-    }
-  }
-  function applyProfile(profile: Profile) {
-    setDrafts((current) => ({
-      ...current,
-      [profile.kind]: { ...empty(profile.kind), ...profile },
-    }));
-    setConfig((current) =>
-      current
-        ? {
-            ...current,
-            services: [
-              ...current.services.filter((row) => row.kind !== profile.kind),
-              profile,
-            ],
-          }
-        : current,
-    );
-  }
-  async function verifyCapabilities() {
-    if (!canVerify || !stored || busy) return;
-    resetConnection();
-    setPendingAction("verify");
-    setError("");
-    setSaved("");
-    try {
-      const profile = await api<Profile>(
-        "/me/model-services/text/capabilities",
-        json("POST", {
-          expected_revision: stored.revision,
-          confirm_charges: true,
-        }),
-      );
-      applyProfile(profile);
-    } catch (err) {
-      setError(message(err));
-    } finally {
-      setPendingAction(null);
-    }
-  }
-  async function save(event: React.FormEvent) {
+
+  function save(event: React.FormEvent) {
     event.preventDefault();
     if (busy || !draft.dirty) return;
     if (!draft.model.trim()) {
@@ -339,36 +144,9 @@ export default function ServiceSettings({
       modelInput.current?.focus();
       return;
     }
-    resetConnection();
-    setPendingAction("save");
-    setError("");
-    setSaved("");
-    try {
-      const profile = await api<Profile>(
-        "/me/model-services/" + kind,
-        json("PUT", {
-          supplier: draft.supplier,
-          supplier_name: draft.supplier_name,
-          protocol: draft.protocol || config?.protocols[kind][0],
-          base_url: preset ? undefined : draft.base_url,
-          model: draft.model,
-          api_key: draft.api_key || null,
-          clear_key: draft.clear_key,
-          expected_revision: draft.revision,
-        }),
-      );
-      applyProfile(profile);
-      setSaved(
-        draft.clear_key
-          ? "已清除 API Key。重新配置此服务后才能用于新任务。"
-          : "已保存到当前账号。新建的对应任务将使用此配置，已有任务保留原配置。",
-      );
-    } catch (err) {
-      setError(message(err));
-    } finally {
-      setPendingAction(null);
-    }
+    void saveDraft();
   }
+
   return (
     <Dialog
       labelledBy="service-settings-title"
@@ -403,10 +181,7 @@ export default function ServiceSettings({
           {error ? (
             <Notice tone="error" role="alert">
               {error}
-              <Button
-                variant="outline"
-                onClick={() => setAttempt((n) => n + 1)}
-              >
+              <Button variant="outline" onClick={retryLoad}>
                 重试读取配置
               </Button>
             </Notice>
@@ -422,12 +197,8 @@ export default function ServiceSettings({
               value={kind}
               onValueChange={(value) => {
                 if (!value) return;
-                resetConnection();
-                setKind(value as Kind);
-                setError("");
-                setModelError("");
-                setSaved("");
-                setConfirmClose(false);
+                selectKind(value as ServiceKind);
+                clearFormFeedback();
               }}
               aria-label="服务类型"
               className="grid w-full grid-cols-2 gap-1.5 md:flex md:flex-col"
@@ -483,7 +254,7 @@ export default function ServiceSettings({
               presets={presets}
               value={draft.supplier}
               disabled={busy}
-              onSelect={selectProvider}
+              onSelect={changeProvider}
             />
             <form
               onSubmit={save}
@@ -620,7 +391,7 @@ export default function ServiceSettings({
                       disabled={busy}
                       onValueChange={(model) => {
                         if (model === CUSTOM_TTS_MODEL) {
-                          selectProvider("custom");
+                          changeProvider("custom");
                         } else {
                           change({ model });
                         }

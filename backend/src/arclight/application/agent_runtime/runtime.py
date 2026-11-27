@@ -12,6 +12,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.agent_skills import freeze_agent_skills
 from arclight.application.agent_limits import configure_agent_run, validate_agent_execution
 from arclight.application.agent_memory import project_agent_memory
+from arclight.application.agent_runtime.loop_state import AgentLoopState
+from arclight.application.agent_runtime.pi_bridge import PiAgent, PiRuntimeError
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import (
     AgentToolRegistry,
@@ -22,7 +24,6 @@ from arclight.application.context_evidence import read_trace
 from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.gateway_text import execution_actor
 from arclight.application.model_gateway import lock_gate
-from arclight.application.pi_agent import PiAgent, PiRuntimeError
 from arclight.application.shared_agent_reads import agent_tool_declarations, with_project_reads
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -40,7 +41,6 @@ from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.models import Episode, WorkflowRun
-from arclight.workflows.agent import AgentLoopState
 
 MAX_AGENT_LOOP_TURNS = 32
 _FATAL_TOOL_ERRORS = frozenset(

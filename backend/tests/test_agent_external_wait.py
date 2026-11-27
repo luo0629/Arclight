@@ -14,8 +14,8 @@ from test_agent_runtime import final, setup_loop, tool_feedback
 from test_agent_tools import create_entry
 
 from arclight.application.agent_external_waits import queue_ready_external
+from arclight.application.agent_runtime.pi_bridge import PiAgent, PiRuntimeError
 from arclight.application.agent_tools import AgentToolRegistry
-from arclight.application.pi_agent import PiAgent, PiRuntimeError
 from arclight.main import create_app
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction, AgentLoopQuestion
 from arclight.persistence.models import AgentToolInvocation, OutboxEvent, WorkflowRun

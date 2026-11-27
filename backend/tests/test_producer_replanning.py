@@ -21,7 +21,7 @@ from test_screenwriter_revision import install_revision as install_writer
 
 from arclight.application import producer_replanning as replanning
 from arclight.application.agent_limits import action_usage
-from arclight.application.agent_loop_store import submit_agent_decision
+from arclight.application.agent_runtime.store import submit_agent_decision
 from arclight.application.invalidation import mark_stale
 from arclight.application.producer_observation import observe_producer
 from arclight.application.producer_plan_history import read_plan_record

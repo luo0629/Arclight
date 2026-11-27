@@ -10,7 +10,7 @@ from arclight.agents.contracts import (
     read_script_content,
 )
 from arclight.application import director_planning as planning
-from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.application.agent_tools import build_agent_tool_registry
 from arclight.application.commands import require_run
 from arclight.application.content_references import validate_storyboard_assets

@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agents.contracts import StoryboardContent, legacy_script_view
-from arclight.application.agent_loop_recovery import (
+from arclight.application.agent_runtime import (
     run_persistent_agent_loop,
     with_initial_question,
 )

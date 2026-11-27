@@ -10,7 +10,7 @@ from test_agent_model import model_service as model_service
 from test_agent_runtime import final, rows_for, setup_loop, tool_feedback
 from test_agent_tools import create_entry
 
-from arclight.application.pi_agent import PiAgent, PiRuntimeError
+from arclight.application.agent_runtime.pi_bridge import PiAgent, PiRuntimeError
 from arclight.domain.model_suppliers import supplier_by_id
 from arclight.main import create_app
 from arclight.persistence.agent_loops import AgentLoopAction, AgentLoopDecision

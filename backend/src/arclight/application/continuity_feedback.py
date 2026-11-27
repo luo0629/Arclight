@@ -8,7 +8,7 @@ from uuid import UUID, uuid5
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_recovery import resume_agent_loop, run_persistent_agent_loop
+from arclight.application.agent_runtime import resume_agent_loop, run_persistent_agent_loop
 from arclight.application.agent_tools import AgentToolRegistry
 from arclight.application.audit import audit
 from arclight.application.candidate_checks import require_candidate_media_check

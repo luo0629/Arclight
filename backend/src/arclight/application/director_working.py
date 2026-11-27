@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.application.director_creation import creation_attempt
 from arclight.application.director_performance import director_contracts, offset_working_shot
 from arclight.application.director_planning import _registry

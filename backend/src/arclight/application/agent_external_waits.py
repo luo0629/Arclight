@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from arclight.application.agent_loop_store import checked_loop
+from arclight.application.agent_runtime.store import checked_loop
 from arclight.application.agent_tools import agent_tool_is_pending, build_agent_tool_registry
 from arclight.application.commands import emit
 from arclight.application.model_gateway import lock_gate

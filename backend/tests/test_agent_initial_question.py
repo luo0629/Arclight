@@ -9,7 +9,7 @@ from test_agent_model import model_request
 from test_agent_model import model_service as model_service
 from test_agent_runtime import final, setup_loop
 
-from arclight.application.agent_loop_recovery import with_initial_question
+from arclight.application.agent_runtime import with_initial_question
 from arclight.domain.agent_runtime import HumanDecisionRequest
 from arclight.main import create_app
 from arclight.persistence.agent_loops import AgentLoopDecision, AgentLoopQuestion

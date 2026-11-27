@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agents.contracts import read_script_content
 from arclight.agents.script_rewrite import RewriteRequest
-from arclight.application.agent_loop_recovery import resume_agent_loop, run_persistent_agent_loop
-from arclight.application.agent_loop_store import checked_loop
+from arclight.application.agent_runtime import resume_agent_loop, run_persistent_agent_loop
+from arclight.application.agent_runtime.store import checked_loop
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolRegistry, build_agent_tool_registry
 from arclight.application.commands import require_run

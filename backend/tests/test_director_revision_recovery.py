@@ -233,7 +233,9 @@ def test_director_check_loop_stops_without_publishing_an_unreviewed_candidate(
     def limit_checks(payload):
         seed = json.loads(payload["messages"][1]["content"]).get("data", {})
         if seed.get("phase") == "CHECK_DIRECTOR":
-            monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+            monkeypatch.setattr(
+                "arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1
+            )
 
     sent, errors, base_errors = install_revision(
         model_service, monkeypatch, settings, on_http=limit_checks

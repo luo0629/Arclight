@@ -166,7 +166,7 @@ def test_new_exhausted_recheck_keeps_old_pass_unselectable_and_qa06_wait_durable
     case = feedback_case
 
     def limit_next_review(_):
-        monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+        monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
 
     sent, _, reviewed, errors, _ = install_feedback_model(
         model_service, ["INVESTIGATE"], on_feedback=limit_next_review

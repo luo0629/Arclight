@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from arclight.agents.contracts import CharacterAsset, ScriptContent, ScriptContentV3
 from arclight.application import screenwriter_planning as planning
-from arclight.application.agent_loop_recovery import run_persistent_agent_loop
+from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.application.agent_tools import (
     build_agent_tool_registry,
 )

@@ -366,7 +366,7 @@ def test_uploaded_replacement_gets_independent_check_and_actual_review(
 def test_actual_limit_stop_persists_human_wait_without_review_or_selection(
     client, episode, settings, reviewer_case, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
     sent, _, _ = install_reviewer_model(model_service)
     job, _ = make_job(client, episode, reviewer_case)
     candidate = candidates(client, episode["project_id"], job)[0]

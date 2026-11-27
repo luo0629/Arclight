@@ -492,7 +492,7 @@ def test_foreign_project_cannot_read_start_or_resume_a_plan(
 def test_planning_stops_at_the_agent_turn_limit(
     client, episode, settings, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 1)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 1)
     run_id, actor = prepare(client, episode, settings)
     sent, errors = install_model(model_service)
     result = planning.plan_screenwriter(

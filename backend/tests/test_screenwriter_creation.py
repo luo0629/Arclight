@@ -384,7 +384,7 @@ def test_plan_constraint_change_is_rejected_before_creating(
 def test_each_screenwriter_operation_gets_its_own_bounded_loop(
     client, episode, settings, model_service, monkeypatch
 ):
-    monkeypatch.setattr("arclight.application.agent_runtime.MAX_AGENT_LOOP_TURNS", 2)
+    monkeypatch.setattr("arclight.application.agent_runtime.runtime.MAX_AGENT_LOOP_TURNS", 2)
     sent, errors = install(model_service, monkeypatch, settings)
     run_id = start(client, episode)
     run = run_once(client, settings, run_id)
