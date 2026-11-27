@@ -404,12 +404,12 @@ def test_non_utc_database_candidate_and_job_responses_are_stable(client, episode
         engine.dispose()
 
 
-def test_upload_replacement_is_explicit_immutable_and_requires_new_review(client, transfer_setup):
-    settings, root = transfer_setup
-    project_id = root.rsplit("/", 1)[1]
-    episode = client.post(f"{root}/episodes", json={"episode_no": 1, "title": "Image generation"})
-    assert episode.status_code == 201, episode.text
-    episode_id = episode.json()["id"]
+def test_upload_replacement_is_explicit_immutable_and_requires_new_review(
+    client, transfer_setup, episode
+):
+    _, root = transfer_setup
+    project_id = episode["project_id"]
+    episode_id = episode["id"]
     asset = create(client, project_id)
     job, attempt = generate(client, project_id, asset, episode_id=episode_id)
     assert ingest(client, attempt) == 1
