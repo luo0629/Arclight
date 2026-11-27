@@ -17,3 +17,5 @@ celerybeat-schedule*
 tests
 scripts
 .local
+pi_runtime/node_modules
+pi_runtime/*.test.mjs

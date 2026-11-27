@@ -10,6 +10,7 @@ from arclight.application.agent_loop_store import AgentLoopStore, claim_loop, ke
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_workflows import (
     WorkflowExecutionDeferred,
+    WorkflowRecoveryFailed,
     active_workflow,
     creation_loops,
     fail_workflow,
@@ -215,6 +216,8 @@ def execute_art(
         fail_workflow(factory, run_id, revision, error.code)
     except AgentStateError:
         fail_workflow(factory, run_id, revision, "RUN_STATE_INVALID")
+    except WorkflowRecoveryFailed:
+        raise
     except Exception as error:
         logger.error("art_failed run_id=%s error_type=%s", run_id, type(error).__name__)
         fail_workflow(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")

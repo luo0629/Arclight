@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_workflows import (
     WorkflowExecutionDeferred,
+    WorkflowRecoveryFailed,
     active_workflow,
     fail_workflow,
 )
@@ -199,6 +200,8 @@ def execute_continuity(
             fail_workflow(factory, run_id, revision, error.code)
     except AgentStateError:
         fail_workflow(factory, run_id, revision, "RUN_STATE_INVALID")
+    except WorkflowRecoveryFailed:
+        raise
     except Exception as error:
         logger.error("review_failed run_id=%s error_type=%s", run_id, type(error).__name__)
         fail_workflow(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")

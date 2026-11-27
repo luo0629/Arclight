@@ -87,6 +87,7 @@ def execute_director(
 ) -> bool:
     from arclight.application.agent_workflows import (
         WorkflowExecutionDeferred,
+        WorkflowRecoveryFailed,
         fail_workflow,
         wait_for_agent,
     )
@@ -146,6 +147,8 @@ def execute_director(
         if exc.code == "SCREENWRITER_DELIVERY_STALE":
             return True
         fail_workflow(factory, run_id, revision, exc.code)
+    except WorkflowRecoveryFailed:
+        raise
     except Exception as exc:
         logger.error("director_failed run_id=%s error_type=%s", run_id, type(exc).__name__)
         fail_workflow(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")

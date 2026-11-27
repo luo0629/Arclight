@@ -26,6 +26,7 @@ from arclight.application.agent_tools import (
     available_agent_tools,
     execute_agent_tool,
 )
+from arclight.application.gateway_accounting import latest_receipt
 from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.generation_leases import DEFAULT_POLICY, LeasePolicy
 from arclight.application.shared_agent_reads import agent_tool_declarations
@@ -41,6 +42,7 @@ from arclight.domain.agent_runtime import (
 )
 from arclight.domain.agent_tools import AgentToolCall, AgentToolFeedback
 from arclight.domain.generation_requests import safe_metadata
+from arclight.domain.model_gateway import GatewayUsage
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.workflows.agent import AgentLoopState, build_agent_graph
@@ -146,7 +148,16 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
             key, "MODEL", {"request": request.model_dump(mode="json"), "tools": declarations}
         )
         if saved is not None:
-            return self.response_model.model_validate(saved)
+            response = self.response_model.model_validate(saved)
+            with self.factory.begin() as db:
+                self.store.guard(db)
+                action = db.get(AgentLoopAction, action_id)
+                assert action is not None and action.gateway_call_id is not None
+                receipt = latest_receipt(db, action.gateway_call_id)
+                assert receipt is not None
+                usage = GatewayUsage.model_validate(receipt.usage_json)
+            self.pi.accept_model(response, tuple(tool.name for tool in definitions), usage)
+            return response
         return invoke_agent(
             self.factory,
             self.settings,
@@ -159,6 +170,7 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
             on_result=lambda db, call_id, result: self.store.save_model(
                 db, action_id, call_id, result.model_dump(mode="json")
             ),
+            on_round=self.pi.accept_model,
         )
 
     def execute_tool(self, request: AgentToolCall, step_key: str) -> AgentToolFeedback:
@@ -168,23 +180,16 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
         wait_key = "wait-" + digest({"tool_action": request.idempotency_key})
         with self.factory.begin() as db:
             _, _, actor = self._context(db)
-            waited = (
-                db.scalar(
-                    select(AgentLoopAction.id).where(
-                        AgentLoopAction.loop_id == self.store.loop_id,
-                        AgentLoopAction.action_key == wait_key,
-                    )
-                )
-                is not None
-            )
             pending = saved is None and agent_tool_is_pending(
                 db, self.registry, self.seed.agent_name, request, actor, self.seed.stage
             )
-        if waited or pending:
-            # Keep every previous interrupt in order when a batched tool node replays.
-            # A separate immutable intent preserves the wait after the receipt is saved.
+        if pending:
             self.store.plan(wait_key, "WAIT", request.model_dump(mode="json"))
-            interrupt(AgentToolWait(request=request).model_dump(mode="json"))
+            waiting = AgentToolWait(request=request).model_dump(mode="json")
+            # Only durable tool readiness authorizes dispatch. Buffered checkpoint
+            # replies may belong to a different call in the same tool batch.
+            while True:
+                interrupt(waiting)
         with self.factory.begin() as db:
             self._context(db)
             feedback = execute_agent_tool(
@@ -306,7 +311,11 @@ def _execute[T: BaseModel](
         "configurable": {"thread_id": f"agent-loop:{loop_id}"},
         "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
     }
-    with keep_loop_alive(store, lease_policy), open_checkpointer(runtime.settings) as saver:
+    with (
+        keep_loop_alive(store, lease_policy),
+        open_checkpointer(runtime.settings) as saver,
+        persistent.pi,
+    ):
         initial_question = _initial_question(runtime.seed)
         graph = build_agent_graph(
             persistent,
@@ -334,10 +343,16 @@ def _execute[T: BaseModel](
                             current_actor,
                             runtime.seed.stage,
                         )
+                        if not pending:
+                            # The current delivery now owns recovery. Keep the ready scan
+                            # from creating a different revision after a Pi process failure.
+                            loop = store.guard(db)
+                            loop.status, loop.outcome_json = "RUNNING", None
                     if pending:
                         store.finish("WAITING_EXTERNAL", waiting)
                         return persistent.outcome_model.model_validate(waiting)
-                    value = Command(resume="external-ready")
+                    # Reenter the tool node using durable readiness, without adding
+                    # a resume value that could be consumed by another tool.
                 else:
                     waiting = snapshot.values["outcome"]
                     stored = store.decision(UUID(waiting["question_id"]))

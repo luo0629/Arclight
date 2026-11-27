@@ -1,6 +1,7 @@
 """Run the real Agent graph using the existing gateway, tools, evidence and execution scope."""
 
 import json
+from collections import deque
 from collections.abc import Callable
 from typing import cast
 from uuid import UUID
@@ -18,6 +19,7 @@ from arclight.application.context_evidence import read_trace
 from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.gateway_text import execution_actor
 from arclight.application.model_gateway import lock_gate
+from arclight.application.pi_agent import PiAgent
 from arclight.application.shared_agent_reads import with_project_reads
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -71,6 +73,7 @@ class _AgentRuntime[T: BaseModel]:
         include_project_reads: bool = True,
     ):
         self.factory, self.settings, self.seed = factory, settings, seed
+        self.pi = PiAgent(seed)
         self.include_project_reads = include_project_reads
         self.registry = with_project_reads(registry) if include_project_reads else registry
         self.result_model = result_model
@@ -216,6 +219,7 @@ class _AgentRuntime[T: BaseModel]:
                     "operation_key": f"loop:{self.identity}:{turn}",
                 }
             )
+            self.pi.request_model()
             response = self.invoke_model(request, turn)
             return {"model_turns": turn, "response": response.model_dump(mode="json")}
         except (DomainError, GatewayFailure) as exc:
@@ -232,6 +236,7 @@ class _AgentRuntime[T: BaseModel]:
             self.decision_model,
             execution=self._execution(turn),
             output_projection=self.output_projection,
+            on_round=self.pi.accept_model,
         )
 
     def execute_tool(self, request: AgentToolCall, step_key: str) -> AgentToolFeedback:
@@ -250,13 +255,17 @@ class _AgentRuntime[T: BaseModel]:
             image_messages: list[AgentUserMessage] = []
             seen_images = set(request.image_ids())
             execution = self._execution(state["model_turns"])
-            for call in response.tool_calls:
+            self.pi.prepare_tools(response.tool_calls)
+            pending = deque(response.tool_calls)
+            while pending:
+                call = self.pi.next_tool(pending)
                 # Provider IDs are transport pairing IDs, not authority or durable action keys.
                 action_key = "loop-" + digest({"step": execution.step_key, "call": call.call_id})
                 tool_request = call.tool_request(request.run_id).model_copy(
                     update={"idempotency_key": action_key}
                 )
                 feedback = self.execute_tool(tool_request, execution.step_key)
+                self.pi.accept_tool(feedback)
                 if feedback.error and (
                     feedback.error.code.startswith("AGENT_")
                     or feedback.error.code in _FATAL_TOOL_ERRORS
@@ -351,8 +360,11 @@ def run_agent_loop[T: BaseModel](
     runtime = _AgentRuntime(factory, settings, request, registry, result_model, validate_result)
     runtime.prepare(parent_run_id)
     graph = build_agent_graph(runtime)
-    state = graph.invoke(
-        AgentLoopState(request=request.model_dump(mode="json"), observed_round=-1, model_turns=0),
-        {"recursion_limit": AGENT_GRAPH_RECURSION_LIMIT},
-    )
+    with runtime.pi:
+        state = graph.invoke(
+            AgentLoopState(
+                request=request.model_dump(mode="json"), observed_round=-1, model_turns=0
+            ),
+            {"recursion_limit": AGENT_GRAPH_RECURSION_LIMIT},
+        )
     return runtime.outcome_model.model_validate(state["outcome"])

@@ -1,4 +1,4 @@
-"""The Agent's conditional decision loop; application services own all effects."""
+"""Persist Agent checkpoints and route human or external waits around Pi execution."""
 
 from collections.abc import Callable
 from typing import Protocol, TypedDict

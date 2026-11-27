@@ -65,6 +65,7 @@ from arclight.persistence.models import (
     Storyboard,
     StorySource,
     WorkflowEvent,
+    WorkflowRecoveryCounter,
     WorkflowRun,
 )
 from arclight.workflows.production import DIRECTOR_WORKFLOW_VERSION, WORKFLOW_VERSION
@@ -691,10 +692,13 @@ def retry_run(db: Session, run: WorkflowRun, *, automatic_short_drama: bool = Fa
     from arclight.application.short_drama_budget import require_manual_workflow
 
     balance_error = run.error_code == "ACCOUNT_BALANCE_INSUFFICIENT"
+    resume_delivery = (
+        run.status == RunStatus.RUNNING and run.error_code == "WORKFLOW_RECOVERY_LIMIT"
+    )
     if not (automatic_short_drama and balance_error):
         require_manual_workflow(db, run.id)
-    if run.status != RunStatus.FAILED:
-        raise DomainError("NOT_RETRYABLE", "只有失败的工作流可以显式重试")
+    if run.status != RunStatus.FAILED and not resume_delivery:
+        raise DomainError("NOT_RETRYABLE", "只有失败或暂停恢复的工作流可以显式重试")
     if run.workflow_type == "art_proposal":
         from arclight.application.agent_workflows import creation_loops
 
@@ -732,12 +736,12 @@ def retry_run(db: Session, run: WorkflowRun, *, automatic_short_drama: bool = Fa
     )
     if active:
         raise DomainError("EPISODE_BUSY", "该剧集已有其他未完成工作流")
-    if balance_error:
+    if balance_error or resume_delivery:
         from arclight.application.gateway_accounting import workflow_balance_rejected
         from arclight.application.gateway_text import validate_publication
 
         validate_publication(db, run.id)
-        if not workflow_balance_rejected(db, run.id):
+        if balance_error and not workflow_balance_rejected(db, run.id):
             raise DomainError("NOT_RETRYABLE", "原调用须核对供应商回执", 409)
         delivery = db.scalar(
             select(OutboxEvent).where(
@@ -746,6 +750,24 @@ def retry_run(db: Session, run: WorkflowRun, *, automatic_short_drama: bool = Fa
         )
         if delivery is None:
             raise DomainError("NOT_RETRYABLE", "原工作流投递不存在", 409)
+        if resume_delivery:
+            from arclight.application.generation_leases import clock
+            from arclight.persistence.agent_loops import AgentLoop
+
+            live_loop = db.scalar(
+                select(AgentLoop.id)
+                .where(
+                    AgentLoop.run_id == run.id,
+                    AgentLoop.lease_token.is_not(None),
+                    AgentLoop.lease_expires_at > clock(db),
+                )
+                .limit(1)
+            )
+            if live_loop is not None:
+                raise DomainError("AGENT_LOOP_BUSY", "原执行器仍持有 Agent 循环", 409)
+            counter = db.get(WorkflowRecoveryCounter, delivery.id)
+            if counter is not None:
+                db.delete(counter)
         run.status, run.error_code = RunStatus.QUEUED, None
         delivery.published_at = None
         emit(db, run, "workflow.retry_requested")

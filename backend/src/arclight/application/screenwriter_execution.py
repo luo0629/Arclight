@@ -11,6 +11,7 @@ from arclight.application.agent_loop_store import AgentLoopStore, claim_loop, ke
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_workflows import (
     WorkflowExecutionDeferred,
+    WorkflowRecoveryFailed,
     active_workflow,
     fail_workflow,
     wait_for_agent,
@@ -383,6 +384,8 @@ def execute_screenwriter(
                 if db.scalar(select(Script.id).where(Script.run_id == run_id)) is not None:
                     return True
         fail_workflow(factory, run_id, revision, exc.code)
+    except WorkflowRecoveryFailed:
+        raise
     except Exception as exc:
         logger.error("screenwriter_failed run_id=%s error_type=%s", run_id, type(exc).__name__)
         fail_workflow(factory, run_id, revision, "WORKFLOW_EXECUTION_FAILED")

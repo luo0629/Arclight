@@ -50,7 +50,7 @@ def execute_run(factory: sessionmaker, settings: Settings, run_id: UUID, revisio
 
     with factory.begin() as db:
         run = db.get(WorkflowRun, run_id)
-        if run is None:
+        if run is None or run.error_code == "WORKFLOW_RECOVERY_LIMIT":
             return
         kind, inputs = run.workflow_type, run.input_json
         if "series_scope" in inputs or "producer_series_context" in inputs:

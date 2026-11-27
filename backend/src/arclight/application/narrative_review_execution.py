@@ -13,6 +13,7 @@ from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import AgentToolRegistry
 from arclight.application.agent_workflows import (
     WorkflowExecutionDeferred,
+    WorkflowRecoveryFailed,
     active_workflow,
     fail_workflow,
     wait_for_agent,
@@ -238,6 +239,8 @@ def execute_narrative_review(
             fail_workflow(factory, run_id, revision, error.code)
     except AgentStateError:
         fail_workflow(factory, run_id, revision, "RUN_STATE_INVALID")
+    except WorkflowRecoveryFailed:
+        raise
     except Exception as error:
         logger.error(
             "narrative_review_failed run_id=%s error_type=%s", run_id, type(error).__name__

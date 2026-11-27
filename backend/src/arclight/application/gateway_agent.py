@@ -61,6 +61,7 @@ def invoke_agent[T: BaseModel](
     output_projection: AgentOutputProjection[T] | None = None,
     on_admit: Callable[[Session, UUID], None] | None = None,
     on_result: Callable[[Session, UUID, AgentModelResponse[T]], None] | None = None,
+    on_round: Callable[[AgentModelResponse[T], tuple[str, ...], GatewayUsage], None] | None = None,
 ) -> AgentModelResponse[T]:
     """Return tool selections or a validated final result without executing either."""
     request = AgentModelRequest.model_validate(request.model_dump(mode="json"))
@@ -221,7 +222,7 @@ def invoke_agent[T: BaseModel](
             # It is a completed, potentially billable response, not safe to resend.
             raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=usage) from exc
 
-    result, _usage = invoke(
+    result, usage = invoke(
         factory,
         call,
         route,
@@ -233,4 +234,6 @@ def invoke_agent[T: BaseModel](
         on_admit=check_binding,
         on_result=publish_round if on_result is not None else None,
     )
+    if on_round is not None:
+        on_round(result, tuple(tool.name for tool in tools), usage)
     return result
