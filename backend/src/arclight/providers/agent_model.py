@@ -17,12 +17,14 @@ from arclight.domain.agent_model import (
     AgentToolDeclaration,
     AgentToolMessage,
     AgentUserMessage,
+    ChatAssistantContext,
     ContextImage,
     ModelToolCall,
 )
 from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
 from arclight.providers.llm import LLMCompletion, LLMService, llm_service, response_contract
+from arclight.providers.llm_models import chat_options
 
 
 def check_capabilities(
@@ -105,7 +107,10 @@ def agent_messages(
                                 exclude_none=True,
                             )
                             for call in message.tool_calls
-                        }
+                        },
+                        "assistant_context": message.provider_context.model_dump(mode="json")
+                        if message.provider_context is not None
+                        else {},
                     },
                 )
             )
@@ -207,7 +212,23 @@ class OpenAICompatibleAgentProvider:
                         raise ValueError("Undeclared tool or reused call ID")
                     seen.add(call.call_id)
                     calls.append(call)
-                return AgentModelResponse[T](status="TOOL_CALLS", tool_calls=calls)
+                profile = chat_options(self.settings)
+                context = (
+                    {
+                        field: message[field]
+                        for field in profile.assistant_fields
+                        if message.get(field) is not None
+                    }
+                    if profile
+                    else {}
+                )
+                return AgentModelResponse[T](
+                    status="TOOL_CALLS",
+                    tool_calls=calls,
+                    provider_context=ChatAssistantContext.model_validate(context)
+                    if context
+                    else None,
+                )
             if message.get("tool_calls"):
                 raise ValueError("Final output cannot contain tool calls")
             final = result_model.model_validate_json(message["content"], strict=True)

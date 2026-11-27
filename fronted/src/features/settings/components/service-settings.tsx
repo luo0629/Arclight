@@ -64,10 +64,12 @@ type ModelPreset = {
   name: string;
 };
 type SpeechModelPreset = ModelPreset & { description: string };
+type VisualModelPreset = ModelPreset & { kind: "image" | "video" };
 type Configuration = {
   services: Profile[];
   speech_models?: SpeechModelPreset[];
   text_models?: ModelPreset[];
+  visual_models: VisualModelPreset[];
   suppliers: ServicePreset[];
   protocols: Record<Kind, string[]>;
   can_store_keys: boolean;
@@ -202,10 +204,11 @@ export default function ServiceSettings({
         )
       : [];
   const speechModel = speechModels.find((row) => row.model === draft.model);
-  const textModels =
-    kind === "text" && preset
-      ? (config?.text_models ?? []).filter((row) => row.supplier === preset.id)
-      : [];
+  const modelSuggestions = (
+    kind === "text"
+      ? (config?.text_models ?? [])
+      : (config?.visual_models ?? []).filter((row) => row.kind === kind)
+  ).filter((row) => row.supplier === preset?.id);
   const stored = config?.services.find((row) => row.kind === kind);
   const hasStoredKey =
     !!stored?.has_key &&
@@ -641,26 +644,33 @@ export default function ServiceSettings({
                     </FieldDescription>
                   </Field>
                 )}
-                {textModels.length > 0 && (
+                {modelSuggestions.length > 0 && (
                   <Field data-disabled={busy}>
-                    <FieldLabel htmlFor="service-text-model-preset">
+                    <FieldLabel htmlFor="service-model-preset">
                       推荐模型
                     </FieldLabel>
                     <ChoiceSelect
-                      id="service-text-model-preset"
+                      id="service-model-preset"
                       aria-label="推荐模型"
+                      aria-describedby="service-model-preset-hint"
                       placeholder="选择推荐模型"
                       value={
-                        textModels.find((row) => row.model === draft.model)
-                          ?.model ?? ""
+                        modelSuggestions.find(
+                          (row) => row.model === draft.model,
+                        )?.model ?? ""
                       }
                       disabled={busy}
                       onValueChange={(model) => change({ model })}
-                      options={textModels.map((row) => ({
+                      options={modelSuggestions.map((row) => ({
                         value: row.model,
                         label: row.name,
                       }))}
                     />
+                    <FieldDescription id="service-model-preset-hint">
+                      {kind === "text"
+                        ? "智能创作能力以验证结果为准。"
+                        : "所选模型需在供应商账号中开通。"}
+                    </FieldDescription>
                   </Field>
                 )}
                 <Field data-invalid={!!modelError} data-disabled={busy}>
@@ -689,7 +699,7 @@ export default function ServiceSettings({
                   <FieldDescription id="service-model-hint">
                     {speechModels.length > 0
                       ? "可选择 TTS 预设，或填写当前服务商支持的模型 ID。"
-                      : textModels.length > 0
+                      : modelSuggestions.length > 0
                         ? "可选择推荐模型，或填写当前服务商支持的模型 ID。"
                         : "请手动填写当前服务商支持的模型 ID。"}
                   </FieldDescription>
@@ -701,9 +711,10 @@ export default function ServiceSettings({
                 </Field>
               </FieldGroup>
               {preset && (
-                <p className="text-xs text-muted-foreground">
-                  使用 {preset.name} 官方接口，服务地址由系统配置。
-                </p>
+                <div className="space-y-1 text-xs text-muted-foreground">
+                  <p>{protocolNames[preset.protocol] ?? preset.protocol}</p>
+                  <p className="break-all">{preset.base_url}</p>
+                </div>
               )}
               {!preset && (
                 <FormLabel>

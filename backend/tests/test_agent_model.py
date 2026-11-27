@@ -29,11 +29,13 @@ from arclight.domain.agent_model import (
     AgentToolDeclaration,
     AgentToolMessage,
     AgentUserMessage,
+    ChatAssistantContext,
     ContextImage,
     ModelToolCall,
 )
 from arclight.domain.agent_tools import AgentToolFeedback, ReadStoryEntryParameters
 from arclight.domain.model_gateway import GatewayCapabilities, GatewayFailure, GatewayUsage
+from arclight.domain.model_suppliers import supplier_by_id
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import AgentToolGrant, User, WorkflowRun
 from arclight.providers.agent_model import OpenAICompatibleAgentProvider
@@ -153,6 +155,91 @@ def receipts(client, run_id):
             (call.route_json, receipt.status, receipt.error_code, receipt.usage_json)
             for call, receipt in rows
         ]
+
+
+@pytest.mark.parametrize(
+    "supplier,replayed",
+    [
+        ("kimi", {"content", "reasoning_content"}),
+        ("minimax", {"content", "reasoning_content"}),
+        ("volcengine", {"content", "reasoning_content", "encrypted_content"}),
+        ("openrouter", {"content", "reasoning_details"}),
+        ("custom", set()),
+    ],
+)
+def test_reasoning_is_only_replayed_for_the_configured_protocol_profile(
+    settings, stub_llm, supplier, replayed
+):
+    preset = supplier_by_id(supplier)
+    if preset is not None:
+        settings.llm_base_url = preset.base_url
+        settings.llm_response_format = preset.response_format
+    settings.llm_supplier = supplier
+    settings.llm_agent_capabilities = AgentModelCapabilities(
+        version="test:1",
+        supplier=supplier,
+        model=settings.llm_model,
+        tools=True,
+        response_formats={settings.llm_response_format},
+    )
+    requests = []
+    context = {
+        "content": "I will retrieve the context.",
+        "reasoning_content": "第一轮原文\n  preserved exactly",
+        "encrypted_content": "provider ciphertext",
+        "reasoning_details": [{"type": "reasoning.encrypted", "data": "encrypted payload"}],
+    }
+    selection = call_response(("call_1", "read_story_entry", {"entry_id": str(uuid4())}))
+    selection["choices"][0]["message"].update(context)
+
+    def respond(req):
+        requests.append(json.loads(req.content))
+        return httpx.Response(200, json=selection if len(requests) == 1 else final_response())
+
+    provider = OpenAICompatibleAgentProvider(settings, service=stub_llm(respond))
+    initial = model_request()
+    result = provider.complete(initial, (declaration(),), FinalResult, {})
+    assert result.status == "TOOL_CALLS"
+    assistant = AgentAssistantMessage(
+        tool_calls=result.tool_calls,
+        provider_context=result.provider_context,
+    )
+    if supplier == "custom":
+        assert "provider_context" not in result.model_dump()
+        assert "provider_context" not in assistant.model_dump()
+        # A message containing metadata from another profile must not send it to a custom endpoint.
+        assistant = assistant.model_copy(
+            update={"provider_context": ChatAssistantContext.model_validate(context)}
+        )
+    else:
+        assert result.provider_context.model_dump() == {name: context[name] for name in replayed}
+        assert context["content"] not in repr(assistant)
+    feedback = AgentToolFeedback(
+        run_id=initial.run_id,
+        tool_name="read_story_entry",
+        idempotency_key="call_1",
+        status="SUCCEEDED",
+        result={"value": 1},
+    )
+    continuation = model_request(
+        initial.run_id,
+        messages=[
+            *initial.messages,
+            assistant,
+            AgentToolMessage(call_id="call_1", feedback=feedback),
+        ],
+    )
+    final = provider.complete(continuation, (declaration(),), FinalResult, {})
+    assert final.status == "FINAL" and len(requests) == 2
+    returned, tool = requests[1]["messages"][-2:]
+    assert tool["tool_call_id"] == returned["tool_calls"][0]["id"] == "call_1"
+    assert {name: returned.get(name) for name in context} == {
+        name: context[name] if name in replayed else None for name in context
+    }
+    if supplier == "minimax":
+        assert all(body["reasoning_split"] is True for body in requests)
+        assert all("response_format" not in body for body in requests)
+        assert all("JSON Schema" in body["messages"][0]["content"] for body in requests)
 
 
 @pytest.mark.parametrize("supplier", ["custom", "qwen"])

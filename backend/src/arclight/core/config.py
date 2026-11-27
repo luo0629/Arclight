@@ -7,7 +7,7 @@ from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from arclight.core.image_service import OpenAIImageSettings
-from arclight.domain.agent_model import AgentModelCapabilities
+from arclight.domain.agent_model import AgentModelCapabilities, ResponseFormat
 from arclight.domain.context import ContextLimits
 from arclight.domain.generation_scheduling import ExecutionPolicy
 from arclight.domain.model_gateway import GatewayPolicy
@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     llm_supplier: str = "custom"
     llm_protocol: Literal["openai_chat", "gemini", "qwen_chat"] = "openai_chat"
     service_model_policies: list[ServiceModelPolicy] = Field(default_factory=list)
-    llm_response_format: Literal["json_schema", "json_object"] = "json_schema"
+    llm_response_format: ResponseFormat = "json_schema"
     llm_agent_capabilities: AgentModelCapabilities | None = None
     service_encryption_key: SecretStr = SecretStr("")
     service_encryption_key_file: Path | None = None

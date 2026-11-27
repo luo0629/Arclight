@@ -182,7 +182,7 @@ class OpenAICompatibleTextProvider:
             data = check_call(self.contexts[stage], data)
         # 输入作为独立数据发送；不允许模型输出执行命令或写入数据库。
         response_format, schema = response_contract(contract, self.settings)
-        if self.settings.llm_response_format == "json_object":
+        if response_format.get("type") != "json_schema":
             instruction += "\n只输出符合以下 JSON Schema 的 JSON 对象：\n" + json.dumps(
                 schema, ensure_ascii=False
             )

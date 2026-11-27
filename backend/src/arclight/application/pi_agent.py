@@ -2,7 +2,6 @@
 
 import json
 import os
-from collections import deque
 from contextlib import suppress
 from pathlib import Path
 from queue import Empty, Full, Queue
@@ -15,7 +14,16 @@ from typing import Self
 from pydantic import BaseModel
 
 from arclight.application.agent_workflows import WorkflowRecoveryFailed
-from arclight.domain.agent_model import AgentModelRequest, AgentModelResponse, ModelToolCall
+from arclight.domain.agent_model import (
+    AgentAssistantMessage,
+    AgentMessage,
+    AgentModelRequest,
+    AgentModelResponse,
+    AgentToolDeclaration,
+    AgentToolMessage,
+    AgentUserMessage,
+    ModelToolCall,
+)
 from arclight.domain.agent_tools import AgentToolFeedback
 from arclight.domain.model_gateway import GatewayUsage
 
@@ -58,7 +66,7 @@ def _write_frame(process: Popen[bytes], payload: bytes, errors: list[OSError]) -
 
 
 class PiAgent:
-    """Reattach Pi at a pending model turn or a checkpointed batch of tool calls."""
+    """Send Pi canonical history and resolve its context to trusted Python records."""
 
     def __init__(self, seed: AgentModelRequest) -> None:
         instructions = "\n\n".join(
@@ -68,8 +76,12 @@ class PiAgent:
             "name": seed.agent_name,
             "stage": seed.stage,
             "instruction": instructions,
-            "input": [message.model_dump(mode="json") for message in seed.messages],
         }
+        self.turn = 0
+        self._users: dict[str, AgentUserMessage] = {}
+        self._assistants: dict[int, AgentAssistantMessage] = {}
+        self._feedback: dict[tuple[int, str], AgentToolMessage] = {}
+        self._active_tool: ModelToolCall | None = None
         self._process: Popen[bytes] | None = None
         self._events: Queue[bytes] = Queue(maxsize=4)
         self._reader: Thread | None = None
@@ -85,7 +97,39 @@ class PiAgent:
     ) -> None:
         self.close()
 
-    def _start(self, resume: str, calls: list[ModelToolCall]) -> None:
+    def _remember_user(self, message: AgentUserMessage) -> str:
+        value = message.model_dump_json()
+        self._users[value] = message
+        return value
+
+    def start(self, messages: list[AgentMessage]) -> None:
+        history: list[dict] = []
+        turn = 0
+        for message in messages:
+            if isinstance(message, AgentUserMessage):
+                history.append({"role": "user", "text": self._remember_user(message)})
+            elif isinstance(message, AgentAssistantMessage):
+                turn += 1
+                self._assistants[turn] = message
+                history.append(
+                    {
+                        "role": "assistant",
+                        "turn": turn,
+                        "calls": [_wire_tool(call) for call in message.tool_calls],
+                    }
+                )
+            else:
+                self._feedback[turn, message.call_id] = message
+                history.append(
+                    {
+                        "role": "tool",
+                        "turn": turn,
+                        "id": message.call_id,
+                        "name": message.feedback.tool_name,
+                        "result": message.feedback.model_dump_json(),
+                        "isError": message.feedback.error is not None,
+                    }
+                )
         executable = which("node")
         if executable is None:
             raise PiRuntimeError("Pi runtime requires Node.js")
@@ -103,15 +147,7 @@ class PiAgent:
         self._events = Queue(maxsize=4)
         self._reader = Thread(target=_read_events, args=(process, self._events), daemon=True)
         self._reader.start()
-        self._send(
-            {
-                "type": "start",
-                "resume": resume,
-                "calls": [_wire_tool(call) for call in calls],
-                "tools": list(dict.fromkeys(call.tool_name for call in calls)),
-                "agent": self._agent,
-            }
-        )
+        self._send({"type": "start", "agent": self._agent, "messages": history})
 
     def _send(self, frame: dict) -> None:
         process = self._process
@@ -133,7 +169,7 @@ class PiAgent:
         if errors:
             raise PiRuntimeError("Pi runtime stopped accepting requests") from errors[0]
 
-    def _event(self, kind: str) -> dict:
+    def event(self) -> dict:
         try:
             frame = self._events.get(timeout=_EVENT_TIMEOUT)
             if not frame:
@@ -145,54 +181,120 @@ class PiAgent:
             raise PiRuntimeError("Timed out waiting for the Pi runtime") from exc
         except (ValueError, RecursionError) as exc:
             raise PiRuntimeError("Pi runtime returned an invalid event") from exc
-        if not isinstance(actual, dict) or actual.get("type") != kind:
+        if not isinstance(actual, dict) or actual.get("type") not in (
+            "prepare",
+            "model",
+            "tool",
+            "tool_rejected",
+            "done",
+        ):
             raise PiRuntimeError("Pi runtime returned an unexpected event")
         return actual
 
-    def _expect(self, kind: str) -> None:
-        if self._event(kind) != {"type": kind}:
-            raise PiRuntimeError("Pi runtime returned an unexpected event")
+    def prepare(
+        self, tools: tuple[AgentToolDeclaration, ...], messages: list[AgentUserMessage]
+    ) -> None:
+        self._send(
+            {
+                "type": "continue",
+                "tools": [tool.model_dump(mode="json") for tool in tools],
+                "messages": [self._remember_user(message) for message in messages],
+            }
+        )
 
-    def request_model(self) -> None:
-        if self._process is None:
-            self._start("model", [])
-        self._expect("model")
+    def model_messages(
+        self, event: dict, tools: tuple[AgentToolDeclaration, ...]
+    ) -> list[AgentMessage]:
+        actual_tools = event.get("tools")
+        expected = {tool.name: tool.model_dump(mode="json") for tool in tools}
+        frames = event.get("messages")
+        if not isinstance(actual_tools, list) or not isinstance(frames, list):
+            raise PiRuntimeError("Pi runtime did not return model messages and tool declarations")
+        try:
+            if (
+                len(actual_tools) != len(expected)
+                or {tool["name"]: tool for tool in actual_tools} != expected
+            ):
+                raise ValueError("Tool declarations differ")
+            messages: list[AgentMessage] = []
+            for frame in frames:
+                if frame["role"] == "user":
+                    messages.append(self._users[frame["text"]])
+                elif frame["role"] == "assistant":
+                    assistant = self._assistants[frame["turn"]]
+                    references = [
+                        {"id": call.call_id, "name": call.tool_name}
+                        for call in assistant.tool_calls
+                    ]
+                    if frame["calls"] != references:
+                        raise ValueError("Tool call references differ")
+                    messages.append(assistant)
+                elif frame["role"] == "tool":
+                    message = self._feedback[frame["turn"], frame["id"]]
+                    if message.feedback.tool_name != frame["name"]:
+                        raise ValueError("Tool result reference differs")
+                    messages.append(message)
+                else:
+                    raise ValueError("Unknown message role")
+        except (KeyError, ValueError, TypeError) as exc:
+            raise PiRuntimeError("Pi runtime returned an invalid model context") from exc
+        return messages
 
     def accept_model[T: BaseModel](
         self, response: AgentModelResponse[T], tools: tuple[str, ...], usage: GatewayUsage
     ) -> None:
         tokens = usage.model_dump(include={"input_tokens", "output_tokens"}, exclude_none=True)
         if response.status == "TOOL_CALLS":
+            if not {call.tool_name for call in response.tool_calls}.issubset(tools):
+                raise PiRuntimeError("The model returned an unauthorized tool")
+            self._assistants[self.turn] = AgentAssistantMessage(
+                tool_calls=response.tool_calls,
+                provider_context=response.provider_context,
+            )
             self._send(
                 {
                     "type": "continue",
+                    "turn": self.turn,
                     "calls": [_wire_tool(call) for call in response.tool_calls],
-                    "tools": tools,
                     "usage": tokens,
                 }
             )
             return
         assert response.final is not None
-        self._send(
-            {"type": "stop", "result": response.final.model_dump(mode="json"), "usage": tokens}
-        )
-        self._expect("done")
+        self._send({"type": "stop", "result": response.final.model_dump_json(), "usage": tokens})
+        if self.event() != {"type": "done"}:
+            raise PiRuntimeError("Pi runtime did not finish the model turn")
         self.close()
 
-    def prepare_tools(self, calls: list[ModelToolCall]) -> None:
-        if self._process is None:
-            self._start("tools", calls)
-
-    def next_tool(self, pending: deque[ModelToolCall]) -> ModelToolCall:
-        event = self._event("tool")
-        call = pending.popleft()
-        if event.get("id") != call.call_id or event.get("name") != call.tool_name:
+    def next_tool(self, event: dict) -> ModelToolCall:
+        assistant = self._assistants.get(self.turn)
+        if assistant is None or event.get("turn") != self.turn:
+            raise PiRuntimeError("Pi tool dispatch has no active model response")
+        pending = (
+            call for call in assistant.tool_calls if (self.turn, call.call_id) not in self._feedback
+        )
+        call = next(pending, None)
+        if call is None or event.get("id") != call.call_id or event.get("name") != call.tool_name:
             raise PiRuntimeError("Pi tool dispatch does not match the authorized model response")
-        # Use Python's validated arguments. JSON numbers may round in the JS runtime.
+        self._active_tool = call
         return call
 
     def accept_tool(self, feedback: AgentToolFeedback) -> None:
-        self._send({"type": "continue", "result": feedback.model_dump(mode="json")})
+        call = self._active_tool
+        assert call is not None
+        message = AgentToolMessage(
+            call_id=call.call_id,
+            feedback=feedback.model_copy(update={"idempotency_key": call.call_id}),
+        )
+        self._feedback[self.turn, call.call_id] = message
+        self._active_tool = None
+        self._send(
+            {
+                "type": "continue",
+                "result": message.feedback.model_dump_json(),
+                "isError": feedback.error is not None,
+            }
+        )
 
     def close(self) -> None:
         process = self._process

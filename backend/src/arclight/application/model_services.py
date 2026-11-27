@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from arclight.application.service_credentials import read_credential
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
-from arclight.domain.agent_model import AgentModelCapabilities
+from arclight.domain.agent_model import AgentModelCapabilities, ResponseFormat
 from arclight.domain.model_suppliers import supplier_by_id
 from arclight.domain.service_models import matching_policy
 from arclight.domain.text_model_catalog import TEXT_MODEL_POLICIES
@@ -108,7 +108,9 @@ def agent_capabilities(settings: Settings, service: dict | None) -> AgentModelCa
     return None
 
 
-def text_response_format(service: dict, capabilities: AgentModelCapabilities | None = None) -> str:
+def text_response_format(
+    service: dict, capabilities: AgentModelCapabilities | None = None
+) -> ResponseFormat:
     preset = supplier_by_id(service["supplier"])
     default = (
         preset.response_format
@@ -122,4 +124,8 @@ def text_response_format(service: dict, capabilities: AgentModelCapabilities | N
         or default in capabilities.response_formats
     ):
         return default
-    return "json_schema" if "json_schema" in capabilities.response_formats else "json_object"
+    formats: tuple[ResponseFormat, ...] = ("json_schema", "json_object", "prompt_json")
+    for preferred in formats:
+        if preferred in capabilities.response_formats:
+            return preferred
+    return default

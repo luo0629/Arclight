@@ -8,6 +8,7 @@ from PIL import Image
 from pydantic import SecretStr
 
 from arclight.domain.model_gateway import GatewayFailure
+from arclight.domain.model_suppliers import supplier_by_id
 from arclight.providers.model_capability_probe import probe_model_capabilities
 
 _COLORS = {
@@ -195,6 +196,43 @@ def test_probe_can_verify_plain_text_format_without_granting_tools(probe_setting
         ("json_schema", False),
         ("json_object", False),
     ]
+
+
+def test_probe_uses_configured_prompt_json_format_and_replays_tool_reasoning(
+    probe_settings, stub_llm
+):
+    preset = supplier_by_id("minimax")
+    assert preset is not None
+    settings = probe_settings.model_copy(
+        update={
+            "llm_supplier": preset.id,
+            "llm_base_url": preset.base_url,
+            "llm_response_format": preset.response_format,
+        }
+    )
+    calls = []
+
+    def upstream(request):
+        body = json.loads(request.content)
+        calls.append(body)
+        assert "response_format" not in body
+        assert "JSON Schema" in body["messages"][0]["content"]
+        assert body["reasoning_split"] is True
+        if _user_tiles(body):
+            return httpx.Response(400, json={"error": {"message": "vision unsupported"}})
+        if len(body["messages"]) == 2:
+            response = _choose_tool([]).json()
+            response["choices"][0]["message"]["reasoning_content"] = "tool choice context"
+            return httpx.Response(200, json=response)
+        assert body["messages"][-2]["reasoning_content"] == "tool choice context"
+        return _answer(body)
+
+    stub_llm(upstream)
+    capabilities = probe_model_capabilities(settings, _IDENTITY)
+    assert capabilities is not None
+    assert capabilities.response_formats == {"prompt_json"}
+    assert capabilities.tools and capabilities.max_input_images == 0
+    assert len(calls) == 3
 
 
 @pytest.mark.parametrize(

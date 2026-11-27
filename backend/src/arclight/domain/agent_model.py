@@ -11,6 +11,11 @@ from arclight.domain.generation_requests import safe_metadata
 
 PROTOCOL_VERSION: Literal["agent-model/1"] = "agent-model/1"
 CallId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")]
+type ResponseFormat = Literal["json_schema", "json_object", "prompt_json"]
+type AssistantContextField = Literal[
+    "content", "reasoning_content", "encrypted_content", "reasoning_details"
+]
+ProviderText = Annotated[str, Field(max_length=1048576)]
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +38,7 @@ class AgentModelCapabilities(AgentModelValue):
     supplier: str = Field(min_length=1, max_length=100)
     model: str = Field(min_length=1, max_length=160)
     tools: bool = False
-    response_formats: frozenset[Literal["json_schema", "json_object"]] = frozenset()
+    response_formats: frozenset[ResponseFormat] = frozenset()
     # Some models support each feature separately, but not this combination.
     structured_output_with_visual_tools: bool = Field(default=True, strict=True)
     max_input_images: int = Field(default=0, strict=True, ge=0, le=8)
@@ -75,9 +80,29 @@ class AgentUserMessage(AgentModelValue):
     image_file_ids: list[UUID] = Field(default_factory=list, max_length=8)
 
 
+class ChatAssistantContext(AgentModelValue):
+    """Provider-only continuation fields retained with a tool selection."""
+
+    content: ProviderText | None = Field(
+        default=None, repr=False, exclude_if=lambda value: value is None
+    )
+    reasoning_content: ProviderText | None = Field(
+        default=None, repr=False, exclude_if=lambda value: value is None
+    )
+    encrypted_content: ProviderText | None = Field(
+        default=None, repr=False, exclude_if=lambda value: value is None
+    )
+    reasoning_details: list[dict[str, JsonValue]] | None = Field(
+        default=None, repr=False, exclude_if=lambda value: value is None
+    )
+
+
 class AgentAssistantMessage(AgentModelValue):
     role: Literal["assistant"] = "assistant"
     tool_calls: list[ModelToolCall] = Field(min_length=1, max_length=16, repr=False)
+    provider_context: ChatAssistantContext | None = Field(
+        default=None, repr=False, exclude_if=lambda value: value is None
+    )
 
 
 class AgentToolMessage(AgentModelValue):
@@ -171,13 +196,16 @@ class AgentModelResponse[T: BaseModel](AgentModelValue):
     status: Literal["TOOL_CALLS", "FINAL"]
     tool_calls: list[ModelToolCall] = Field(default_factory=list, max_length=16, repr=False)
     final: T | None = Field(default=None, repr=False)
+    provider_context: ChatAssistantContext | None = Field(
+        default=None, repr=False, exclude_if=lambda value: value is None
+    )
 
     @model_validator(mode="after")
     def exclusive_result(self):
         if self.status == "TOOL_CALLS":
             if not self.tool_calls or self.final is not None:
                 raise ValueError("Tool selection and final output are mutually exclusive")
-        elif self.tool_calls or self.final is None:
+        elif self.tool_calls or self.final is None or self.provider_context is not None:
             raise ValueError("Final output requires a validated result")
         safe_metadata(self.model_dump(mode="json"))
         return self

@@ -11,6 +11,7 @@ from test_agent_runtime import final, rows_for, setup_loop, tool_feedback
 from test_agent_tools import create_entry
 
 from arclight.application.pi_agent import PiAgent, PiRuntimeError
+from arclight.domain.model_suppliers import supplier_by_id
 from arclight.main import create_app
 from arclight.persistence.agent_loops import AgentLoopAction, AgentLoopDecision
 
@@ -18,6 +19,13 @@ from arclight.persistence.agent_loops import AgentLoopAction, AgentLoopDecision
 def test_pi_process_death_reuses_settled_turn_and_resumes_tools_and_human_answer(
     client, episode, settings, model_service, monkeypatch
 ):
+    preset = supplier_by_id("kimi")
+    assert preset is not None and settings.llm_agent_capabilities is not None
+    settings.llm_base_url = preset.base_url
+    settings.llm_supplier = preset.id
+    settings.llm_agent_capabilities = settings.llm_agent_capabilities.model_copy(
+        update={"supplier": preset.id}
+    )
     run_id, actor, registry = setup_loop(client, episode, settings)
     seed = model_request(run_id)
     entries = [create_entry(client, episode["project_id"]) for _ in range(2)]
@@ -27,12 +35,14 @@ def test_pi_process_death_reuses_settled_turn_and_resumes_tools_and_human_answer
         for identity, entry in zip(provider_ids, entries, strict=True)
     )
     sent = []
+    reasoning = "继续调取已授权证据\n  preserved exactly"
 
     def respond(request):
         payload = json.loads(request.content)
         sent.append(payload)
         if len(sent) == 1:
             response = call_response(*tool_calls)
+            response["choices"][0]["message"]["reasoning_content"] = reasoning
         elif len(sent) == 2:
             response = final("HUMAN_REVIEW")
         elif len(sent) == 3:
@@ -43,9 +53,11 @@ def test_pi_process_death_reuses_settled_turn_and_resumes_tools_and_human_answer
 
     model_service(respond)
     accept_model = PiAgent.accept_model
+    model_messages = PiAgent.model_messages
     next_tool = PiAgent.next_tool
     accepted = []
     dispatched = []
+    requests_from_pi = []
     stopped = False
 
     def interrupt_after_receipt(bridge, response, tools, usage):
@@ -60,12 +72,17 @@ def test_pi_process_death_reuses_settled_turn_and_resumes_tools_and_human_answer
         accepted.append(response.status)
         return result
 
-    def record_tool_dispatch(bridge, pending):
-        call = next_tool(bridge, pending)
+    def record_model_context(bridge, event, tools):
+        requests_from_pi.append(event)
+        return model_messages(bridge, event, tools)
+
+    def record_tool_dispatch(bridge, event):
+        call = next_tool(bridge, event)
         dispatched.append(call.call_id)
         return call
 
     monkeypatch.setattr(PiAgent, "accept_model", interrupt_after_receipt)
+    monkeypatch.setattr(PiAgent, "model_messages", record_model_context)
     monkeypatch.setattr(PiAgent, "next_tool", record_tool_dispatch)
 
     with pytest.raises(PiRuntimeError):
@@ -78,6 +95,7 @@ def test_pi_process_death_reuses_settled_turn_and_resumes_tools_and_human_answer
     with client.app.state.session_factory() as db:
         action = db.scalars(select(AgentLoopAction).where(AgentLoopAction.loop_id == loop_id)).one()
         assert action.kind == "MODEL" and action.result_json["status"] == "TOOL_CALLS"
+        assert action.result_json["provider_context"]["reasoning_content"] == reasoning
 
     waiting = resume(client, settings, loop_id, actor, registry)
     assert waiting.status == "HUMAN_REVIEW" and waiting.loop_id == loop_id
@@ -86,6 +104,15 @@ def test_pi_process_death_reuses_settled_turn_and_resumes_tools_and_human_answer
         provider_ids
     )
     assert [item["status"] for item in tool_feedback(sent[1])] == ["SUCCEEDED", "SUCCEEDED"]
+    second_context = requests_from_pi[-1]
+    assert [
+        item["id"] for item in second_context["messages"] if item["role"] == "tool"
+    ] == provider_ids
+    declaration = next(
+        tool for tool in second_context["tools"] if tool["name"] == "read_story_entry"
+    )
+    assert declaration["parameters"]["properties"]["entry_id"]["format"] == "uuid"
+    assert declaration["parameters"]["required"] == ["entry_id"]
 
     decision = answer(waiting)
     with TestClient(create_app(settings)) as restarted:
@@ -98,6 +125,12 @@ def test_pi_process_death_reuses_settled_turn_and_resumes_tools_and_human_answer
     assert completed.loop_id == loop_id and completed.input_sha256 == waiting.input_sha256
     assert all(
         call in sent[2]["messages"] for call in sent[1]["messages"] if call["role"] == "tool"
+    )
+    for request in sent[1:]:
+        assistant = next(item for item in request["messages"] if item["role"] == "assistant")
+        assert assistant["reasoning_content"] == reasoning
+    assert json.dumps(reasoning, ensure_ascii=False) not in json.dumps(
+        requests_from_pi, ensure_ascii=False
     )
     decision_message = sent[2]["messages"][-1]
     assert decision_message["role"] == "user"

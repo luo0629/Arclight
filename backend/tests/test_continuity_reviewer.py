@@ -459,7 +459,7 @@ def test_human_pause_and_duplicate_resume_keep_original_limits_and_thread(
         assert db.get(AgentLoop, waiting.loop_id).seed_json == frozen
 
 
-@pytest.mark.parametrize("node", ["decide", "tools"])
+@pytest.mark.parametrize("node", ["invoke_model", "execute_tool"])
 def test_restart_reuses_committed_model_and_tool_actions(
     client,
     settings,

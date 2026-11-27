@@ -1,11 +1,12 @@
-"""Persistent execution of the shared Agent graph, including native human interrupts."""
+"""Durable Pi execution, including human decisions and external tool readiness."""
 
 import json
 from collections.abc import Callable
 from typing import cast
 from uuid import UUID, uuid4
 
-from langgraph.types import Command, interrupt
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint.base import BaseCheckpointSaver, CheckpointTuple, empty_checkpoint
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -18,18 +19,16 @@ from arclight.application.agent_loop_store import (
     keep_loop_alive,
     submit_agent_decision,
 )
-from arclight.application.agent_runtime import AGENT_GRAPH_RECURSION_LIMIT, _AgentRuntime
+from arclight.application.agent_runtime import MAX_AGENT_LOOP_TURNS, _AgentRuntime
 from arclight.application.agent_runtime_state import scope_for_run
 from arclight.application.agent_tools import (
     AgentToolRegistry,
     agent_tool_is_pending,
-    available_agent_tools,
     execute_agent_tool,
 )
 from arclight.application.gateway_accounting import latest_receipt
 from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.generation_leases import DEFAULT_POLICY, LeasePolicy
-from arclight.application.shared_agent_reads import agent_tool_declarations
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelRequest, AgentModelResponse, AgentUserMessage
@@ -37,7 +36,6 @@ from arclight.domain.agent_runtime import (
     AgentDecision,
     AgentHumanDecision,
     AgentLoopResult,
-    AgentToolWait,
     HumanDecisionRequest,
 )
 from arclight.domain.agent_tools import AgentToolCall, AgentToolFeedback
@@ -45,10 +43,14 @@ from arclight.domain.generation_requests import safe_metadata
 from arclight.domain.model_gateway import GatewayUsage
 from arclight.domain.versions import digest
 from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
-from arclight.workflows.agent import AgentLoopState, build_agent_graph
+from arclight.workflows.agent import AgentLoopState
 from arclight.workflows.checkpoints import open_checkpointer
 
 _INITIAL_QUESTION = "_server_initial_question"
+_SESSION_NAMESPACE = "pi-agent"
+_SESSION_CHANNEL = "state"
+_LEGACY_FIELDS = frozenset({"request", "observed_round", "model_turns", "response", "outcome"})
+_LEGACY_BRANCH = "branch:to:"
 
 
 def with_initial_question(
@@ -58,7 +60,6 @@ def with_initial_question(
 
     This reserved control message is constructed by application services, never by
     an HTTP story/answer body. It is part of the exact journal seed and hash.
-    Existing operations and their graph entry points remain unchanged.
     """
     control = AgentUserMessage(data={_INITIAL_QUESTION: question.model_dump(mode="json")})
     return AgentModelRequest.model_validate(
@@ -80,9 +81,65 @@ class _RecoveryRequired(DomainError):
         self.state = state
 
 
+class _ExternalWait(Exception):
+    def __init__(self, request: AgentToolCall):
+        self.request = request
+
+
+class _SessionCheckpoint:
+    """Store a single Pi resume cursor in the existing, separate checkpoint database."""
+
+    def __init__(self, store: AgentLoopStore, saver: BaseCheckpointSaver[str], thread: str):
+        self.store = store
+        self.saver = saver
+        self.thread = thread
+        self.config: RunnableConfig = {
+            "configurable": {"thread_id": thread, "checkpoint_ns": _SESSION_NAMESPACE}
+        }
+        self.step = -1
+        self.version: str | None = None
+
+    def load(self) -> AgentLoopState | None:
+        snapshot = self.saver.get_tuple(self.config)
+        if snapshot is None:
+            return None
+        state = snapshot.checkpoint["channel_values"].get(_SESSION_CHANNEL)
+        version = snapshot.checkpoint["channel_versions"].get(_SESSION_CHANNEL)
+        if not isinstance(state, dict) or not isinstance(version, str):
+            raise DomainError("AGENT_CHECKPOINT_INVALID", "Agent 恢复状态不完整", 409)
+        with self.store.factory.begin() as db:
+            self.store.verify(db, state)
+        self.config = snapshot.config
+        self.step = snapshot.metadata.get("step", 0)
+        self.version = version
+        return cast(AgentLoopState, state)
+
+    def legacy(self) -> CheckpointTuple | None:
+        return self.saver.get_tuple(
+            {"configurable": {"thread_id": self.thread, "checkpoint_ns": ""}}
+        )
+
+    def save(self, state: AgentLoopState) -> None:
+        checkpoint = empty_checkpoint()
+        self.store.stamp({}, dict(state))
+        version = self.saver.get_next_version(self.version, None)
+        checkpoint["channel_values"] = {_SESSION_CHANNEL: dict(state)}
+        checkpoint["channel_versions"] = {_SESSION_CHANNEL: version}
+        checkpoint["updated_channels"] = [_SESSION_CHANNEL]
+        self.config = self.saver.put(
+            self.config,
+            checkpoint,
+            {"source": "loop", "step": self.step + 1, "parents": {}},
+            {_SESSION_CHANNEL: version},
+        )
+        self.step += 1
+        self.version = version
+
+
 class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
     store: AgentLoopStore
     input_sha256: str
+    session: _SessionCheckpoint
 
     def _context(self, db: Session):
         context = super()._context(db)
@@ -103,17 +160,8 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
             raise _RecoveryRequired(state, code)
         return super()._stop(state, code)
 
-    def _stamped(self, state: AgentLoopState, changes: AgentLoopState) -> AgentLoopState:
-        return cast(AgentLoopState, self.store.stamp(dict(state), dict(changes)))
-
-    def observe(self, state: AgentLoopState) -> AgentLoopState:
-        return self._stamped(state, super().observe(state))
-
-    def decide(self, state: AgentLoopState) -> AgentLoopState:
-        return self._stamped(state, super().decide(state))
-
-    def tools(self, state: AgentLoopState) -> AgentLoopState:
-        return self._stamped(state, super().tools(state))
+    def checkpoint(self, state: AgentLoopState) -> None:
+        self.session.save(state)
 
     def finish(self, state: AgentLoopState) -> AgentLoopState:
         changes = super().finish(state)
@@ -121,28 +169,21 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
         if outcome is not None and outcome["status"] == "HUMAN_REVIEW":
             identity = self.store.question(state["model_turns"], outcome["human_request"])
             changes["outcome"] = outcome | {"question_id": str(identity)}
-        return self._stamped(state, changes)
+        return changes
 
     def invoke_model(
         self, request: AgentModelRequest, turn: int
     ) -> AgentModelResponse[AgentDecision[T]]:
-        with self.factory.begin() as db:
-            _, _, actor = self._context(db)
-            definitions = available_agent_tools(
-                db, self.registry, request.run_id, request.agent_name, actor, request.stage
-            )
-            declarations = []
-            for tool in agent_tool_declarations(definitions):
-                schema = tool.parameters
-                parameters: dict | str = schema
-                try:
-                    safe_metadata(schema)
-                except ValueError:
-                    # Trusted schemas may name data such as an authorization query.
-                    # Encode their grammar, never relax credential checks on values.
-                    # Keep the original shape for already-persisted safe declarations.
-                    parameters = json.dumps(schema, ensure_ascii=False, sort_keys=True)
-                declarations.append({"name": tool.name, "parameters": parameters})
+        declarations = []
+        for tool in self.declarations:
+            schema = tool.parameters
+            parameters: dict | str = schema
+            try:
+                safe_metadata(schema)
+            except ValueError:
+                # Preserve original request hashes and keep sensitive values out of the journal.
+                parameters = json.dumps(schema, ensure_ascii=False, sort_keys=True)
+            declarations.append({"name": tool.name, "parameters": parameters})
         key = self._execution(turn).step_key
         action_id, saved = self.store.plan(
             key, "MODEL", {"request": request.model_dump(mode="json"), "tools": declarations}
@@ -156,7 +197,7 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
                 receipt = latest_receipt(db, action.gateway_call_id)
                 assert receipt is not None
                 usage = GatewayUsage.model_validate(receipt.usage_json)
-            self.pi.accept_model(response, tuple(tool.name for tool in definitions), usage)
+            self.pi.accept_model(response, tuple(tool.name for tool in self.declarations), usage)
             return response
         return invoke_agent(
             self.factory,
@@ -171,29 +212,28 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
                 db, action_id, call_id, result.model_dump(mode="json")
             ),
             on_round=self.pi.accept_model,
+            expected_tools=self.declarations,
         )
 
-    def execute_tool(self, request: AgentToolCall, step_key: str) -> AgentToolFeedback:
+    def execute_tool(
+        self, request: AgentToolCall, step_key: str, *, rejected: bool = False
+    ) -> AgentToolFeedback:
         action_id, saved = self.store.plan(
             request.idempotency_key, "TOOL", request.model_dump(mode="json")
         )
         wait_key = "wait-" + digest({"tool_action": request.idempotency_key})
-        with self.factory.begin() as db:
-            _, _, actor = self._context(db)
-            pending = saved is None and agent_tool_is_pending(
-                db, self.registry, self.seed.agent_name, request, actor, self.seed.stage
-            )
-        if pending:
+        if saved is None and not rejected and self.tool_pending(request):
             self.store.plan(wait_key, "WAIT", request.model_dump(mode="json"))
-            waiting = AgentToolWait(request=request).model_dump(mode="json")
-            # Only durable tool readiness authorizes dispatch. Buffered checkpoint
-            # replies may belong to a different call in the same tool batch.
-            while True:
-                interrupt(waiting)
+            raise _ExternalWait(request)
         with self.factory.begin() as db:
             self._context(db)
             feedback = execute_agent_tool(
-                db, self.registry, self.seed.agent_name, request, step_key=step_key
+                db,
+                self.registry,
+                self.seed.agent_name,
+                request,
+                step_key=step_key,
+                rejected=rejected,
             )
             action = db.get(AgentLoopAction, action_id)
             assert action is not None
@@ -204,78 +244,130 @@ class _PersistentRuntime[T: BaseModel](_AgentRuntime[T]):
                 raise DomainError("AGENT_ACTION_CONFLICT", "工具回放与持久结果不一致", 409)
             return feedback
 
-    def human(self, state: AgentLoopState) -> AgentLoopState:
-        try:
-            return self._human_answer(state)
-        except ValidationError:
-            return self._stamped(state, self._stop(state, "AGENT_CONTEXT_LIMIT"))
+    def tool_pending(self, request: AgentToolCall, *, resuming: bool = False) -> bool:
+        with self.factory.begin() as db:
+            _, _, actor = self._context(db)
+            if resuming:
+                intent = db.scalar(
+                    select(AgentLoopAction).where(
+                        AgentLoopAction.loop_id == self.store.loop_id,
+                        AgentLoopAction.action_key == request.idempotency_key,
+                        AgentLoopAction.kind == "TOOL",
+                    )
+                )
+                if intent is None or intent.request_json != request.model_dump(mode="json"):
+                    raise DomainError("AGENT_ACTION_CONFLICT", "外部等待与持久行动不一致", 409)
+            pending = agent_tool_is_pending(
+                db, self.registry, self.seed.agent_name, request, actor, self.seed.stage
+            )
+            if resuming and not pending:
+                # The current delivery owns recovery, even if the new Pi process exits.
+                loop = self.store.guard(db)
+                loop.status, loop.outcome_json = "RUNNING", None
+        return pending
 
-    def _human_answer(self, state: AgentLoopState) -> AgentLoopState:
+    def human(self, state: AgentLoopState) -> AgentLoopState:
         outcome = state["outcome"]
         assert outcome is not None
         question_id = UUID(outcome["question_id"])
-        # No effects before interrupt: this node restarts when Command resumes it.
-        resumed = interrupt(
-            {
-                "loop_id": str(self.store.loop_id),
-                "question_id": str(question_id),
-                "input_sha256": self.input_sha256,
-                "human_request": outcome["human_request"],
-            }
-        )
         stored = self.store.decision(question_id)
-        if stored is None or str(stored[0]) != resumed:
-            raise DomainError("AGENT_DECISION_REQUIRED", "恢复必须使用已持久化的人工决定", 409)
+        if stored is None:
+            return state
         decision_id, value, actor = stored
         decision = AgentHumanDecision.model_validate(value)
         if decision.decision == "STOP":
-            return self._stamped(state, self._stop(state, "AGENT_HUMAN_STOPPED"))
+            return state | self._stop(state, "AGENT_HUMAN_STOPPED")
         request = AgentModelRequest.model_validate(state["request"])
-        updated = AgentModelRequest.model_validate(
-            request.model_dump(mode="json")
-            | {
-                "messages": [item.model_dump(mode="json") for item in request.messages]
-                + [
-                    AgentUserMessage(
-                        data={
-                            "human_decision": {
-                                "decision_id": str(decision_id),
-                                "actor_id": actor,
-                                "question": outcome["human_request"],
-                                **value,
-                            }
-                        }
-                    ).model_dump(mode="json")
-                ]
-            }
-        )
-        return self._stamped(state, {"request": updated.model_dump(mode="json"), "outcome": None})
-
-
-def _external_wait(snapshot) -> AgentToolCall | None:
-    for paused in snapshot.interrupts:
-        value = paused.value
-        if isinstance(value, dict) and value.get("resource_type") == "agent_tool_wait":
-            return AgentToolWait.model_validate(value).request
-    return None
-
-
-def _waiting_outcome(runtime: _PersistentRuntime, snapshot, request: AgentToolCall) -> dict:
-    with runtime.factory.begin() as db:
-        runtime._context(db)
-        runtime.store.verify(db, snapshot.values)
-        intent = db.scalar(
-            select(AgentLoopAction).where(
-                AgentLoopAction.loop_id == runtime.store.loop_id,
-                AgentLoopAction.action_key == request.idempotency_key,
-                AgentLoopAction.kind == "TOOL",
+        try:
+            answer = AgentUserMessage(
+                data={
+                    "human_decision": {
+                        "decision_id": str(decision_id),
+                        "actor_id": actor,
+                        "question": outcome["human_request"],
+                        **value,
+                    }
+                }
             )
-        )
-        if intent is None or intent.request_json != request.model_dump(mode="json"):
-            raise DomainError("AGENT_ACTION_CONFLICT", "外部等待与持久行动不一致", 409)
-    return runtime._outcome(
-        snapshot.values, status="WAITING_EXTERNAL", waiting_for=request.model_dump(mode="json")
+            updated = AgentModelRequest.model_validate(
+                request.model_dump(mode="json")
+                | {
+                    "messages": [
+                        item.model_dump(mode="json") for item in [*request.messages, answer]
+                    ]
+                }
+            )
+        except ValidationError:
+            return state | self._stop(state, "AGENT_CONTEXT_LIMIT")
+        return state | {
+            "request": updated.model_dump(mode="json"),
+            "outcome": None,
+            "phase": "prepare",
+        }
+
+
+def _import_legacy_state(runtime: _PersistentRuntime, snapshot: CheckpointTuple) -> AgentLoopState:
+    """Translate a stamped graph checkpoint into the current Pi cursor once."""
+    channels = snapshot.checkpoint["channel_values"]
+    values = {key: value for key, value in channels.items() if key in _LEGACY_FIELDS}
+    branch = next(
+        (key.removeprefix(_LEGACY_BRANCH) for key in channels if key.startswith(_LEGACY_BRANCH)), ""
     )
+    if not values and isinstance(channels.get("__start__"), dict):
+        values = dict(channels["__start__"])
+        branch = "observe"
+    # A completed graph node may have committed its writes before the process
+    # saved the next checkpoint. Only its stamped business fields carry forward.
+    writes = {name: value for _, name, value in snapshot.pending_writes or ()}
+    if _LEGACY_FIELDS.intersection(writes):
+        values.update({key: value for key, value in writes.items() if key in _LEGACY_FIELDS})
+        branch = next(
+            (key.removeprefix(_LEGACY_BRANCH) for key in writes if key.startswith(_LEGACY_BRANCH)),
+            "",
+        )
+    with runtime.factory.begin() as db:
+        runtime.store.verify(db, values)
+    state = cast(AgentLoopState, values)
+    if state.get("outcome") is not None:
+        state["phase"] = "finish"
+        return state
+    if branch == "observe" or (branch == "decide" and state["model_turns"] >= MAX_AGENT_LOOP_TURNS):
+        state.update({"phase": "prepare", "response": None})
+        return state
+    if branch not in {"decide", "tools", "finish"}:
+        raise DomainError("AGENT_CHECKPOINT_INVALID", "无法恢复 Agent 旧检查点", 409)
+    if branch == "decide":
+        state["model_turns"] += 1
+    state["request"] = state["request"] | {
+        "operation_key": runtime._execution(state["model_turns"]).step_key
+    }
+    state["phase"] = "tools" if branch == "tools" else "model"
+    if branch != "tools":
+        state["response"] = None
+    return state
+
+
+def _start_state(runtime: _PersistentRuntime) -> AgentLoopState:
+    legacy = runtime.session.legacy()
+    if legacy is not None:
+        return _import_legacy_state(runtime, legacy)
+    state = AgentLoopState(
+        request=runtime.seed.model_dump(mode="json"),
+        observed_round=-1,
+        model_turns=0,
+        phase="prepare",
+    )
+    question = _initial_question(runtime.seed)
+    if question is not None:
+        value = question.model_dump(mode="json")
+        state["phase"] = "finish"
+        state["outcome"] = runtime._outcome(
+            state,
+            status="HUMAN_REVIEW",
+            human_request=value,
+            question_id=str(runtime.store.question(0, value)),
+        )
+    return state
 
 
 def _execute[T: BaseModel](
@@ -294,6 +386,8 @@ def _execute[T: BaseModel](
             return result
         token = claim_loop(db, loop, lease_policy)
         input_sha256 = loop.input_sha256
+        thread = loop.thread_id
+        previous_status, previous_outcome = loop.status, loop.outcome_json
     persistent = _PersistentRuntime(
         runtime.factory,
         runtime.settings,
@@ -307,83 +401,37 @@ def _execute[T: BaseModel](
     persistent.store = store = AgentLoopStore(runtime.factory, loop_id, token)
     persistent.input_sha256 = input_sha256
     persistent.project_id = runtime.project_id
-    config = {
-        "configurable": {"thread_id": f"agent-loop:{loop_id}"},
-        "recursion_limit": AGENT_GRAPH_RECURSION_LIMIT,
-    }
-    with (
-        keep_loop_alive(store, lease_policy),
-        open_checkpointer(runtime.settings) as saver,
-        persistent.pi,
-    ):
-        initial_question = _initial_question(runtime.seed)
-        graph = build_agent_graph(
-            persistent,
-            checkpointer=saver,
-            human=persistent.human,
-            start_with_human=initial_question is not None,
-        )
-        snapshot = graph.get_state(config)
-        value: AgentLoopState | Command | None
-        if snapshot.values:
+    with keep_loop_alive(store, lease_policy), open_checkpointer(runtime.settings) as saver:
+        persistent.session = _SessionCheckpoint(store, saver, thread)
+        state = persistent.session.load()
+        if state is None:
+            state = _start_state(persistent)
+            persistent.checkpoint(state)
+        if previous_status == "WAITING_EXTERNAL":
+            waiting = persistent.outcome_model.model_validate(previous_outcome)
+            assert waiting.waiting_for is not None
+            if persistent.tool_pending(waiting.waiting_for, resuming=True):
+                return waiting
+        if (state.get("outcome") or {}).get("status") == "HUMAN_REVIEW":
+            continued = persistent.human(state)
+            if continued is not state:
+                persistent.checkpoint(continued)
+                state = continued
+        if previous_status == "WAITING_HUMAN" and state.get("outcome") is None:
             with runtime.factory.begin() as db:
-                store.verify(db, snapshot.values)
-            value = None
-            if snapshot.interrupts:
-                external = _external_wait(snapshot)
-                if external is not None:
-                    waiting = _waiting_outcome(persistent, snapshot, external)
-                    with runtime.factory.begin() as db:
-                        _, _, current_actor = persistent._context(db)
-                        pending = agent_tool_is_pending(
-                            db,
-                            runtime.registry,
-                            runtime.seed.agent_name,
-                            external,
-                            current_actor,
-                            runtime.seed.stage,
-                        )
-                        if not pending:
-                            # The current delivery now owns recovery. Keep the ready scan
-                            # from creating a different revision after a Pi process failure.
-                            loop = store.guard(db)
-                            loop.status, loop.outcome_json = "RUNNING", None
-                    if pending:
-                        store.finish("WAITING_EXTERNAL", waiting)
-                        return persistent.outcome_model.model_validate(waiting)
-                    # Reenter the tool node using durable readiness, without adding
-                    # a resume value that could be consumed by another tool.
-                else:
-                    waiting = snapshot.values["outcome"]
-                    stored = store.decision(UUID(waiting["question_id"]))
-                    if stored is None:
-                        store.finish("WAITING_HUMAN", waiting)
-                        return persistent.outcome_model.model_validate(waiting)
-                    value = Command(resume=str(stored[0]))
-        else:
-            value = AgentLoopState(
-                request=runtime.seed.model_dump(mode="json"), observed_round=-1, model_turns=0
-            )
-            if initial_question is not None:
-                question = initial_question.model_dump(mode="json")
-                value["outcome"] = persistent._outcome(
-                    value,
-                    status="HUMAN_REVIEW",
-                    human_request=question,
-                    question_id=str(store.question(0, question)),
-                )
-            store.stamp({}, dict(value))
+                active_loop = store.guard(db)
+                active_loop.status, active_loop.outcome_json = "RUNNING", None
         try:
-            state = graph.invoke(value, config, durability="sync")
-            snapshot = graph.get_state(config)
-            external = _external_wait(snapshot)
-            if external is not None:
-                outcome = _waiting_outcome(persistent, snapshot, external)
-                store.finish("WAITING_EXTERNAL", outcome)
-                return persistent.outcome_model.model_validate(outcome)
+            if state.get("outcome") is None:
+                state = persistent.run(state)
             outcome = state["outcome"]
             assert outcome is not None
             status = "WAITING_HUMAN" if outcome["status"] == "HUMAN_REVIEW" else outcome["status"]
+        except _ExternalWait as exc:
+            status = "WAITING_EXTERNAL"
+            outcome = persistent._outcome(
+                state, status=status, waiting_for=exc.request.model_dump(mode="json")
+            )
         except _RecoveryRequired as exc:
             outcome = persistent._outcome(exc.state, status="STOPPED", stop_code=exc.code)
             status = "RECOVERY_REQUIRED"

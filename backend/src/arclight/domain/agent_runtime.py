@@ -6,15 +6,8 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from arclight.domain.agent_state import AgentStepId
-from arclight.domain.agent_tools import AgentName, AgentToolCall, AgentToolContract
+from arclight.domain.agent_tools import AgentName, AgentToolCall
 from arclight.domain.generation_requests import safe_metadata
-
-
-class AgentToolWait(AgentToolContract):
-    """Server-created interrupt for a durable tool whose external inputs are not ready."""
-
-    resource_type: Literal["agent_tool_wait"] = "agent_tool_wait"
-    request: AgentToolCall
 
 
 class HumanDecisionRequest(BaseModel):

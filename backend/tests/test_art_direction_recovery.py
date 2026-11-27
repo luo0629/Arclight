@@ -128,7 +128,7 @@ def test_art_loop_stops_at_the_runtime_turn_limit_without_formal_writes(
     assert facts(client) == before
 
 
-@pytest.mark.parametrize("node", ["decide", "tools"])
+@pytest.mark.parametrize("node", ["invoke_model", "execute_tool"])
 def test_crash_reentry_reuses_committed_model_and_tool_actions(
     client, episode, settings, model_service, monkeypatch, node
 ):

@@ -254,6 +254,8 @@ class LLMService:
 
 def response_contract(contract: type[BaseModel], settings: Settings) -> tuple[dict, dict]:
     schema = contract.model_json_schema()
+    if settings.llm_response_format == "prompt_json":
+        return {}, schema
     fmt = {"type": settings.llm_response_format}
     if settings.llm_response_format == "json_schema":
         return {**fmt, "json_schema": {"name": contract.__name__, "schema": schema}}, schema

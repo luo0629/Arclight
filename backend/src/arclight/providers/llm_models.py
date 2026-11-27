@@ -21,7 +21,9 @@ from openai import AsyncOpenAI, OpenAI
 from pydantic import JsonValue, PrivateAttr, SecretStr
 
 from arclight.core.config import Settings
+from arclight.domain.agent_model import AssistantContextField
 from arclight.domain.model_gateway import GatewayFailure
+from arclight.domain.model_suppliers import OpenAIChatOptions, supplier_by_id
 from arclight.providers.llm_transport import active_exchange, gemini_model_path
 from arclight.providers.native_text import gemini_payload
 
@@ -30,6 +32,17 @@ _CHAT_OPTIONS: dict[str, tuple[tuple[str, dict[str, JsonValue]], ...]] = {
     "deepseek": ((r".*", {"thinking": {"type": "disabled"}}),),
     "qwen": ((r"^qwen", {"enable_thinking": False}),),
 }
+
+
+def chat_options(settings: Settings) -> OpenAIChatOptions | None:
+    preset = supplier_by_id(settings.llm_supplier)
+    if (
+        preset is not None
+        and preset.protocol == settings.llm_protocol == "openai_chat"
+        and preset.base_url == settings.llm_base_url
+    ):
+        return preset.chat_options
+    return None
 
 
 def invocation_kwargs(
@@ -50,8 +63,18 @@ def invocation_kwargs(
         ),
         {},
     )
+    profile = chat_options(settings)
     # extra_body preserves the protocol roles through SDK message conversion.
-    extra = {**deepcopy(options), "messages": message_dicts(messages)}
+    extra = {
+        **deepcopy(options),
+        "messages": message_dicts(
+            messages, assistant_fields=profile.assistant_fields if profile else ()
+        ),
+    }
+    if profile and profile.require_parameters:
+        extra["provider"] = {"require_parameters": True}
+    if profile and profile.reasoning_split:
+        extra["reasoning_split"] = True
     if response_format:
         extra["response_format"] = response_format
     kwargs: dict = {"extra_body": extra}
@@ -60,7 +83,12 @@ def invocation_kwargs(
     return kwargs
 
 
-def message_dicts(messages: list[BaseMessage], *, native_ids: bool = False) -> list[dict]:
+def message_dicts(
+    messages: list[BaseMessage],
+    *,
+    native_ids: bool = False,
+    assistant_fields: tuple[AssistantContextField, ...] = (),
+) -> list[dict]:
     values: list[dict] = []
     for message in messages:
         if isinstance(message, SystemMessage):
@@ -89,9 +117,16 @@ def message_dicts(messages: list[BaseMessage], *, native_ids: bool = False) -> l
                         **(native if native_ids else {}),
                     }
                 )
-            values.append(
-                {"role": "assistant", "content": message.content or None, "tool_calls": calls}
+            assistant = {
+                "role": "assistant",
+                "content": message.content or None,
+                "tool_calls": calls,
+            }
+            context = message.additional_kwargs.get("assistant_context", {})
+            assistant.update(
+                {field: context[field] for field in assistant_fields if field in context}
             )
+            values.append(assistant)
         else:
             raise GatewayFailure("INPUT_INVALID", not_accepted=True)
     return values

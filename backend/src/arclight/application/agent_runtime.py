@@ -1,7 +1,6 @@
-"""Run the real Agent graph using the existing gateway, tools, evidence and execution scope."""
+"""Serve Pi model and tool callbacks inside the owning workflow scope."""
 
 import json
-from collections import deque
 from collections.abc import Callable
 from typing import cast
 from uuid import UUID
@@ -14,21 +13,24 @@ from arclight.agent_skills import freeze_agent_skills
 from arclight.application.agent_limits import configure_agent_run, validate_agent_execution
 from arclight.application.agent_memory import project_agent_memory
 from arclight.application.agent_runtime_state import scope_for_run
-from arclight.application.agent_tools import AgentToolRegistry, execute_agent_tool
+from arclight.application.agent_tools import (
+    AgentToolRegistry,
+    available_agent_tools,
+    execute_agent_tool,
+)
 from arclight.application.context_evidence import read_trace
 from arclight.application.gateway_agent import AgentOutputProjection, invoke_agent
 from arclight.application.gateway_text import execution_actor
 from arclight.application.model_gateway import lock_gate
-from arclight.application.pi_agent import PiAgent
-from arclight.application.shared_agent_reads import with_project_reads
+from arclight.application.pi_agent import PiAgent, PiRuntimeError
+from arclight.application.shared_agent_reads import agent_tool_declarations, with_project_reads
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.agent_model import (
-    AgentAssistantMessage,
     AgentModelRequest,
     AgentModelResponse,
-    AgentToolMessage,
+    AgentToolDeclaration,
     AgentUserMessage,
 )
 from arclight.domain.agent_runtime import AgentDecision, AgentLoopResult
@@ -38,12 +40,9 @@ from arclight.domain.model_gateway import GatewayFailure
 from arclight.domain.versions import digest
 from arclight.persistence.agent_limits import AgentRunLimit
 from arclight.persistence.models import Episode, WorkflowRun
-from arclight.workflows.agent import AgentLoopState, build_agent_graph
+from arclight.workflows.agent import AgentLoopState
 
 MAX_AGENT_LOOP_TURNS = 32
-# Observe, decide, apply tools or finish, and optionally resume a human answer.
-AGENT_GRAPH_RECURSION_LIMIT = MAX_AGENT_LOOP_TURNS * 4 + 10
-
 _FATAL_TOOL_ERRORS = frozenset(
     {
         "USER_NOT_AUTHORIZED",
@@ -74,6 +73,7 @@ class _AgentRuntime[T: BaseModel]:
     ):
         self.factory, self.settings, self.seed = factory, settings, seed
         self.pi = PiAgent(seed)
+        self.declarations: tuple[AgentToolDeclaration, ...] = ()
         self.include_project_reads = include_project_reads
         self.registry = with_project_reads(registry) if include_project_reads else registry
         self.result_model = result_model
@@ -207,23 +207,13 @@ class _AgentRuntime[T: BaseModel]:
         except ValidationError:
             return self._stop(state, "AGENT_CONTEXT_LIMIT")
 
-    def decide(self, state: AgentLoopState) -> AgentLoopState:
-        if state["model_turns"] >= MAX_AGENT_LOOP_TURNS:
-            return self._stop(state, "AGENT_MODEL_CALL_LIMIT")
-        turn = state["model_turns"] + 1
-        advanced: AgentLoopState = {**state, "model_turns": turn}
-        try:
-            request = AgentModelRequest.model_validate(
-                state["request"]
-                | {
-                    "operation_key": f"loop:{self.identity}:{turn}",
-                }
-            )
-            self.pi.request_model()
-            response = self.invoke_model(request, turn)
-            return {"model_turns": turn, "response": response.model_dump(mode="json")}
-        except (DomainError, GatewayFailure) as exc:
-            return {"model_turns": turn, **self._stop(advanced, exc.code)}
+    def checkpoint(self, state: AgentLoopState) -> None:
+        """Durable callers save the exact prefix before exposing the next side effect."""
+
+    def _advance(self, state: AgentLoopState, changes: AgentLoopState) -> None:
+        updated: AgentLoopState = {**state, **changes}
+        self.checkpoint(updated)
+        state.update(updated)
 
     def invoke_model(
         self, request: AgentModelRequest, turn: int
@@ -237,80 +227,155 @@ class _AgentRuntime[T: BaseModel]:
             execution=self._execution(turn),
             output_projection=self.output_projection,
             on_round=self.pi.accept_model,
+            expected_tools=self.declarations,
         )
 
-    def execute_tool(self, request: AgentToolCall, step_key: str) -> AgentToolFeedback:
+    def execute_tool(
+        self, request: AgentToolCall, step_key: str, *, rejected: bool = False
+    ) -> AgentToolFeedback:
         with self.factory.begin() as db:
             self._context(db)
             validate_agent_execution(db, request.run_id, self.seed.stage)
             return execute_agent_tool(
-                db, self.registry, self.seed.agent_name, request, step_key=step_key
+                db,
+                self.registry,
+                self.seed.agent_name,
+                request,
+                step_key=step_key,
+                rejected=rejected,
             )
 
-    def tools(self, state: AgentLoopState) -> AgentLoopState:
-        try:
-            request = AgentModelRequest.model_validate(state["request"])
-            response = self.response_model.model_validate(state["response"])
-            messages = [*request.messages, AgentAssistantMessage(tool_calls=response.tool_calls)]
-            image_messages: list[AgentUserMessage] = []
-            seen_images = set(request.image_ids())
-            execution = self._execution(state["model_turns"])
-            self.pi.prepare_tools(response.tool_calls)
-            pending = deque(response.tool_calls)
-            while pending:
-                call = self.pi.next_tool(pending)
-                # Provider IDs are transport pairing IDs, not authority or durable action keys.
-                action_key = "loop-" + digest({"step": execution.step_key, "call": call.call_id})
-                tool_request = call.tool_request(request.run_id).model_copy(
-                    update={"idempotency_key": action_key}
+    def _declarations(self, request: AgentModelRequest) -> tuple[AgentToolDeclaration, ...]:
+        with self.factory.begin() as db:
+            _, _, actor = self._context(db)
+            return agent_tool_declarations(
+                available_agent_tools(
+                    db, self.registry, request.run_id, request.agent_name, actor, request.stage
                 )
-                feedback = self.execute_tool(tool_request, execution.step_key)
-                self.pi.accept_tool(feedback)
-                if feedback.error and (
-                    feedback.error.code.startswith("AGENT_")
-                    or feedback.error.code in _FATAL_TOOL_ERRORS
-                ):
-                    return self._stop(state, feedback.error.code)
-                messages.append(
-                    AgentToolMessage(
-                        call_id=call.call_id,
-                        feedback=feedback.model_copy(update={"idempotency_key": call.call_id}),
-                    )
-                )
-                tool = self.registry.get(call.tool_name)
-                if (
-                    feedback.status == "SUCCEEDED"
-                    and tool is not None
-                    and issubclass(tool.result_model, RetrieveEvidenceResult)
-                ):
-                    evidence = tool.result_model.model_validate(feedback.result)
-                    assert isinstance(evidence, RetrieveEvidenceResult)
-                    images = [
-                        identity
-                        for identity in evidence.image_file_ids
-                        if identity not in seen_images
-                    ]
-                    if images:
-                        image_messages.append(
-                            AgentUserMessage(
-                                data={"evidence_manifest_id": str(evidence.manifest_id)},
-                                image_file_ids=images,
-                            )
-                        )
-                        seen_images.update(images)
-            updated = AgentModelRequest.model_validate(
-                request.model_dump(mode="json")
-                | {
-                    "messages": [
-                        item.model_dump(mode="json") for item in [*messages, *image_messages]
-                    ],
-                }
             )
-            return {"request": updated.model_dump(mode="json")}
-        except DomainError as exc:
-            return self._stop(state, exc.code)
+
+    def _tool(self, event: dict, request: AgentModelRequest) -> AgentToolFeedback:
+        call = self.pi.next_tool(event)
+        execution = self._execution(self.pi.turn)
+        # Pairing identifiers from a provider do not grant an action or its idempotency key.
+        action_key = "loop-" + digest({"step": execution.step_key, "call": call.call_id})
+        tool_request = call.tool_request(request.run_id).model_copy(
+            update={"idempotency_key": action_key}
+        )
+        if event["type"] == "tool_rejected":
+            return self.execute_tool(tool_request, execution.step_key, rejected=True)
+        return self.execute_tool(tool_request, execution.step_key)
+
+    def _evidence_images(
+        self, feedback: AgentToolFeedback, seen: set[UUID]
+    ) -> AgentUserMessage | None:
+        tool = self.registry.get(feedback.tool_name)
+        if (
+            feedback.status != "SUCCEEDED"
+            or tool is None
+            or not issubclass(tool.result_model, RetrieveEvidenceResult)
+        ):
+            return None
+        evidence = tool.result_model.model_validate(feedback.result)
+        assert isinstance(evidence, RetrieveEvidenceResult)
+        images = [identity for identity in evidence.image_file_ids if identity not in seen]
+        if not images:
+            return None
+        seen.update(images)
+        return AgentUserMessage(
+            data={"evidence_manifest_id": str(evidence.manifest_id)}, image_file_ids=images
+        )
+
+    def run(self, state: AgentLoopState) -> AgentLoopState:
+        """Service Pi's events. The SDK chooses the next model or tool callback."""
+        request = AgentModelRequest.model_validate(state["request"])
+        replaying = state.get("phase") in {"model", "tools"}
+        image_messages: list[AgentUserMessage] = []
+        seen_images = set(request.image_ids())
+        prepared_round: int | None = None
+        try:
+            with self.pi:
+                self.pi.start(request.messages)
+                while True:
+                    event = self.pi.event()
+                    kind = event["type"]
+                    if kind == "prepare":
+                        if replaying:
+                            prepared_round = state["observed_round"]
+                            additions: list[AgentUserMessage] = []
+                        else:
+                            observed = self.observe(state)
+                            if observed.get("outcome") is not None:
+                                return {**state, **observed}
+                            if state["model_turns"] >= MAX_AGENT_LOOP_TURNS:
+                                return {**state, **self._stop(state, "AGENT_MODEL_CALL_LIMIT")}
+                            prepared_round = observed["observed_round"]
+                            additions = image_messages + [
+                                AgentUserMessage.model_validate(message)
+                                for message in observed["request"]["messages"][
+                                    len(request.messages) :
+                                ]
+                            ]
+                        self.declarations = self._declarations(request)
+                        self.pi.prepare(self.declarations, additions)
+                    elif kind == "model" and prepared_round is not None:
+                        messages = self.pi.model_messages(event, self.declarations)
+                        if replaying:
+                            if messages != request.messages:
+                                raise PiRuntimeError("Pi changed a frozen model request")
+                        else:
+                            turn = state["model_turns"] + 1
+                            request = AgentModelRequest.model_validate(
+                                state["request"]
+                                | {
+                                    "messages": messages,
+                                    "evidence_round": prepared_round,
+                                    "operation_key": self._execution(turn).step_key,
+                                }
+                            )
+                            self._advance(
+                                state,
+                                AgentLoopState(
+                                    request=request.model_dump(mode="json"),
+                                    phase="model",
+                                    response=None,
+                                    model_turns=turn,
+                                    observed_round=prepared_round,
+                                ),
+                            )
+                        replaying = False
+                        prepared_round = None
+                        image_messages.clear()
+                        self.pi.turn = state["model_turns"]
+                        response = self.invoke_model(request, self.pi.turn)
+                        saved = response.model_dump(mode="json")
+                        if response.status != "TOOL_CALLS":
+                            finished: AgentLoopState = {
+                                **state,
+                                "response": saved,
+                                "phase": "finish",
+                            }
+                            finished.update(self.finish(finished))
+                            self.checkpoint(finished)
+                            return finished
+                        self._advance(state, AgentLoopState(response=saved, phase="tools"))
+                    elif kind in {"tool", "tool_rejected"} and state.get("phase") == "tools":
+                        feedback = self._tool(event, request)
+                        self.pi.accept_tool(feedback)
+                        if feedback.error and (
+                            feedback.error.code.startswith("AGENT_")
+                            or feedback.error.code in _FATAL_TOOL_ERRORS
+                        ):
+                            return {**state, **self._stop(state, feedback.error.code)}
+                        image = self._evidence_images(feedback, seen_images)
+                        if image is not None:
+                            image_messages.append(image)
+                    else:
+                        raise PiRuntimeError("Pi runtime returned an out-of-sequence event")
+        except (DomainError, GatewayFailure) as exc:
+            return {**state, **self._stop(state, exc.code)}
         except ValidationError:
-            return self._stop(state, "AGENT_CONTEXT_LIMIT")
+            return {**state, **self._stop(state, "AGENT_CONTEXT_LIMIT")}
 
     def finish(self, state: AgentLoopState) -> AgentLoopState:
         try:
@@ -359,12 +424,12 @@ def run_agent_loop[T: BaseModel](
     request = freeze_agent_skills(request)
     runtime = _AgentRuntime(factory, settings, request, registry, result_model, validate_result)
     runtime.prepare(parent_run_id)
-    graph = build_agent_graph(runtime)
-    with runtime.pi:
-        state = graph.invoke(
-            AgentLoopState(
-                request=request.model_dump(mode="json"), observed_round=-1, model_turns=0
-            ),
-            {"recursion_limit": AGENT_GRAPH_RECURSION_LIMIT},
+    state = runtime.run(
+        AgentLoopState(
+            request=request.model_dump(mode="json"),
+            observed_round=-1,
+            model_turns=0,
+            phase="prepare",
         )
+    )
     return runtime.outcome_model.model_validate(state["outcome"])

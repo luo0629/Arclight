@@ -35,10 +35,11 @@ from arclight.domain.model_suppliers import (
     PROTOCOLS,
     SPEECH_MODEL_PRESETS,
     SUPPLIERS,
+    VISUAL_MODEL_PRESETS,
     Supplier,
     supplier_by_id,
 )
-from arclight.domain.text_model_catalog import TEXT_MODELS
+from arclight.domain.text_model_catalog import TEXT_MODEL_PRESETS
 from arclight.persistence.models import ModelService, ServiceAudit
 from arclight.providers.media_io import bounded_call
 from arclight.providers.model_capability_probe import probe_model_capabilities
@@ -142,10 +143,11 @@ def list_services(
         "key_storage": status,
         "protocols": PROTOCOLS,
         "text_models": [
-            {"supplier": supplier, "model": model, "name": name}
-            for supplier, model, name, _, _ in TEXT_MODELS
+            {"supplier": row.supplier, "model": row.model, "name": row.name}
+            for row in TEXT_MODEL_PRESETS
         ],
         "speech_models": [preset.model_dump() for preset in SPEECH_MODEL_PRESETS],
+        "visual_models": [preset.model_dump() for preset in VISUAL_MODEL_PRESETS],
         "suppliers": [preset.model_dump(exclude={"response_format"}) for preset in SUPPLIERS],
     }
 

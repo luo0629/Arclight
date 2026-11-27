@@ -1,4 +1,4 @@
-"""ARUN-05 exercises the real persistent graph, journals and gateway, with HTTP Fakes."""
+"""Persistent Pi sessions, journals and gateway tested through the real HTTP boundary."""
 
 import json
 import os
@@ -16,6 +16,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from langgraph.checkpoint.base import empty_checkpoint
 from sqlalchemy import select, text, update
 from sqlalchemy.exc import DBAPIError
 from test_agent_model import FinalResult, call_response, model_request
@@ -249,9 +250,9 @@ def test_duplicate_decision_is_idempotent_but_conflicting_or_stale_answer_is_rej
     "protocol,node",
     [
         ("openai_chat", "intent"),
-        ("openai_chat", "decide"),
-        ("openai_chat", "tools"),
-        ("gemini", "tools"),
+        ("openai_chat", "invoke_model"),
+        ("openai_chat", "execute_tool"),
+        ("gemini", "execute_tool"),
     ],
 )
 def test_reentry_after_crash_reuses_logical_model_and_tool_actions(
@@ -353,6 +354,66 @@ def test_reentry_after_crash_reuses_logical_model_and_tool_actions(
         actions = list(db.scalars(select(AgentLoopAction)))
         assert len(actions) == 3 and all(row.result_json is not None for row in actions)
         assert all(row.request_sha256 for row in actions)
+
+
+def test_resume_imports_stamped_legacy_batch_with_pending_checkpoint_writes(
+    client, episode, settings, model_service, monkeypatch
+):
+    run_id, actor, registry = setup_loop(client, episode, settings)
+    seed = model_request(run_id)
+    entry = create_entry(client, episode["project_id"])
+    sent = []
+
+    def respond(request):
+        payload = json.loads(request.content)
+        sent.append(payload)
+        return httpx.Response(
+            200,
+            json=final()
+            if tool_feedback(payload)
+            else call_response(("read", "read_story_entry", {"entry_id": str(entry)})),
+        )
+
+    model_service(respond)
+
+    def write_historical_checkpoint(session, state):
+        if state["phase"] != "tools":
+            return
+        initial = {
+            "request": state["request"] | {"operation_key": seed.operation_key},
+            "observed_round": state["observed_round"],
+            "model_turns": 0,
+        }
+        changes = {"model_turns": 1, "response": state["response"]}
+        session.store.stamp(initial, changes)
+        config = {"configurable": {"thread_id": session.thread, "checkpoint_ns": ""}}
+        snapshot = empty_checkpoint()
+        snapshot["channel_values"] = initial | {"branch:to:decide": None}
+        versions = {
+            key: session.saver.get_next_version(None, None) for key in snapshot["channel_values"]
+        }
+        snapshot["channel_versions"] = versions
+        written = session.saver.put(config, snapshot, {"source": "loop", "step": 1}, versions)
+        session.saver.put_writes(
+            written, [*changes.items(), ("branch:to:tools", None)], str(uuid4())
+        )
+        raise RuntimeError("historical interruption")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(recovery._SessionCheckpoint, "save", write_historical_checkpoint)
+        with pytest.raises(RuntimeError, match="historical interruption"):
+            start(client, settings, seed, registry)
+    assert len(sent) == 1
+    loop_id = loop_for(client, run_id)
+    result = resume(client, settings, loop_id, actor, registry)
+    assert result.status == "COMPLETED" and result.model_turns == 2
+    assert len(sent) == 2 and len(rows_for(client, run_id)["invocations"]) == 1
+    assert len(rows_for(client, run_id)["actions"]) == 3
+    with open_checkpointer(settings) as saver:
+        config = {"configurable": {"thread_id": f"agent-loop:{loop_id}"}}
+        assert saver.get_tuple(config) is not None
+        config["configurable"]["checkpoint_ns"] = recovery._SESSION_NAMESPACE
+        assert saver.get_tuple(config) is not None
 
 
 @pytest.mark.parametrize("evidence", [False, True])
@@ -484,12 +545,22 @@ def test_operation_and_result_contract_are_frozen_and_checkpoint_cannot_inject_s
         start(client, settings, seed.model_copy(update={"prompt_version": "forged:2"}), registry)
     assert caught.value.code == "AGENT_LOOP_CONFLICT"
     with open_checkpointer(settings) as saver:
-        graph = recovery.build_agent_graph(recovery._PersistentRuntime, checkpointer=saver)
-        # Bind no executable driver: update_state only changes persisted channels.
-        config = {"configurable": {"thread_id": f"agent-loop:{waiting.loop_id}"}}
-        saved = graph.get_state(config)
-        forged = saved.values["request"] | {"system_instruction": "forged authority"}
-        graph.update_state(config, {"request": forged})
+        config = {
+            "configurable": {
+                "thread_id": f"agent-loop:{waiting.loop_id}",
+                "checkpoint_ns": recovery._SESSION_NAMESPACE,
+            }
+        }
+        saved = saver.get_tuple(config)
+        assert saved is not None
+        channel = recovery._SESSION_CHANNEL
+        state = saved.checkpoint["channel_values"][channel]
+        forged = state["request"] | {"system_instruction": "forged authority"}
+        version = saver.get_next_version(saved.checkpoint["channel_versions"][channel], None)
+        checkpoint = empty_checkpoint()
+        checkpoint["channel_values"] = {channel: state | {"request": forged}}
+        checkpoint["channel_versions"] = {channel: version}
+        saver.put(saved.config, checkpoint, saved.metadata, {channel: version})
     with pytest.raises(DomainError) as caught:
         resume(client, settings, waiting.loop_id, actor, registry)
     assert caught.value.code == "AGENT_CHECKPOINT_INVALID"
@@ -575,11 +646,11 @@ settings = Settings(
 )
 llm_transport.PublicHTTPTransport = lambda *a, **kw: httpx.MockTransport(
     lambda req: httpx.Response(200, json=data["response"]))
-original = r._PersistentRuntime.decide
-def crash(self, state):
-    original(self, state)
+original = r._PersistentRuntime.invoke_model
+def crash(self, request, turn):
+    original(self, request, turn)
     os._exit(51)
-r._PersistentRuntime.decide = crash
+r._PersistentRuntime.invoke_model = crash
 r.run_persistent_agent_loop(session_factory(build_engine(settings), settings), settings,
     AgentModelRequest.model_validate(data["request"]), build_agent_tool_registry(settings=settings),
     FinalResult, lease_policy=LeasePolicy(duration_seconds=3, heartbeat_seconds=.2))

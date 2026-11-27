@@ -129,10 +129,11 @@ jobs:
       - name: Verify packaged Pi runtime
         if: matrix.database == 'sqlite' && matrix.shard == 1 && needs.scope.outputs.mode == 'full'
         run: |
-          start='{"type":"start","resume":"model","agent":{"name":"director","stage":"planning","instruction":"Check the runtime.","input":[{"role":"user","data":{}}]}}'
-          reply=$(printf '%s\n' "$start" '{"type":"stop"}' | \
+          start='{"type":"start","agent":{"name":"director","stage":"planning","instruction":"Check the runtime."},"messages":[{"role":"user","text":"{}"}]}'
+          prepared='{"type":"continue","tools":[],"messages":[]}'
+          reply=$(printf '%s\n' "$start" "$prepared" '{"type":"stop"}' | \
             docker run --rm -i --network none arclight-backend:test node /app/pi_runtime/runner.mjs)
-          test "$reply" = "$(printf '%s\n' '{"type":"model"}' '{"type":"done"}')"
+          test "$reply" = "$(printf '%s\n' '{"type":"prepare"}' '{"type":"model","messages":[{"role":"user","text":"{}"}],"tools":[]}' '{"type":"done"}')"
       - name: Build isolated S3 test service
         uses: docker/build-push-action@v7
         with:

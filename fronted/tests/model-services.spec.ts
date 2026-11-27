@@ -120,7 +120,7 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   await expect(model).toHaveValue("");
   await expect(
     dialog.getByRole("combobox", { name: "推荐模型", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await model.fill("exact-deepseek-id");
   await dialog
     .getByLabel("API Key", { exact: true })
@@ -186,6 +186,71 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
     await secondContext.close();
   }
   expect(crashes).toEqual([]);
+});
+
+test("文字、图片和视频按后端供应商预设填写模型并保存", async ({ page }) => {
+  const { dialog, headers } = await openSettings(page);
+  const path = "/api/v1/me/model-services";
+  const catalog = await (await page.request.get(path, { headers })).json();
+  const model = dialog.getByLabel("模型 ID", { exact: true });
+  for (const [kind, tab, supplier] of [
+    ["text", "文字模型", "kimi"],
+    ["text", "文字模型", "minimax"],
+    ["text", "文字模型", "openrouter"],
+    ["image", "图片模型", "volcengine"],
+    ["video", "视频模型", "google"],
+  ]) {
+    const preset = catalog.suppliers.find(
+      (row: { kind: string; id: string }) =>
+        row.kind === kind && row.id === supplier,
+    );
+    const suggestion = (
+      kind === "text" ? catalog.text_models : catalog.visual_models
+    ).find(
+      (row: { kind?: string; supplier: string }) =>
+        (row.kind === undefined || row.kind === kind) &&
+        row.supplier === supplier,
+    );
+    expect(preset).toBeDefined();
+    expect(suggestion).toBeDefined();
+    await dialog.getByRole("radio", { name: tab, exact: true }).click();
+    await dialog.getByRole("radio", { name: preset.name, exact: true }).click();
+    await expect(model).toHaveValue("");
+    await expect(
+      dialog.getByText(preset.base_url, { exact: true }),
+    ).toBeVisible();
+    await dialog
+      .getByRole("combobox", { name: "推荐模型", exact: true })
+      .click();
+    await page
+      .getByRole("option", { name: suggestion.name, exact: true })
+      .click();
+    await expect(model).toHaveValue(suggestion.model);
+    const key = dialog.getByLabel("API Key", { exact: true });
+    await expect(key).toHaveValue("");
+    await key.fill("synthetic-preset-browser-key");
+    await dialog
+      .getByRole("button", { name: "保存此服务", exact: true })
+      .click();
+    await expect(dialog.getByRole("status")).toContainText("已保存到当前账号");
+    const saved = await page.request.get(path, { headers });
+    const profiles = (await saved.json()).services;
+    const profile = profiles.find((row: { kind: string }) => row.kind === kind);
+    expect(profile).toMatchObject({
+      supplier,
+      model: suggestion.model,
+      protocol: preset.protocol,
+      base_url: preset.base_url,
+      has_key: true,
+    });
+    if (kind === "text") {
+      expect(profile.capability_check).toMatchObject({
+        status: "unverified",
+        tools: false,
+        can_check: true,
+      });
+    }
+  }
 });
 
 test("OpenAI 推荐模型保存后直接使用已登记能力", async ({ page }) => {

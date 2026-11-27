@@ -332,6 +332,7 @@ def execute_agent_tool(
     request: AgentToolCall,
     *,
     step_key: str | None = None,
+    rejected: bool = False,
 ) -> AgentToolFeedback:
     """Execute one server-registered tool inside the caller's DB transaction.
 
@@ -485,6 +486,8 @@ def execute_agent_tool(
                         fields=validation_fields(exc.errors(include_input=False)),
                     )
                 ) from exc
+            if rejected:
+                raise _ToolFailure(_failure(request, "INVALID_ARGUMENTS", "工具参数不符合合同"))
             tool.scope_validator(context, parameters)
             result_value = tool.handler(context, parameters)
             try:

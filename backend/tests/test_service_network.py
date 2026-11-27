@@ -328,9 +328,12 @@ def test_official_request_contract_and_invalid_json_rejection(stub_llm, settings
     )
     assert result == valid
     body = sent[0]
-    assert body["response_format"]["type"] == supplier.response_format
+    if supplier.response_format == "prompt_json":
+        assert "response_format" not in body
+    else:
+        assert body["response_format"]["type"] == supplier.response_format
     assert body["model"] == configuration.llm_model
-    if supplier.id == "openai":
+    if supplier.response_format == "json_schema":
         assert "max_completion_tokens" not in body and "max_tokens" not in body
         assert (
             body["response_format"]["json_schema"]["schema"]
@@ -339,6 +342,8 @@ def test_official_request_contract_and_invalid_json_rejection(stub_llm, settings
     else:
         assert "max_tokens" not in body and "JSON Schema" in body["messages"][0]["content"]
     assert (body.get("thinking") == {"type": "disabled"}) == (supplier.id == "deepseek")
+    assert (body.get("provider") == {"require_parameters": True}) == (supplier.id == "openrouter")
+    assert (body.get("reasoning_split") is True) == (supplier.id == "minimax")
     assert usage.input_tokens == 4
     with pytest.raises(GatewayFailure) as caught:
         provider.analyze("story")

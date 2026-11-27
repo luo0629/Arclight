@@ -1,74 +1,161 @@
 import { createInterface } from 'node:readline';
 import { Agent } from '@earendil-works/pi-agent-core';
-import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { createAssistantMessageEventStream, getCurrentTools } from '@earendil-works/pi-ai';
 
-// Pi requires an API identifier in the model descriptor. The custom stream resolves
-// every model request through Python's gateway.
-const model = {
+// Python's gateway resolves the model and capabilities. Pi uses this identity
+// only to associate assistant messages with the custom stream.
+const gatewayModel = {
   id: 'arclight-gateway',
   name: 'Arclight Model Gateway',
-  api: 'openai-completions',
+  api: 'unknown',
   provider: 'arclight',
   baseUrl: '',
   reasoning: false,
-  input: ['text'],
+  input: [],
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 1,
-  maxTokens: 1,
+  contextWindow: 0,
+  maxTokens: 0,
 };
-const toolParameters = { type: 'object', additionalProperties: true };
 
 function isObject(value) {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function toolBatch(value, names) {
-  if (!Array.isArray(names) || !names.every((name) => typeof name === 'string' && name)) {
-    throw new Error('Invalid tool declarations');
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function isTurn(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function toolIdentity(turn, id) {
+  if (!isTurn(turn) || !isNonEmptyString(id)) throw new Error('Invalid tool identity');
+  return String(turn) + ':' + id;
+}
+
+function toolReference(id, name) {
+  const separator = id.indexOf(':');
+  const turn = Number(id.slice(0, separator));
+  const callId = id.slice(separator + 1);
+  if (toolIdentity(turn, callId) !== id || !isNonEmptyString(name)) {
+    throw new Error('Invalid tool reference');
   }
-  if (!Array.isArray(value) || value.length === 0 || value.length > 16) {
+  return { turn, id: callId, name };
+}
+
+function toolCalls(turn, calls, allowed = undefined) {
+  if (!isTurn(turn) || !Array.isArray(calls) || calls.length === 0 || calls.length > 16) {
     throw new Error('Invalid tool batch');
   }
-  const tools = new Set(names);
   const ids = new Set();
-  const calls = value.map(({ id, name, arguments: args, signature }) => {
-    if (typeof id !== 'string' || !id || ids.has(id) || !tools.has(name) || !isObject(args)) {
+  return calls.map((call) => {
+    if (!isObject(call)) throw new Error('Invalid tool call');
+    const { id, name, arguments: args, signature } = call;
+    if (
+      ids.has(id) || !isNonEmptyString(name) || (allowed && !allowed.has(name)) ||
+      !isObject(args) || (signature !== undefined && typeof signature !== 'string')
+    ) {
       throw new Error('Invalid tool call');
     }
     ids.add(id);
     return {
       type: 'toolCall',
-      id,
+      id: toolIdentity(turn, id),
       name,
       arguments: args,
-      ...(typeof signature === 'string' ? { thoughtSignature: signature } : {}),
+      ...(signature === undefined ? {} : { thoughtSignature: signature }),
     };
   });
-  return { calls, tools };
 }
 
-function completedStream(content, reason, usage = {}) {
+function textContent(text) {
+  if (typeof text !== 'string') throw new Error('Invalid message text');
+  return [{ type: 'text', text }];
+}
+
+function userMessage(text) {
+  return { role: 'user', content: textContent(text), timestamp: 0 };
+}
+
+function assistantMessage(content, reason, usage = {}) {
   if (!isObject(usage)) throw new Error('Invalid model usage');
   const { input_tokens: input = 0, output_tokens: output = 0 } = usage;
   if (![input, output, input + output].every((count) => Number.isSafeInteger(count) && count >= 0)) {
     throw new Error('Invalid model usage');
   }
-  const stream = createAssistantMessageEventStream();
-  stream.push({
-    type: 'done',
-    reason,
-    message: {
-      role: 'assistant', content, api: model.api, provider: model.provider, model: model.id,
-      usage: { input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output, cost: { ...model.cost, total: 0 } },
-      stopReason: reason,
-      timestamp: Date.now(),
+  return {
+    role: 'assistant',
+    content,
+    api: gatewayModel.api,
+    provider: gatewayModel.provider,
+    model: gatewayModel.id,
+    usage: {
+      input, output, cacheRead: 0, cacheWrite: 0, totalTokens: input + output,
+      cost: { ...gatewayModel.cost, total: 0 },
     },
-  });
+    stopReason: reason,
+    timestamp: Date.now(),
+  };
+}
+
+function toolResult(result, isError) {
+  if (typeof isError !== 'boolean') throw new Error('Invalid tool outcome');
+  return { content: textContent(result), details: {}, isError };
+}
+
+function historyMessage(message) {
+  if (!isObject(message)) throw new Error('Invalid history message');
+  if (message.role === 'user') return userMessage(message.text);
+  if (message.role === 'assistant') {
+    return assistantMessage(toolCalls(message.turn, message.calls), 'toolUse');
+  }
+  if (message.role === 'tool' && isNonEmptyString(message.name)) {
+    return {
+      role: 'toolResult',
+      toolCallId: toolIdentity(message.turn, message.id),
+      toolName: message.name,
+      ...toolResult(message.result, message.isError),
+      timestamp: 0,
+    };
+  }
+  throw new Error('Invalid history role');
+}
+
+function modelContext(context) {
+  const messages = [];
+  for (const message of context.messages) {
+    if (message.role === 'system') continue;
+    if (message.role === 'user') {
+      messages.push({ role: 'user', text: message.content[0].text });
+    } else if (message.role === 'assistant') {
+      const references = message.content
+        .filter((item) => item.type === 'toolCall')
+        .map((item) => toolReference(item.id, item.name));
+      const turn = references[0]?.turn;
+      if (!turn || references.some((reference) => reference.turn !== turn)) {
+        throw new Error('Invalid assistant history');
+      }
+      messages.push({
+        role: 'assistant', turn, calls: references.map(({ id, name }) => ({ id, name })),
+      });
+    } else if (message.role === 'toolResult') {
+      messages.push({ role: 'tool', ...toolReference(message.toolCallId, message.toolName) });
+    } else {
+      throw new Error('Invalid context role');
+    }
+  }
+  return { messages, tools: getCurrentTools(context.messages) };
+}
+
+function completedStream(content, reason, usage) {
+  const stream = createAssistantMessageEventStream();
+  stream.push({ type: 'done', reason, message: assistantMessage(content, reason, usage) });
   return stream;
 }
 
 function send(frame) {
-  process.stdout.write(`${JSON.stringify(frame)}\n`);
+  process.stdout.write(JSON.stringify(frame) + '\n');
 }
 
 async function run(frames) {
@@ -81,85 +168,123 @@ async function run(frames) {
   }
 
   const start = await read();
-  if (start.type !== 'start' || !['model', 'tools'].includes(start.resume)) {
+  const identity = start.agent;
+  if (
+    start.type !== 'start' || !isObject(identity) ||
+    ![identity.name, identity.stage, identity.instruction].every(isNonEmptyString) ||
+    !Array.isArray(start.messages) || start.messages[0]?.role !== 'user'
+  ) {
     throw new Error('Invalid start frame');
   }
-  const identity = start.agent;
-  if (!isObject(identity) || ![identity.name, identity.stage, identity.instruction].every(
-    (value) => typeof value === 'string' && value,
-  ) || !Array.isArray(identity.input) || !identity.input.length || !identity.input.every(
-    (message) => isObject(message) && message.role === 'user',
-  )) {
-    throw new Error('Invalid agent');
-  }
-  let savedBatch = start.resume === 'tools' ? toolBatch(start.calls, start.tools) : undefined;
-  let requestContext;
+  const history = start.messages.map(historyMessage);
+  let latestTurn = start.messages.reduce((turn, message) => Math.max(turn, message.turn ?? 0), 0);
+  let agent;
   let stopped = false;
   let protocolFailed = false;
+  const dispatched = new Set();
 
-  async function exchange(frame) {
+  async function exchange(frame, convert) {
     try {
       send(frame);
       const reply = await read();
       if (reply.type !== 'continue' && reply.type !== 'stop') throw new Error('Invalid host reply');
-      return reply;
+      return convert(reply);
     } catch (error) {
       protocolFailed = true;
-      agent.abort();
+      agent?.abort();
       throw error;
     }
   }
 
-  async function executeTool(name, id, args) {
-    const reply = await exchange({ type: 'tool', id, name, arguments: args });
-    if (reply.type === 'stop') {
-      stopped = true;
-      agent.abort();
-    }
-    const result = reply.result;
-    return {
-      content: [{ type: 'text', text: JSON.stringify(result ?? {}) }],
-      details: result ?? {},
-      isError: Boolean(result?.error),
-    };
+  async function dispatchTool(type, name, key) {
+    return exchange({ type, ...toolReference(key, name) }, (reply) => {
+      if (reply.type === 'stop') {
+        stopped = true;
+        agent.abort();
+        return toolResult(reply.result ?? '{}', true);
+      }
+      return toolResult(reply.result, reply.isError);
+    });
   }
 
-  const agent = new Agent({
-    initialState: { model, systemPrompt: identity.instruction },
+  async function prepare() {
+    return exchange({ type: 'prepare' }, (reply) => {
+      if (reply.type === 'stop') {
+        stopped = true;
+        return undefined;
+      }
+      if (!Array.isArray(reply.tools) || !Array.isArray(reply.messages)) {
+        throw new Error('Invalid preparation');
+      }
+      const names = new Set();
+      const tools = reply.tools.map((tool) => {
+        if (!isObject(tool)) throw new Error('Invalid tool declaration');
+        const { name, description, parameters } = tool;
+        if (
+          !isNonEmptyString(name) || names.has(name) || !isNonEmptyString(description) ||
+          !isObject(parameters)
+        ) {
+          throw new Error('Invalid tool declaration');
+        }
+        names.add(name);
+        return {
+          name, label: name, description, parameters,
+          execute: (key) => {
+            dispatched.add(key);
+            return dispatchTool('tool', name, key);
+          },
+        };
+      });
+      return { tools, messages: reply.messages.map(userMessage) };
+    });
+  }
+
+  const initial = await prepare();
+  if (!initial) {
+    send({ type: 'done' });
+    return;
+  }
+  agent = new Agent({
+    initialState: {
+      model: gatewayModel,
+      systemPrompt: identity.instruction,
+      tools: initial.tools,
+      messages: [...history, ...initial.messages],
+    },
     toolExecution: 'sequential',
-    prepareRequest: ({ context }) => { requestContext = context; },
-    streamFn: async () => {
+    finishTurn: () => (stopped || protocolFailed ? { action: 'end' } : undefined),
+    prepareNextTurnWithContext: async ({ context }) => {
+      const next = await prepare();
+      if (!next) return undefined;
+      return { context: { ...context, tools: next.tools }, messages: next.messages };
+    },
+    streamFn: async (_model, context) => {
       if (stopped || protocolFailed) return completedStream([], 'stop');
-      let batch = savedBatch;
-      savedBatch = undefined;
-      let usage;
-      if (!batch) {
-        const reply = await exchange({ type: 'model' });
-        usage = reply.usage;
+      const request = modelContext(context);
+      return exchange({ type: 'model', ...request }, (reply) => {
         if (reply.type === 'stop') {
-          const stream = completedStream(reply.result === undefined ? [] : [{
-            type: 'text', text: JSON.stringify(reply.result),
-          }], 'stop', usage);
+          const content = reply.result === undefined ? [] : textContent(reply.result);
+          const stream = completedStream(content, 'stop', reply.usage);
           stopped = true;
           return stream;
         }
-        batch = toolBatch(reply.calls, reply.tools);
-      }
-      // Python supplies the authorized tools and validates their original arguments at dispatch.
-      requestContext.tools = Array.from(batch.tools, (name) => ({
-        name,
-        label: name,
-        description: `Dispatch ${name} through the Arclight tool registry`,
-        parameters: toolParameters,
-        execute: (id, args) => executeTool(name, id, args),
-      }));
-      return completedStream(batch.calls, 'toolUse', usage);
+        if (!isTurn(reply.turn) || reply.turn <= latestTurn) throw new Error('Invalid model turn');
+        latestTurn = reply.turn;
+        const allowed = new Set(request.tools.map((tool) => tool.name));
+        return completedStream(toolCalls(reply.turn, reply.calls, allowed), 'toolUse', reply.usage);
+      });
     },
   });
+  agent.subscribe(async (event, signal) => {
+    if (event.type !== 'tool_execution_end') return;
+    if (dispatched.delete(event.toolCallId) || stopped || protocolFailed || signal.aborted) return;
 
-  // The gateway transcript is durable in Python. On recovery the saved response is
-  // supplied to Pi as the first completed stream, so Pi dispatches remaining work.
-  await agent.prompt(JSON.stringify(identity.input));
+    // Pi's schema validation can reject a call before execute. Journal that
+    // outcome through the host before Pi sends its next model request.
+    await dispatchTool('tool_rejected', event.toolName, event.toolCallId);
+  });
+
+  await agent.continue();
   if (protocolFailed || !stopped) throw new Error('Pi session ended before the host stopped it');
   send({ type: 'done' });
 }

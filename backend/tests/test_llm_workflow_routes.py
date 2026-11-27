@@ -55,13 +55,21 @@ def assert_request(req, protocol, endpoint, model, key, supplier, *, output_form
             assert first["role"] == "system"
             assert first["content"].startswith("JSON Schema:\n") == (output_format == "json_schema")
         else:
-            assert body["response_format"]["type"] == output_format
+            if output_format == "prompt_json":
+                assert "response_format" not in body
+                assert "JSON Schema" in body["messages"][0]["content"]
+            else:
+                assert body["response_format"]["type"] == output_format
             if output_format == "json_schema":
                 assert body["response_format"]["json_schema"]["name"] == "StoryAnalysisContent"
             assert "max_completion_tokens" not in body
             assert "max_tokens" not in body
             if supplier == "deepseek":
                 assert body["thinking"] == {"type": "disabled"}
+            assert (body.get("provider") == {"require_parameters": True}) == (
+                supplier == "openrouter"
+            )
+            assert (body.get("reasoning_split") is True) == (supplier == "minimax")
 
 
 def assert_result(client, episode, run_id, model, source):

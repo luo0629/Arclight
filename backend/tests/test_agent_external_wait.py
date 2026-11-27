@@ -1,4 +1,4 @@
-"""Durable external waits reuse the native graph without model polling."""
+"""Durable external waits resume the original Pi batch without model polling."""
 
 import json
 from dataclasses import replace

@@ -4,7 +4,6 @@ from io import BytesIO
 from random import SystemRandom
 from secrets import randbelow
 from time import monotonic
-from typing import Literal
 from uuid import UUID, uuid4
 
 from PIL import Image
@@ -19,13 +18,13 @@ from arclight.domain.agent_model import (
     AgentToolMessage,
     AgentUserMessage,
     ContextImage,
+    ResponseFormat,
 )
 from arclight.domain.agent_tools import AgentToolContract, AgentToolFeedback
 from arclight.domain.model_gateway import GatewayFailure
 from arclight.providers.agent_model import agent_transport
 from arclight.providers.llm import dispatch_inference
 
-ResponseFormat = Literal["json_schema", "json_object"]
 _FORMATS: tuple[ResponseFormat, ...] = ("json_schema", "json_object")
 _VERSION = "account-capability-probe/1"
 _COLORS = {
@@ -158,7 +157,10 @@ def _challenge(
         update={
             "messages": [
                 *request.messages,
-                AgentAssistantMessage(tool_calls=[call]),
+                AgentAssistantMessage(
+                    tool_calls=[call],
+                    provider_context=response.provider_context,
+                ),
                 AgentToolMessage(call_id=call.call_id, feedback=feedback),
             ]
         }
@@ -188,8 +190,11 @@ def probe_model_capabilities(
 ) -> AgentModelCapabilities | None:
     """Check strict output, tools, and eight synthetic input images where supported."""
     deadline = monotonic() + settings.llm_timeout_seconds
+    formats: tuple[ResponseFormat, ...] = (
+        ("prompt_json",) if settings.llm_response_format == "prompt_json" else _FORMATS
+    )
     for check_tools in (True, False):
-        for response_format in _FORMATS:
+        for response_format in formats:
             textual = AgentModelCapabilities(
                 version=_VERSION,
                 supplier=settings.llm_supplier,

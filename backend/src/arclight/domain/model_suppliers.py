@@ -2,7 +2,16 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from arclight.domain.agent_model import AssistantContextField, ResponseFormat
+
+
+class OpenAIChatOptions(BaseModel):
+    model_config = ConfigDict(frozen=True)
+    assistant_fields: tuple[AssistantContextField, ...] = ()
+    reasoning_split: bool = False
+    require_parameters: bool = False
 
 
 class Supplier(BaseModel):
@@ -14,7 +23,8 @@ class Supplier(BaseModel):
     description: str
     base_url: str
     protocol: str = "openai_chat"
-    response_format: Literal["json_schema", "json_object"] = "json_object"
+    response_format: ResponseFormat = "json_object"
+    chat_options: OpenAIChatOptions | None = Field(default=None, exclude=True)
 
 
 class SpeechModelPreset(BaseModel):
@@ -25,6 +35,40 @@ class SpeechModelPreset(BaseModel):
     model: str
     name: str
     description: str
+
+
+class VisualModelPreset(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["image", "video"]
+    supplier: str
+    model: str
+    name: str
+
+
+VISUAL_MODEL_PRESETS = (
+    VisualModelPreset(
+        kind="image",
+        supplier="volcengine",
+        model="doubao-seedream-4-0-20260415",
+        name="Seedream 4.0",
+    ),
+    VisualModelPreset(
+        kind="image", supplier="google", model="gemini-3.1-flash-image", name="Nano Banana 2"
+    ),
+    VisualModelPreset(
+        kind="video",
+        supplier="volcengine",
+        model="doubao-seedance-2-0-260128",
+        name="Seedance 2.0",
+    ),
+    VisualModelPreset(kind="video", supplier="qwen", model="wan2.6-t2v", name="Wan 2.6 文生视频"),
+    VisualModelPreset(
+        kind="video", supplier="google", model="gemini-omni-1.2-flash", name="Gemini Omni 1.2 Flash"
+    ),
+    VisualModelPreset(
+        kind="video", supplier="xai", model="grok-imagine-video-1.5", name="Grok Imagine Video 1.5"
+    ),
+)
 
 
 # Verified against official API documentation on 2026-11-12.
@@ -112,6 +156,58 @@ SUPPLIERS = (
         description="Gemini 原生 API · 文字生成",
         base_url="https://generativelanguage.googleapis.com/v1beta",
         protocol="gemini",
+    ),
+    Supplier(
+        id="kimi",
+        kind="text",
+        name="Kimi（月之暗面）",
+        group="domestic",
+        description="月之暗面 · OpenAI 兼容",
+        base_url="https://api.moonshot.cn/v1",
+        chat_options=OpenAIChatOptions(assistant_fields=("content", "reasoning_content")),
+    ),
+    Supplier(
+        id="minimax",
+        kind="text",
+        name="MiniMax",
+        group="domestic",
+        description="MiniMax 开放平台 · OpenAI 兼容",
+        base_url="https://api.minimax.cn/v1",
+        response_format="prompt_json",
+        chat_options=OpenAIChatOptions(
+            assistant_fields=("content", "reasoning_content"), reasoning_split=True
+        ),
+    ),
+    Supplier(
+        id="volcengine",
+        kind="text",
+        name="火山方舟",
+        group="domestic",
+        description="豆包大模型 · 支持模型 ID 或接入点 ID",
+        base_url="https://ark.cn-beijing.volces.com/api/v3",
+        chat_options=OpenAIChatOptions(
+            assistant_fields=("content", "reasoning_content", "encrypted_content")
+        ),
+    ),
+    Supplier(
+        id="openrouter",
+        kind="text",
+        name="OpenRouter",
+        group="international",
+        description="多供应商模型聚合 · 使用明确的模型 ID",
+        base_url="https://openrouter.ai/api/v1",
+        response_format="json_schema",
+        chat_options=OpenAIChatOptions(
+            assistant_fields=("content", "reasoning_details"), require_parameters=True
+        ),
+    ),
+    Supplier(
+        id="mistral",
+        kind="text",
+        name="Mistral",
+        group="international",
+        description="Mistral · OpenAI 兼容",
+        base_url="https://api.mistral.ai/openai/v1",
     ),
     Supplier(
         id="zhipu",

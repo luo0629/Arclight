@@ -26,6 +26,7 @@ from arclight.domain.agent_limits import AgentExecutionContext
 from arclight.domain.agent_model import (
     AgentModelRequest,
     AgentModelResponse,
+    AgentToolDeclaration,
 )
 from arclight.domain.model_gateway import (
     GatewayCapabilities,
@@ -62,6 +63,7 @@ def invoke_agent[T: BaseModel](
     on_admit: Callable[[Session, UUID], None] | None = None,
     on_result: Callable[[Session, UUID, AgentModelResponse[T]], None] | None = None,
     on_round: Callable[[AgentModelResponse[T], tuple[str, ...], GatewayUsage], None] | None = None,
+    expected_tools: tuple[AgentToolDeclaration, ...] | None = None,
 ) -> AgentModelResponse[T]:
     """Return tool selections or a validated final result without executing either."""
     request = AgentModelRequest.model_validate(request.model_dump(mode="json"))
@@ -103,6 +105,8 @@ def invoke_agent[T: BaseModel](
             db, registry, run.id, request.agent_name, actor, request.stage
         )
         tools = agent_tool_declarations(definitions)
+        if expected_tools is not None and tools != expected_tools:
+            raise DomainError("AGENT_ACTION_CONFLICT", "模型调用前工具授权或合同已变化", 409)
         snapshot = run.input_json.get("_text_service")
         settings = run_settings(text_settings(db, episode.project_id, run, settings), snapshot, db)
         transport = agent_transport(settings)

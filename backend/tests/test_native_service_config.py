@@ -22,7 +22,7 @@ def test_named_provider_key_model_and_official_endpoint(client, settings, preset
     account(client)
     catalog = client.get("/api/v1/me/model-services").json()
     assert Counter(p["kind"] for p in catalog["suppliers"]) == {
-        "text": 6,
+        "text": 11,
         "image": 5,
         "video": 5,
         "speech": 3,
@@ -118,7 +118,7 @@ def test_personal_native_protocol_is_frozen(client, settings, supplier, protocol
         )
 
 
-def test_current_catalog_lists_speech_models_without_automatic_configuration(client):
+def test_current_catalog_lists_models_without_automatic_configuration(client):
     account(client)
     response = client.get("/api/v1/me/model-services")
     assert response.status_code == 200
@@ -127,6 +127,18 @@ def test_current_catalog_lists_speech_models_without_automatic_configuration(cli
     assert "catalog_version" not in catalog
     assert catalog["services"] == []
     assert all("model" not in row for row in catalog["suppliers"])
+    routes = {(row["kind"], row["id"]) for row in catalog["suppliers"]}
+    visual_models = catalog["visual_models"]
+    assert {row["kind"] for row in visual_models} == {"image", "video"}
+    assert {row["supplier"] for row in catalog["text_models"]} == {
+        supplier for kind, supplier in routes if kind == "text"
+    }
+    assert len({(r["kind"], r["supplier"], r["model"]) for r in visual_models}) == len(
+        visual_models
+    )
+    for row in visual_models:
+        assert (row["kind"], row["supplier"]) in routes
+        assert set(row) == {"kind", "supplier", "model", "name"}
     models = catalog["speech_models"]
     assert models
     speech_suppliers = {row["id"] for row in catalog["suppliers"] if row["kind"] == "speech"}
