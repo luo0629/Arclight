@@ -103,18 +103,19 @@ export default function useServiceSettings() {
   const presets =
     config?.suppliers.filter((supplier) => supplier.kind === kind) ?? [];
   const preset = presets.find((row) => row.id === draft.supplier);
-  const speechModels =
+  const models =
     kind === "speech"
-      ? (config?.speech_models ?? []).filter(
-          (row) => row.supplier === draft.supplier,
+      ? (config?.speech_models ?? [])
+      : kind === "text"
+        ? (config?.text_models ?? [])
+        : (config?.visual_models ?? []).filter((row) => row.kind === kind);
+  const modelSuggestions = models.filter((row) => row.supplier === preset?.id);
+  const speechModel =
+    kind === "speech"
+      ? config?.speech_models?.find(
+          (row) => row.supplier === preset?.id && row.model === draft.model,
         )
-      : [];
-  const speechModel = speechModels.find((row) => row.model === draft.model);
-  const modelSuggestions = (
-    kind === "text"
-      ? (config?.text_models ?? [])
-      : (config?.visual_models ?? []).filter((row) => row.kind === kind)
-  ).filter((row) => row.supplier === preset?.id);
+      : undefined;
   const stored = config?.services.find((row) => row.kind === kind);
   const hasStoredKey =
     !!stored?.has_key &&
@@ -172,6 +173,7 @@ export default function useServiceSettings() {
   function selectProvider(id: string) {
     const next = presets.find((row) => row.id === id);
     const previous = stored?.supplier === id ? stored : null;
+    const firstRecommendation = models.find((row) => row.supplier === next?.id);
     changeDraft({
       supplier: id,
       supplier_name: next?.name ?? previous?.supplier_name ?? "",
@@ -181,7 +183,7 @@ export default function useServiceSettings() {
         config?.protocols[kind][0] ??
         "",
       base_url: next?.base_url ?? previous?.base_url ?? "",
-      model: previous?.model ?? "",
+      model: previous?.model ?? firstRecommendation?.model ?? "",
       api_key: "",
       clear_key: false,
     });
@@ -267,7 +269,6 @@ export default function useServiceSettings() {
     draft,
     presets,
     preset,
-    speechModels,
     speechModel,
     modelSuggestions,
     stored,

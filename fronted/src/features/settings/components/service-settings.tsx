@@ -14,11 +14,16 @@ import {
   PlugZap,
 } from "lucide-react";
 import Dialog from "@/components/shared/app-dialog";
+import { ModelIdInput } from "./model-id-input";
 import ServiceProviders from "./service-providers";
 import useServiceSettings, {
   type ServiceDraft,
 } from "../hooks/use-service-settings";
-import type { CapabilityCheck, ServiceKind } from "../service-settings-api";
+import type {
+  CapabilityCheck,
+  ConnectionResult,
+  ServiceKind,
+} from "../service-settings-api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -41,11 +46,15 @@ const services = [
   { kind: "video" as const, label: "视频模型", icon: Video },
   { kind: "speech" as const, label: "语音服务", icon: AudioLines },
 ];
-const CUSTOM_TTS_MODEL = "__custom_tts__";
 const capabilityLabels: Record<CapabilityCheck["status"], string> = {
   ready: "模型支持智能创作",
   partial: "仅通过部分能力检查",
   unverified: "智能创作能力尚未验证",
+};
+const connectionLabels: Record<ConnectionResult["status"], string> = {
+  model_found: "已查到模型",
+  reachable: "服务可达",
+  failed: "检测连接失败",
 };
 const protocolNames: Record<string, string> = {
   openai_chat: "OpenAI Chat Completions",
@@ -80,7 +89,6 @@ export default function ServiceSettings({
     draft,
     presets,
     preset,
-    speechModels,
     speechModel,
     modelSuggestions,
     stored,
@@ -107,6 +115,10 @@ export default function ServiceSettings({
   const confirmation = useRef<HTMLDivElement>(null);
   const modelInput = useRef<HTMLInputElement>(null);
   const [modelError, setModelError] = useState("");
+  const protocol = draft.protocol || config?.protocols[kind][0];
+  const baseUrlExample =
+    presets.find((row) => row.protocol === protocol)?.base_url ??
+    "https://provider.example";
 
   useEffect(() => {
     if (confirmClose) {
@@ -162,7 +174,7 @@ export default function ServiceSettings({
               模型与服务
             </h2>
             <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
-              选择服务商，填写 API Key 和模型 ID。配置仅属于你的账号。
+              选择模型服务并保存到你的账号。
             </p>
           </div>
         </div>
@@ -246,8 +258,8 @@ export default function ServiceSettings({
             <Alert role="note">
               <Info aria-hidden="true" />
               <AlertDescription>
-                指定服务商只需填写 API Key 和模型 ID；选择「自定义」还需填写
-                Base URL。
+                服务商预设会带入已登记的连接参数和推荐模型。自定义服务需选择 API
+                协议并填写 Base URL。
               </AlertDescription>
             </Alert>
             <ServiceProviders
@@ -348,15 +360,33 @@ export default function ServiceSettings({
                   </Button>
                 )}
               </div>
+              {!preset && (
+                <FormLabel>
+                  API 协议
+                  <ChoiceSelect
+                    aria-label="API 协议"
+                    value={protocol}
+                    disabled={busy}
+                    onValueChange={(protocol) =>
+                      change({ protocol, api_key: "", clear_key: false })
+                    }
+                    options={config.protocols[kind].map((value) => ({
+                      value,
+                      label: protocolNames[value] ?? value,
+                    }))}
+                  />
+                </FormLabel>
+              )}
               <FieldGroup className="grid min-w-0 gap-4 sm:grid-cols-2">
                 {!preset && (
-                  <FormLabel>
-                    Base URL
+                  <Field data-disabled={busy}>
+                    <FieldLabel htmlFor="service-base-url">Base URL</FieldLabel>
                     <Input
-                      aria-label="Base URL"
+                      id="service-base-url"
+                      aria-describedby="service-base-url-hint"
                       required
                       type="url"
-                      placeholder="https://provider.example/v1"
+                      placeholder={baseUrlExample}
                       maxLength={500}
                       value={draft.base_url}
                       disabled={busy}
@@ -368,79 +398,9 @@ export default function ServiceSettings({
                         })
                       }
                     />
-                    <span className="text-xs font-normal text-muted-foreground">
-                      填写服务的 API 基础地址，使用公网 HTTPS。
-                    </span>
-                  </FormLabel>
-                )}
-                {kind === "speech" && (
-                  <Field data-disabled={busy}>
-                    <FieldLabel htmlFor="service-speech-model-preset">
-                      TTS 模型预设
-                    </FieldLabel>
-                    <ChoiceSelect
-                      id="service-speech-model-preset"
-                      aria-label="TTS 模型预设"
-                      aria-describedby="service-speech-model-preset-hint"
-                      placeholder="选择预设模型"
-                      value={
-                        draft.supplier === "custom"
-                          ? CUSTOM_TTS_MODEL
-                          : (speechModel?.model ?? "")
-                      }
-                      disabled={busy}
-                      onValueChange={(model) => {
-                        if (model === CUSTOM_TTS_MODEL) {
-                          changeProvider("custom");
-                        } else {
-                          change({ model });
-                        }
-                      }}
-                      options={[
-                        ...speechModels.map((row) => ({
-                          value: row.model,
-                          label: row.name,
-                        })),
-                        {
-                          value: CUSTOM_TTS_MODEL,
-                          label: "用户自定义 TTS 模型",
-                        },
-                      ]}
-                    />
-                    <FieldDescription id="service-speech-model-preset-hint">
-                      {draft.supplier === "custom"
-                        ? "填写 Base URL、API Key 和模型 ID，并选择服务支持的 API 协议。"
-                        : (speechModel?.description ??
-                          "选择预设填入模型 ID，或选择用户自定义 TTS 模型。")}
-                    </FieldDescription>
-                  </Field>
-                )}
-                {modelSuggestions.length > 0 && (
-                  <Field data-disabled={busy}>
-                    <FieldLabel htmlFor="service-model-preset">
-                      推荐模型
-                    </FieldLabel>
-                    <ChoiceSelect
-                      id="service-model-preset"
-                      aria-label="推荐模型"
-                      aria-describedby="service-model-preset-hint"
-                      placeholder="选择推荐模型"
-                      value={
-                        modelSuggestions.find(
-                          (row) => row.model === draft.model,
-                        )?.model ?? ""
-                      }
-                      disabled={busy}
-                      onValueChange={(model) => change({ model })}
-                      options={modelSuggestions.map((row) => ({
-                        value: row.model,
-                        label: row.name,
-                      }))}
-                    />
-                    <FieldDescription id="service-model-preset-hint">
-                      {kind === "text"
-                        ? "智能创作能力以验证结果为准。"
-                        : "所选模型需在供应商账号中开通。"}
+                    <FieldDescription id="service-base-url-hint">
+                      填写公网 HTTPS API 基础地址，保留服务要求的路径前缀。示例
+                      <span className="ml-1 break-all">{baseUrlExample}</span>
                     </FieldDescription>
                   </Field>
                 )}
@@ -451,28 +411,26 @@ export default function ServiceSettings({
                       （必填）
                     </span>
                   </FieldLabel>
-                  <Input
+                  <ModelIdInput
+                    key={`${kind}:${draft.supplier}`}
                     id="service-model"
-                    ref={modelInput}
-                    aria-label="模型 ID"
-                    required
-                    aria-required="true"
-                    aria-invalid={!!modelError}
-                    aria-describedby={
+                    inputRef={modelInput}
+                    invalid={!!modelError}
+                    describedBy={
                       modelError ? "service-model-error" : "service-model-hint"
                     }
-                    placeholder="供应商提供的模型 ID"
-                    maxLength={160}
                     value={draft.model}
                     disabled={busy}
-                    onChange={(event) => change({ model: event.target.value })}
+                    suggestions={modelSuggestions}
+                    onValueChange={(model) => change({ model })}
                   />
                   <FieldDescription id="service-model-hint">
-                    {speechModels.length > 0
-                      ? "可选择 TTS 预设，或填写当前服务商支持的模型 ID。"
-                      : modelSuggestions.length > 0
-                        ? "可选择推荐模型，或填写当前服务商支持的模型 ID。"
-                        : "请手动填写当前服务商支持的模型 ID。"}
+                    {speechModel?.description ??
+                      (modelSuggestions.length === 0
+                        ? "填写当前服务商支持的模型 ID。"
+                        : kind === "speech"
+                          ? "可选择 TTS 预设，或直接填写供应商支持的模型 ID。"
+                          : "可选择推荐模型，或直接填写供应商支持的模型 ID。")}
                   </FieldDescription>
                   {modelError && (
                     <FieldError id="service-model-error">
@@ -487,23 +445,6 @@ export default function ServiceSettings({
                   <p className="break-all">{preset.base_url}</p>
                 </div>
               )}
-              {!preset && (
-                <FormLabel>
-                  API 协议
-                  <ChoiceSelect
-                    aria-label="API 协议"
-                    value={draft.protocol || config.protocols[kind][0]}
-                    disabled={busy}
-                    onValueChange={(protocol) =>
-                      change({ protocol, api_key: "", clear_key: false })
-                    }
-                    options={config.protocols[kind].map((value) => ({
-                      value,
-                      label: protocolNames[value] ?? value,
-                    }))}
-                  />
-                </FormLabel>
-              )}
               {capability && (
                 <section
                   aria-label="智能创作能力"
@@ -514,10 +455,17 @@ export default function ServiceSettings({
                       {capabilityLabels[capability.status]}
                     </p>
                     {capability.status !== "unverified" && (
-                      <p className="text-xs text-muted-foreground">
-                        {capability.tools ? "支持工具调用" : "工具调用待确认"}
-                        {capability.max_input_images > 0 && " · 支持参考图"}
-                      </p>
+                      <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                        <li>已确认结构化输出</li>
+                        <li>
+                          {capability.tools ? "支持工具调用" : "工具调用待确认"}
+                        </li>
+                        <li>
+                          {capability.max_input_images > 0
+                            ? `支持参考图（最多 ${capability.max_input_images} 张）`
+                            : "参考图能力待确认"}
+                        </li>
+                      </ul>
                     )}
                   </div>
                   {capability.status === "partial" && (
@@ -534,6 +482,9 @@ export default function ServiceSettings({
                     )}
                   {canVerify && (
                     <>
+                      <p className="text-xs text-muted-foreground">
+                        检查结构化输出、工具调用和参考图。
+                      </p>
                       <p
                         id="service-capability-check-hint"
                         className="text-xs text-muted-foreground"
@@ -589,7 +540,10 @@ export default function ServiceSettings({
                         : "info"
                   }
                 >
-                  {connection.message}
+                  <span className="font-medium">
+                    {connectionLabels[connection.status]}
+                  </span>
+                  <span>{connection.message}</span>
                 </Notice>
               )}
               {error && (

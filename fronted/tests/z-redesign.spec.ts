@@ -315,7 +315,7 @@ test("新版：服务配置真实持久化、切区保留、密钥不回显、�
   expect(outsideCalls).toBe(0);
 });
 
-test("新版：官方供应商填写密钥与模型 ID、自定义地址与目标变更保护", async ({
+test("新版：官方供应商预填模型 ID、自定义地址与目标变更保护", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -335,7 +335,9 @@ test("新版：官方供应商填写密钥与模型 ID、自定义地址与目�
   await expect(custom).toBeChecked();
   await supplier.click();
   await expect(endpoint).toHaveCount(0);
-  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue("");
+  await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
+    "deepseek-flash",
+  );
   await dialog.getByLabel("模型 ID", { exact: true }).fill("exact-deepseek-id");
   await expect(dialog.getByText("待配置密钥", { exact: true })).toBeVisible();
   await key.fill("official-browser-test-key");

@@ -59,6 +59,13 @@ test("检测连接使用未保存的输入，显示结果且编辑后清除（�
         await route.fulfill({
           json: { status: "model_found", message: "服务可达，已查到该模型。" },
         });
+      } else if (requests.length === 2) {
+        await route.fulfill({
+          json: {
+            status: "reachable",
+            message: "模型查询未能确认此模型。",
+          },
+        });
       } else {
         await route.fulfill({
           json: {
@@ -77,6 +84,9 @@ test("检测连接使用未保存的输入，显示结果且编辑后清除（�
   } finally {
     release();
   }
+  await expect(
+    dialog.getByRole("status").getByText("已查到模型", { exact: true }),
+  ).toBeVisible();
   await expect(dialog.getByRole("status")).toContainText("已查到该模型");
   expect(requests).toEqual([
     {
@@ -99,6 +109,17 @@ test("检测连接使用未保存的输入，显示结果且编辑后清除（�
   await model.fill("other-model");
   await expect(dialog.getByRole("status")).toHaveCount(0);
   await check.click();
+  await expect(
+    dialog.getByRole("status").getByText("服务可达", { exact: true }),
+  ).toBeVisible();
+  await expect(dialog.getByRole("status")).toContainText(
+    "模型查询未能确认此模型",
+  );
+  await expect(dialog.getByText("已查到模型", { exact: true })).toHaveCount(0);
+  await check.click();
+  await expect(
+    dialog.getByRole("alert").getByText("检测连接失败", { exact: true }),
+  ).toBeVisible();
   await expect(dialog.getByRole("alert")).toContainText("服务拒绝访问");
   await dialog.getByRole("radio", { name: "图片模型" }).click();
   await expect(dialog.getByText("服务拒绝访问", { exact: false })).toHaveCount(
@@ -153,7 +174,7 @@ test("切换服务类型会中止正在进行的连接检测并保留草稿", as
   }
 });
 
-test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
+test("预设填入默认模型，手填 ID 刷新保留且账号独立", async ({
   page,
   browser,
   baseURL,
@@ -164,10 +185,20 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   await dialog.getByRole("radio", { name: "DeepSeek", exact: true }).click();
   await expect(dialog.getByLabel("Base URL", { exact: true })).toHaveCount(0);
   const model = dialog.getByLabel("模型 ID", { exact: true });
-  await expect(model).toHaveValue("");
-  await expect(
-    dialog.getByRole("combobox", { name: "推荐模型", exact: true }),
-  ).toBeVisible();
+  await expect(model).toHaveValue("deepseek-flash");
+  await expect(model).toHaveCount(1);
+  const recommendations = page.getByRole("listbox", { name: "推荐模型" });
+  await model.press("ArrowDown");
+  await expect(recommendations).toBeVisible();
+  await model.press("Escape");
+  await expect(recommendations).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+  await expect(model).toBeFocused();
+  await model.press("ArrowDown");
+  await model.press("ArrowDown");
+  await model.press("Enter");
+  await expect(model).toHaveValue("deepseek-v4-pro");
+  await expect(recommendations).toHaveCount(0);
   await model.fill("exact-deepseek-id");
   await dialog
     .getByLabel("API Key", { exact: true })
@@ -201,6 +232,11 @@ test("预设只填密钥和模型 ID，刷新保留且账号独立", async ({
   await expect(
     dialog.getByRole("radio", { name: "DeepSeek", exact: true }),
   ).toBeChecked();
+  await expect(model).toHaveValue("exact-deepseek-id");
+  await dialog.getByRole("radio", { name: "OpenAI", exact: true }).click();
+  await expect(model).toHaveValue("gpt-5.4-mini");
+  await dialog.getByRole("radio", { name: "DeepSeek", exact: true }).click();
+  await expect(model).toHaveValue("exact-deepseek-id");
   await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
   expect(
     await page.evaluate(() => JSON.stringify([localStorage, sessionStorage])),
@@ -262,16 +298,18 @@ test("文字、图片和视频按后端供应商预设填写模型并保存", as
     expect(suggestion).toBeDefined();
     await dialog.getByRole("radio", { name: tab, exact: true }).click();
     await dialog.getByRole("radio", { name: preset.name, exact: true }).click();
-    await expect(model).toHaveValue("");
+    await expect(model).toHaveValue(suggestion.model);
     await expect(
       dialog.getByText(preset.base_url, { exact: true }),
     ).toBeVisible();
     await dialog
-      .getByRole("combobox", { name: "推荐模型", exact: true })
+      .getByRole("button", { name: "查看推荐模型", exact: true })
       .click();
-    await page
-      .getByRole("option", { name: suggestion.name, exact: true })
-      .click();
+    const option = page.getByRole("option").filter({
+      has: page.getByText(suggestion.model, { exact: true }),
+    });
+    await expect(option).toContainText(suggestion.name);
+    await option.click();
     await expect(model).toHaveValue(suggestion.model);
     const key = dialog.getByLabel("API Key", { exact: true });
     await expect(key).toHaveValue("");
@@ -304,9 +342,6 @@ test("OpenAI 推荐模型保存后直接使用已登记能力", async ({ page })
   const { dialog, headers } = await openSettings(page);
   await dialog.getByRole("radio", { name: "OpenAI", exact: true }).click();
   const model = dialog.getByLabel("模型 ID", { exact: true });
-  await expect(model).toHaveValue("");
-  await dialog.getByRole("combobox", { name: "推荐模型", exact: true }).click();
-  await page.getByRole("option", { name: "GPT-5.4 mini", exact: true }).click();
   await expect(model).toHaveValue("gpt-5.4-mini");
   await dialog
     .getByLabel("API Key", { exact: true })
@@ -315,8 +350,9 @@ test("OpenAI 推荐模型保存后直接使用已登记能力", async ({ page })
 
   const capabilities = dialog.getByRole("region", { name: "智能创作能力" });
   await expect(capabilities).toContainText("模型支持智能创作");
+  await expect(capabilities).toContainText("已确认结构化输出");
   await expect(capabilities).toContainText("支持工具调用");
-  await expect(capabilities).toContainText("支持参考图");
+  await expect(capabilities).toContainText("支持参考图（最多 8 张）");
   await expect(
     dialog.getByRole("button", { name: "同意并验证模型" }),
   ).toHaveCount(0);
@@ -366,10 +402,27 @@ test("切换供应商不复用旧密钥，自定义支持手填及兼容协议",
   await dialog
     .getByRole("radio", { name: "自定义服务商", exact: true })
     .click();
-  await expect(dialog.getByLabel("Base URL", { exact: true })).toBeEditable();
-  await dialog
-    .getByLabel("Base URL", { exact: true })
-    .fill("https://my-provider.example/v1");
+  const baseUrl = dialog.getByLabel("Base URL", { exact: true });
+  const protocol = dialog.getByRole("combobox", {
+    name: "API 协议",
+    exact: true,
+  });
+  await expect(baseUrl).toBeEditable();
+  await expect(baseUrl).toHaveAttribute(
+    "placeholder",
+    "https://api.openai.com/v1",
+  );
+  for (const [name, example] of [
+    ["Google Gemini", "https://generativelanguage.googleapis.com/v1beta"],
+    ["通义 DashScope", "https://dashscope.aliyuncs.com/api/v1"],
+    ["OpenAI Chat Completions", "https://api.openai.com/v1"],
+  ]) {
+    await protocol.click();
+    await page.getByRole("option", { name, exact: true }).click();
+    await expect(baseUrl).toHaveAttribute("placeholder", example);
+    await expect(baseUrl).toHaveValue("");
+  }
+  await baseUrl.fill("https://my-provider.example/v1");
   await dialog.getByLabel("模型 ID", { exact: true }).fill("my-story-model");
   await dialog.getByLabel("API Key", { exact: true }).fill("custom-only-key");
   await expect(
@@ -449,6 +502,9 @@ test("保存文字模型后由用户选择验证能力，并继续使用返回�
 
   await verify.click();
   await expect(capabilities).toContainText("仅通过部分能力检查");
+  await expect(capabilities).toContainText("已确认结构化输出");
+  await expect(capabilities).toContainText("工具调用待确认");
+  await expect(capabilities).toContainText("参考图能力待确认");
   await expect(verify).toHaveCount(0);
   expect(checks).toEqual([
     { expected_revision: profile.revision, confirm_charges: true },
@@ -629,20 +685,16 @@ for (const viewport of [
         .getByRole("radio", { name: provider!.name, exact: true })
         .click();
       await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
-        "",
+        models[0].model,
       );
-      const selector = dialog.getByRole("combobox", {
-        name: "TTS 模型预设",
-        exact: true,
-      });
-      await selector.click();
-      await expect(page.getByRole("option")).toHaveCount(models.length + 1);
-      await expect(
-        page.getByRole("option", { name: "用户自定义 TTS 模型", exact: true }),
-      ).toBeVisible();
+      await dialog
+        .getByRole("button", { name: "查看推荐模型", exact: true })
+        .click();
+      await expect(page.getByRole("option")).toHaveCount(models.length);
       selected = models[models.length - 1];
       await page
-        .getByRole("option", { name: selected.name, exact: true })
+        .getByRole("option")
+        .filter({ has: page.getByText(selected.model, { exact: true }) })
         .click();
       await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
         selected.model,
@@ -668,8 +720,8 @@ for (const viewport of [
       selected!.model,
     );
     await expect(
-      dialog.getByRole("combobox", { name: "TTS 模型预设", exact: true }),
-    ).toContainText(selected!.name);
+      dialog.getByText(selected!.description, { exact: true }),
+    ).toBeVisible();
     await expect(dialog.getByLabel("API Key", { exact: true })).toHaveValue("");
     await page.screenshot({
       path: testInfo.outputPath(`tts-model-presets-${viewport.width}.png`),
@@ -705,9 +757,9 @@ for (const viewport of [
     await dialog
       .getByLabel("模型 ID", { exact: true })
       .fill("account-specific-tts-model");
-    await expect(
-      dialog.getByRole("combobox", { name: "TTS 模型预设", exact: true }),
-    ).toContainText("选择预设模型");
+    await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
+      "account-specific-tts-model",
+    );
     await dialog
       .getByRole("button", { name: "保存此服务", exact: true })
       .click();
@@ -732,22 +784,18 @@ for (const viewport of [
     await dialog
       .getByRole("radio", { name: openAI!.name, exact: true })
       .click();
-    const selector = dialog.getByRole("combobox", {
-      name: "TTS 模型预设",
-      exact: true,
-    });
-    await selector.click();
-    await expect(page.getByRole("option")).toHaveCount(1);
-    await page.keyboard.press("Escape");
+    await expect(
+      dialog.getByRole("button", { name: "查看推荐模型", exact: true }),
+    ).toHaveCount(0);
+    await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue("");
     await dialog
       .getByLabel("模型 ID", { exact: true })
       .fill("my-openai-tts-model");
     await expect(dialog.getByLabel("模型 ID", { exact: true })).toHaveValue(
       "my-openai-tts-model",
     );
-    await selector.click();
-    await page
-      .getByRole("option", { name: "用户自定义 TTS 模型", exact: true })
+    await dialog
+      .getByRole("radio", { name: "自定义服务商", exact: true })
       .click();
     await expect(
       dialog.getByRole("radio", { name: "自定义服务商", exact: true }),
@@ -780,7 +828,9 @@ for (const viewport of [
       .getByRole("button", { name: "模型服务配置", exact: true })
       .click();
     await dialog.getByRole("radio", { name: "语音服务", exact: true }).click();
-    await expect(selector).toContainText("用户自定义 TTS 模型");
+    await expect(
+      dialog.getByRole("radio", { name: "自定义服务商", exact: true }),
+    ).toBeChecked();
     await expect(dialog.getByLabel("Base URL", { exact: true })).toHaveValue(
       "https://speech-provider.example/v1",
     );
@@ -843,8 +893,12 @@ for (const viewport of [
       animations: "disabled",
     });
     if (viewport.width < 640) {
-      await dialog.getByLabel("Base URL", { exact: true }).evaluate((element) =>
-        element.closest("label")!.scrollIntoView({
+      const protocol = dialog.getByRole("combobox", {
+        name: "API 协议",
+        exact: true,
+      });
+      await protocol.evaluate((element) =>
+        element.scrollIntoView({
           block: "start",
           inline: "nearest",
           behavior: "instant",
