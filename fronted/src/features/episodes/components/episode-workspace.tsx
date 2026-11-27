@@ -866,12 +866,14 @@ export default function EpisodeWorkspace({
       {shotId && data && (
         <ShotViewer
           projectId={episode.project_id}
+          episodeId={episode.id}
           graph={data.graph}
           shotId={shotId}
           boards={boardRows}
           ensureBoard={ensureBoard}
           onSelect={setShotId}
           onClose={() => setShotId("")}
+          onMediaChanged={() => refresh()}
           onOpenBoard={(id) => {
             setShotId("");
             navigate({ view: "list", node: id });

@@ -11,11 +11,14 @@ import ShotDetails, {
   type Performance,
 } from "@/features/editor/components/shot-details";
 import { message } from "@/lib/api/client";
+import { isResourceId } from "@/lib/routes";
 import { PerformanceIntentReceipt } from "./performance-review";
+import { ProductionBody } from "./shot-production";
 import type { ContentVersion, Graph } from "@/types/api";
 
 type Props = {
   projectId: string;
+  episodeId: string;
   graph: Graph;
   shotId: string;
   boards: ContentVersion[];
@@ -23,9 +26,11 @@ type Props = {
   onSelect: (id: string) => void;
   onClose: () => void;
   onOpenBoard: (id: string) => void;
+  onMediaChanged: () => Promise<void>;
 };
 export default function ShotViewer({
   projectId,
+  episodeId,
   graph,
   shotId,
   boards,
@@ -33,6 +38,7 @@ export default function ShotViewer({
   onSelect,
   onClose,
   onOpenBoard,
+  onMediaChanged,
 }: Props) {
   const node = graph.nodes.find(
     (row) => row.id === shotId && row.kind === "shot",
@@ -40,7 +46,11 @@ export default function ShotViewer({
   const parentId = graph.edges.find(
     (edge) => edge.target === shotId && edge.source.startsWith("storyboard:"),
   )?.source;
-  const parent = graph.nodes.find((row) => row.id === parentId);
+  const parent = graph.nodes.find(
+    (row) => row.id === parentId && row.kind === "storyboard",
+  );
+  const storyboardId = parent?.resource_id;
+  const exactShotId = node?.resource_id;
   const siblings = graph.nodes.filter(
     (row) =>
       row.kind === "shot" &&
@@ -153,20 +163,41 @@ export default function ShotViewer({
             </Button>
           </div>
         </header>
-        <ScrollArea className="shot-viewer-scroll">
+        <ScrollArea key={shotId} className="shot-viewer-scroll">
           <div className="shot-viewer-body">
-            <section className="shot-stage" aria-label="镜头画面描述">
-              <div className="shot-stage-label">
-                <Film />
-                {node?.title}
-                <span>{(node?.duration_ms ?? 0) / 1000} 秒</span>
-              </div>
-              <div className="shot-stage-content">
-                <Clapperboard aria-hidden="true" />
-                <p>{node?.description || "暂无画面描述"}</p>
-                <small>文字分镜 · 图片和视频生成尚未开放</small>
-              </div>
-            </section>
+            <div className="min-w-0">
+              <section className="shot-stage" aria-label="镜头画面描述">
+                <div className="shot-stage-label">
+                  <Film />
+                  {node?.title}
+                  <span>{(node?.duration_ms ?? 0) / 1000} 秒</span>
+                </div>
+                <div className="shot-stage-content">
+                  <p>{node?.description || "暂无画面描述"}</p>
+                </div>
+              </section>
+              <section
+                aria-label="镜头素材"
+                className="flex min-w-0 flex-col gap-4 px-4 py-5 sm:p-6"
+              >
+                <h3 className="text-base font-semibold">镜头素材</h3>
+                {exactShotId &&
+                storyboardId &&
+                isResourceId(exactShotId) &&
+                isResourceId(storyboardId) ? (
+                  <ProductionBody
+                    key={`${projectId}:${episodeId}:${storyboardId}:${exactShotId}`}
+                    projectId={projectId}
+                    episodeId={episodeId}
+                    storyboardId={storyboardId}
+                    shotId={exactShotId}
+                    onChanged={onMediaChanged}
+                  />
+                ) : (
+                  <Notice>无法确认镜头与所属分镜，请刷新工作区后重试。</Notice>
+                )}
+              </section>
+            </div>
             <aside className="shot-viewer-info" aria-label="镜头信息">
               <h3>镜头信息</h3>
               {node && <StatusBadge status={node.status} />}

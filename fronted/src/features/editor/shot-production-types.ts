@@ -1,4 +1,5 @@
 import type { VideoCandidateSummary } from "@/features/video/types";
+import { isResourceId } from "@/lib/routes";
 
 export type Blocker = { code: string; message: string };
 export type ProductionJob = {
@@ -22,6 +23,19 @@ export type ProductionCandidate = {
   can_reject: boolean;
   blocker: Blocker | null;
 };
+
+export function candidateImagePath(
+  projectId: string,
+  candidate: ProductionCandidate,
+) {
+  if (
+    ![projectId, candidate.asset_id, candidate.version_id].every(isResourceId)
+  )
+    return null;
+  const path = `/projects/${projectId}/assets/${candidate.asset_id}/versions/${candidate.version_id}/image`;
+  return candidate.image_path === path ? path : null;
+}
+
 export type GenerationRequest = {
   episode_id: string;
   target_type: "SHOT_IMAGE";
@@ -45,6 +59,7 @@ export type ProductionShot = {
   job: ProductionJob | null;
   request: GenerationRequest | null;
   blocker: Blocker | null;
+  selected_image_version_id: string | null;
   candidates: ProductionCandidate[];
   candidates_truncated: boolean;
   video_candidates: VideoCandidateSummary[];

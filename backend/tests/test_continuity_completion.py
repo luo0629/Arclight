@@ -96,12 +96,24 @@ def test_only_owner_selection_completes_once_and_exposes_exact_neighbor(
     asset, version = target_rows(client, case)
     assert choose(client, asset, version).status_code == 409
     version = approve(client, case)
+    path = (
+        f"/api/v1/episodes/{episode['id']}/storyboards/{case['target']['storyboard_id']}/production"
+    )
+    params = {"shot_id": str(shot_id)}
+    approved = client.get(path, params=params)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["shots"][0]["selected_image_version_id"] is None
     assert work_for(client, episode["project_id"], candidate)["status"] == "WAITING_REVIEW"
     asset = current(client, asset)
     chosen = choose(client, asset, version)
     assert chosen.status_code == 200, chosen.text
     assert choose(client, asset, version).status_code == 409
     assert work_for(client, episode["project_id"], candidate)["status"] == "SUCCEEDED"
+    selected = client.get(path, params=params)
+    assert selected.status_code == 200, selected.text
+    shot = selected.json()["shots"][0]
+    assert shot["selected_image_version_id"] == version["id"]
+    assert any(row["version_id"] == version["id"] for row in shot["candidates"])
     with factory() as db:
         run = db.get(WorkflowRun, identity)
         assert run.input_json == original and run.pending_review is None

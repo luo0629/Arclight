@@ -9,7 +9,10 @@ from sqlalchemy.orm import Session
 from arclight.agents.contracts import ShotContentV3, read_shot_content
 from arclight.core.errors import DomainError
 from arclight.domain.generation import ACTIVE_STATUSES
+from arclight.domain.generation_requests import ShotReviewBinding
 from arclight.persistence.generation import GenerationJob
+from arclight.persistence.generation_candidates import GenerationCandidate
+from arclight.persistence.models import DependencyManifest, Episode, Shot, Storyboard
 
 
 def require_available_target(
@@ -40,8 +43,6 @@ def require_available_shot(
     """Use the existing project write gate before checking an exact shot target."""
     from arclight.application.continuity_workflow import require_shot_binding
     from arclight.application.dependencies import exact_version
-    from arclight.domain.generation_requests import ShotReviewBinding
-    from arclight.persistence.models import DependencyManifest, Shot
 
     target = ShotReviewBinding.model_validate(binding)
     require_shot_binding(db, project_id, target, episode_id)
@@ -97,3 +98,77 @@ def require_available_shot(
         statement = statement.where(GenerationJob.id != exclude_job_id)
     if db.scalar(statement.limit(1)) is not None:
         raise DomainError("GENERATION_SHOT_BUSY", "此镜头已有未结束的任务，未知结果须先对账", 409)
+
+
+def candidate_episode_ids(
+    db: Session, project_id: UUID, version_ids: set[UUID]
+) -> dict[UUID, UUID]:
+    if not version_ids:
+        return {}
+
+    bound: dict[UUID, tuple[UUID | None, ShotReviewBinding]] = {}
+    direct: dict[UUID, UUID] = {}
+    # A replacement or restored video can have a new candidate manifest. Its job
+    # still identifies the original generation and frozen shot binding.
+    for version_id, episode_id, raw_binding in db.execute(
+        select(
+            GenerationCandidate.asset_version_id,
+            GenerationJob.episode_id,
+            DependencyManifest.snapshot_json["context"]["continuity_review"],
+        )
+        .join(GenerationJob, GenerationJob.id == GenerationCandidate.job_id)
+        .join(DependencyManifest, DependencyManifest.id == GenerationJob.input_manifest_id)
+        .where(
+            GenerationCandidate.asset_version_id.in_(version_ids),
+            GenerationCandidate.project_id == project_id,
+            GenerationJob.project_id == project_id,
+            GenerationJob.task_type.in_(["IMAGE", "VIDEO"]),
+            DependencyManifest.project_id == project_id,
+        )
+    ):
+        if raw_binding is not None:
+            try:
+                bound[version_id] = (episode_id, ShotReviewBinding.model_validate(raw_binding))
+            except ValidationError:
+                continue
+        elif episode_id is not None:
+            direct[version_id] = episode_id
+
+    project_episodes = (
+        set(
+            db.scalars(
+                select(Episode.id).where(
+                    Episode.project_id == project_id, Episode.id.in_(set(direct.values()))
+                )
+            )
+        )
+        if direct
+        else set()
+    )
+    result = {
+        version_id: episode_id
+        for version_id, episode_id in direct.items()
+        if episode_id in project_episodes
+    }
+    if bound:
+        targets = {
+            shot_id: (board_id, episode_id)
+            for shot_id, board_id, episode_id in db.execute(
+                select(Shot.id, Storyboard.id, Episode.id)
+                .join(Storyboard, Storyboard.id == Shot.storyboard_id)
+                .join(Episode, Episode.id == Storyboard.episode_id)
+                .where(
+                    Episode.project_id == project_id,
+                    Shot.id.in_({binding.shot_id for _, binding in bound.values()}),
+                )
+            )
+        }
+        for version_id, (episode_id, binding) in bound.items():
+            target = targets.get(binding.shot_id)
+            if (
+                target is not None
+                and target[0] == binding.storyboard_id
+                and (episode_id is None or target[1] == episode_id)
+            ):
+                result[version_id] = target[1]
+    return result

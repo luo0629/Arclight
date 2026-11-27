@@ -407,8 +407,11 @@ def test_non_utc_database_candidate_and_job_responses_are_stable(client, episode
 def test_upload_replacement_is_explicit_immutable_and_requires_new_review(client, transfer_setup):
     settings, root = transfer_setup
     project_id = root.rsplit("/", 1)[1]
+    episode = client.post(f"{root}/episodes", json={"episode_no": 1, "title": "Image generation"})
+    assert episode.status_code == 201, episode.text
+    episode_id = episode.json()["id"]
     asset = create(client, project_id)
-    job, attempt = generate(client, project_id, asset)
+    job, attempt = generate(client, project_id, asset, episode_id=episode_id)
     assert ingest(client, attempt) == 1
     source = candidates(client, project_id, job)[0]
     upload = ticket(client, root)
@@ -425,6 +428,12 @@ def test_upload_replacement_is_explicit_immutable_and_requires_new_review(client
     assert replacement["source"] == "REPLACEMENT"
     assert replacement["replaces_candidate_id"] == source["id"]
     assert replacement["asset_version_id"] != source["asset_version_id"]
+    canvas = client.get(f"/api/v1/episodes/{episode_id}/canvas")
+    assert canvas.status_code == 200, canvas.text
+    nodes = {node["id"]: node for node in canvas.json()["nodes"]}
+    for candidate in (source, replacement):
+        node = nodes[f"asset-version:{candidate['asset_version_id']}"]
+        assert node["preview_kind"] == "IMAGE" and node["media_episode_id"] == episode_id
     assert client.post(endpoint, json=body).json() == replacement
     assert client.post(endpoint, json={**body, "file_id": str(uuid4())}).status_code == 409
     assert client.post(endpoint, json={**body, "creation_key": str(uuid4())}).status_code == 409

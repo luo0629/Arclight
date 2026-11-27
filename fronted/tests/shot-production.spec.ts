@@ -5,6 +5,7 @@ import {
   shotProductionFixture,
   tinyPng,
 } from "./shot-production-helpers";
+import { openWorkspacePanels } from "./workspace-helpers";
 
 test.afterEach(async ({}, info) => {
   await writeFile(
@@ -21,6 +22,114 @@ test.afterEach(async ({}, info) => {
       2,
     ),
   );
+});
+
+test("单镜头报价和提交只绑定当前镜头，丢失回执后沿用原提交", async ({
+  page,
+}) => {
+  const env = await shotProductionFixture(page);
+  const [first, second] = (await env.state()).shots;
+  const submissions: { shotId: string; key: string }[] = [];
+  let releaseResponse!: () => void;
+  const holdResponse = new Promise<void>((resolve) => {
+    releaseResponse = resolve;
+  });
+  await page.route("**" + env.generationPath, async (route) => {
+    const request = route.request();
+    if (request.method() !== "POST") return route.continue();
+    submissions.push({
+      shotId: request.postDataJSON().review_target.shot_id,
+      key: request.headers()["idempotency-key"],
+    });
+    const attempt = submissions.length;
+    if (attempt === 2) return route.continue();
+    const response = await route.fetch();
+    expect(response.status()).toBe(201);
+    if (attempt === 1) return route.abort("connectionreset");
+    await holdResponse;
+    await route.fulfill({ response });
+  });
+
+  await page.goto(`/projects/${env.project.id}/episodes/${env.episode.id}`);
+  await openWorkspacePanels(page);
+  await page.getByRole("radio", { name: "素材库", exact: true }).click();
+  await page.locator(".library-shot").filter({ hasText: "镜头 01" }).click();
+  const firstViewer = page.getByRole("dialog", {
+    name: "镜头 01",
+    exact: true,
+  });
+  await firstViewer.getByRole("button", { name: "预览数量与费用" }).click();
+  const preview = firstViewer.getByRole("region", {
+    name: "批量提交预览与结果",
+  });
+  await expect(preview.locator("[data-batch-shot]")).toHaveAttribute(
+    "data-batch-shot",
+    first.id,
+  );
+  await expect(preview).toContainText("0.000000 USD");
+  expect(await env.jobs()).toHaveLength(0);
+  await preview.getByRole("button", { name: "确认逐项提交" }).click();
+  await expect(
+    preview.getByRole("button", { name: "继续未完成提交" }),
+  ).toBeEnabled();
+
+  await firstViewer.getByRole("button", { name: "下一个镜头" }).click();
+  const secondViewer = page.getByRole("dialog", {
+    name: "镜头 02",
+    exact: true,
+  });
+  await expect(secondViewer.getByText(/其他镜头的提交待确认/)).toBeVisible();
+  await expect(
+    secondViewer.getByRole("button", { name: "预览数量与费用" }),
+  ).toBeDisabled();
+  await expect(
+    secondViewer.getByRole("button", { name: "继续未完成提交" }),
+  ).toHaveCount(0);
+
+  await secondViewer.getByRole("button", { name: "上一个镜头" }).click();
+  await preview.getByRole("button", { name: "继续未完成提交" }).click();
+  await expect(preview.getByRole("status")).toContainText("已受理 1 项");
+  expect(submissions).toHaveLength(2);
+  expect(submissions[0]).toEqual({ shotId: first.id, key: expect.any(String) });
+  expect(submissions[1]).toEqual(submissions[0]);
+  expect(await env.jobs()).toHaveLength(1);
+  expect(
+    (await env.state()).shots.find((shot) => shot.id === second.id)?.job,
+  ).toBeNull();
+
+  await firstViewer.getByRole("button", { name: "下一个镜头" }).click();
+  await secondViewer.getByRole("button", { name: "预览数量与费用" }).click();
+  await secondViewer.getByRole("button", { name: "确认逐项提交" }).click();
+  await expect.poll(() => submissions.length).toBe(3);
+  await secondViewer.getByRole("button", { name: "下一个镜头" }).click();
+  const thirdViewer = page.getByRole("dialog", {
+    name: "镜头 03",
+    exact: true,
+  });
+  await expect(thirdViewer.getByText(/其他镜头的提交待确认/)).toBeVisible();
+  releaseResponse();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const key = Object.keys(sessionStorage).find((id) =>
+          id.startsWith("arclight:shot-batch:v1:"),
+        );
+        return key
+          ? JSON.parse(sessionStorage.getItem(key)!).items[0].phase
+          : null;
+      }),
+    )
+    .toBe("accepted");
+  await thirdViewer.getByRole("button", { name: "刷新生产状态" }).click();
+  await expect(thirdViewer.getByText(/其他镜头的提交待确认/)).toHaveCount(0);
+  await expect(
+    thirdViewer.getByRole("button", { name: "预览数量与费用" }),
+  ).toBeEnabled();
+  expect(submissions.map((row) => row.shotId)).toEqual([
+    first.id,
+    first.id,
+    second.id,
+  ]);
 });
 
 test("UI-03：关闭工作区后停止后续项，重新打开只继续原批次未完成项", async ({
@@ -341,15 +450,17 @@ test("UI-03：精确候选多选批准、必填意见及逐项CAS冲突", async 
     revision: 2,
   }));
   model.shots.forEach((shot, index) => {
+    const assetId = crypto.randomUUID();
+    const versionId = crypto.randomUUID();
     shot.candidates = [
       {
         id: crypto.randomUUID(),
-        asset_id: crypto.randomUUID(),
-        version_id: crypto.randomUUID(),
+        asset_id: assetId,
+        version_id: versionId,
         version_no: index + 1,
         revision: 2,
         status: "READY_FOR_REVIEW",
-        image_path: `/shot-production-test-images/${index}`,
+        image_path: `/projects/${env.project.id}/assets/${assetId}/versions/${versionId}/image`,
         can_submit: false,
         can_approve: true,
         can_reject: true,
@@ -360,13 +471,13 @@ test("UI-03：精确候选多选批准、必填意见及逐项CAS冲突", async 
   await page.route("**" + env.productionPath + "?**", (route) =>
     route.fulfill({ json: model }),
   );
-  await page.route("**/api/v1/shot-production-test-images/*", (route) =>
-    route.fulfill({ contentType: "image/png", body: tinyPng }),
-  );
   const patches: { index: number; body: unknown }[] = [];
   for (const [index, shot] of model.shots.entries()) {
     const candidate = shot.candidates[0];
     const path = `/api/v1/projects/${env.project.id}/assets/${candidate.asset_id}/versions/${candidate.version_id}`;
+    await page.route("**" + path + "/image", (route) =>
+      route.fulfill({ contentType: "image/png", body: tinyPng }),
+    );
     await page.route("**" + path, (route) =>
       route.fulfill({ json: versions[index] }),
     );

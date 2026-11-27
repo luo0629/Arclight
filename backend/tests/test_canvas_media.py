@@ -50,6 +50,30 @@ def exact(value, version_id):
     return next(node for node in value["nodes"] if node["id"] == f"asset-version:{version_id}")
 
 
+def test_canvas_shot_image_uses_frozen_episode_when_job_episode_is_omitted(client, episode):
+    from test_continuity_workflow import make_job
+    from test_generation_candidates import candidates
+    from test_shot_production import production
+    from test_storyboard_table import board_fixture
+
+    _, board, _ = board_fixture(client, episode)
+    shot = production(client, episode, board)[1]["shots"][0]
+    case = {"target": {"storyboard_id": board["id"], "shot_id": shot["id"]}}
+    job, _ = make_job(client, episode | {"id": None}, case)
+    candidate = candidates(client, episode["project_id"], job)[0]
+    assert job["episode_id"] is None
+
+    other_episode = client.post(
+        f"/api/v1/projects/{episode['project_id']}/episodes",
+        json={"episode_no": 2, "title": "Another episode"},
+    )
+    assert other_episode.status_code == 201, other_episode.text
+    for view in (episode, other_episode.json()):
+        node = exact(graph(client, view), candidate["asset_version_id"])
+        assert node["preview_kind"] == "IMAGE"
+        assert node["media_episode_id"] == episode["id"]
+
+
 def test_canvas_automatic_scene_ignores_other_jobs_and_edits_of_the_same_storyboard(
     client, episode, render_case
 ):
@@ -345,6 +369,7 @@ def test_canvas_formal_video_is_private_exact_and_unselected_without_temporal_re
     node = exact(graph(client, episode), str(candidate.asset_version_id))
     assert node["preview_kind"] == "VIDEO"
     assert node["candidate_id"] == str(candidate.id)
+    assert node["media_episode_id"] == case["episode_id"]
     assert node["asset_type"] == "VIDEO"
     assert node["status"] == "DRAFT" and not node["current"]
     assert node["duration_ms"] == 6000

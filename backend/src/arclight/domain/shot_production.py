@@ -45,6 +45,7 @@ class ProductionVideoCandidate(BaseModel):
     asset_revision: int
     status: str
     content_path: str
+    selected: bool = False
 
 
 class ProductionShot(BaseModel):
@@ -56,6 +57,7 @@ class ProductionShot(BaseModel):
     blocker: ProductionBlocker | None
     candidates: list[ProductionCandidate]
     candidates_truncated: bool
+    selected_image_version_id: UUID | None = None
     video_candidates: list[ProductionVideoCandidate] = []
     video_candidates_truncated: bool = False
 

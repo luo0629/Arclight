@@ -32,6 +32,7 @@ export default function VideoCandidateDetail({
   expectedShotId,
   expectedVersionId,
   expectedChecksum,
+  selectedForShot,
   onChanged,
   onCreated,
   unavailable,
@@ -42,6 +43,7 @@ export default function VideoCandidateDetail({
   expectedShotId?: string;
   expectedVersionId?: string;
   expectedChecksum?: string;
+  selectedForShot?: boolean;
   onChanged: () => Promise<void>;
   onCreated?: (id: string) => Promise<void>;
   unavailable: (cause: unknown) => void;
@@ -291,7 +293,9 @@ export default function VideoCandidateDetail({
             <dt>选用状态</dt>
             <dd>
               {version && asset?.current_version_id === version.id
-                ? "已选用此版本"
+                ? selectedForShot === false
+                  ? "已登记选用，当前证据已失效"
+                  : "已选用此版本"
                 : asset?.current_version_id
                   ? "已选用其他版本"
                   : "尚未选用"}

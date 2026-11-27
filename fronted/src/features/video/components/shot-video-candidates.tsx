@@ -32,6 +32,7 @@ export default function ShotVideoCandidates({
   unavailable: (cause: unknown) => void;
 }) {
   const [selected, setSelected] = useState("");
+  const active = candidates.find((row) => row.id === selected);
   return (
     <section
       aria-label={"镜头 " + shotNo + " 视频候选"}
@@ -58,9 +59,11 @@ export default function ShotVideoCandidates({
           <Button
             key={row.id}
             variant={selected === row.id ? "default" : "outline"}
+            aria-pressed={selected === row.id}
             onClick={() => setSelected(row.id)}
           >
             视频 v{row.version_no} · {row.status}
+            {row.selected && " · 当前选用"}
           </Button>
         ))}
       </div>
@@ -69,13 +72,15 @@ export default function ShotVideoCandidates({
           此处显示最近候选，完整历史可从内容与媒体列表查看。
         </p>
       )}
-      {selected && (
+      {active && (
         <VideoCandidateDetail
-          key={projectId + ":" + selected}
+          key={projectId + ":" + active.id}
           projectId={projectId}
-          candidateId={selected}
+          candidateId={active.id}
           expectedStoryboardId={storyboardId}
           expectedShotId={shotId}
+          expectedVersionId={active.version_id}
+          selectedForShot={active.selected}
           unavailable={unavailable}
           onChanged={onChanged}
           onCreated={async (id) => {

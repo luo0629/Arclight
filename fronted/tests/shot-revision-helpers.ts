@@ -17,10 +17,12 @@ export async function shotRevisionFixture(page: Page) {
   const env = await shotProductionFixture(page);
   const model = await env.state();
   const shot = model.shots[0];
+  const assetId = crypto.randomUUID();
+  const versionId = crypto.randomUUID();
   const candidate = {
     id: crypto.randomUUID(),
-    asset_id: crypto.randomUUID(),
-    version_id: crypto.randomUUID(),
+    asset_id: assetId,
+    version_id: versionId,
     version_no: 1,
     revision: 0,
     status: "DRAFT",
@@ -31,7 +33,7 @@ export async function shotRevisionFixture(page: Page) {
       code: "CONTINUITY_REVIEW_REQUIRED",
       message: "新候选须先完成连续性审查",
     },
-    image_path: `/projects/${env.project.id}/shot-revision-test/image`,
+    image_path: `/projects/${env.project.id}/assets/${assetId}/versions/${versionId}/image`,
   };
   shot.candidates = [candidate];
   const png = await readFile(

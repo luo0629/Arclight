@@ -23,5 +23,8 @@ def get_production(
     actor: Actor,
     limit: Limit = 50,
     offset: Offset = 0,
+    shot_id: UUID | None = None,
 ) -> StoryboardProduction:
-    return read_production(db, episode_id, storyboard_id, actor, limit=limit, offset=offset)
+    return read_production(
+        db, episode_id, storyboard_id, actor, limit=limit, offset=offset, shot_id=shot_id
+    )

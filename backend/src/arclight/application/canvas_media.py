@@ -6,6 +6,7 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from arclight.application.generation_targets import candidate_episode_ids
 from arclight.application.video_candidates import require_video_candidate_media_check
 from arclight.core.errors import DomainError
 from arclight.persistence.audio_production import AudioLineBinding, AudioSnapshot
@@ -25,6 +26,7 @@ def media_facts(
         return {}
     by_id = {row.id: row for row in versions}
     files: dict[UUID, StoredFile] = {}
+    image_versions: set[UUID] = set()
     video_files: dict[UUID, StoredFile] = {}
     for stored in db.scalars(
         select(StoredFile).where(
@@ -42,6 +44,8 @@ def media_facts(
         ):
             if stored.rights_confirmed:
                 files[version.id] = stored
+            if stored.media_type.startswith("image/"):
+                image_versions.add(version.id)
             if stored.media_type == "video/mp4":
                 video_files[version.id] = stored
     facts: dict[UUID, dict] = {}
@@ -75,6 +79,10 @@ def media_facts(
                 ),
                 "duration_ms": check.video.duration_ms,
             }
+    for version_id, episode_id in candidate_episode_ids(
+        db, project_id, image_versions | facts.keys()
+    ).items():
+        facts.setdefault(version_id, {})["media_episode_id"] = str(episode_id)
     for version_id, audio_file in files.items():
         if audio_file.media_type in AUDIO_TYPES:
             facts[version_id] = {

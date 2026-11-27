@@ -72,6 +72,19 @@ def test_production_reads_precise_paged_source_and_never_creates_work(client, ep
     assert first["next_offset"] == 1 and second["shots"][0] == page["shots"][1]
     assert client.get(path, params={"offset": 1000}).json()["shots"] == []
     assert client.get(path, params={"limit": 101}).status_code == 422
+    target = page["shots"][-1]
+    detail = client.get(path, params={"shot_id": target["id"], "offset": 1000, "limit": 1})
+    assert detail.status_code == 200, detail.text
+    assert detail.json() == {
+        **page,
+        "shots": [target],
+        "total": 1,
+        "offset": 0,
+        "next_offset": None,
+    }
+    assert target["selected_image_version_id"] is None
+    assert client.get(path, params={"shot_id": str(uuid4())}).status_code == 404
+    assert client.get(path, params={"shot_id": "invalid"}).status_code == 422
     with client.app.state.session_factory() as db:
         assert db.scalar(select(func.count()).select_from(GenerationJob)) == 0
         assert set(db.scalars(select(DependencyManifest.id))) == original_manifests
@@ -215,7 +228,9 @@ def test_read_rejects_cross_episode_board_and_keeps_unapproved_history_readable(
     )
     body["content"]["shots"][0]["notes"] = "待审新版本"
     pending = client.post(prefix + "/storyboards", json=body).json()
-    _, page = production(client, episode, pending)
+    pending_path, page = production(client, episode, pending)
+    original_shot_id = production(client, episode, board)[1]["shots"][0]["id"]
+    assert client.get(pending_path, params={"shot_id": original_shot_id}).status_code == 404
     assert page["shots"][0]["request"] is None
     assert page["shots"][0]["blocker"]["code"] == "REVIEW_TARGET_INVALID"
 
@@ -302,6 +317,16 @@ def test_selected_locked_shot_cannot_be_bypassed_with_an_unregistered_target(
     )
     _, current = production(client, episode, board)
     assert current["shots"][0]["request"] is None
+
+    # The copied storyboard keeps its frozen image reference after source invalidation.
+    with client.app.state.session_factory.begin() as db:
+        db.get(AssetVersion, UUID(review_case["target"]["asset_version_id"])).stale = True
+    _, current = production(client, episode, board)
+    shot = current["shots"][0]
+    assert shot["selected_image_version_id"] is None
+    assert [row["version_id"] for row in shot["candidates"]] == [
+        review_case["target"]["asset_version_id"]
+    ]
 
 
 def test_postgres_competing_unregistered_shot_targets_have_one_winner(client, episode, settings):

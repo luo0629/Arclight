@@ -3,14 +3,16 @@
 from uuid import UUID
 
 from pydantic import ValidationError
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
-from arclight.agents.contracts import ShotContentV3, read_shot_content
+from arclight.agents.contracts import AssetReference, ShotContentV3, read_shot_content
 from arclight.application.commands import require_episode, require_project
-from arclight.application.continuity_selection import require_shot_review
+from arclight.application.continuity_neighbors import selected_neighbor
+from arclight.application.continuity_selection import require_shot_review, validate_selected_shot
 from arclight.application.dependencies import exact_version
-from arclight.application.generation_targets import require_available_shot
+from arclight.application.generation_targets import candidate_episode_ids, require_available_shot
+from arclight.application.video_review import require_video_review
 from arclight.core.errors import DomainError
 from arclight.domain.generation_requests import GenerationCreate
 from arclight.domain.shot_production import (
@@ -122,16 +124,63 @@ def generation_request(
     )
 
 
+def selected_image_version_id(
+    db: Session, project_id: UUID, episode_id: UUID, shot: Shot
+) -> UUID | None:
+    try:
+        content = read_shot_content(shot.content_json)
+        reference = content.selected_visual_asset
+        if reference is None:
+            selected = selected_neighbor(db, project_id, shot.id)
+            if selected is None:
+                return None
+            version, asset = exact_version(db, project_id, UUID(selected["asset_version_id"]))
+            return version.id if asset.asset_type in {"IMAGE", "SHOT_IMAGE"} else None
+
+        version, asset = exact_version(db, project_id, UUID(reference.asset_version_id))
+        if (
+            asset.asset_type not in {"IMAGE", "SHOT_IMAGE"}
+            or str(asset.id) != reference.asset_id
+            or asset.status in {"ARCHIVED", "STALE", "REJECTED"}
+            or asset.current_version_id != version.id
+            or version.status not in {"APPROVED", "LOCKED"}
+            or version.stale
+        ):
+            return None
+        record = require_shot_review(db, version)
+        validate_selected_shot(db, record, content, episode_id)
+        if record.review.target.shot_id != shot.id and (
+            content.quality_review is None
+            or content.quality_review.review_id != str(record.review.result_id)
+        ):
+            return None
+    except (DomainError, ValidationError):
+        return None
+    return version.id
+
+
 def read_candidates(
     db: Session,
     project_id: UUID,
+    episode_id: UUID,
     shot_id: UUID,
     storyboard_id: UUID,
     selected_version_id: UUID | None,
     *,
+    recorded_reference: AssetReference | None,
     writable: bool,
     owner: bool,
 ) -> tuple[list[ProductionCandidate], bool]:
+    exact_versions = [GenerationCandidate.asset_version_id == selected_version_id]
+    if recorded_reference is not None:
+        version_id = UUID(recorded_reference.asset_version_id)
+        if candidate_episode_ids(db, project_id, {version_id}).get(version_id) == episode_id:
+            exact_versions.append(
+                and_(
+                    GenerationCandidate.asset_version_id == version_id,
+                    VisualAsset.id == UUID(recorded_reference.asset_id),
+                )
+            )
     rows = list(
         db.execute(
             select(GenerationCandidate, AssetVersion, VisualAsset)
@@ -141,9 +190,16 @@ def read_candidates(
             .join(DependencyManifest, DependencyManifest.id == GenerationJob.input_manifest_id)
             .where(
                 GenerationCandidate.project_id == project_id,
+                VisualAsset.project_id == project_id,
                 VisualAsset.asset_type.in_(["IMAGE", "SHOT_IMAGE"]),
+                GenerationJob.project_id == project_id,
+                DependencyManifest.project_id == project_id,
                 or_(
                     and_(
+                        or_(
+                            GenerationJob.episode_id == episode_id,
+                            GenerationJob.episode_id.is_(None),
+                        ),
                         DependencyManifest.snapshot_json["context"]["continuity_review"][
                             "storyboard_id"
                         ].as_string()
@@ -153,10 +209,14 @@ def read_candidates(
                         ].as_string()
                         == str(shot_id),
                     ),
-                    GenerationCandidate.asset_version_id == selected_version_id,
+                    *exact_versions,
                 ),
             )
-            .order_by(GenerationCandidate.created_at.desc(), GenerationCandidate.id)
+            .order_by(
+                case((GenerationCandidate.asset_version_id == selected_version_id, 0), else_=1),
+                GenerationCandidate.created_at.desc(),
+                GenerationCandidate.id,
+            )
             .limit(17)
         )
     )
@@ -188,11 +248,17 @@ def read_candidates(
 
 
 def read_video_candidates(
-    db: Session, project_id: UUID, storyboard_id: UUID, shot_id: UUID
+    db: Session, project_id: UUID, episode_id: UUID, storyboard_id: UUID, shot_id: UUID
 ) -> tuple[list[ProductionVideoCandidate], bool]:
+    current = and_(
+        VisualAsset.current_version_id == AssetVersion.id,
+        VisualAsset.status.not_in(["ARCHIVED", "STALE", "REJECTED"]),
+        AssetVersion.status.in_(["APPROVED", "LOCKED"]),
+        AssetVersion.stale.is_(False),
+    )
     rows = list(
         db.execute(
-            select(GenerationCandidate, AssetVersion, VisualAsset)
+            select(GenerationCandidate, AssetVersion, VisualAsset, current.label("current"))
             .join(AssetVersion, AssetVersion.id == GenerationCandidate.asset_version_id)
             .join(VisualAsset, VisualAsset.id == AssetVersion.asset_id)
             .join(GenerationJob, GenerationJob.id == GenerationCandidate.job_id)
@@ -203,6 +269,8 @@ def read_video_candidates(
                 VisualAsset.asset_type == "VIDEO",
                 GenerationJob.project_id == project_id,
                 GenerationJob.target_type == "VIDEO",
+                or_(GenerationJob.episode_id == episode_id, GenerationJob.episode_id.is_(None)),
+                DependencyManifest.project_id == project_id,
                 DependencyManifest.snapshot_json["context"]["continuity_review"][
                     "storyboard_id"
                 ].as_string()
@@ -212,28 +280,53 @@ def read_video_candidates(
                 ].as_string()
                 == str(shot_id),
             )
-            .order_by(GenerationCandidate.created_at.desc(), GenerationCandidate.id)
+            .order_by(
+                case((current, 0), else_=1),
+                GenerationCandidate.created_at.desc(),
+                GenerationCandidate.id,
+            )
             .limit(17)
         )
     )
-    return [
-        ProductionVideoCandidate(
-            id=candidate.id,
-            job_id=candidate.job_id,
-            asset_id=asset.id,
-            version_id=version.id,
-            version_no=version.version_no,
-            revision=version.revision,
-            asset_revision=asset.revision,
-            status=version.status,
-            content_path=f"/projects/{project_id}/generation-candidates/{candidate.id}/content",
+    videos = []
+    for candidate, version, asset, current_version in rows[:16]:
+        selected = False
+        if current_version:
+            try:
+                report = require_video_review(db, version).report
+                selected = (
+                    report.episode_id == episode_id
+                    and report.target.storyboard_id == storyboard_id
+                    and report.target.shot_id == shot_id
+                )
+            except DomainError:
+                pass
+        videos.append(
+            ProductionVideoCandidate(
+                id=candidate.id,
+                job_id=candidate.job_id,
+                asset_id=asset.id,
+                version_id=version.id,
+                version_no=version.version_no,
+                revision=version.revision,
+                asset_revision=asset.revision,
+                status=version.status,
+                content_path=f"/projects/{project_id}/generation-candidates/{candidate.id}/content",
+                selected=selected,
+            )
         )
-        for candidate, version, asset in rows[:16]
-    ], len(rows) > 16
+    return videos, len(rows) > 16
 
 
 def read_production(
-    db: Session, episode_id: UUID, storyboard_id: UUID, actor: str, *, limit: int, offset: int
+    db: Session,
+    episode_id: UUID,
+    storyboard_id: UUID,
+    actor: str,
+    *,
+    limit: int,
+    offset: int,
+    shot_id: UUID | None = None,
 ) -> StoryboardProduction:
     episode = require_episode(db, episode_id, actor)
     project = require_project(db, episode.project_id, actor)
@@ -246,18 +339,18 @@ def read_production(
     except DomainError:
         writable = False
     owner = project.owner_id == actor
-    total = (
-        db.scalar(select(func.count()).select_from(Shot).where(Shot.storyboard_id == board.id)) or 0
-    )
-    shots = list(
-        db.scalars(
-            select(Shot)
-            .where(Shot.storyboard_id == board.id)
-            .order_by(Shot.shot_no)
-            .offset(offset)
-            .limit(limit)
-        )
-    )
+    scope = Shot.storyboard_id == board.id
+    query = select(Shot).where(scope)
+    if shot_id is None:
+        total = db.scalar(select(func.count()).select_from(Shot).where(scope)) or 0
+        shots = list(db.scalars(query.order_by(Shot.shot_no).offset(offset).limit(limit)))
+    else:
+        shot = db.scalar(query.where(Shot.id == shot_id))
+        if shot is None:
+            raise DomainError("NOT_FOUND", "镜头不存在", 404)
+        shots = [shot]
+        total = 1
+        offset = 0
     jobs: dict[str, GenerationJob] = {}
     # One ordered query for this page; only the authoritative frozen binding identifies a shot.
     for job, manifest in db.execute(
@@ -266,6 +359,8 @@ def read_production(
         .where(
             GenerationJob.project_id == project.id,
             GenerationJob.target_type == "SHOT_IMAGE",
+            or_(GenerationJob.episode_id == episode_id, GenerationJob.episode_id.is_(None)),
+            DependencyManifest.project_id == project.id,
             DependencyManifest.snapshot_json["context"]["continuity_review"][
                 "storyboard_id"
             ].as_string()
@@ -282,7 +377,11 @@ def read_production(
         job = jobs.get(str(shot.id))
         blocker = None
         payload = None
+        reference = None
         try:
+            raw_reference = shot.content_json.get("selected_visual_asset")
+            if raw_reference is not None:
+                reference = AssetReference.model_validate(raw_reference)
             if not writable:
                 require_episode(db, episode_id, actor, write=True)
             require_available_shot(
@@ -305,17 +404,21 @@ def read_production(
             if job
             else None
         )
-        selected = shot.content_json.get("selected_visual_asset")
+        selected_version_id = selected_image_version_id(db, project.id, episode_id, shot)
         candidates, truncated = read_candidates(
             db,
             project.id,
+            episode_id,
             shot.id,
             board.id,
-            UUID(selected["asset_version_id"]) if selected else None,
+            selected_version_id,
+            recorded_reference=reference if selected_version_id is None else None,
             writable=writable,
             owner=owner,
         )
-        videos, videos_truncated = read_video_candidates(db, project.id, board.id, shot.id)
+        videos, videos_truncated = read_video_candidates(
+            db, project.id, episode_id, board.id, shot.id
+        )
         results.append(
             ProductionShot(
                 id=shot.id,
@@ -335,6 +438,7 @@ def read_production(
                 blocker=blocker,
                 candidates=candidates,
                 candidates_truncated=truncated,
+                selected_image_version_id=selected_version_id,
                 video_candidates=videos,
                 video_candidates_truncated=videos_truncated,
             )

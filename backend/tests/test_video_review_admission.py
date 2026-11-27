@@ -240,6 +240,12 @@ def test_trusted_pass_and_owner_complete_real_ready_approval_selection_lock(clie
         response = lifecycle(client, case, status)
         assert response.status_code == 200, response.text
         assert response.json()["status"] == status
+    target = case["body"]["review_target"]
+    path = f"/api/v1/episodes/{case['episode_id']}/storyboards/{target['storyboard_id']}/production"
+    params = {"shot_id": target["shot_id"]}
+    approved = client.get(path, params=params)
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["shots"][0]["video_candidates"][0]["selected"] is False
     asset = client.get(case["root"]).json()
     selected = client.post(
         case["root"] + f"/versions/{case['version_id']}/select",
@@ -259,6 +265,11 @@ def test_trusted_pass_and_owner_complete_real_ready_approval_selection_lock(clie
     )
     assert locked.status_code == 200, locked.text
     assert locked.json()["status"] == "LOCKED"
+    detail = client.get(path, params=params)
+    assert detail.status_code == 200, detail.text
+    videos = detail.json()["shots"][0]["video_candidates"]
+    assert len(videos) == 1 and videos[0]["version_id"] == str(case["version_id"])
+    assert videos[0]["selected"] is True
     with client.app.state.session_factory() as db:
         version = db.get(AssetVersion, case["version_id"])
         summary = read_admission(db, UUID(case["project_id"]), version)
@@ -482,6 +493,12 @@ def test_restore_as_new_gets_own_candidate_check_and_cannot_borrow_old_video_pas
         assert candidate.id != case["candidate_id"] and candidate.source == "REPLACEMENT"
         assert candidate.media_check_json["candidate_id"] == str(candidate.id)
         assert candidate.media_check_json["input_manifest_id"] == manifest.json()["id"]
+    canvas = client.get(f"/api/v1/episodes/{case['episode_id']}/canvas")
+    assert canvas.status_code == 200, canvas.text
+    node = next(
+        row for row in canvas.json()["nodes"] if row["id"] == f"asset-version:{fresh['id']}"
+    )
+    assert node["preview_kind"] == "VIDEO" and node["media_episode_id"] == case["episode_id"]
     blocked = lifecycle(client, case | {"version_id": UUID(fresh["id"])}, "READY_FOR_REVIEW")
     assert blocked.status_code == 409 and blocked.json()["error"]["code"] == "VIDEO_REVIEW_REQUIRED"
 

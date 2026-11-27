@@ -542,11 +542,8 @@
   min-height: 0;
 }
 .shot-stage {
-  min-height: 480px;
   background: var(--secondary);
   padding: 24px;
-  display: flex;
-  flex-direction: column;
 }
 .shot-stage-label {
   display: flex;
@@ -562,32 +559,13 @@
   color: var(--muted-foreground);
 }
 .shot-stage-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 24px;
-  max-width: 620px;
-  margin: 48px auto;
-}
-.shot-stage-content > svg {
-  width: 64px;
-  height: 64px;
-  stroke-width: 0.75;
-  color: var(--muted-foreground);
+  margin-top: 12px;
 }
 .shot-stage-content > p {
   font-family: Georgia, "Noto Serif SC", SimSun, serif;
-  font-size: clamp(20px, 2.4vw, 32px);
-  line-height: 1.9;
-  text-align: center;
+  font-size: clamp(16px, 1.8vw, 22px);
+  line-height: 1.65;
   overflow-wrap: anywhere;
-}
-.shot-stage-content > small {
-  font-size: 10px;
-  color: var(--muted-foreground);
-  text-align: center;
 }
 .shot-viewer-info {
   padding: 24px;
@@ -687,7 +665,6 @@
     grid-template-columns: minmax(0, 1fr) 260px;
   }
   .shot-stage {
-    min-height: 380px;
     padding: 18px;
   }
 }
@@ -784,16 +761,6 @@
   }
   .shot-viewer-body {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .shot-stage {
-    min-height: 300px;
-  }
-  .shot-stage-content {
-    margin-block: 32px;
-    gap: 20px;
-  }
-  .shot-stage-content > p {
-    font-size: 20px;
   }
   .shot-viewer-info {
     padding: 20px;

@@ -35,6 +35,7 @@ export type VideoCandidateSummary = {
   status: string;
   asset_revision: number;
   content_path: string | null;
+  selected: boolean;
 };
 export type MouthRegion = {
   x: number;

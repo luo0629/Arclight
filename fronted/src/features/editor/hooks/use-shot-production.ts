@@ -2,10 +2,12 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "@/features/auth/auth-context";
+import { useProjectEvents } from "@/features/projects/project-events";
 import { api, ApiError, json, message } from "@/lib/api/client";
 import { isResourceId } from "@/lib/routes";
 import {
   batchActions,
+  candidateImagePath,
   type BatchAction,
   type BatchItem,
   type ImageConfiguration,
@@ -18,9 +20,12 @@ export default function useShotProduction(
   episodeId: string,
   storyboardId: string,
   offset: number,
+  shotId?: string,
 ) {
   const { user } = useAuth();
-  const endpoint = `/episodes/${episodeId}/storyboards/${storyboardId}/production?limit=50&offset=${offset}`;
+  const endpoint =
+    `/episodes/${episodeId}/storyboards/${storyboardId}/production?limit=50&offset=${offset}` +
+    (shotId ? `&shot_id=${encodeURIComponent(shotId)}` : "");
   const projectPath = `/projects/${projectId}`;
   const storageKey = `arclight:shot-batch:v1:${user.id}:${projectId}:${episodeId}:${storyboardId}`;
   const [data, setData] = useState<ProductionPage | null>(null);
@@ -32,6 +37,7 @@ export default function useShotProduction(
   const operating = useRef(false);
   const currentBatch = useRef<ShotBatch | null>(null);
   const scope = useRef(0);
+  const scopeRead = useRef<AbortController | null>(null);
   const readSequence = useRef(0);
 
   const unavailable = useCallback(
@@ -39,30 +45,34 @@ export default function useShotProduction(
       if (cause instanceof ApiError && [401, 403, 404].includes(cause.status)) {
         readSequence.current += 1;
         currentBatch.current = null;
-        try {
-          sessionStorage.removeItem(storageKey);
-          const revisionPrefix = `arclight:shot-revision:v1:${user.id}:${projectId}:${episodeId}:${storyboardId}:`;
-          for (const key of Object.keys(sessionStorage)) {
-            if (key.startsWith(revisionPrefix)) sessionStorage.removeItem(key);
+        if (!shotId) {
+          try {
+            sessionStorage.removeItem(storageKey);
+            const revisionPrefix = `arclight:shot-revision:v1:${user.id}:${projectId}:${episodeId}:${storyboardId}:`;
+            for (const key of Object.keys(sessionStorage)) {
+              if (key.startsWith(revisionPrefix))
+                sessionStorage.removeItem(key);
+            }
+          } catch {
+            // Access is already blocked; no further command can be sent from this view.
           }
-        } catch {
-          // Access is already blocked; no further command can be sent from this view.
         }
         setData(null);
         setBatch(null);
       }
     },
-    [storageKey, user.id, projectId, episodeId, storyboardId],
+    [storageKey, user.id, projectId, episodeId, storyboardId, shotId],
   );
   const load = useCallback(
-    async (signal?: AbortSignal) => {
+    async (signal = scopeRead.current?.signal) => {
       const sequence = ++readSequence.current;
       try {
         const page = await api<ProductionPage>(endpoint, { signal });
         if (
           page.project_id !== projectId ||
           page.episode_id !== episodeId ||
-          page.storyboard_id !== storyboardId
+          page.storyboard_id !== storyboardId ||
+          (shotId && (page.shots.length !== 1 || page.shots[0].id !== shotId))
         )
           throw new Error("生产列表与当前精确分镜不一致。");
         if (
@@ -84,7 +94,7 @@ export default function useShotProduction(
         throw cause;
       }
     },
-    [endpoint, projectId, episodeId, storyboardId, unavailable],
+    [endpoint, projectId, episodeId, storyboardId, shotId, unavailable],
   );
 
   useEffect(() => {
@@ -97,57 +107,60 @@ export default function useShotProduction(
   useEffect(() => {
     scope.current += 1;
     const controller = new AbortController();
+    scopeRead.current = controller;
     setData(null);
     void load(controller.signal).catch(() => {});
     return () => controller.abort();
   }, [load]);
-  useEffect(() => {
+  const restoreBatch = useCallback(() => {
     try {
       const saved: unknown = JSON.parse(
         sessionStorage.getItem(storageKey) ?? "null",
       );
-      if (saved === null) return;
-      const value = saved as ShotBatch;
+      const value = saved as ShotBatch | null;
       if (
-        value.schema !== 1 ||
-        value.user_id !== user.id ||
-        value.project_id !== projectId ||
-        value.episode_id !== episodeId ||
-        value.storyboard_id !== storyboardId ||
-        !Object.hasOwn(batchActions, value.action) ||
-        typeof value.comment !== "string" ||
-        !Array.isArray(value.items) ||
-        !value.items.length ||
-        value.items.length > 50 ||
-        !value.items.every(
-          (item) =>
-            isResourceId(item.shot_id) &&
-            isResourceId(item.key) &&
-            Number.isInteger(item.shot_no) &&
-            typeof item.attempted === "boolean" &&
-            ["ready", "blocked", "unknown", "accepted", "failed"].includes(
-              item.phase,
-            ) &&
-            (!item.request ||
-              (item.request.episode_id === episodeId &&
-                item.request.review_target.storyboard_id === storyboardId &&
-                item.request.review_target.shot_id === item.shot_id)) &&
-            (!item.candidate ||
-              (isResourceId(item.candidate.asset_id) &&
-                isResourceId(item.candidate.version_id))) &&
-            (!item.job || isResourceId(item.job.id)),
-        )
+        value !== null &&
+        (value.schema !== 1 ||
+          value.user_id !== user.id ||
+          value.project_id !== projectId ||
+          value.episode_id !== episodeId ||
+          value.storyboard_id !== storyboardId ||
+          !Object.hasOwn(batchActions, value.action) ||
+          typeof value.comment !== "string" ||
+          !Array.isArray(value.items) ||
+          !value.items.length ||
+          value.items.length > 50 ||
+          !value.items.every(
+            (item) =>
+              isResourceId(item.shot_id) &&
+              isResourceId(item.key) &&
+              Number.isInteger(item.shot_no) &&
+              typeof item.attempted === "boolean" &&
+              ["ready", "blocked", "unknown", "accepted", "failed"].includes(
+                item.phase,
+              ) &&
+              (!item.request ||
+                (item.request.episode_id === episodeId &&
+                  item.request.review_target.storyboard_id === storyboardId &&
+                  item.request.review_target.shot_id === item.shot_id)) &&
+              (!item.candidate ||
+                (isResourceId(item.candidate.asset_id) &&
+                  isResourceId(item.candidate.version_id))) &&
+              (!item.job || isResourceId(item.job.id)),
+          ))
       )
         throw new Error(
           "本标签页的批量提交记录损坏。请先核对服务器任务，避免重复提交。",
         );
       currentBatch.current = value;
       setBatch(value);
+      setStorageBlocked(false);
     } catch (cause) {
       setStorageBlocked(true);
       setError(message(cause));
     }
   }, [storageKey, user.id, projectId, episodeId, storyboardId]);
+  useEffect(() => restoreBatch(), [restoreBatch]);
   const active = data?.shots.some(
     (shot) =>
       shot.job &&
@@ -166,6 +179,15 @@ export default function useShotProduction(
       clearInterval(timer);
     };
   }, [active, busy, load]);
+  useProjectEvents(() => {
+    if (shotId && !operating.current) void load().catch(() => {});
+  });
+
+  const otherShots =
+    !!shotId && batch?.items.some((item) => item.shot_id !== shotId);
+  const pendingOtherShots = Boolean(
+    otherShots && batch?.items.some((item) => item.phase === "unknown"),
+  );
 
   function persist(value: ShotBatch) {
     // A durable logical key is required before a request can leave the browser.
@@ -246,6 +268,8 @@ export default function useShotProduction(
             );
             if (!candidate)
               throw new Error("请先为此镜头选择并查看要审核的精确候选。");
+            if (!candidateImagePath(projectId, candidate))
+              throw new Error("候选图片与当前精确版本不一致，请刷新后核对。");
             if (
               !(action === "submit"
                 ? candidate.can_submit
@@ -295,6 +319,8 @@ export default function useShotProduction(
   async function execute() {
     const original = currentBatch.current;
     if (!original || operating.current || storageBlocked) return;
+    if (shotId && original.items.some((item) => item.shot_id !== shotId))
+      return;
     operating.current = true;
     setBusy(true);
     setError("");
@@ -433,11 +459,13 @@ export default function useShotProduction(
   async function refresh() {
     if (operating.current) return;
     setError("");
+    if (shotId) restoreBatch();
     await load().catch(() => {});
   }
   return {
     data,
-    batch,
+    batch: otherShots ? null : batch,
+    pendingOtherShots,
     busy,
     error,
     storageBlocked,
