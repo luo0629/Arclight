@@ -16,6 +16,7 @@ from arclight.domain.model_gateway import (
     GatewayRequest,
     GatewayRoute,
     GatewayUsage,
+    InvalidResponseStage,
 )
 from arclight.domain.versions import digest
 from arclight.persistence.base import utcnow
@@ -177,6 +178,8 @@ def finish(
     usage: GatewayUsage,
     policy: GatewayPolicy,
     error: str | None = None,
+    *,
+    invalid_response_stage: InvalidResponseStage | None = None,
 ) -> None:
     lock_gate(db)
     call = db.get(GatewayCall, call_id)
@@ -193,7 +196,13 @@ def finish(
             error_code=error,
             usage_json=usage.model_dump(mode="json"),
             actual_cost=usage.actual_cost,
-            evidence=None,
+            evidence=(
+                invalid_response_stage.value
+                if status == "FAILED"
+                and error == "INVALID_RESPONSE"
+                and isinstance(invalid_response_stage, InvalidResponseStage)
+                else None
+            ),
             actor="model-gateway",
         )
     )
@@ -297,6 +306,9 @@ def invoke[T](
                 else GatewayUsage(),
                 policy,
                 error,
+                invalid_response_stage=(
+                    exc.invalid_response_stage if isinstance(exc, GatewayFailure) else None
+                ),
             )
         if isinstance(exc, crash_errors):
             raise RuntimeError(

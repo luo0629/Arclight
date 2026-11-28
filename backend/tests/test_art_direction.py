@@ -5,8 +5,10 @@ import json
 from copy import deepcopy
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from art_direction_support import (
+    draft_from_feedback,
     install_direction_model,
     prepare_direction,
     reference_set,
@@ -14,8 +16,9 @@ from art_direction_support import (
 )
 from pydantic import ValidationError
 from sqlalchemy import func, select
+from test_agent_model import call_response
 from test_agent_model import model_service as model_service
-from test_agent_runtime import tool_feedback
+from test_agent_runtime import final, tool_feedback
 from test_asset_versions import image_bytes
 from test_contexts import visual_setup
 
@@ -84,6 +87,74 @@ def test_real_multimodal_loop_delivers_compared_art_proposal_and_preserves_forma
         run = db.get(WorkflowRun, run_id)
         assert run.status == "RUNNING" and run.pending_review is None
         assert "content_base64" not in json.dumps(run.agent_state_json)
+
+
+def test_zero_reference_task_completes_after_empty_catalog_search(
+    client, episode, settings, model_service
+):
+    run_id, actor, source, task = prepare_direction(client, episode, settings, minimum=0)
+    before = facts(client)
+    sent = []
+    draft = None
+
+    def respond(request):
+        nonlocal draft
+        payload = json.loads(request.content)
+        sent.append(payload)
+        feedback = tool_feedback(payload)
+        if len(sent) == 1:
+            seed = seed_from_payload(payload)
+            assert seed["task"]["minimum_reference_images"] == 0
+            assert seed["task"]["target_asset_ids"] == []
+            prompt = next(
+                item["content"] for item in payload["messages"] if item["role"] == "system"
+            )
+            assert "minimum_reference_images=0" in prompt
+            assert "proposal.references=[]" in prompt
+            reply = call_response(
+                ("visual", "investigate_art", {"query": {"path": "visual"}}),
+                ("model", "investigate_art", {"query": {"path": "model"}}),
+                (
+                    "directory",
+                    "investigate_art",
+                    {"query": {"path": "catalog", "asset_type": "CHARACTER", "name": "无匹配角色"}},
+                ),
+            )
+        elif len(sent) == 2:
+            catalog = feedback[-1]
+            assert catalog["tool_name"] == "investigate_art" and catalog["status"] == "SUCCEEDED"
+            assert catalog["result"]["materials"] == []
+            assert [missing["reason"] for missing in catalog["result"]["missing"]] == ["NOT_FOUND"]
+            draft = draft_from_feedback(payload)
+            for assessment in draft["assessments"]:
+                assessment["strengths"] = "基于定稿剧本和视觉规范保持人物辨识度"
+            reply = call_response(("compare", "compare_art_options", {"draft": draft}))
+        else:
+            assert len(sent) == 3
+            comparison = feedback[-1]
+            assert comparison["tool_name"] == "compare_art_options"
+            assert comparison["status"] == "SUCCEEDED", comparison
+            reply = final(
+                result={
+                    "draft": draft,
+                    "comparison_sha256": comparison["result"]["comparison"]["comparison_sha256"],
+                }
+            )
+        return httpx.Response(200, json=reply)
+
+    model_service(respond)
+    result = propose_art(client.app.state.session_factory, settings, run_id, actor, task)
+    assert result.status == "COMPLETED", result.model_dump_json()
+    assert len(sent) == result.model_turns == 3
+    delivery = result.result
+    proposal = delivery.draft.proposal
+    assert proposal.sources[0].resource_type == "SCRIPT"
+    assert proposal.sources[0].resource_id == UUID(source["id"])
+    assert proposal.references == []
+    assert {item.source_kind for item in delivery.draft.evidence} == {"VISUAL", "MODEL"}
+    assert all(not option.reference_ids for option in proposal.options)
+    assert all(not item.reference_ids for item in delivery.draft.assessments)
+    assert facts(client) == before
 
 
 @pytest.mark.parametrize("initial", ["雨夜角色", "空目录"])

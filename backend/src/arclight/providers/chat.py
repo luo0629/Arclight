@@ -3,7 +3,7 @@
 import httpx
 from pydantic import ValidationError
 
-from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
+from arclight.domain.model_gateway import GatewayFailure, GatewayUsage, InvalidResponseStage
 
 
 def response_usage(body: dict) -> GatewayUsage:
@@ -97,16 +97,31 @@ def completed_message(body: dict, *, strict: bool = True) -> tuple[dict, str]:
     usage = response_usage(body)
     choices = body.get("choices")
     if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
-        raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=usage)
+        raise GatewayFailure(
+            "INVALID_RESPONSE",
+            completed=True,
+            usage=usage,
+            invalid_response_stage=InvalidResponseStage.CHAT_ENVELOPE,
+        )
     choice = choices[0]
     message = choice.get("message")
     reason = choice.get("finish_reason", None if strict else "stop")
     if not isinstance(message, dict):
-        raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=usage)
+        raise GatewayFailure(
+            "INVALID_RESPONSE",
+            completed=True,
+            usage=usage,
+            invalid_response_stage=InvalidResponseStage.CHAT_ENVELOPE,
+        )
     if message.get("refusal") or reason == "content_filter":
         raise GatewayFailure("PROVIDER_REFUSED", completed=True, usage=usage)
     if reason == "length":
         raise GatewayFailure("PROVIDER_TRUNCATED", completed=True, usage=usage)
     if reason not in {"stop", "tool_calls"}:
-        raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=usage)
+        raise GatewayFailure(
+            "INVALID_RESPONSE",
+            completed=True,
+            usage=usage,
+            invalid_response_stage=InvalidResponseStage.CHAT_ENVELOPE,
+        )
     return message, reason

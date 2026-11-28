@@ -34,7 +34,12 @@ from arclight.domain.agent_model import (
     ModelToolCall,
 )
 from arclight.domain.agent_tools import AgentToolFeedback, ReadStoryEntryParameters
-from arclight.domain.model_gateway import GatewayCapabilities, GatewayFailure, GatewayUsage
+from arclight.domain.model_gateway import (
+    GatewayCapabilities,
+    GatewayFailure,
+    GatewayUsage,
+    InvalidResponseStage,
+)
 from arclight.domain.model_suppliers import supplier_by_id
 from arclight.persistence.model_gateway import GatewayCall, GatewayReceipt
 from arclight.persistence.models import AgentToolGrant, User, WorkflowRun
@@ -152,7 +157,13 @@ def receipts(client, run_id):
             .order_by(GatewayCall.created_at)
         ).all()
         return [
-            (call.route_json, receipt.status, receipt.error_code, receipt.usage_json)
+            (
+                call.route_json,
+                receipt.status,
+                receipt.error_code,
+                receipt.usage_json,
+                receipt.evidence,
+            )
             for call, receipt in rows
         ]
 
@@ -399,14 +410,16 @@ def test_input_contract_rejects_sensitive_data_and_invalid_roles_or_types(patch)
 
 
 @pytest.mark.parametrize(
-    "kind,expected",
+    "kind,expected,stage",
     [
-        ("refusal", "GATEWAY_MODEL_REFUSED"),
-        ("filter", "GATEWAY_MODEL_REFUSED"),
-        ("length", "GATEWAY_MODEL_TRUNCATED"),
-        ("schema", "GATEWAY_INVALID_RESPONSE"),
-        ("unsafe", "GATEWAY_INVALID_RESPONSE"),
-        ("bad_choices", "GATEWAY_INVALID_RESPONSE"),
+        ("refusal", "GATEWAY_MODEL_REFUSED", None),
+        ("filter", "GATEWAY_MODEL_REFUSED", None),
+        ("length", "GATEWAY_MODEL_TRUNCATED", None),
+        ("malformed_json", "GATEWAY_INVALID_RESPONSE", "FINAL_JSON"),
+        ("schema", "GATEWAY_INVALID_RESPONSE", "FINAL_SCHEMA"),
+        ("unsafe", "GATEWAY_INVALID_RESPONSE", "FINAL_SCHEMA"),
+        ("bad_choices", "GATEWAY_INVALID_RESPONSE", "CHAT_ENVELOPE"),
+        ("bad_finish_reason", "GATEWAY_INVALID_RESPONSE", "CHAT_ENVELOPE"),
     ],
 )
 def test_completed_failures_preserve_known_usage_and_unknown_money(
@@ -417,6 +430,7 @@ def test_completed_failures_preserve_known_usage_and_unknown_money(
     caplog,
     kind,
     expected,
+    stage,
 ):
     body = final_response()
     choice = body["choices"][0]
@@ -428,12 +442,16 @@ def test_completed_failures_preserve_known_usage_and_unknown_money(
         choice["finish_reason"] = "content_filter"
     elif kind == "length":
         choice["finish_reason"] = "length"
+    elif kind == "malformed_json":
+        choice["message"]["content"] = '{"summary":"private-invalid-model-output"'
     elif kind == "schema":
         choice["message"]["content"] = '{"summary":"private-invalid-model-output"}'
     elif kind == "unsafe":
         choice["message"]["content"] = (
             '{"summary":"data:image/png;base64,private-image","requires_human_review":true}'
         )
+    elif kind == "bad_finish_reason":
+        choice["finish_reason"] = "private-invalid-model-output"
     else:
         body["choices"] = []
     model_service(lambda _: httpx.Response(200, json=body))
@@ -449,6 +467,7 @@ def test_completed_failures_preserve_known_usage_and_unknown_money(
     assert caught.value.code == expected
     record = receipts(client, run_id)[0]
     assert record[1] == "FAILED"
+    assert record[4] == stage
     assert record[3] == {
         "input_tokens": 11,
         "output_tokens": 7,
@@ -569,6 +588,10 @@ def test_vendor_tool_calls_are_untrusted_and_must_follow_protocol(settings, mode
         provider.complete(model_request(), (declaration(),), FinalResult, {})
     assert caught.value.code == "INVALID_RESPONSE" and caught.value.completed
     assert caught.value.usage.input_tokens == 13
+    assert caught.value.invalid_response_stage is {
+        "text_tool_arguments": InvalidResponseStage.FINAL_SCHEMA,
+        "fenced_final": InvalidResponseStage.FINAL_JSON,
+    }.get(variant, InvalidResponseStage.TOOL_CALLS)
     assert "private-non-json" not in str(caught.value)
 
 

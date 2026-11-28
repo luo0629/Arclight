@@ -5,7 +5,7 @@ import json
 from uuid import UUID
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -22,7 +22,7 @@ from arclight.domain.agent_model import (
     ModelToolCall,
 )
 from arclight.domain.generation_requests import safe_metadata
-from arclight.domain.model_gateway import GatewayFailure, GatewayUsage
+from arclight.domain.model_gateway import GatewayFailure, GatewayUsage, InvalidResponseStage
 from arclight.providers.llm import LLMCompletion, LLMService, llm_service, response_contract
 from arclight.providers.llm_models import chat_options
 
@@ -183,6 +183,7 @@ class OpenAICompatibleAgentProvider:
         result: LLMCompletion,
     ) -> AgentModelResponse[T]:
         message, reason = result.message, result.reason
+        stage = InvalidResponseStage.TOOL_CALLS
         try:
             if reason == "tool_calls":
                 raw_calls = message.get("tool_calls")
@@ -231,10 +232,31 @@ class OpenAICompatibleAgentProvider:
                 )
             if message.get("tool_calls"):
                 raise ValueError("Final output cannot contain tool calls")
-            final = result_model.model_validate_json(message["content"], strict=True)
+            stage = InvalidResponseStage.FINAL_JSON
+            content = message.get("content")
+            if not isinstance(content, str):
+                raise ValueError("Final output must contain JSON text")
+            stage = InvalidResponseStage.FINAL_SCHEMA
+            final = result_model.model_validate_json(content, strict=True)
             return AgentModelResponse[T](status="FINAL", final=final)
-        except (KeyError, TypeError, ValueError):
-            raise GatewayFailure("INVALID_RESPONSE", completed=True, usage=result.usage) from None
+        except (KeyError, TypeError, ValueError) as exc:
+            if (
+                stage is InvalidResponseStage.FINAL_SCHEMA
+                and isinstance(exc, ValidationError)
+                and any(
+                    error["type"] == "json_invalid" and not error["loc"]
+                    for error in exc.errors(
+                        include_input=False, include_context=False, include_url=False
+                    )
+                )
+            ):
+                stage = InvalidResponseStage.FINAL_JSON
+            raise GatewayFailure(
+                "INVALID_RESPONSE",
+                completed=True,
+                usage=result.usage,
+                invalid_response_stage=stage,
+            ) from None
 
 
 # Runtime mode selects a transport, not a model's abilities. The remote

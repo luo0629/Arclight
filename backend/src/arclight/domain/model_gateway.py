@@ -1,6 +1,7 @@
 """Versioned public call facts; transport credentials never enter these contracts."""
 
 from decimal import Decimal
+from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
@@ -122,6 +123,13 @@ class GatewayUsage(GatewayValue):
             raise ValueError("Non-acceptance requires zero usage and cost")
 
 
+class InvalidResponseStage(StrEnum):
+    CHAT_ENVELOPE = "CHAT_ENVELOPE"
+    TOOL_CALLS = "TOOL_CALLS"
+    FINAL_JSON = "FINAL_JSON"
+    FINAL_SCHEMA = "FINAL_SCHEMA"
+
+
 class GatewayFailure(Exception):
     """Only an adapter with explicit non-acceptance evidence may permit a retry."""
 
@@ -132,13 +140,21 @@ class GatewayFailure(Exception):
         not_accepted: bool = False,
         completed: bool = False,
         usage: GatewayUsage | None = None,
+        invalid_response_stage: InvalidResponseStage | None = None,
     ):
         if not_accepted and (completed or usage is not None):
             raise ValueError("Non-acceptance cannot assert completed usage")
         if usage is not None and not completed:
             raise ValueError("Usage requires a completed provider response")
+        if invalid_response_stage is not None and (
+            not isinstance(invalid_response_stage, InvalidResponseStage)
+            or code != "INVALID_RESPONSE"
+            or not completed
+        ):
+            raise ValueError("A response stage requires a completed invalid response")
         self.code = code
         self.not_accepted = not_accepted
         self.completed = completed
+        self.invalid_response_stage = invalid_response_stage
         self.usage = GatewayUsage.model_validate(usage.model_dump()) if usage else GatewayUsage()
         super().__init__("Model service call failed")
