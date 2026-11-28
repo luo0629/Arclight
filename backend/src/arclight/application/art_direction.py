@@ -1,5 +1,7 @@
 """Art-domain adapter over the existing durable runtime; it publishes no asset."""
 
+from collections.abc import Callable
+from functools import partial
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -15,6 +17,7 @@ from arclight.application.agent_tools import (
     build_agent_tool_registry,
 )
 from arclight.application.art_direction_evidence import (
+    direction_loop,
     operation_sha256,
     validate_delivery,
     validate_draft,
@@ -40,7 +43,8 @@ from arclight.domain.art_direction import (
 )
 from arclight.domain.art_proposals import VersionArtSource
 from arclight.domain.versions import digest
-from arclight.persistence.agent_loops import AgentLoop
+from arclight.persistence.agent_limits import AgentRunLimit
+from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.models import Episode, WorkflowRun
 
 
@@ -91,6 +95,70 @@ def validate_art_direction(
     if {tool.name for tool in permitted} != required:
         raise DomainError("USER_NOT_AUTHORIZED", "美术决策工具授权已撤销", 403)
     validate_delivery(db, settings, run, actor, result)
+
+
+def _complete_short_drama_art(
+    db: Session, *, run_id: UUID, parent_id: UUID
+) -> ArtDirectionResult | None:
+    loop, seed = direction_loop(db, run_id)
+    action = db.scalar(
+        select(AgentLoopAction)
+        .where(
+            AgentLoopAction.loop_id == loop.id,
+            AgentLoopAction.kind == "TOOL",
+            AgentLoopAction.request_json["tool_name"].as_string() == COMPARISON_TOOL,
+        )
+        .order_by(AgentLoopAction.created_at.desc(), AgentLoopAction.id.desc())
+        .limit(1)
+    )
+    if action is None or not action.result_json or action.result_json["status"] != "SUCCEEDED":
+        return None
+
+    draft = CompareArtParameters.model_validate(action.request_json["arguments"]).draft
+    receipt = CompareArtResult.model_validate(action.result_json["result"])
+    if receipt.draft_sha256 != digest(draft.model_dump(mode="json")):
+        raise DomainError("ART_COMPARISON_REQUIRED", "美术提案与原比较回执不一致", 422)
+    proposal = draft.proposal
+    selected_id = proposal.preferred_option_id or proposal.options[0].option_id
+    selected = next(
+        (option for option in receipt.comparison.options if option.option_id == selected_id), None
+    )
+    if (
+        selected is None
+        or not selected.changes
+        or any(change.protection != "NONE" for change in selected.changes)
+    ):
+        return None
+
+    from arclight.application.short_drama_delivery import require_run_authorization
+
+    parent = db.get(WorkflowRun, parent_id)
+    assert parent is not None
+    episode, actor, specification = require_run_authorization(db, parent)
+    if (
+        episode.id != seed.episode_id
+        or actor != loop.actor_id
+        or specification["script_version_id"] != str(seed.script_version_id)
+    ):
+        raise DomainError("SHORT_DRAMA_PLAN_SCOPE", "美术交付须使用原定稿剧本和制作范围", 409)
+    return ArtDirectionResult(draft=draft, comparison_sha256=receipt.comparison.comparison_sha256)
+
+
+def _short_drama_completion(
+    db: Session, run: WorkflowRun
+) -> Callable[[Session], ArtDirectionResult | None] | None:
+    control = db.get(AgentRunLimit, run.id)
+    if run.workflow_type != "art_proposal" or control is None or control.parent_run_id is None:
+        return None
+    parent = db.get(WorkflowRun, control.parent_run_id)
+    if (
+        parent is None
+        or parent.id != control.root_run_id
+        or parent.workflow_type != "producer"
+        or parent.input_json.get("short_drama") is None
+    ):
+        return None
+    return partial(_complete_short_drama_art, run_id=run.id, parent_id=parent.id)
 
 
 def propose_art(
@@ -189,6 +257,7 @@ def propose_art(
                 ),
             ],
         )
+        complete_after_tools = _short_drama_completion(db, run)
         if previous:
             saved = AgentModelRequest.model_validate(previous.seed_json)
             if saved.messages != request.messages:
@@ -201,6 +270,7 @@ def propose_art(
         art_direction_registry(settings),
         ArtDirectionResult,
         validate_result=lambda db, result: validate_art_direction(db, settings, run_id, result),
+        complete_after_tools=complete_after_tools,
     )
 
 
@@ -217,6 +287,9 @@ def resume_art_direction(
         run_id = loop.run_id
         if loop.operation_sha256 != operation_sha256(run_id, db=db):
             raise DomainError("ART_DIRECTION_INVALID", "只能恢复原美术决策循环", 409)
+        run = db.get(WorkflowRun, run_id)
+        assert run is not None
+        complete_after_tools = _short_drama_completion(db, run)
     return resume_agent_loop(
         factory,
         settings,
@@ -226,4 +299,5 @@ def resume_art_direction(
         ArtDirectionResult,
         decision=decision,
         validate_result=lambda db, result: validate_art_direction(db, settings, run_id, result),
+        complete_after_tools=complete_after_tools,
     )

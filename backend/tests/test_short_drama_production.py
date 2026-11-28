@@ -8,7 +8,7 @@ import pytest
 from art_direction_support import install_direction_model, reference_set
 from sqlalchemy import select
 from test_agent_model import call_response
-from test_agent_runtime import tool_feedback
+from test_agent_runtime import final, tool_feedback
 from test_collaboration import create_episode, create_project, register
 from test_director_revision import install_revision
 from test_native_media_integration import catalog_version, configure
@@ -549,12 +549,58 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
     assert blocked["error_code"] == "ACCOUNT_BALANCE_INSUFFICIENT"
     assert blocked["can_retry_balance"]
     recharge(blocked["revision"])
-    art_calls, art_errors, _ = install_direction_model(model_service)
+    requests_after_comparison = []
+
+    def art_model_service(respond):
+        def dispatch(request):
+            if any(
+                item["tool_name"] == "compare_art_options" and item["status"] == "SUCCEEDED"
+                for item in tool_feedback(json.loads(request.content))
+            ):
+                requests_after_comparison.append(request)
+                invalid = final()
+                invalid["choices"][0]["message"]["content"] = '{"decision":"COMPLETE",'
+                return httpx.Response(200, json=invalid)
+            return respond(request)
+
+        model_service(dispatch)
+
+    art_calls, art_errors, _ = install_direction_model(art_model_service)
     execute_run(factory, settings, child_id, art_revision)
-    assert art_calls and not art_errors
+    assert not requests_after_comparison
+    assert len(art_calls) == 3 and not art_errors
     with factory() as db:
         child = db.get(WorkflowRun, child_id)
         assert child.status == "WAITING_REVIEW", child.error_code
+        art_loop = db.scalars(select(AgentLoop).where(AgentLoop.run_id == child_id)).one()
+        assert art_loop.status == "COMPLETED"
+        assert art_loop.outcome_json["model_turns"] == len(art_calls)
+        actions = list(
+            db.scalars(select(AgentLoopAction).where(AgentLoopAction.loop_id == art_loop.id))
+        )
+        model_actions = [action for action in actions if action.kind == "MODEL"]
+        assert len(model_actions) == len(art_calls)
+        assert all(
+            action.result_json["status"] == "TOOL_CALLS"
+            and latest_receipt(db, action.gateway_call_id).status == "SUCCEEDED"
+            for action in model_actions
+        )
+        (compared,) = (
+            action
+            for action in actions
+            if action.kind == "TOOL" and action.request_json["tool_name"] == "compare_art_options"
+        )
+        assert compared.result_json["status"] == "SUCCEEDED"
+        comparison_result = compared.result_json["result"]
+        art_result = art_loop.outcome_json["result"]
+        assert digest(art_result["draft"]) == comparison_result["draft_sha256"]
+        assert (
+            art_result["comparison_sha256"] == comparison_result["comparison"]["comparison_sha256"]
+        )
+        assert any(
+            source["resource_type"] == "SCRIPT" and source["resource_id"] == script["id"]
+            for source in art_result["draft"]["proposal"]["sources"]
+        )
         review = db.scalar(select(HumanReviewRequest).where(HumanReviewRequest.run_id == child_id))
         assert review is not None
         review_id = review.id
