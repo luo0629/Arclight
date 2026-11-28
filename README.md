@@ -270,6 +270,8 @@ Python 依赖安装、后端启动和 Alembic 命令在 `backend/` 执行；前�
 - 配置按账号隔离，revision 防止陈旧覆盖。读取接口只返回密钥是否存在及安全诊断，不返回密钥或密文；浏览器不持久化 API Key。更换供应商或地址须重新填 Key 或清除旧凭证。清除密钥后，账号保留已保存的服务设置，新任务须先重新配置密钥。历史运行使用冻结时的连接与凭证；凭证不进入提示词、checkpoint、公开任务详情或审计事件。个人配置审计可从 `/api/v1/me/model-services/audit` 分页读取。
 - 「检测连接」向供应商发只读请求，结果区分地址可达和已查到模型。保存服务时只写入账号配置。主动创建任务后，任务使用的故事或素材会按所选模型服务提交，费用由供应商结算。
 
+语音连接保存后，项目音色选择器和短剧制作准备会自动读取当前模型的目录。账号专属目录实时查询，公开清单在服务端内存中缓存最多 5 分钟，到期后重新请求。自定义网关可以在同一 Base URL 下提供 `GET /audio/voice-catalog?model=<模型 ID>`，接收该连接的 Bearer 凭证。返回 JSON 对象 `{"models":{"模型 ID":[{"id":"voice-id","label":"音色名称","description":"音色描述"}]}}`。按精确模型读取候选，`description` 可省略。上游没有发布可用目录时，页面会提示当前模型缺少候选。
+
 ## 文件来源与安全回收
 
 项目 Owner 可用 `POST /api/v1/projects/{project_id}/storage-cleanups` 扫描 `TEMPORARY`、`VALIDATED`、`ASSET`、`INTERMEDIATE`、`RENDERED` 或 `SOURCE` 命名空间，每页最多100个对象；`previous_plan_id` 继续下一页。计划只记录候选，观察1小时后，使用 `POST .../storage-cleanups/{plan_id}/items/{item_id}/execute` 逐项执行，24小时后须重新扫描。`GET .../storage-cleanups` 可查看清理结果和失败错误码，失败目标可用同一执行接口重试。

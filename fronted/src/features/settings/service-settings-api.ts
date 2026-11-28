@@ -73,6 +73,14 @@ type SaveInput = ConnectionInput & {
 };
 
 const modelServicesPath = "/me/model-services";
+const serviceSavedEvent = "arclight:model-service-saved";
+
+export function onServiceSaved(listener: (kind: ServiceKind) => void) {
+  const notify = (event: Event) =>
+    listener((event as CustomEvent<ServiceKind>).detail);
+  window.addEventListener(serviceSavedEvent, notify);
+  return () => window.removeEventListener(serviceSavedEvent, notify);
+}
 
 export function readServiceConfiguration() {
   return api<ServiceConfiguration>(modelServicesPath);
@@ -90,11 +98,16 @@ export function checkServiceConnection(
   });
 }
 
-export function saveServiceConfiguration(kind: ServiceKind, input: SaveInput) {
-  return api<ServiceProfile>(
+export async function saveServiceConfiguration(
+  kind: ServiceKind,
+  input: SaveInput,
+) {
+  const profile = await api<ServiceProfile>(
     `${modelServicesPath}/${kind}`,
     json("PUT", input),
   );
+  window.dispatchEvent(new CustomEvent(serviceSavedEvent, { detail: kind }));
+  return profile;
 }
 
 export function verifyTextCapabilities(revision: number) {

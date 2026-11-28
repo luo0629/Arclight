@@ -6,7 +6,6 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from arclight.domain.agent_model import AgentModelCapabilities
-from arclight.domain.audio_voices import AudioVoiceOption
 
 
 class ServiceModelPolicy(BaseModel):
@@ -17,7 +16,6 @@ class ServiceModelPolicy(BaseModel):
     model: str = Field(min_length=1, max_length=160)
     protocol: str = Field(min_length=1, max_length=40)
     agent_capabilities: AgentModelCapabilities | None = None
-    speech_voice_options: tuple[AudioVoiceOption, ...] = ()
     maximum_cost_per_output: Decimal | None = Field(
         default=None, gt=0, le=1000000, decimal_places=6
     )

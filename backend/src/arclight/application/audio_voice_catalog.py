@@ -16,16 +16,15 @@ from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.audio_voices import AudioVoiceCatalogRead, AudioVoiceOption
 from arclight.domain.model_gateway import GatewayFailure
-from arclight.domain.service_models import matching_policy
 from arclight.providers.media_capabilities import parameter_ranges, resolve_parameters
 from arclight.providers.media_io import bounded_call
-from arclight.providers.speech_catalogs import VoiceCatalogDefinition, official_voice_catalog
+from arclight.providers.speech_catalogs import VoiceCatalogQuery, voice_catalog_query
 
 
 @dataclass(frozen=True)
 class VoiceCatalogSource:
     selection: MediaSelection | None = None
-    definition: VoiceCatalogDefinition | None = None
+    query: VoiceCatalogQuery | None = None
     api_key: str | None = field(default=None, repr=False)
     timeout: float = 0
     dns_timeout: float = 0
@@ -48,22 +47,13 @@ def read_voice_catalog_source(
             selection = account_selection(db, actor, "AUDIO")
         if selection is None:
             return VoiceCatalogSource()
-        configuration = selection.configuration
-        policy = matching_policy(settings.service_model_policies, configuration)
-        definition = (
-            VoiceCatalogDefinition(policy.speech_voice_options)
-            if policy and policy.speech_voice_options
-            else official_voice_catalog(configuration)
-        )
-        if definition is None:
-            return VoiceCatalogSource(selection)
         key = credential_for_selection(db, settings, project_id, selection)
     except DomainError as error:
         return VoiceCatalogSource(selection, error_code=error.code)
     return VoiceCatalogSource(
         selection,
-        definition,
-        key if definition.query is not None else None,
+        voice_catalog_query(selection.configuration),
+        key,
         min(10, settings.media_execution_policy.call_timeout_seconds),
         settings.llm_dns_timeout_seconds,
     )
@@ -87,32 +77,34 @@ def query_voice_catalog(source: VoiceCatalogSource) -> AudioVoiceCatalogRead:
     }
     if source.error_code:
         return AudioVoiceCatalogRead(status="QUERY_FAILED", error_code=source.error_code, **catalog)
-    if source.definition is None:
-        return AudioVoiceCatalogRead(status="UNAVAILABLE", **catalog)
-    options = source.definition.options
-    query = source.definition.query
-    if query is not None:
-        key = source.api_key
-        assert key is not None
-        try:
-            options += bounded_call(
-                lambda: query(configuration, key, source.timeout, source.dns_timeout),
-                source.timeout,
-            )
-        except (DomainError, GatewayFailure) as error:
-            return AudioVoiceCatalogRead(status="QUERY_FAILED", error_code=error.code, **catalog)
-        except (httpx.HTTPError, TimeoutError, ValueError):
-            return AudioVoiceCatalogRead(
-                status="QUERY_FAILED", error_code="AUDIO_VOICE_CATALOG_QUERY_FAILED", **catalog
-            )
+    query, key = source.query, source.api_key
+    assert query is not None and key is not None
+    try:
+        options = bounded_call(
+            lambda: query(key, source.timeout, source.dns_timeout), source.timeout
+        )
+        for option in options:
+            fields = (option.id, option.label, option.description)
+            if any(value is not None and not _catalog_field(value, key) for value in fields):
+                raise GatewayFailure("INVALID_RESPONSE")
+    except (DomainError, GatewayFailure) as error:
+        return AudioVoiceCatalogRead(status="QUERY_FAILED", error_code=error.code, **catalog)
+    except (httpx.HTTPError, TimeoutError, ValueError):
+        return AudioVoiceCatalogRead(
+            status="QUERY_FAILED", error_code="AUDIO_VOICE_CATALOG_QUERY_FAILED", **catalog
+        )
     options_by_id: dict[str, AudioVoiceOption] = {}
     for option in options:
         options_by_id.setdefault(option.id, option)
     return AudioVoiceCatalogRead(
-        status="READY",
+        status="READY" if options_by_id else "UNAVAILABLE",
         options=tuple(options_by_id.values()),
         **catalog,
     )
+
+
+def _catalog_field(value: str, key: str) -> bool:
+    return value == value.strip() and value.isprintable() and key not in value
 
 
 def require_catalog_voice(catalog: AudioVoiceCatalogRead, voice: object) -> None:

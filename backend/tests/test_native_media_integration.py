@@ -44,21 +44,6 @@ def configure(
     protocol="cogview",
     revision=0,
     key="first-key",
-    *,
-    voice_options=(
-        "test-voice",
-        "another-voice",
-        "new-default",
-        "new-voice",
-        "alloy",
-        "nova",
-        "Cherry",
-        "model:anna",
-        "v",
-        "hoarse-test-voice",
-        "wrong-role",
-        "wrong-speaker",
-    ),
 ):
     if not settings.service_encryption_key.get_secret_value():
         settings.service_encryption_key = SecretStr(Fernet.generate_key().decode())
@@ -72,9 +57,6 @@ def configure(
             base_url="https://native.example/v1",
             maximum_cost_per_output=Decimal("1"),
             pricing_version="test-native:1",
-            speech_voice_options=tuple({"id": voice, "label": voice} for voice in voice_options)
-            if kind == "speech"
-            else (),
         )
     ]
     response = client.put(

@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 import httpx
+from speech_catalog_support import json_catalog
 from sqlalchemy import select
 from test_agent_model import model_service as model_service
 from test_native_media_integration import configure
@@ -35,7 +36,16 @@ def test_voice_casting_reconciles_original_call_and_rejects_unknown_voice(
 ):
     episode = configured_episode
     project_id = UUID(episode["project_id"])
-    configure(client, settings, "speech", "openai_tts", voice_options=("test-voice",))
+    configure(client, settings, "speech", "openai_tts")
+
+    def discover(request):
+        assert request.url.params["model"] == "native-model"
+        return json_catalog("native-model", "test-voice")
+
+    monkeypatch.setattr(
+        "arclight.providers.speech_catalogs.PublicHTTPTransport",
+        lambda _timeout, **_kwargs: httpx.MockTransport(discover),
+    )
     script = save_script(client, episode)
     font_id = delivery_font(client, episode, script)
     queued = create_short_drama(client, episode, script, font_file_id=str(font_id))
@@ -145,3 +155,47 @@ def test_voice_casting_reconciles_original_call_and_rejects_unknown_voice(
     assert bindings.status_code == 200, bindings.text
     assert "test-voice" not in bindings.text and "made-up-voice" not in bindings.text
     assert SHORT_DRAMA_VOICE_CATALOG not in {row["resource_type"] for row in bindings.json()}
+
+
+def test_short_drama_discovers_voice_directory_before_admission(
+    client, settings, configured_episode, monkeypatch
+):
+    episode = configured_episode
+    configure(client, settings, "speech", "openai_tts")
+    script = save_script(client, episode)
+    font_id = delivery_font(client, episode, script)
+    keys = set()
+    available = False
+
+    def discover(request):
+        assert request.url.path == "/v1/audio/voice-catalog"
+        keys.add(request.headers["Authorization"])
+        if not available:
+            return httpx.Response(404)
+        return json_catalog(request.url.params["model"], "available-voice")
+
+    monkeypatch.setattr(
+        "arclight.providers.speech_catalogs.PublicHTTPTransport",
+        lambda _timeout, **_kwargs: httpx.MockTransport(discover),
+    )
+    readiness = f"/api/v1/episodes/{episode['id']}/short-drama/preflight"
+    parameters = {"script_version_id": script["id"]}
+    missing = client.get(readiness, params=parameters).json()
+    assert missing["issues"][0]["code"] == "AUDIO_VOICE_CATALOG_UNAVAILABLE"
+    key = uuid4().hex
+    rejected = create_short_drama(client, episode, script, key=key, font_file_id=str(font_id))
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["error"]["code"] == "AUDIO_VOICE_CATALOG_UNAVAILABLE"
+    with client.app.state.session_factory() as db:
+        assert db.scalar(select(WorkflowRun).where(WorkflowRun.idempotency_key == key)) is None
+
+    available = True
+    ready = client.get(readiness, params=parameters).json()
+    assert ready["issues"] == []
+    started = create_short_drama(client, episode, script, key=key, font_file_id=str(font_id))
+    assert started.status_code == 202, started.text
+    assert keys == {"Bearer first-key"}
+
+    available = False
+    replayed = create_short_drama(client, episode, script, key=key, font_file_id=str(font_id))
+    assert replayed.status_code == 202 and replayed.json()["run_id"] == started.json()["run_id"]

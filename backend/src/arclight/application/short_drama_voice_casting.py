@@ -9,11 +9,10 @@ from arclight.application.agent_runtime import run_persistent_agent_loop
 from arclight.application.agent_tools import AgentToolRegistry
 from arclight.application.audio_voice_catalog import query_voice_catalog, read_voice_catalog_source
 from arclight.application.gateway_agent import AgentOutputProjection
-from arclight.application.media_services import MediaSelection, restore_selection
+from arclight.application.media_services import restore_selection
 from arclight.application.model_gateway import lock_gate
 from arclight.application.producer_interaction import COMMAND, require_producer
 from arclight.application.production_versions import bind, find_binding
-from arclight.application.short_drama_diagnostics import ShortDramaFailure
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
@@ -106,15 +105,6 @@ def _assignment_scope(
     return run, episode, casting
 
 
-def _catalog_failure(code: str, service: MediaSelection) -> ShortDramaFailure:
-    return ShortDramaFailure(
-        DomainError(code, "当前语音模型的音色目录不可用", 409),
-        service_kind="SPEECH",
-        service=service.configuration,
-        service_owner=service.created_by,
-    )
-
-
 def _catalog_scope(run: WorkflowRun, episode: Episode, casting: VoiceCastingInput) -> dict:
     return {
         "run_id": str(run.id),
@@ -149,6 +139,8 @@ def _catalog_snapshot(
             db, settings, episode.project_id, actor, selection=service
         )
 
+    from arclight.application.short_drama_audio import require_casting_options
+
     # A supplier directory lookup must not hold scheduling, episode or project locks.
     queried = query_voice_catalog(source)
     with factory.begin() as db:
@@ -156,14 +148,7 @@ def _catalog_snapshot(
         scope = _catalog_scope(run, episode, casting)
         catalog = _read_catalog(db, episode.project_id, command_id, scope)
         if catalog is None:
-            if queried.status == "QUERY_FAILED":
-                raise _catalog_failure(
-                    queried.error_code or "AUDIO_VOICE_CATALOG_QUERY_FAILED", service
-                )
-            if queried.status != "READY" or not queried.options:
-                raise _catalog_failure("AUDIO_VOICE_CATALOG_UNAVAILABLE", service)
-            if queried.configuration_version != service.configuration["configuration_version"]:
-                raise _catalog_failure("MEDIA_SERVICE_CONFIG_CHANGED", service)
+            require_casting_options(queried, service)
             bind(
                 db,
                 episode.project_id,

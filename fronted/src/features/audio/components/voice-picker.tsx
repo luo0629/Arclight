@@ -16,6 +16,7 @@ import useRenderDetail from "@/features/rendering/hooks/use-render-detail";
 import useRenderMutation, {
   pendingCreationKey,
 } from "@/features/rendering/hooks/use-render-mutation";
+import { onServiceSaved } from "@/features/settings/service-settings-api";
 import { runErrorMessage } from "@/lib/run-errors";
 import { audioApi } from "../api";
 import type { AudioVoice } from "../types";
@@ -26,8 +27,7 @@ const voiceId = (row: AudioVoice) => row.id;
 
 const catalogStatusMessage = {
   NOT_CONFIGURED: "请先配置语音服务",
-  UNAVAILABLE:
-    "当前配音模型没有可用的音色目录。请在「模型服务配置」中更换模型。",
+  UNAVAILABLE: "当前配音服务未返回该模型的可用音色。请核对服务地址和模型 ID。",
   QUERY_FAILED: "音色目录查询失败。请检查配音服务后重新读取。",
 };
 export default function VoicePicker({
@@ -72,6 +72,13 @@ export default function VoicePicker({
     unavailable,
     writable && formOpen,
   );
+  const refreshCatalog = catalog.refresh;
+  useEffect(() => {
+    if (!writable || !formOpen) return;
+    return onServiceSaved((kind) => {
+      if (kind === "speech") refreshCatalog();
+    });
+  }, [writable, formOpen, refreshCatalog]);
   const [choice, setChoice] = useState<{
     version: string;
     voice: string;

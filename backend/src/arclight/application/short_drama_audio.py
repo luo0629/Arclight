@@ -24,7 +24,7 @@ from arclight.application.audio_tts import (
     require_tts_voice,
 )
 from arclight.application.audio_versions import require_audio_file, require_audio_version
-from arclight.application.audio_voice_catalog import read_voice_catalog_source
+from arclight.application.audio_voice_catalog import VoiceCatalogSource, read_voice_catalog_source
 from arclight.application.audio_voice_profiles import (
     profile_for_line,
     resolve_selection,
@@ -199,29 +199,44 @@ def dialogue_voice(
     return DialogueVoice(voice_version_id=voice_id, voice_profile_version_id=profile_id)
 
 
-def require_casting_service(
+def require_casting_source(
     db: Session, settings: Settings, project_id: UUID, actor: str
-) -> MediaSelection:
+) -> VoiceCatalogSource:
     source = read_voice_catalog_source(db, settings, project_id, actor)
     service = source.selection
-    frozen = service.private_snapshot() if service else None
     if source.error_code:
+        frozen = service.private_snapshot() if service else None
         raise speech_failure(DomainError(source.error_code, "请检查账号语音服务", 409), frozen)
     if service is None:
         raise speech_failure(
             DomainError("SHORT_DRAMA_SPEECH_SERVICE_REQUIRED", "请先配置账号语音服务", 409)
         )
-    if source.definition is None:
-        raise speech_failure(
-            DomainError("AUDIO_VOICE_CATALOG_UNAVAILABLE", "当前语音模型没有可用音色目录", 409),
-            frozen,
-        )
-    return service
+    return source
+
+
+def require_casting_options(catalog: AudioVoiceCatalogRead | None, service: MediaSelection) -> None:
+    if (
+        catalog is None
+        or catalog.configuration_version != service.configuration["configuration_version"]
+    ):
+        code = "MEDIA_SERVICE_CONFIG_CHANGED"
+        message = "当前语音服务已变化，请重新检查制作准备"
+    elif catalog.status == "QUERY_FAILED":
+        code = catalog.error_code or "AUDIO_VOICE_CATALOG_QUERY_FAILED"
+        message = "查询当前语音模型的音色目录失败"
+    elif catalog.status != "READY" or not catalog.options:
+        code = "AUDIO_VOICE_CATALOG_UNAVAILABLE"
+        message = "当前配音服务未返回该模型的可用音色"
+    else:
+        return
+    raise speech_failure(DomainError(code, message, 409), service.private_snapshot())
 
 
 def inspect_dialogue(
     db: Session, settings: Settings, project_id: UUID, actor: str, script: Script
-) -> tuple[list[NeededVoice], list[BlockedVoice], list[ShortDramaFailure]]:
+) -> tuple[
+    list[NeededVoice], list[BlockedVoice], list[ShortDramaFailure], VoiceCatalogSource | None
+]:
     content = read_script_content(script.content_json)
     lines = script_audio_lines(content)
     snapshot = AudioSnapshot(episode_id=script.episode_id, script_version_id=script.id)
@@ -262,9 +277,10 @@ def inspect_dialogue(
                 else ShortDramaFailure(error, service_kind="SPEECH" if recording is None else None)
             )
             failures.append(failure)
+    source = None
     if missing_voice:
         try:
-            require_casting_service(db, settings, project_id, actor)
+            source = require_casting_source(db, settings, project_id, actor)
         except ShortDramaFailure as error:
             failures.append(error)
     unique_failures = {
@@ -277,11 +293,18 @@ def inspect_dialogue(
         ): failure
         for failure in failures
     }
-    return list(needed.values()), list(blocked.values()), list(unique_failures.values())
+    return list(needed.values()), list(blocked.values()), list(unique_failures.values()), source
 
 
 def preflight_dialogue(
-    db: Session, settings: Settings, run: WorkflowRun, project_id: UUID, actor: str, script_id: UUID
+    db: Session,
+    settings: Settings,
+    run: WorkflowRun,
+    project_id: UUID,
+    actor: str,
+    script_id: UUID,
+    *,
+    catalog: AudioVoiceCatalogRead | None = None,
 ) -> None:
     from arclight.application.short_drama_voice_casting import VoiceCastingInput, VoiceCastingRole
 
@@ -312,7 +335,9 @@ def preflight_dialogue(
         bind(db, project_id, DIALOGUE_PLAN, run.id, result.model_dump(mode="json"))
         return
 
-    service = require_casting_service(db, settings, project_id, actor)
+    service = require_casting_source(db, settings, project_id, actor).selection
+    assert service is not None
+    require_casting_options(catalog, service)
     casting = VoiceCastingInput(
         audio_snapshot_id=snapshot.id,
         speech_service=service.private_snapshot(),

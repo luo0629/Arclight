@@ -164,7 +164,11 @@ test("音色目录区分没有目录、空目录及查询失败，切换模型�
     exact: true,
   });
 
-  await expect(panel.getByText(/当前配音模型没有可用的音色目录/)).toBeVisible();
+  await expect(
+    panel.getByText("当前配音服务未返回该模型的可用音色。请核对服务地址和模型 ID。", {
+      exact: true,
+    }),
+  ).toBeVisible();
   await expect(voice).toBeDisabled();
   env.controlAudio.catalogStatus = "QUERY_FAILED";
   await refresh.click();

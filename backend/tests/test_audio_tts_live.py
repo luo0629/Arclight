@@ -313,7 +313,6 @@ def test_three_authorized_original_tts_lines(settings, client):
                     protocol=inputs.protocol,
                     maximum_cost_per_output=inputs.quote,
                     pricing_version=inputs.pricing_version,
-                    speech_voice_options=({"id": inputs.voice, "label": inputs.voice},),
                 )
             ]
             key = SecretStr(inputs.key_file.read_text(encoding="utf-8").strip())

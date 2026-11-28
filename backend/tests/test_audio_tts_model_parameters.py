@@ -13,21 +13,19 @@ from test_audio_tts import create_ok, declaration, finish_audio, tts_case
 from test_audio_tts_boundaries import boundary_state
 from test_native_media_integration import attempt_for, catalog_version
 
-from arclight.domain.audio_voices import AudioVoiceOption
 from arclight.persistence.audio_voices import AudioVoiceVersion
 from arclight.persistence.models import DependencyManifest, GenerationAttempt
 
 __all__ = ["tts_case"]
 
 
-def configure_model(client, settings, model, protocol="openai_tts", *, voice="alloy"):
+def configure_model(client, settings, model, protocol="openai_tts"):
     policy = settings.service_model_policies[0]
     settings.service_model_policies = [
         policy.model_copy(
             update={
                 "model": model,
                 "protocol": protocol,
-                "speech_voice_options": (AudioVoiceOption(id=voice, label=voice),),
             }
         )
     ]
@@ -161,7 +159,7 @@ def test_siliconflow_known_models_reject_voice_output_before_persistence_or_budg
     client, settings, tts_case, model, output
 ):
     voice = f"{model}:alex"
-    configure_model(client, settings, model, protocol="siliconflow_tts", voice=voice)
+    configure_model(client, settings, model, protocol="siliconflow_tts")
     before, count = boundary_state(client), voice_count(client)
     response = save_model_voice(client, tts_case, voice=voice, output_spec=output)
     assert response.status_code == 422, response.text
@@ -190,7 +188,7 @@ def test_siliconflow_known_models_admit_valid_frozen_output_to_line_budget(
     client, settings, tts_case, model, output
 ):
     voice = f"{model}:alex"
-    configure_model(client, settings, model, protocol="siliconflow_tts", voice=voice)
+    configure_model(client, settings, model, protocol="siliconflow_tts")
     response = save_model_voice(client, tts_case, voice=voice, output_spec=output)
     assert response.status_code == 201, response.text
     assert response.json()["output_spec"] == output
@@ -214,7 +212,7 @@ def test_siliconflow_known_models_admit_valid_frozen_output_to_line_budget(
 def test_qwen_audio_protocol_downloads_signed_wav_and_keeps_usage(
     client, settings, tts_case, model, voice, streamed
 ):
-    configure_model(client, settings, model, protocol="qwen_audio_tts", voice=voice)
+    configure_model(client, settings, model, protocol="qwen_audio_tts")
     instructions = "Read with restrained urgency."
     invalid = save_model_voice(client, tts_case, voice=voice, speed=2.1)
     assert invalid.status_code == 422, invalid.text

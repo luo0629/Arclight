@@ -7,6 +7,7 @@ import { Notice } from "@/components/ui-kit";
 import VoicePicker from "@/features/audio/components/voice-picker";
 import ImpactButton from "@/features/dependencies/components/impact-button";
 import useRenderDetail from "@/features/rendering/hooks/use-render-detail";
+import { onServiceSaved } from "@/features/settings/service-settings-api";
 import { api, ApiError, message } from "@/lib/api/client";
 import { productionDeliveryPath, productionTaskPath } from "@/lib/routes";
 import { runErrorMessage } from "@/lib/run-errors";
@@ -63,6 +64,14 @@ export default function ShortDramaStart({
     preflightPath,
     readPreflight,
     onUnavailable,
+  );
+  const refreshPreflight = preflight.refresh;
+  useEffect(
+    () =>
+      onServiceSaved((kind) => {
+        if (kind === "speech") refreshPreflight();
+      }),
+    [refreshPreflight],
   );
   const readiness = preflight.data;
   const controlsLocked = disabled || pending || !!intent.current;
@@ -151,15 +160,24 @@ export default function ShortDramaStart({
           {speaker} · {reason}
         </Notice>
       ))}
-      {!!readiness?.needed_voices.length && !readiness.issues.length && !readiness.blocked_voices.length && (
-        <p className="text-sm text-muted-foreground">制作时会为未选音色的角色和旁白自动分配。</p>
-      )}
+      {!!readiness?.needed_voices.length &&
+        !readiness.issues.length &&
+        !readiness.blocked_voices.length && (
+          <p className="text-sm text-muted-foreground">
+            制作时会为未选音色的角色和旁白自动分配。
+          </p>
+        )}
       {!!readiness?.needed_voices.length && (
         <details>
           <summary className="cursor-pointer text-sm">手动选择音色</summary>
           <div className="mt-2 flex flex-col gap-2">
             {readiness.needed_voices.map(({ speaker, character_asset_id }) => {
-              const scope = JSON.stringify([projectId, scriptId, speaker, character_asset_id]);
+              const scope = JSON.stringify([
+                projectId,
+                scriptId,
+                speaker,
+                character_asset_id,
+              ]);
               return (
                 <VoicePicker
                   key={scope}
@@ -287,11 +305,15 @@ const errorLabel: Record<string, string> = {
     "当前文字模型无法满足镜头质检的图片输入要求。请选择能分析镜头图片的文字模型。",
   AUDIO_PERFORMANCE_UNSUPPORTED:
     "当前配音模型不支持对白所需的表演设置。请调整配音设置或更换配音模型。",
-  AUDIO_VOICE_CATALOG_UNAVAILABLE: "当前配音模型没有可用音色目录，请选择提供音色目录的模型。",
-  AUDIO_VOICE_CATALOG_QUERY_FAILED: "查询当前模型的音色失败，请检查供应商配置后重试。",
-  SHORT_DRAMA_VOICE_SELECTION_INVALID: "自动分配返回了无效音色。请手选音色后重新制作。",
+  AUDIO_VOICE_CATALOG_UNAVAILABLE:
+    "当前配音服务未返回该模型的可用音色。请核对服务地址和模型 ID。",
+  AUDIO_VOICE_CATALOG_QUERY_FAILED:
+    "查询当前模型的音色失败，请检查供应商配置后重试。",
+  SHORT_DRAMA_VOICE_SELECTION_INVALID:
+    "自动分配返回了无效音色。请手选音色后重新制作。",
   INPUT_INVALID: "模型不接受本步骤的输入。请检查模型名称和可用的生成参数。",
-  PROVIDER_REJECTED: "供应商拒绝了请求。请核对模型是否可用，以及该模型接受的输入。",
+  PROVIDER_REJECTED:
+    "供应商拒绝了请求。请核对模型是否可用，以及该模型接受的输入。",
   PROVIDER_UNAVAILABLE: "当前供应商不可用，请检查服务地址或稍后查看原任务。",
   PROVIDER_FAILED: "供应商未返回符合本步骤要求的结果。请核对模型能力和原任务。",
   GATEWAY_CAPABILITY_REJECTED:

@@ -42,6 +42,7 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
   const runId = crypto.randomUUID();
   let savedScriptId: string | undefined;
   let savedVoice = false;
+  let speechRevision = 1;
   let checkBlocked = true;
   const preflightScripts: (string | null)[] = [];
   const approvals: string[] = [];
@@ -87,14 +88,26 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
       });
     },
   );
+  await page.route("**/api/v1/me/model-services/speech", async (route) => {
+    expect(route.request().method()).toBe("PUT");
+    const response = await route.fetch();
+    if (response.ok()) speechRevision += 1;
+    await route.fulfill({ response });
+  });
   await page.route(`**${projectApi}/audio-voice-catalog`, (route) =>
     route.fulfill({
       json: {
         status: "READY",
         supplier: "测试供应商",
-        model: "test-tts",
-        configuration_version: "test-config:1",
-        options: [{ id: "test-voice", label: "测试音色", description: null }],
+        model: speechRevision === 1 ? "test-tts" : "custom-browser-tts",
+        configuration_version: `test-config:${speechRevision}`,
+        options: [
+          {
+            id: "test-voice",
+            label: speechRevision === 1 ? "测试音色" : "新模型音色",
+            description: null,
+          },
+        ],
         supported_parameters: ["voice"],
         parameter_ranges: {},
         error_code: null,
@@ -111,7 +124,7 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
       speaker,
       character_asset_id: characterId,
       expected_version_no: 0,
-      model_config_version: "test-config:1",
+      model_config_version: "test-config:2",
       parameters: { voice: "test-voice" },
     });
     savedVoice = true;
@@ -254,8 +267,34 @@ test("从空剧集起稿、修改和准备配音后，只确认一次定稿制�
     exact: true,
   });
   await voice.getByText(`为${speaker}保存新音色`, { exact: true }).click();
+  await expect(voice.getByLabel("供应商音色", { exact: true })).toBeVisible();
+  const previousChecks = preflightScripts.length;
+  await page.getByRole("button", { name: "模型服务配置", exact: true }).click();
+  const services = page.getByRole("dialog").filter({
+    has: page.getByRole("heading", { name: "模型与服务", exact: true }),
+  });
+  await services.getByRole("radio", { name: "语音服务", exact: true }).click();
+  await services
+    .getByRole("radio", { name: "OpenAI Audio", exact: true })
+    .click();
+  await services
+    .getByLabel("模型 ID", { exact: true })
+    .fill("custom-browser-tts");
+  await services
+    .getByLabel("API Key", { exact: true })
+    .fill("synthetic-voice-key");
+  await services
+    .getByRole("button", { name: "保存此服务", exact: true })
+    .click();
+  await expect(services.getByRole("status")).toContainText("已保存到当前账号");
+  await services
+    .getByRole("button", { name: "关闭模型配置", exact: true })
+    .click();
+  await expect
+    .poll(() => preflightScripts.length)
+    .toBeGreaterThan(previousChecks);
   await voice.getByLabel("供应商音色", { exact: true }).click();
-  await page.getByRole("option", { name: "测试音色", exact: true }).click();
+  await page.getByRole("option", { name: "新模型音色", exact: true }).click();
   await voice
     .getByRole("button", { name: "保存新音色版本", exact: true })
     .click();

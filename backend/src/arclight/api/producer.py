@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Header, Request
 
-from arclight.api.dependencies import Actor, Database
+from arclight.api.dependencies import Actor, Database, ShortSessionActor
 from arclight.api.schemas import AcceptedRun
 from arclight.application.commands import require_project
 from arclight.application.producer_interaction import (
@@ -66,13 +66,12 @@ def create_short_drama(
     episode_id: UUID,
     payload: ShortDramaCreate,
     request: Request,
-    db: Database,
-    actor: Actor,
+    actor: ShortSessionActor,
     key: CommandKey,
 ) -> AcceptedRun:
     return _accepted(
         start_short_drama(
-            db,
+            request.app.state.session_factory,
             request.app.state.settings,
             episode_id,
             actor,
@@ -108,10 +107,14 @@ def short_drama_progress(episode_id: UUID, db: Database, actor: Actor) -> dict |
 
 @router.get("/episodes/{episode_id}/short-drama/preflight")
 def short_drama_readiness(
-    episode_id: UUID, script_version_id: UUID, request: Request, db: Database, actor: Actor
+    episode_id: UUID, script_version_id: UUID, request: Request, actor: ShortSessionActor
 ) -> ShortDramaPreflight:
     return short_drama_preflight(
-        db, request.app.state.settings, episode_id, actor, script_version_id
+        request.app.state.session_factory,
+        request.app.state.settings,
+        episode_id,
+        actor,
+        script_version_id,
     )
 
 

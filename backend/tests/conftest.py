@@ -19,6 +19,26 @@ from arclight.main import create_app
 from arclight.providers.llm import LLMService, llm_service
 
 
+@pytest.fixture(autouse=True)
+def mock_speech_catalog_http(request, monkeypatch):
+    from speech_catalog_support import catalog_response
+
+    from arclight.providers.speech_catalogs import _public_document
+
+    if request.path.name == "test_audio_tts_live.py":
+        yield
+        return
+    _public_document.cache_clear()
+    monkeypatch.setattr(
+        "arclight.providers.speech_catalogs.PublicHTTPTransport",
+        lambda _timeout, **_kwargs: httpx.MockTransport(catalog_response),
+    )
+    try:
+        yield
+    finally:
+        _public_document.cache_clear()
+
+
 @pytest.fixture
 def stub_llm(settings, monkeypatch):
     """Patch only the network boundary; SDKs, admission and decoding stay real."""
