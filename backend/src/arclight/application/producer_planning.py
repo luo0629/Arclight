@@ -1,5 +1,6 @@
 """Versioned Producer plans use the existing durable Agent runtime and authority gates."""
 
+from functools import partial
 from typing import cast
 from uuid import UUID
 
@@ -29,6 +30,7 @@ from arclight.application.shared_agent_reads import grant_professional_agent_too
 from arclight.application.short_drama_planning import (
     SHORT_DRAMA_PLAN_OUTPUT,
     SHORT_DRAMA_PLAN_SCHEMA,
+    build_short_drama_plan,
 )
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
@@ -42,6 +44,7 @@ from arclight.domain.producer_planning import (
     WORKFLOW_VERSION,
     ProducerGoal,
     ProducerPlan,
+    ProducerPlanEvidence,
     ProducerPlanReference,
 )
 from arclight.domain.producer_research import RESEARCH_TOOL
@@ -187,6 +190,77 @@ def _planning_loop(db: Session, run_id: UUID) -> AgentLoop | None:
     )
 
 
+def _investigation_evidence(db: Session, loop: AgentLoop) -> dict[tuple[str, str], str]:
+    actions = list(
+        db.scalars(
+            select(AgentLoopAction)
+            .where(AgentLoopAction.loop_id == loop.id)
+            .order_by(AgentLoopAction.created_at, AgentLoopAction.id)
+        )
+    )
+    # Models see their transport call ID; durable tool keys are executor-generated.
+    # Bind the visible citation through the committed model response to its real action.
+    visible_keys = {
+        "loop-" + digest({"step": action.action_key, "call": call["call_id"]}): call["call_id"]
+        for action in actions
+        if action.kind == "MODEL" and action.result_json
+        for call in action.result_json.get("tool_calls", [])
+        if call["tool_name"] == RESEARCH_TOOL
+    }
+    evidence: dict[tuple[str, str], str] = {}
+    for action in actions:
+        feedback = action.result_json or {}
+        if (
+            action.kind != "TOOL"
+            or action.request_json.get("tool_name") != RESEARCH_TOOL
+            or feedback.get("status") != "SUCCEEDED"
+        ):
+            continue
+        invocation = db.scalar(
+            select(AgentToolInvocation).where(
+                AgentToolInvocation.run_id == loop.run_id,
+                AgentToolInvocation.idempotency_key == feedback["idempotency_key"],
+                AgentToolInvocation.agent_name == "producer",
+                AgentToolInvocation.tool_name == RESEARCH_TOOL,
+                AgentToolInvocation.status == "SUCCEEDED",
+            )
+        )
+        if (
+            invocation is not None
+            and invocation.feedback_json == feedback
+            and action.action_key in visible_keys
+        ):
+            result = feedback["result"]
+            evidence[visible_keys[action.action_key], result["evidence_sha256"]] = result[
+                "episode_id"
+            ]
+    return evidence
+
+
+def _complete_short_drama_plan(db: Session, *, run_id: UUID) -> ProducerPlan | None:
+    from arclight.application.short_drama import require_exact_inputs
+
+    run = db.get(WorkflowRun, run_id)
+    loop = _planning_loop(db, run_id)
+    assert run is not None and loop is not None
+    episode = db.get(Episode, run.episode_id)
+    assert episode is not None
+    evidence = [
+        ProducerPlanEvidence(tool_call_key=key, evidence_sha256=sha256)
+        for (key, sha256), episode_id in _investigation_evidence(db, loop).items()
+        if episode_id == str(run.episode_id)
+    ]
+    if not evidence:
+        return None
+    script = require_exact_inputs(db, episode, run.input_json["short_drama"])
+    return build_short_drama_plan(
+        run.input_json["goal_sha256"],
+        script.id,
+        "依据定稿剧本和本集调查，先完成美术设计，再制作分镜。",
+        evidence,
+    )
+
+
 def _validate(db: Session, run_id: UUID, plan: ProducerPlan, settings: Settings) -> None:
     from arclight.application.producer_delegation import validate_plan_tasks
 
@@ -199,51 +273,13 @@ def _validate(db: Session, run_id: UUID, plan: ProducerPlan, settings: Settings)
     loop = _planning_loop(db, run.id)
     if loop is None:
         raise DomainError("PRODUCER_PLAN_EVIDENCE", "生产计划缺少本次持久调查", 422)
-    actions = list(db.scalars(select(AgentLoopAction).where(AgentLoopAction.loop_id == loop.id)))
-    # Models see their transport call ID; durable tool keys are executor-generated.
-    # Bind the visible citation through the committed model response to its real action.
-    visible_keys = {
-        "loop-" + digest({"step": action.action_key, "call": call["call_id"]}): call["call_id"]
-        for action in actions
-        if action.kind == "MODEL" and action.result_json
-        for call in action.result_json.get("tool_calls", [])
-        if call["tool_name"] == RESEARCH_TOOL
-    }
-    evidence = set()
-    investigated: set[str] = set()
-    for action in actions:
-        feedback = action.result_json or {}
-        if (
-            action.kind != "TOOL"
-            or action.request_json.get("tool_name") != RESEARCH_TOOL
-            or feedback.get("status") != "SUCCEEDED"
-        ):
-            continue
-        invocation = db.scalar(
-            select(AgentToolInvocation).where(
-                AgentToolInvocation.run_id == run.id,
-                AgentToolInvocation.idempotency_key == feedback["idempotency_key"],
-                AgentToolInvocation.agent_name == "producer",
-                AgentToolInvocation.tool_name == RESEARCH_TOOL,
-                AgentToolInvocation.status == "SUCCEEDED",
-            )
-        )
-        if (
-            invocation is not None
-            and invocation.feedback_json == feedback
-            and action.action_key in visible_keys
-        ):
-            evidence.add((visible_keys[action.action_key], feedback["result"]["evidence_sha256"]))
-            cited = (visible_keys[action.action_key], feedback["result"]["evidence_sha256"])
-            if cited in {(row.tool_call_key, row.evidence_sha256) for row in plan.evidence}:
-                investigated.add(feedback["result"]["episode_id"])
-    if not {(row.tool_call_key, row.evidence_sha256) for row in plan.evidence} <= evidence:
+    evidence = _investigation_evidence(db, loop)
+    cited = {(row.tool_call_key, row.evidence_sha256) for row in plan.evidence}
+    if not cited <= evidence.keys():
         raise DomainError("PRODUCER_PLAN_EVIDENCE", "计划依据须来自本循环真实成功调查", 422)
-    if (
-        has_series_scope(run)
-        and not {row["episode_id"] for row in run.input_json["series_scope"]["episodes"]}
-        <= investigated
-    ):
+    if has_series_scope(run) and not {
+        row["episode_id"] for row in run.input_json["series_scope"]["episodes"]
+    } <= {evidence[item] for item in cited}:
         raise DomainError("PRODUCER_PLAN_EVIDENCE", "多集计划须引用逐集真实调查", 422)
     validate_plan_tasks(db, run, plan, execution_actor(db, run), settings)
 
@@ -358,6 +394,7 @@ def plan_producer(
         episode = db.get(Episode, run.episode_id)
         assert episode is not None
         text_settings(db, episode.project_id, run, settings)
+        short_drama = run.input_json.get("short_drama") is not None
         previous = _planning_loop(db, run.id)
         if previous is not None:
             request = AgentModelRequest.model_validate(previous.seed_json)
@@ -399,6 +436,9 @@ def plan_producer(
         AgentToolRegistry([research]),
         plan_model(run.workflow_version),
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings),
+        complete_after_tools=partial(_complete_short_drama_plan, run_id=run_id)
+        if short_drama
+        else None,
         output_projection=SHORT_DRAMA_PLAN_OUTPUT
         if request.result_schema_version == SHORT_DRAMA_PLAN_SCHEMA
         else None,
@@ -425,6 +465,7 @@ def resume_producer_plan(
         run = db.get(WorkflowRun, run_id)
         assert run is not None
         result_model = plan_model(run.workflow_version)
+        short_drama = run.input_json.get("short_drama") is not None
         request = AgentModelRequest.model_validate(loop.seed_json)
     research = producer_registry(settings).get(RESEARCH_TOOL)
     assert research is not None
@@ -437,6 +478,9 @@ def resume_producer_plan(
         result_model,
         decision=decision,
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings),
+        complete_after_tools=partial(_complete_short_drama_plan, run_id=run_id)
+        if short_drama
+        else None,
         output_projection=SHORT_DRAMA_PLAN_OUTPUT
         if request.result_schema_version == SHORT_DRAMA_PLAN_SCHEMA
         else None,

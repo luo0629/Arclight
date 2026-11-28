@@ -14,6 +14,7 @@ from arclight.domain.producer_planning import (
     DirectorTask,
     PlanText,
     ProducerPlan,
+    ProducerPlanEvidence,
     ProducerTask,
 )
 from arclight.domain.producer_research import RESEARCH_TOOL
@@ -61,12 +62,26 @@ def _materialize(request: AgentModelRequest, value: BaseModel) -> AgentDecision[
             and observed.get("episode_id") == seed.data["episode_id"]
         ):
             evidence.append(
-                {
-                    "tool_call_key": message.call_id,
-                    "evidence_sha256": observed["evidence_sha256"],
-                }
+                ProducerPlanEvidence(
+                    tool_call_key=message.call_id,
+                    evidence_sha256=str(observed["evidence_sha256"]),
+                )
             )
-    script_id = UUID(str(seed.data["script_version_id"]))
+    plan = build_short_drama_plan(
+        str(seed.data["goal_sha256"]),
+        UUID(str(seed.data["script_version_id"])),
+        value.result.summary,
+        evidence,
+    )
+    return AgentDecision[ProducerPlan](decision="COMPLETE", result=plan, human_request=None)
+
+
+def build_short_drama_plan(
+    goal_sha256: str,
+    script_id: UUID,
+    summary: str,
+    evidence: list[ProducerPlanEvidence],
+) -> ProducerPlan:
     art = ProducerTask(
         task_key="art",
         reason="补齐本集短剧的美术设计。",
@@ -85,15 +100,12 @@ def _materialize(request: AgentModelRequest, value: BaseModel) -> AgentDecision[
         reason="结合本集美术设计，将同一份定稿剧本制作成分镜。",
         task=DirectorTask(kind="director", script_version_id=script_id, director_revision_rounds=3),
     )
-    plan = ProducerPlan.model_validate(
-        {
-            "goal_sha256": seed.data["goal_sha256"],
-            "summary": value.result.summary,
-            "evidence": evidence[-16:],
-            "tasks": [art, director],
-        }
+    return ProducerPlan(
+        goal_sha256=goal_sha256,
+        summary=summary,
+        evidence=evidence[-16:],
+        tasks=[art, director],
     )
-    return AgentDecision[ProducerPlan](decision="COMPLETE", result=plan, human_request=None)
 
 
 SHORT_DRAMA_PLAN_OUTPUT: AgentOutputProjection[AgentDecision[ProducerPlan]] = AgentOutputProjection(

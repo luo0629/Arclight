@@ -435,6 +435,7 @@ def _execute[T: BaseModel](
         runtime.validate_result,
         runtime.output_projection,
         include_project_reads=runtime.include_project_reads,
+        complete_after_tools=runtime.complete_after_tools,
     )
     persistent.store = store = AgentLoopStore(runtime.factory, loop_id, token)
     persistent.input_sha256 = input_sha256
@@ -488,6 +489,7 @@ def run_persistent_agent_loop[T: BaseModel](
     validate_result: Callable[[Session, T], None] | None = None,
     output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
     include_project_reads: bool = True,
+    complete_after_tools: Callable[[Session], T | None] | None = None,
     lease_policy: LeasePolicy = DEFAULT_POLICY,
 ) -> AgentLoopResult[T]:
     """Start/reenter one stable server operation. No asset is published or approved."""
@@ -503,6 +505,7 @@ def run_persistent_agent_loop[T: BaseModel](
         validate_result,
         output_projection,
         include_project_reads=include_project_reads,
+        complete_after_tools=complete_after_tools,
     )
     runtime.prepare(parent_run_id)
     with factory.begin() as db:
@@ -556,6 +559,7 @@ def resume_agent_loop[T: BaseModel](
     decision: AgentHumanDecision | None = None,
     validate_result: Callable[[Session, T], None] | None = None,
     output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
+    complete_after_tools: Callable[[Session], T | None] | None = None,
     lease_policy: LeasePolicy = DEFAULT_POLICY,
 ) -> AgentLoopResult[T]:
     """Resume stored state only, after reauthorizing both initiator and current actor."""
@@ -567,7 +571,14 @@ def resume_agent_loop[T: BaseModel](
         if decision is not None:
             submit_agent_decision(db, loop.id, actor, decision)
     runtime = _AgentRuntime(
-        factory, settings, seed, registry, result_model, validate_result, output_projection
+        factory,
+        settings,
+        seed,
+        registry,
+        result_model,
+        validate_result,
+        output_projection,
+        complete_after_tools=complete_after_tools,
     )
     runtime.prepare(None)
     return _execute(runtime, loop_id, actor=actor, lease_policy=lease_policy)

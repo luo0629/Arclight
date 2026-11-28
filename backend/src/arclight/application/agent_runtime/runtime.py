@@ -70,6 +70,7 @@ class _AgentRuntime[T: BaseModel]:
         output_projection: AgentOutputProjection[AgentDecision[T]] | None = None,
         *,
         include_project_reads: bool = True,
+        complete_after_tools: Callable[[Session], T | None] | None = None,
     ):
         self.factory, self.settings, self.seed = factory, settings, seed
         self.pi = PiAgent(seed)
@@ -89,6 +90,7 @@ class _AgentRuntime[T: BaseModel]:
         )
         self.validate_result = validate_result
         self.output_projection = output_projection
+        self.complete_after_tools = complete_after_tools
         self.identity = digest(
             {"run": str(seed.run_id), "stage": seed.stage, "operation": seed.operation_key}
         )
@@ -309,6 +311,15 @@ class _AgentRuntime[T: BaseModel]:
                             observed = self.observe(state)
                             if observed.get("outcome") is not None:
                                 return {**state, **observed}
+                            if (
+                                state.get("phase") == "tools"
+                                and self.complete_after_tools is not None
+                            ):
+                                completed = self._finish_after_tools({**state, **observed})
+                                if completed is not None:
+                                    self.pi.stop()
+                                    self.checkpoint(completed)
+                                    return completed
                             if state["model_turns"] >= MAX_AGENT_LOOP_TURNS:
                                 return {**state, **self._stop(state, "AGENT_MODEL_CALL_LIMIT")}
                             prepared_round = observed["observed_round"]
@@ -379,6 +390,29 @@ class _AgentRuntime[T: BaseModel]:
         except ValidationError:
             return {**state, **self._stop(state, "AGENT_CONTEXT_LIMIT")}
 
+    def _authorize_delivery(self, db: Session) -> None:
+        self._context(db)
+        validate_agent_execution(db, self.seed.run_id, self.seed.stage)
+
+    def _validate_delivery(self, db: Session, result: T | None) -> None:
+        if result is not None and self.validate_result is not None:
+            self.validate_result(db, result)
+
+    def _finish_after_tools(self, state: AgentLoopState) -> AgentLoopState | None:
+        assert self.complete_after_tools is not None
+        with self.factory.begin() as db:
+            self._authorize_delivery(db)
+            result = self.complete_after_tools(db)
+            if result is None:
+                return None
+            self._validate_delivery(db, result)
+        return {
+            **state,
+            "phase": "finish",
+            "response": None,
+            "outcome": self._outcome(state, status="COMPLETED", result=result),
+        }
+
     def finish(self, state: AgentLoopState) -> AgentLoopState:
         try:
             decision = self.response_model.model_validate_json(
@@ -386,10 +420,8 @@ class _AgentRuntime[T: BaseModel]:
             ).final
             assert decision is not None
             with self.factory.begin() as db:
-                self._context(db)
-                validate_agent_execution(db, self.seed.run_id, self.seed.stage)
-                if decision.result is not None and self.validate_result is not None:
-                    self.validate_result(db, decision.result)
+                self._authorize_delivery(db)
+                self._validate_delivery(db, decision.result)
             return {
                 "outcome": self._outcome(
                     state,

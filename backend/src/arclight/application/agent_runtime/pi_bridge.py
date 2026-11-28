@@ -261,9 +261,12 @@ class PiAgent:
             )
             return
         assert response.final is not None
-        self._send({"type": "stop", "result": response.final.model_dump_json(), "usage": tokens})
+        self.stop(result=response.final.model_dump_json(), usage=tokens)
+
+    def stop(self, **payload: str | dict[str, int]) -> None:
+        self._send({"type": "stop", **payload})
         if self.event() != {"type": "done"}:
-            raise PiRuntimeError("Pi runtime did not finish the model turn")
+            raise PiRuntimeError("Pi runtime did not finish")
         self.close()
 
     def next_tool(self, event: dict) -> ModelToolCall:

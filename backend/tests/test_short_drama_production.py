@@ -8,7 +8,7 @@ import pytest
 from art_direction_support import install_direction_model, reference_set
 from sqlalchemy import select
 from test_agent_model import call_response
-from test_agent_runtime import final, tool_feedback
+from test_agent_runtime import tool_feedback
 from test_collaboration import create_episode, create_project, register
 from test_director_revision import install_revision
 from test_native_media_integration import catalog_version, configure
@@ -30,6 +30,7 @@ from test_text_contract_v2 import legacy_script, save_script
 from arclight.application.agent_limits import action_usage
 from arclight.application.agent_workflows import WorkflowRecoveryFailed
 from arclight.application.audio_voice_catalog import query_voice_catalog, read_voice_catalog_source
+from arclight.application.gateway_accounting import latest_receipt
 from arclight.application.producer_interaction import command_rows
 from arclight.application.production_versions import find_binding
 from arclight.application.render_execution import execute_render
@@ -47,11 +48,12 @@ from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.timelines import TimelineCreate
 from arclight.domain.versions import SHORT_DRAMA_VOICE_INPUT, digest
 from arclight.persistence.agent_limits import AgentRunLimit
-from arclight.persistence.agent_loops import AgentLoop
+from arclight.persistence.agent_loops import AgentLoop, AgentLoopAction
 from arclight.persistence.audio_voices import AudioVoiceVersion
 from arclight.persistence.base import utcnow
 from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
 from arclight.persistence.models import (
+    AgentToolInvocation,
     AuditEvent,
     OutboxEvent,
     Project,
@@ -436,18 +438,16 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
     def plan_model(request):
         payload = json.loads(request.content)
         sent.append(payload)
-        if not tool_feedback(payload):
-            return httpx.Response(
-                200,
-                json=call_response(
-                    ("overview", "investigate_project", {"query": {"path": "overview"}}),
-                    ("reviews", "investigate_project", {"query": {"path": "reviews"}}),
-                    ("budget", "investigate_project", {"query": {"path": "budget"}}),
-                    ("status", "arclight_read_production_status", {"run_id": str(root)}),
-                ),
-            )
+        assert len(sent) == 1
+        assert not tool_feedback(payload)
         return httpx.Response(
-            200, json=final(result={"summary": "已核对定稿，先补齐美术，再制作分镜。"})
+            200,
+            json=call_response(
+                ("overview", "investigate_project", {"query": {"path": "overview"}}),
+                ("reviews", "investigate_project", {"query": {"path": "reviews"}}),
+                ("budget", "investigate_project", {"query": {"path": "budget"}}),
+                ("status", "arclight_read_production_status", {"run_id": str(root)}),
+            ),
         )
 
     model_service(plan_model)
@@ -455,18 +455,21 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
     with factory.begin() as db:
         assert all(event.run_id != root for event in pending_workflow_events(db))
     execute_run(factory, settings, root, initial)
-    assert len(sent) == 2
-    response_format = sent[-1]["response_format"]
-    assert response_format["type"] == "json_schema"
-    assert response_format["json_schema"]["name"] == "ShortDramaPlanDecision"
-    schema = response_format["json_schema"]["schema"]
-    assert set(schema["$defs"]["ShortDramaPlanSummary"]["properties"]) == {"summary"}
+    assert len(sent) == 1
     advance_pending(factory, settings)
     state = progress(client, episode)
     assert state["phase"] == "ART", state
     with factory() as db:
-        loop = db.scalar(select(AgentLoop).where(AgentLoop.run_id == root))
-        assert loop is not None
+        loop = db.scalars(select(AgentLoop).where(AgentLoop.run_id == root)).one()
+        assert loop.status == "COMPLETED"
+        assert loop.outcome_json["model_turns"] == 1
+        actions = list(
+            db.scalars(select(AgentLoopAction).where(AgentLoopAction.loop_id == loop.id))
+        )
+        (model_action,) = (action for action in actions if action.kind == "MODEL")
+        assert model_action.result_json["status"] == "TOOL_CALLS"
+        tool_actions = {action.action_key: action for action in actions if action.kind == "TOOL"}
+        assert len(tool_actions) == 4
         frozen = find_binding(db, project, "WORKFLOW", root)
         assert frozen is not None
         prompt = next(
@@ -478,15 +481,27 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
         assert binding is not None
         plan = binding.snapshot_json["plan"]
         assert plan["goal_sha256"] == db.get(WorkflowRun, root).input_json["goal_sha256"]
-        assert plan["evidence"] == [
-            {
-                "tool_call_key": item["idempotency_key"],
-                "evidence_sha256": item["result"]["evidence_sha256"],
-            }
-            for item in tool_feedback(sent[-1])
-            if item["tool_name"] == "investigate_project" and item["status"] == "SUCCEEDED"
-        ]
+        expected_evidence = {}
+        for call in model_action.result_json["tool_calls"]:
+            key = "loop-" + digest({"step": model_action.action_key, "call": call["call_id"]})
+            action = tool_actions[key]
+            invocation = db.scalars(
+                select(AgentToolInvocation).where(
+                    AgentToolInvocation.run_id == root, AgentToolInvocation.idempotency_key == key
+                )
+            ).one()
+            assert invocation.status == "SUCCEEDED"
+            assert invocation.tool_name == call["tool_name"]
+            assert invocation.feedback_json == action.result_json
+            if invocation.tool_name == "investigate_project":
+                result = invocation.feedback_json["result"]
+                assert result["episode_id"] == episode["id"]
+                expected_evidence[call["call_id"]] = result["evidence_sha256"]
+        assert set(expected_evidence) == {"overview", "reviews", "budget"}
         assert len(plan["evidence"]) == 3
+        assert {
+            item["tool_call_key"]: item["evidence_sha256"] for item in plan["evidence"]
+        } == expected_evidence
         art, director = plan["tasks"]
         assert art["depends_on"] == [] and director["depends_on"] == [art["task_key"]]
         assert art["task"]["kind"] == "art_director"
@@ -510,8 +525,17 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
         )
         assert child_id is not None and db.get(WorkflowRun, child_id).status == "QUEUED"
         usage = action_usage(db, root)
-        assert sum(action.kind == "MODEL" for action in usage["actions"]) == 3
-        assert usage["pending_estimate"] == Decimal("2")
+        receipts = [
+            latest_receipt(db, action.gateway_call_id)
+            for action in usage["actions"]
+            if action.kind == "MODEL"
+        ]
+        assert sorted(receipt.status for receipt in receipts) == ["NOT_ACCEPTED", "SUCCEEDED"]
+        accepted = next(receipt for receipt in receipts if receipt.status == "SUCCEEDED")
+        assert accepted.call_id == model_action.gateway_call_id
+        assert accepted.usage_json["input_tokens"] == 13
+        assert accepted.usage_json["output_tokens"] == 4
+        assert usage["pending_estimate"] == Decimal("1")
     denied = client.post(f"/api/v1/runs/{child_id}/cancel")
     assert denied.status_code == 409, denied.text
 
