@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -6,10 +7,11 @@ import httpx
 import pytest
 from art_direction_support import install_direction_model, reference_set
 from sqlalchemy import select
+from test_agent_model import call_response
+from test_agent_runtime import final, tool_feedback
 from test_collaboration import create_episode, create_project, register
 from test_director_revision import install_revision
 from test_native_media_integration import catalog_version, configure
-from test_producer_planning import install_plan_model
 from test_producer_planning import model_service as model_service
 from test_short_drama_delivery import (
     approve_recordings,
@@ -43,8 +45,9 @@ from arclight.application.short_drama_production import advance_pending, set_pro
 from arclight.core.errors import DomainError
 from arclight.domain.model_gateway import GatewayPolicy
 from arclight.domain.timelines import TimelineCreate
-from arclight.domain.versions import SHORT_DRAMA_VOICE_INPUT
+from arclight.domain.versions import SHORT_DRAMA_VOICE_INPUT, digest
 from arclight.persistence.agent_limits import AgentRunLimit
+from arclight.persistence.agent_loops import AgentLoop
 from arclight.persistence.audio_voices import AudioVoiceVersion
 from arclight.persistence.base import utcnow
 from arclight.persistence.human_reviews import HumanReviewDecision, HumanReviewRequest
@@ -376,27 +379,7 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
     content["scenes"][0]["dialogue"] = []
     script = save_script(client, episode, content=content)
     settings.model_gateway_policy = GatewayPolicy(text_maximum_cost="1", pricing_version="test:1")
-    tasks = [
-        {
-            "task_key": "art",
-            "depends_on": [],
-            "reason": "需要确定雨夜场景与角色的风格",
-            "task": {
-                "kind": "art_director",
-                "script_version_id": script["id"],
-                "task": {
-                    "visual_goal": "明确雨夜场景与角色的视觉风格",
-                    "minimum_reference_images": 0,
-                },
-            },
-        },
-        {
-            "task_key": "board",
-            "depends_on": ["art"],
-            "reason": "按定稿剧本与美术设计制作分镜",
-            "task": {"kind": "director", "script_version_id": script["id"]},
-        },
-    ]
+    settings.llm_response_format = "json_schema"
     queued = create_short_drama(client, episode, script)
     assert queued.status_code == 202, queued.text
     root = UUID(queued.json()["run_id"])
@@ -448,16 +431,75 @@ def test_scheduler_checks_art_and_storyboard_then_cancels_original_child(
         assert result.status_code == 202, result.text
 
     recharge(initial)
-    sent, errors = install_plan_model(model_service, cost="0.5", tasks=tasks)
+    sent = []
+
+    def plan_model(request):
+        payload = json.loads(request.content)
+        sent.append(payload)
+        if not tool_feedback(payload):
+            return httpx.Response(
+                200,
+                json=call_response(
+                    ("overview", "investigate_project", {"query": {"path": "overview"}}),
+                    ("reviews", "investigate_project", {"query": {"path": "reviews"}}),
+                    ("budget", "investigate_project", {"query": {"path": "budget"}}),
+                    ("status", "arclight_read_production_status", {"run_id": str(root)}),
+                ),
+            )
+        return httpx.Response(
+            200, json=final(result={"summary": "已核对定稿，先补齐美术，再制作分镜。"})
+        )
+
+    model_service(plan_model)
     execute_run(factory, settings, root, initial)
-    assert sent and not errors
     with factory.begin() as db:
         assert all(event.run_id != root for event in pending_workflow_events(db))
     execute_run(factory, settings, root, initial)
     assert len(sent) == 2
+    response_format = sent[-1]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["name"] == "ShortDramaPlanDecision"
+    schema = response_format["json_schema"]["schema"]
+    assert set(schema["$defs"]["ShortDramaPlanSummary"]["properties"]) == {"summary"}
     advance_pending(factory, settings)
     state = progress(client, episode)
     assert state["phase"] == "ART", state
+    with factory() as db:
+        loop = db.scalar(select(AgentLoop).where(AgentLoop.run_id == root))
+        assert loop is not None
+        frozen = find_binding(db, project, "WORKFLOW", root)
+        assert frozen is not None
+        prompt = next(
+            entry for entry in frozen.snapshot_json["components"] if entry["kind"] == "PROMPT"
+        )
+        assert prompt["version"] == loop.seed_json["result_schema_version"]
+        assert prompt["digest"] == digest({"instruction": loop.seed_json["system_instruction"]})
+        binding = find_binding(db, project, "PRODUCER_PLAN", loop.id)
+        assert binding is not None
+        plan = binding.snapshot_json["plan"]
+        assert plan["goal_sha256"] == db.get(WorkflowRun, root).input_json["goal_sha256"]
+        assert plan["evidence"] == [
+            {
+                "tool_call_key": item["idempotency_key"],
+                "evidence_sha256": item["result"]["evidence_sha256"],
+            }
+            for item in tool_feedback(sent[-1])
+            if item["tool_name"] == "investigate_project" and item["status"] == "SUCCEEDED"
+        ]
+        assert len(plan["evidence"]) == 3
+        art, director = plan["tasks"]
+        assert art["depends_on"] == [] and director["depends_on"] == [art["task_key"]]
+        assert art["task"]["kind"] == "art_director"
+        assert art["task"]["script_version_id"] == script["id"]
+        assert art["task"]["task"]["target_asset_ids"] == []
+        assert art["task"]["task"]["minimum_reference_images"] == 0
+        assert art["task"]["concept_plan"] is None
+        assert director["task"] == {
+            "kind": "director",
+            "script_version_id": script["id"],
+            "director_revision_rounds": 3,
+            "art_collaboration": False,
+        }
     delegated = revision()
     advance_pending(factory, settings)
     assert revision() == delegated

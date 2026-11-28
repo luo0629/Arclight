@@ -26,6 +26,10 @@ from arclight.application.production_versions import (
     text_settings,
 )
 from arclight.application.shared_agent_reads import grant_professional_agent_tools
+from arclight.application.short_drama_planning import (
+    SHORT_DRAMA_PLAN_OUTPUT,
+    SHORT_DRAMA_PLAN_SCHEMA,
+)
 from arclight.core.config import Settings
 from arclight.core.errors import DomainError
 from arclight.domain.agent_model import AgentModelRequest, AgentUserMessage
@@ -258,8 +262,13 @@ def require_completed_plan(loop: AgentLoop) -> AgentLoopResult[ProducerPlan]:
             if seed.agent_version == SERIES_PRODUCER_VERSION
             else AgentLoopResult[ProducerPlan].model_validate(loop.outcome_json)
         )
+        first = seed.messages[0]
         version = (
-            SERIES_PLAN_VERSION if seed.agent_version == SERIES_PRODUCER_VERSION else PLAN_VERSION
+            SERIES_PLAN_VERSION
+            if seed.agent_version == SERIES_PRODUCER_VERSION
+            else SHORT_DRAMA_PLAN_SCHEMA
+            if isinstance(first, AgentUserMessage) and "script_version_id" in first.data
+            else PLAN_VERSION
         )
         if (
             loop.status != "COMPLETED"
@@ -350,40 +359,35 @@ def plan_producer(
         assert episode is not None
         text_settings(db, episode.project_id, run, settings)
         previous = _planning_loop(db, run.id)
-        request = (
-            AgentModelRequest.model_validate(previous.seed_json)
-            if previous is not None
-            else AgentModelRequest(
+        if previous is not None:
+            request = AgentModelRequest.model_validate(previous.seed_json)
+        else:
+            prompt_version, instruction = producer_prompt(db, episode.project_id, run.id)
+            data = {
+                "project_id": str(episode.project_id),
+                "episode_id": str(episode.id),
+                "goal": run.input_json["goal"],
+                "goal_sha256": run.input_json["goal_sha256"],
+            }
+            schema_version: str = PLAN_VERSION
+            if has_series_scope(run):
+                schema_version = SERIES_PLAN_VERSION
+                data["series_scope"] = run.input_json["series_scope"]
+                data["series_scope_sha256"] = digest(data["series_scope"])
+            elif prompt_version == SHORT_DRAMA_PLAN_SCHEMA:
+                schema_version = SHORT_DRAMA_PLAN_SCHEMA
+                data["script_version_id"] = run.input_json["short_drama"]["script_version_id"]
+            request = AgentModelRequest(
                 run_id=run.id,
                 agent_name="producer",
                 stage="producer",
                 operation_key=PLAN_VERSION,
                 agent_version=run.workflow_version,
-                prompt_version=SERIES_PLAN_VERSION if has_series_scope(run) else PLAN_VERSION,
-                result_schema_version=SERIES_PLAN_VERSION
-                if has_series_scope(run)
-                else PLAN_VERSION,
-                system_instruction=producer_prompt(db, episode.project_id, run.id),
-                messages=[
-                    AgentUserMessage(
-                        data={
-                            "project_id": str(episode.project_id),
-                            "episode_id": str(episode.id),
-                            "goal": run.input_json["goal"],
-                            "goal_sha256": run.input_json["goal_sha256"],
-                            **(
-                                {
-                                    "series_scope": run.input_json["series_scope"],
-                                    "series_scope_sha256": digest(run.input_json["series_scope"]),
-                                }
-                                if "series_scope" in run.input_json
-                                else {}
-                            ),
-                        }
-                    )
-                ],
+                prompt_version=schema_version,
+                result_schema_version=schema_version,
+                system_instruction=instruction,
+                messages=[AgentUserMessage(data=data)],
             )
-        )
     # A planning model can investigate; delegation requires a separately completed plan.
     registry = producer_registry(settings)
     research = registry.get(RESEARCH_TOOL)
@@ -395,6 +399,9 @@ def plan_producer(
         AgentToolRegistry([research]),
         plan_model(run.workflow_version),
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings),
+        output_projection=SHORT_DRAMA_PLAN_OUTPUT
+        if request.result_schema_version == SHORT_DRAMA_PLAN_SCHEMA
+        else None,
     )
     _save(factory, settings, run_id, outcome)
     return outcome
@@ -418,6 +425,7 @@ def resume_producer_plan(
         run = db.get(WorkflowRun, run_id)
         assert run is not None
         result_model = plan_model(run.workflow_version)
+        request = AgentModelRequest.model_validate(loop.seed_json)
     research = producer_registry(settings).get(RESEARCH_TOOL)
     assert research is not None
     outcome = resume_agent_loop(
@@ -429,6 +437,9 @@ def resume_producer_plan(
         result_model,
         decision=decision,
         validate_result=lambda db, plan: _validate(db, run_id, plan, settings),
+        output_projection=SHORT_DRAMA_PLAN_OUTPUT
+        if request.result_schema_version == SHORT_DRAMA_PLAN_SCHEMA
+        else None,
     )
     _save(factory, settings, run_id, outcome)
     return outcome

@@ -146,7 +146,9 @@ def component(
     }
 
 
-def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, dict]]:
+def text_definitions(
+    stage: str, workflow_version: str, *, confirmed_short_drama: bool = False
+) -> list[tuple[str, str, dict]]:
     from arclight.domain.narrative_review import (
         NARRATIVE_REVIEW_PROMPT,
         NARRATIVE_REVIEW_VERSION,
@@ -199,9 +201,21 @@ def text_definitions(stage: str, workflow_version: str) -> list[tuple[str, str, 
 
         if workflow_version != producer.WORKFLOW_VERSION:
             raise DomainError("PRODUCER_VERSION_INVALID", "不兼容的 Producer 版本", 409)
+        prompt: tuple[str, str, dict] = (
+            "PROMPT",
+            producer.PLAN_VERSION,
+            {"instruction": producer.PLANNING_PROMPT},
+        )
+        if confirmed_short_drama:
+            from arclight.application.short_drama_planning import (
+                SHORT_DRAMA_PLAN_PROMPT,
+                SHORT_DRAMA_PLAN_SCHEMA,
+            )
+
+            prompt = ("PROMPT", SHORT_DRAMA_PLAN_SCHEMA, {"instruction": SHORT_DRAMA_PLAN_PROMPT})
         return [
             ("AGENT", producer.WORKFLOW_VERSION, {"workflow_version": producer.WORKFLOW_VERSION}),
-            ("PROMPT", producer.PLAN_VERSION, {"instruction": producer.PLANNING_PROMPT}),
+            prompt,
             ("SCHEMA", producer.PLAN_VERSION, producer.ProducerPlan.model_json_schema()),
         ]
     from arclight.domain.art_concepts import (
@@ -625,7 +639,9 @@ def capture_text(
             definition,
         )
         for stage in text_stages(run)
-        for kind, version, definition in text_definitions(stage, run.workflow_version)
+        for kind, version, definition in text_definitions(
+            stage, run.workflow_version, confirmed_short_drama="short_drama" in run.input_json
+        )
     ]
     entries.append(
         component(
@@ -687,7 +703,7 @@ def prompt_instruction(definition: dict) -> str:
     return instruction
 
 
-def producer_prompt(db: Session, project_id: UUID, run_id: UUID) -> str:
+def producer_prompt(db: Session, project_id: UUID, run_id: UUID) -> tuple[str, str]:
     binding = find_binding(db, project_id, "WORKFLOW", run_id)
     if binding is not None:
         for entry in checked_snapshot(db, binding)["components"]:
@@ -695,7 +711,7 @@ def producer_prompt(db: Session, project_id: UUID, run_id: UUID) -> str:
                 component_row = db.get(ProductionVersion, UUID(entry["id"]))
                 assert component_row is not None
                 try:
-                    return prompt_instruction(component_row.definition_json)
+                    return component_row.version, prompt_instruction(component_row.definition_json)
                 except ValueError:
                     break
     raise DomainError("PRODUCTION_VERSION_INCOMPATIBLE", "缺少有效的冻结制片提示词", 409)
